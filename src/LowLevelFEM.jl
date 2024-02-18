@@ -2,8 +2,13 @@ module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
 using Arpack
-import gmsh
+#import gmsh
+#using Gmsh: Gmsh, gmsh
 #import Gmsh: gmsh
+import gmsh_jll
+include(gmsh_jll.gmsh_api)
+import .gmsh
+export gmsh
 
 """
     Problem(; E=..., ν=..., ρ=..., thickness=..., type=...)
