@@ -3,6 +3,12 @@ uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
 authors = ["Balázs Pere"]
 version = "1.0.0-DEV"
 
+[deps]
+Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
+Gmsh = "705231aa-382f-11e9-3f0c-b7cb4346fdeb"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+
 [compat]
 julia = "1"
 

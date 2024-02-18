@@ -3,6 +3,7 @@ module LowLevelFEM
 using LinearAlgebra, SparseArrays
 using Arpack
 import gmsh
+#import Gmsh: gmsh
 
 """
     Problem(; E=..., ν=..., ρ=..., thickness=..., type=...)
