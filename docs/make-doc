@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec gnome-terminal -- sh -c "julia --color=yes --project make.jl; sleep 5"
