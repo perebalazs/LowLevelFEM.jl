@@ -1,3 +1,5 @@
+[![Build Status](https://github.com/perebalazs/LowLevelFEM.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/perebalazs/LowLevelFEM.jl/actions/workflows/CI.yml?query=branch%3Amain)
+
 # LowLevelFEM
 
 LowLevelFEM package gives possibility to solve finite element problems using matrix equations. For example to solve problems from linear elasticity the stiffness matrix $\mathbf{K}$ and load vector $\mathbf{f}$ are needed. After applying the neccesery boundary conditions to $\mathbf{K}$ and $\mathbf{f}$ (and getting $\tilde{\mathbf{K}}$ and $\tilde{\mathbf{f}}$) the system of linear equations $\tilde{\mathbf{K}}\mathbf{q}=\tilde{\mathbf{f}}$ have to be solved. With the functions of the package the above discribed tasks can be performed easily.
