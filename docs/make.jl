@@ -4,3 +4,5 @@ using Documenter, .LowLevelFEM
 
 #makedocs(sitename="LowLevelFEM", format=Documenter.LaTeX())
 makedocs(sitename="LowLevelFEM")
+
+deploydocs(; repo="github.com/perebalazs/LowLevelFEM.jl",)
