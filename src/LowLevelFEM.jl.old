@@ -51,18 +51,8 @@ struct Problem
             error("Problem = $type ????")
         end
         name = gmsh.model.getCurrent()
-        
-        elemTags = []
-        elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(2,-1)
-        for i in 1:length(elementTags)
-            for j in 1:length(elementTags[i])
-		          push!(elemTags, elementTags[i][j])
-	         end
-        end
-        oldTags, newTags = gmsh.model.mesh.computeRenumbering("RCMK", elemTags)
-        #gmsh.model.mesh.renumberNodes(oldTags, newTags)
-
-        non = length(oldTags)
+        nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true)
+        non = length(nodeTags)
         return new(name, type, dim, E, ν, ρ, thickness, non)
     end
 end
@@ -173,7 +163,6 @@ function stiffnessMatrix(problem; PhGname="", E=1im, ν=1im)
         E = problem.E
         ν = problem.ν
     end
-    dim = 0
     if problem.dim == 3 && problem.type == "Solid"
         D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
                                         ν 1-ν ν 0 0 0;
@@ -276,8 +265,8 @@ function stiffnessMatrix(problem; PhGname="", E=1im, ν=1im)
         end
         push!(nn, nnet)
     end
-    #nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(problem.dim, -1, true)
-    non = problem.non
+    nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(problem.dim, -1, true)
+    non = length(nodeTags)
     dof = problem.dim * non
     K = sparse(I, J, V, dof, dof)
     return K
@@ -371,8 +360,8 @@ function massMatrix(problem; PhGname="", ρ=1im, lumped=true)
         end
         push!(nn, nnet)
     end
-    #nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(problem.dim, -1, true)
-    non = problem.non
+    nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(problem.dim, -1, true)
+    non = length(nodeTags)
     dof = problem.dim * non
     M = sparse(I, J, V, dof, dof)
     if lumped == true
@@ -404,8 +393,8 @@ function loadVector(problem, loads)
     gmsh.model.setCurrent(problem.name)
     pdim = problem.dim
     b = problem.thickness
-    #nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(pdim, -1, true)
-    non = problem.non
+    nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(pdim, -1, true)
+    non = length(nodeTags)
     dof = pdim * non
     fp = zeros(dof)
     for n in 1:length(loads)
@@ -933,11 +922,11 @@ function smallestPeriodTime(K, M)
     #ω², ϕ = Arpack.eigs(Kp, Mp, nev=1, which=:LM)
     #α = 1e10
     #Ks = K - α * M
-    ω², ϕ = Arpack.eigs(K, M, nev=100, which=:LM)
+    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LM)
 
     #if norm(Kp * ϕ - λ²[1] * Mp * ϕ) > 1e-6
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1])
-    if err > 300#1e-6 
+    if err > 1#1e-6
         error("Túl nagy a hiba a legnagyobb sajátérték számításánál: $err")
     end
     #Δt = 2π / √(real(ω²[1]))
