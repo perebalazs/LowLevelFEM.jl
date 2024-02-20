@@ -53,7 +53,7 @@ struct Problem
         name = gmsh.model.getCurrent()
         
         elemTags = []
-        elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(2,-1)
+        elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(dim,-1)
         for i in 1:length(elementTags)
             for j in 1:length(elementTags[i])
 		          push!(elemTags, elementTags[i][j])
@@ -276,9 +276,7 @@ function stiffnessMatrix(problem; PhGname="", E=1im, ν=1im)
         end
         push!(nn, nnet)
     end
-    #nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(problem.dim, -1, true)
-    non = problem.non
-    dof = problem.dim * non
+    dof = problem.dim * problem.non
     K = sparse(I, J, V, dof, dof)
     return K
 end
@@ -371,9 +369,7 @@ function massMatrix(problem; PhGname="", ρ=1im, lumped=true)
         end
         push!(nn, nnet)
     end
-    #nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(problem.dim, -1, true)
-    non = problem.non
-    dof = problem.dim * non
+    dof = problem.dim * problem.non
     M = sparse(I, J, V, dof, dof)
     if lumped == true
     M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
@@ -404,7 +400,6 @@ function loadVector(problem, loads)
     gmsh.model.setCurrent(problem.name)
     pdim = problem.dim
     b = problem.thickness
-    #nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes(pdim, -1, true)
     non = problem.non
     dof = pdim * non
     fp = zeros(dof)
@@ -926,18 +921,10 @@ Types:
 - `Δt`: Double 
 """
 function smallestPeriodTime(K, M)
-    #using SymRCM
-    #perm = symrcm(K)
-    #Kp = K[perm, perm]
-    #Mp = M[perm, perm]
-    #ω², ϕ = Arpack.eigs(Kp, Mp, nev=1, which=:LM)
-    #α = 1e10
-    #Ks = K - α * M
-    ω², ϕ = Arpack.eigs(K, M, nev=100, which=:LM)
+    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LM)
 
-    #if norm(Kp * ϕ - λ²[1] * Mp * ϕ) > 1e-6
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1])
-    if err > 300#1e-6 
+    if err > 300#1e-6 || true
         error("Túl nagy a hiba a legnagyobb sajátérték számításánál: $err")
     end
     #Δt = 2π / √(real(ω²[1]))
@@ -1031,8 +1018,6 @@ Types:
 function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
     gmsh.model.setCurrent(problem.name)
     dim = problem.dim
-    #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
-    #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
     nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
     non = length(nodeTags)
     uvec = gmsh.view.add(name)
@@ -1042,7 +1027,6 @@ function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
     for j in 1:length(t)
         k = 1im
         if comp == "uvec" || comp == "vvec"
-            #ucomp = σ
             nc = 3
             u = zeros(3 * non)
             for i in 1:length(nodeTags)
@@ -1050,7 +1034,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
                 u[3i-1] = q[dim*nodeTags[i]-(dim-2), j]
                 u[3i-0] = dim == 3 ? q[dim*nodeTags[i]-(dim-3), j] : 0
             end
-        else #if comp != "uvec"
+        else
             nc = 1
             if comp == "ux" || comp == "vx"
                 k = 1
@@ -1114,9 +1098,6 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
     SS = gmsh.view.add(name)
     #σcomp = []
     σ = S.sigma
-    #display("length(σ) = $(length(σ))")
-    #display("length(σ[1]) = $(length(σ[1]))")
-    #display("length(σ[1][1]) = $(length(σ[1][1]))")
     numElem = S.numElem
     for jj in 1:length(t)
         #σ = S[j].sigma
@@ -1127,8 +1108,6 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
             σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
             nc = 9
         else
-            #end
-            #if comp != "s"
             nc = 1
             if comp == "sx"
                 k = 8
