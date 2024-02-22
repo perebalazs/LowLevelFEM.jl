@@ -48,7 +48,7 @@ LowLevelFEM package gives the possibility to solve finite element problems using
 - [ ] Heat conduction problems,
 	- [ ] solving conductivity matrix,
 	- [ ] solving heat capacity matrix.
-- [ ] Dynamic transient problems with HHT-$\alpha{}$ (or Newmark).
+- [ ] Dynamic transient problems with HHT-α (or Newmark).
 - [ ] Linear buckling.
 - [ ] Modal analysis (eigenfrequencies, modal shapes).
 
