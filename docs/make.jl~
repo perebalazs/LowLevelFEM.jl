@@ -7,10 +7,9 @@ DocMeta.setdocmeta!(LowLevelFEM, :DocTestSetup, :(using LowLevelFEM); recursive=
 #makedocs(sitename="LowLevelFEM", format=Documenter.LaTeX())
 makedocs(;sitename="LowLevelFEM",
     authors="Balázs Pere",
-    repo="https://github.com/perebalazs/LowLevelFEM.jl", #/blob/{commit}{path}#{line}",
+#    repo="https://github.com/perebalazs/LowLevelFEM.jl/stable/{commit}{path}#{line}",
     format=Documenter.HTML(;
-        prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://perebalazs.github.io/LowLevelFEM.jl",
+        canonical="https://docs.juliahub.com/General/LowLevelFEM/stable/",
         assets=String[],
     ),
     pages=[
@@ -18,7 +17,7 @@ makedocs(;sitename="LowLevelFEM",
     ],
 )
 
-deploydocs(; repo="github.com/perebalazs/LowLevelFEM.jl",
+deploydocs(; repo="github.com/perebalazs/LowLevelFEM.jl.git",
     devbranch = "main",
     devurl="dev",
     target = "build",
