@@ -20,7 +20,8 @@ makedocs(;sitename="LowLevelFEM",
 deploydocs(; repo="github.com/perebalazs/LowLevelFEM.jl.git"#,
     #devbranch = "main",
     #devurl="dev",
-    #target = "build",
+    target = "build",
     #branch = "gh-pages",
     #versions = ["stable" => "v^", "v#.#" ]
+    push_preview = true,
 )
