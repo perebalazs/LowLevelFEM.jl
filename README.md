@@ -2,7 +2,7 @@
 
 # LowLevelFEM
 
-LowLevelFEM package gives possibility to solve finite element problems using matrix equations. For example to solve problems from linear elasticity the stiffness matrix $\mathbf{K}$ and load vector $\mathbf{f}$ are needed. After applying the neccesery boundary conditions to $\mathbf{K}$ and $\mathbf{f}$ (and getting $\tilde{\mathbf{K}}$ and $\tilde{\mathbf{f}}$) the system of linear equations $\tilde{\mathbf{K}}\mathbf{q}=\tilde{\mathbf{f}}$ have to be solved. With the functions of the package the above discribed tasks can be performed easily.
+LowLevelFEM package gives the possibility to solve finite element problems using matrix equations. For example to solve problems from linear elasticity the stiffness matrix $\mathbf{K}$ and load vector $\mathbf{f}$ are needed. After applying the neccesery boundary conditions to $\mathbf{K}$ and $\mathbf{f}$ (and getting $\tilde{\mathbf{K}}$ and $\tilde{\mathbf{f}}$) the system of linear equations $\tilde{\mathbf{K}}\mathbf{q}=\tilde{\mathbf{f}}$ have to be solved. With the functions of the package the above described tasks can be performed easily.
 
 # Features
 
@@ -26,8 +26,8 @@ LowLevelFEM package gives possibility to solve finite element problems using mat
 - Solution of static and dynamic (transient with central difference method) problems,
 - which means the generations of the mass matrix $\mathbf{M}$.
 - Displaying the results (scalar or vector displacements, scalar or tensor stresses) with [GMSH](https://gmsh.info).
-  - When dynamic problem is solved animations are also possible (click on $\triangleright$).
-- Plotting arbitrary result on paths.
+  - When dynamic problems are solved animations are also possible (click on $\triangleright$).
+- Plotting arbitrary results on paths.
 
 # Planed features
 
@@ -48,11 +48,11 @@ LowLevelFEM package gives possibility to solve finite element problems using mat
 - [ ] Heat conduction problems,
 	- [ ] solving conductivity matrix,
 	- [ ] solving heat capacity matrix.
-- [ ] Dynamic transient problems with HHT-$ \alpha $ (or Newmark).
+- [ ] Dynamic transient problems with HHT-$\alpha{}$ (or Newmark).
 - [ ] Linear buckling.
 - [ ] Modal analysis (eigenfrequencies, modal shapes).
 
-Any sugessions are welcome.
+Any suggestions are welcome.
 
 # Examples
 
@@ -62,8 +62,8 @@ cantilever2D.jl
 ```Julia
 using LinearAlgebra, SparseArrays
 import LowLevelFEM as FEM
-import gmsh_jll
-include(gmsh_jll.gmsh_api)
+using LowLevelFEM: gmsh
+
 gmsh.initialize()
 
 gmsh.open("cantilever2D.geo")
@@ -131,8 +131,8 @@ cantilever3D.jl
 ```Julia
 using LinearAlgebra, SparseArrays
 import LowLevelFEM as FEM
-import gmsh_jll
-include(gmsh_jll.gmsh_api)
+using LowLevelFEM: gmsh
+
 gmsh.initialize()
 
 gmsh.open("cantilever3D.geo")
