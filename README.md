@@ -62,7 +62,7 @@ cantilever2D.jl
 ```Julia
 using LinearAlgebra, SparseArrays
 import LowLevelFEM as FEM
-using LowLevelFEM: gmsh
+using LowLevelFEM
 
 gmsh.initialize()
 
@@ -131,7 +131,7 @@ cantilever3D.jl
 ```Julia
 using LinearAlgebra, SparseArrays
 import LowLevelFEM as FEM
-using LowLevelFEM: gmsh
+using LowLevelFEM
 
 gmsh.initialize()
 
