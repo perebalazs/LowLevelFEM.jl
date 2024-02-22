@@ -56,11 +56,11 @@ struct Problem
         elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(dim,-1)
         for i in 1:length(elementTags)
             for j in 1:length(elementTags[i])
-		          push!(elemTags, elementTags[i][j])
-	         end
+                push!(elemTags, elementTags[i][j])
+	    end
         end
         oldTags, newTags = gmsh.model.mesh.computeRenumbering("RCMK", elemTags)
-        #gmsh.model.mesh.renumberNodes(oldTags, newTags)
+        gmsh.model.mesh.renumberNodes(oldTags, newTags)
 
         non = length(oldTags)
         return new(name, type, dim, E, ν, ρ, thickness, non)

@@ -32,6 +32,10 @@ LowLevelFEM package gives possibility to solve finite element problems using mat
 # Planed features
 
 - [ ] 2D axisymmetric problems
+- [ ] 3D (and 2D) beam structures
+- [ ] Shells
+- [ ] Giving loads and prescribed displacements with functions
+- [ ] Different material properties on physical groups
 - [ ] Contact problems,
   - [ ] in 2D,
   - [ ] in 3D,
@@ -44,9 +48,11 @@ LowLevelFEM package gives possibility to solve finite element problems using mat
 - [ ] Heat conduction problems,
 	- [ ] solving conductivity matrix,
 	- [ ] solving heat capacity matrix.
-- [ ] Dynamic transient problems with HHT-$\alpha$ (or Newmark).
+- [ ] Dynamic transient problems with HHT-$ \alpha $ (or Newmark).
 - [ ] Linear buckling.
 - [ ] Modal analysis (eigenfrequencies, modal shapes).
+
+Any sugessions are welcome.
 
 # Examples
 
@@ -77,15 +83,11 @@ S = FEM.solveStress(problem, q)
 u = FEM.showDoFResults(problem, q, "uvec", name="uvec", visible=false)
 ux = FEM.showDoFResults(problem, q, "ux", name="ux", visible=false)
 uy = FEM.showDoFResults(problem, q, "uy", name="uy", visible=false)
-uz = FEM.showDoFResults(problem, q, "uz", name="uz", visible=false)
 
 s = FEM.showStressResults(problem, S, "s", name="σ", visible=true, smooth=true)
 sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=true)
 sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
-sz = FEM.showStressResults(problem, S, "sz", name="σz", visible=false, smooth=true)
 sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
-syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
-szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
 
 FEM.plotOnPath(problem, "path", sx, 100, name="σx", visible=false);
 FEM.plotOnPath(problem, "path", sxy, 100, name="τxy", visible=false);

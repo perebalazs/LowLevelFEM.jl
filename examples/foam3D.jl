@@ -5,18 +5,21 @@ import gmsh_jll
 include(gmsh_jll.gmsh_api)
 gmsh.initialize()
 
-gmsh.open("foam2D.geo")
-problem = FEM.Problem(type="PlaneStress")
+gmsh.open("foam3D.geo")
+problem = FEM.Problem(type="Solid")
 
-#gmsh.fltk.run()
+gmsh.fltk.run()
 
-supp = FEM.displacementConstraint("supp", ux=0, uy=0)
+supp = FEM.displacementConstraint("supp", ux=0, uy=0, uz=0)
 load = FEM.load("load", fx=1)
 
 K = FEM.stiffnessMatrix(problem)
 display(K)
+#display("non = $(problem.non)")
+#display("dim = $(problem.dim)")
+#display("dof = $(problem.dim * problem.non)")
 f = FEM.loadVector(problem, [load])
-display(size(K))
+#display(size(K))
 
 FEM.applyBoundaryConditions!(problem, K, f, [supp])
 
