@@ -1,31 +1,17 @@
-push!(LOAD_PATH,"../src/")
-include("../src/LowLevelFEM.jl")
-using Documenter, .LowLevelFEM
+using Documenter
+ using LowLevelFEM  # your package name here
 
-#DocMeta.setdocmeta!(LowLevelFEM, :DocTestSetup, :(using LowLevelFEM); recursive=true)
+ makedocs(
+     sitename = "LowLevelFEM",  # your package name here
+     format = Documenter.HTML(prettyurls = false),  # optional
+     pages = [
+         "Introduction" => "index.md"
+     ]
+ )
 
-#makedocs(sitename="LowLevelFEM", format=Documenter.LaTeX())
-makedocs(;sitename="LowLevelFEM",
-    authors="Balázs Pere",
-    doctest = false,
-    remotes = nothing,
-    #repo="https://github.com/perebalazs/LowLevelFEM.jl.git",
-    pages=[
-        "Home" => "index.md",
-    ],
-    format=Documenter.HTML(;
-        repolink = "https://localhost:8000",
-        canonical="https://perebalazs.juliahub.io/LowLevelFEM/stable/",
-        #assets=String[],
-    ),
-)
-
-deploydocs(; 
-    repo="github.com/perebalazs/LowLevelFEM.jl.git",
-    devbranch = "main",
-    devurl="dev",
-    target = "build",
-    branch = "main",
-    versions = ["stable" => "v^", "v#.#" ],
-    push_preview = true,
-)
+ # Documenter can also automatically deploy documentation to gh-pages.
+ # See "Hosting Documentation" and deploydocs() in the Documenter manual
+ # for more information.
+ deploydocs(
+     repo = "github.com/perebalazs/LowLevelFEM.jl.git",
+ )
