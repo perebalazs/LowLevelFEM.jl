@@ -1,4 +1,6 @@
-# LowLevelFEM.jl Documentation
+# LowLevelFEM.jl
+
+Documentation for LowLevelFEM.jl
 
 ```@contents
 ```
