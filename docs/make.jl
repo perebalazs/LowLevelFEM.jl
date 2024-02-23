@@ -15,7 +15,7 @@ makedocs(;sitename="LowLevelFEM",
     ],
     format=Documenter.HTML(;
         repolink = "https://localhost:8000",
-        #canonical="https://perebalazs.juliahub.io/LowLevelFEM/stable/",
+        canonical="https://perebalazs.juliahub.io/LowLevelFEM/stable/",
         #assets=String[],
     ),
 )
@@ -25,7 +25,7 @@ deploydocs(;
     devbranch = "main",
     devurl="dev",
     target = "build",
-    #branch = "gh-pages",
+    branch = "main",
     versions = ["stable" => "v^", "v#.#" ],
     push_preview = true,
 )
