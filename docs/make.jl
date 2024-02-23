@@ -20,7 +20,8 @@ makedocs(;sitename="LowLevelFEM",
     ),
 )
 
-deploydocs(; repo="github.com/perebalazs/LowLevelFEM.jl.git",
+deploydocs(; 
+    repo="github.com/perebalazs/LowLevelFEM.jl.git",
     devbranch = "main",
     devurl="dev",
     target = "build",
