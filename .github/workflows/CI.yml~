@@ -38,12 +38,16 @@ jobs:
     - uses: julia-actions/cache@v1
     - uses: julia-actions/julia-buildpkg@v1
     - uses: julia-actions/julia-runtest@v1
-    - run: |
-        julia --project=docs -e '
-          using Pkg
-          Pkg.develop(PackageSpec(path=pwd()))
-          Pkg.instantiate()'
-    - run: julia --project=docs --color=yes docs/make.jl
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+    
+    
+    docs:
+      name: Documentation
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v2
+        - uses: julia-actions/cache@v1
+        - uses: julia-actions/julia-buildpkg@latest
+        - uses: julia-actions/julia-docdeploy@latest
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
