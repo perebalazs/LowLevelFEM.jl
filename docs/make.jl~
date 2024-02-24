@@ -4,7 +4,7 @@ using LowLevelFEM
 makedocs(
     sitename = "LowLevelFEM",
     format = Documenter.HTML(),
-    modules = [LowLevelFEM],
+#    modules = [LowLevelFEM],
     pages = [
          "Introduction" => "index.md"]
 )
