@@ -3,10 +3,14 @@ using LowLevelFEM
 
 makedocs(
     sitename = "LowLevelFEM",
-    format = Documenter.HTML(),
-#    modules = [LowLevelFEM],
+    authors="Balázs Pere",
+    format = Documenter.HTML(
+        prettyurls = get(ENV, "CI", nothing) == "true",
+        assets=String[],
+    ),
     pages = [
-         "Introduction" => "index.md"]
+         "Introduction" => "index.md"],
+    repo="https://github.com/perebalazs/LowLevelFEM.jl/blob/{commit}{path}#L{line}",
 )
 
 # Documenter can also automatically deploy documentation to gh-pages.
@@ -14,6 +18,6 @@ makedocs(
 # for more information.
 deploydocs( 
     repo = "github.com/perebalazs/LowLevelFEM.jl.git",
-    target="build",
-    push_preview=false
+    #target="build",
+    push_preview=true
 )
