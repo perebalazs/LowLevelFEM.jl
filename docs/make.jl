@@ -7,11 +7,13 @@ makedocs(
     authors="Balázs Pere",
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        assets=String[],
+        #assets=String[],
+        collapselevel=1
     ),
     pages = [
          "Introduction" => "index.md"],
-    repo="https://github.com/perebalazs/LowLevelFEM.jl/blob/{commit}{path}#L{line}",
+    #repo="https://github.com/perebalazs/LowLevelFEM.jl/blob/{commit}{path}#L{line}",
+    doctest=false,
 )
 
 # Documenter can also automatically deploy documentation to gh-pages.

@@ -1,3 +1,4 @@
+push!(LOAD_PATH,"../src/")
 using Documenter
 using LowLevelFEM
 
@@ -18,6 +19,8 @@ makedocs(
 # for more information.
 deploydocs( 
     repo = "github.com/perebalazs/LowLevelFEM.jl.git",
-    #target="build",
+    branch = "gh-pages",
+    target="build",
+    devbranch="main",
     push_preview=true
 )
