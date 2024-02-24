@@ -13,5 +13,5 @@ makedocs(
 # See "Hosting Documentation" and deploydocs() in the Documenter manual
 # for more information.
 deploydocs(
-    repo = "https://github.com/perebalazs/LowLevelFEM.jl.git"
+    repo = "https://github.com/perebalazs/LowLevelFEM.jl"
 )
