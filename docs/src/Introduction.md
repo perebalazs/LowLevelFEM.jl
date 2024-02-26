@@ -28,7 +28,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
   - When dynamic problems are solved animations are also possible (click on $\triangleright$).
 - Plotting arbitrary results on paths.
 
-## Planed features
+## Planned features
 
 - [ ] 2D axisymmetric problems
 - [ ] 3D (and 2D) beam structures

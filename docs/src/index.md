@@ -2,16 +2,16 @@
 
 Documentation for LowLevelFEM.jl
 
-```@contents
-```
 
 ## Functions
 
 ```@autodocs
- Modules = [LowLevelFEM]
+Modules = [LowLevelFEM]
 ```
 
 ## Index
 
 ```@index
+
 ```
+
