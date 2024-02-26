@@ -62,7 +62,7 @@ struct Problem
         oldTags, newTags = gmsh.model.mesh.computeRenumbering("RCMK", elemTags)
         gmsh.model.mesh.renumberNodes(oldTags, newTags)
 
-        non = length(oldTags) 
+        non = length(oldTags)
         return new(name, type, dim, E, ν, ρ, thickness, non)
     end
 end
