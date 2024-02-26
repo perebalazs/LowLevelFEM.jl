@@ -11,8 +11,8 @@ makedocs(
         collapselevel=1
     ),
     pages = [
-         "Introduction" => "Introduction.md"],
-         "Functions" => "index.md"],
+         "Introduction" => "Introduction.md",
+         "Functions" => "index.md",
          "Examples" => "Examples.md"],
     doctest=false,
 )
