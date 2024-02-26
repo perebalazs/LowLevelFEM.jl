@@ -3,7 +3,8 @@
 
 # LowLevelFEM
 
-LowLevelFEM package gives the possibility to solve finite element problems using matrix equations. For example to solve problems from linear elasticity the stiffness matrix $\mathbf{K}$ and load vector $\mathbf{f}$ are needed. After applying the neccesery boundary conditions to $\mathbf{K}$ and $\mathbf{f}$ (and getting $\tilde{\mathbf{K}}$ and $\tilde{\mathbf{f}}$) the system of linear equations $\tilde{\mathbf{K}}\mathbf{q}=\tilde{\mathbf{f}}$ have to be solved. With the functions of the package the above described tasks can be performed easily.
+Solution of a problem in linear elasticity using Finite Element Method consists of solution of the stiffness matrix $\mathbf{K}$ and load vector $\mathbf{f}$, modifying them according to the boundary conditions (getting $\tilde{\mathbf{K}}$ and $\tilde{\mathbf{f}}$), solving the displacement field $\mathbf{q}$ as the result of the system of equations $\tilde{\mathbf{K}}\mathbf{q}=\tilde{\mathbf{f}}$, solving the stress field from $\mathbf{q}$ and visualize them.
+The above described steps can be easily performed using the LowLevelFEM package. Each step means a function with the appropriate parameters, while at any step it is possible to perform an arbitrary operation with the quantities calculated in the meantime. For example the strain energy can be solved as $U=\frac{1}{2}\mathbf{q}^T\mathbf{K}\mathbf{q}$, for which the code is simply ```U=q'*K*q/2.```(see Examples)
 
 # Features
 
