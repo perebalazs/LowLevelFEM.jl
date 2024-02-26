@@ -1,8 +1,7 @@
 using LinearAlgebra, SparseArrays
-include("../src/LowLevelFEM.jl")
-import .LowLevelFEM as FEM
-import gmsh_jll
-include(gmsh_jll.gmsh_api)
+import LowLevelFEM as FEM
+using LowLevelFEM
+
 gmsh.initialize()
 
 gmsh.open("foam2D.geo")

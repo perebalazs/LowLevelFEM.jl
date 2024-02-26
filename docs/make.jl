@@ -11,8 +11,9 @@ makedocs(
         collapselevel=1
     ),
     pages = [
-         "Introduction" => "index.md"],
-    #repo="https://github.com/perebalazs/LowLevelFEM.jl/blob/{commit}{path}#L{line}",
+         "Introduction" => "Introduction.md"],
+         "Functions" => "index.md"],
+         "Examples" => "Examples.md"],
     doctest=false,
 )
 
