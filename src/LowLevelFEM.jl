@@ -46,6 +46,8 @@ struct Problem
             error("Problem = $type ????")
         end
         name = gmsh.model.getCurrent()
+        gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
+        gmsh.option.setString("View.Format", "%.6g")
         
         material = mat
         elemTags = []
@@ -1142,12 +1144,9 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
         error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     SS = gmsh.view.add(name)
-    #σcomp = []
     σ = S.sigma
     numElem = S.numElem
     for jj in 1:length(t)
-        #σ = S[j].sigma
-        #numElem = S[j].numElem
 
         k = 1im
         if comp == "s"
@@ -1177,14 +1176,9 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
                 for j in 1:(div(size(σ[i], 1), 9))
                     sx[j] = σ[i][9j-k, jj]
                 end
-                #display("sx = $sx")
                 push!(σcomp, sx)
             end
         end
-        #display("length(σ) = $(length(σ))")
-        #display("length(numElem) = $(length(numElem))")
-        #display("length(σcomp) = $(length(σcomp))")
-        #display("σcomp = $(σcomp)")
         gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
     end
 

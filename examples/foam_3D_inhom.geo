@@ -186,6 +186,10 @@ Transfinite Line {14,17,20,23,26,29,32,35,38,41,44,47,50,53,56,59,62,65,68,71,74
 Mesh 3;
 
 
-Physical Volume(1) = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};  // itt a {}-közé bepakolod a 2 gömb közti térfogatokat
+Physical Volume("Fe", 1) = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};  // itt a {}-közé bepakolod a 2 gömb közti térfogatokat
+Physical Volume("Al", 2) = {16};
 
-Save "save_volume_1.m";
+
+//Save "save_volume_1.m";//+
+Physical Surface("supp", 97) = {1};
+Physical Surface("load", 98) = {2};
