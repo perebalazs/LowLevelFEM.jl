@@ -2,9 +2,6 @@ module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
 using Arpack
-#import gmsh
-#using Gmsh: Gmsh, gmsh
-#import Gmsh: gmsh
 import gmsh_jll
 include(gmsh_jll.gmsh_api)
 import .gmsh
@@ -35,12 +32,10 @@ struct Problem
     name::String
     type::String
     dim::Int64
-    E::Float64
-    ν::Float64
-    ρ::Float64
+    material::Vector{Tuple{String, Float64, Float64, Float64}}
     thickness::Float64
     non::Int64
-    function Problem(; E=2e5, ν=0.3, ρ=7.85e-9, thickness=1, type="Solid")
+    function Problem(mat; thickness=1, type="Solid")
         if type == "Solid"
             dim = 3
         elseif type == "PlaneStress"
@@ -52,6 +47,7 @@ struct Problem
         end
         name = gmsh.model.getCurrent()
         
+        material = mat
         elemTags = []
         elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(dim,-1)
         for i in 1:length(elementTags)
@@ -63,7 +59,7 @@ struct Problem
         gmsh.model.mesh.renumberNodes(oldTags, newTags)
 
         non = length(oldTags)
-        return new(name, type, dim, E, ν, ρ, thickness, non)
+        return new(name, type, dim, material, thickness, non)
     end
 end
 
@@ -84,6 +80,27 @@ struct StressField
     sigma::Vector{Matrix{Float64}}
     numElem::Vector{Int}
     nsteps::Int
+end
+
+"""
+    FEM.material(name; E=2.0e5, ν=0.3, ρ=7.85e-9)
+
+Returns a tuple in which `name` is the name of a physical group, 
+`E` is the modulus of elasticity, `ν` Poisson's ratio and `ρ` is
+the mass density.
+
+Return: mat
+
+Types:
+- `mat`: Tuple(string, double, double, double)
+- `name`: string
+- `E`: double
+- `ν`: double
+- `ρ`: double
+"""
+function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9)
+    mat = name, E, ν, ρ
+    return mat
 end
 
 """
@@ -126,9 +143,9 @@ end
 
 
 """
-    FEM.generateMesh(...)
+    FEM.generateMesh(problem, surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
 
-Gives...
+Obsolate, use gmsh script (.geo) instead.
 
 Return: none
 
@@ -168,44 +185,10 @@ Types:
 - `ν`: double - unused
 - `stiffMat`: Matrix
 """
-function stiffnessMatrix(problem; PhGname="", E=1im, ν=1im)
-    if E == 1im || ν == 1im
-        E = problem.E
-        ν = problem.ν
-    end
-    dim = 0
-    if problem.dim == 3 && problem.type == "Solid"
-        D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
-                                        ν 1-ν ν 0 0 0;
-                                        ν ν 1-ν 0 0 0;
-                                        0 0 0 (1-2ν)/2 0 0;
-                                        0 0 0 0 (1-2ν)/2 0;
-                                        0 0 0 0 0 (1-2ν)/2]
-
-        dim = 3
-        rowsOfB = 6
-        b = 1
-    elseif problem.dim == 2 && problem.type == "PlaneStress"
-        D = E / (1 - ν^2) * [1 ν 0;
-                             ν 1 0;
-                             0 0 (1-ν)/2]
-        dim = 2
-        rowsOfB = 3
-        b = problem.thickness
-    elseif problem.dim == 2 && problem.type == "PlaneStrain"
-        D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
-                                        ν 1-ν 0;
-                                        0 0 (1-2ν)/2]
-        dim = 2
-        rowsOfB = 3
-        b = 1
-    else
-        error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
-    end
-
+function stiffnessMatrix(problem; elements=[])
     gmsh.model.setCurrent(problem.name)
-    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
-    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
     nn = []
     I = []
     J = []
@@ -214,70 +197,112 @@ function stiffnessMatrix(problem; PhGname="", E=1im, ν=1im)
     sizehint!(I, lengthOfIJV)
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
-    for i in 1:length(elemTypes)
-        et = elemTypes[i]
-        elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-        intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order+1))
-        numIntPoints = length(intWeights)
-        comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
-        ∇h = reshape(dfun, :, numIntPoints)
-        nnet = zeros(Int, length(elemTags[i]), numNodes)
-        invJac = zeros(3, 3numIntPoints)
-        Iidx = zeros(Int, numNodes * dim, numNodes * dim)
-        Jidx = zeros(Int, numNodes * dim, numNodes * dim)
-        for k in 1:numNodes*dim, l in 1:numNodes*dim
-            Iidx[k, l] = l
-            Jidx[k, l] = k
+
+    for ipg in 1:length(problem.material)
+        phName, E, ν, ρ = problem.material[ipg]
+        dim = 0
+        if problem.dim == 3 && problem.type == "Solid"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+                ν 1-ν ν 0 0 0;
+                ν ν 1-ν 0 0 0;
+                0 0 0 (1-2ν)/2 0 0;
+                0 0 0 0 (1-2ν)/2 0;
+                0 0 0 0 0 (1-2ν)/2]
+
+            dim = 3
+            rowsOfB = 6
+            b = 1
+        elseif problem.dim == 2 && problem.type == "PlaneStress"
+            D = E / (1 - ν^2) * [1 ν 0;
+                ν 1 0;
+                0 0 (1-ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
+                ν 1-ν 0;
+                0 0 (1-2ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = 1
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
         end
-        ∂h = zeros(dim, numNodes * numIntPoints)
-        B = zeros(rowsOfB * numIntPoints, dim * numNodes)
-        K1 = zeros(dim * numNodes, dim * numNodes)
-        nn2 = zeros(Int, dim * numNodes)
-        for j in 1:length(elemTags[i])
-            elem = elemTags[i][j]
-            for k in 1:numNodes
-                nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
-            end
-            jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
-            Jac = reshape(jac, 3, :)
-            for k in 1:numIntPoints
-                invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
-            end
-            ∂h .*= 0
-            for k in 1:numIntPoints, l in 1:numNodes
-                ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
-            end
-            B .*= 0
-            if dim == 2 && rowsOfB == 3
-                for k in 1:numIntPoints, l in 1:numNodes
-                    B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
-                    B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * dim, numNodes * dim)
+                Jidx = zeros(Int, numNodes * dim, numNodes * dim)
+                for k in 1:numNodes*dim, l in 1:numNodes*dim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
                 end
-            elseif dim == 3 && rowsOfB == 6
-                for k in 1:numIntPoints, l in 1:numNodes
-                    B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
-                    B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
-                    B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B = zeros(rowsOfB * numIntPoints, dim * numNodes)
+                K1 = zeros(dim * numNodes, dim * numNodes)
+                nn2 = zeros(Int, dim * numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    K1 .*= 0
+                    for k in 1:numIntPoints
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes] # B1[...] .= B[...] ????
+                        K1 += B1' * D * B1 * b * jacDet[k] * intWeights[k]
+                    end
+                    for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
                 end
-            else
-                error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                push!(nn, nnet)
             end
-            K1 .*= 0
-            for k in 1:numIntPoints
-                B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes] # B1[...] .= B[...] ????
-                K1 += B1' * D * B1 * b * jacDet[k] * intWeights[k]
-            end
-            for k in 1:dim
-                nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
-            end
-            append!(I, nn2[Iidx[:]])
-            append!(J, nn2[Jidx[:]])
-            append!(V, K1[:])
         end
-        push!(nn, nnet)
     end
     dof = problem.dim * problem.non
     K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
     return K
 end
 
@@ -295,29 +320,10 @@ Types:
 - `lumped`: boolean
 - `massMat`: Matrix
 """
-function massMatrix(problem; PhGname="", ρ=1im, lumped=true)
-    if ρ == 1im
-        ρ = problem.ρ
-    end
-    if problem.dim == 3 && problem.type == "Solid"
-        dim = 3
-        rowsOfH = 3
-        b = 1
-    elseif problem.dim == 2 && problem.type == "PlaneStress"
-        dim = 2
-        rowsOfH = 2
-        b = problem.thickness
-    elseif problem.dim == 2 && problem.type == "PlaneStrain"
-        dim = 2
-        rowsOfH = 2
-        b = 1
-    else
-        error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
-    end
-
+function massMatrix(problem; elements=[], lumped=true)
     gmsh.model.setCurrent(problem.name)
-    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
-    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
     nn = []
     I = []
     J = []
@@ -326,54 +332,83 @@ function massMatrix(problem; PhGname="", ρ=1im, lumped=true)
     sizehint!(I, lengthOfIJV)
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
-    for i in 1:length(elemTypes)
-        et = elemTypes[i]
-        elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-        intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order+1))
-        numIntPoints = length(intWeights)
-        comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
-        h = reshape(fun, :, numIntPoints)
-        nnet = zeros(Int, length(elemTags[i]), numNodes)
-        Iidx = zeros(Int, numNodes * dim, numNodes * dim)
-        Jidx = zeros(Int, numNodes * dim, numNodes * dim)
-        for k in 1:numNodes*dim, l in 1:numNodes*dim
-            Iidx[k, l] = l
-            Jidx[k, l] = k
+
+    for ipg in 1:length(problem.material)
+        phName, E, ν, ρ = problem.material[ipg]
+        dim = 0
+        if problem.dim == 3 && problem.type == "Solid"
+            dim = 3
+            rowsOfH = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == "PlaneStress"
+            dim = 2
+            rowsOfH = 2
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+            dim = 2
+            rowsOfH = 2
+            b = 1
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
         end
-        nn2 = zeros(Int, 2 * numNodes)
-        H = zeros(rowsOfH * numIntPoints, dim * numNodes)
-        for k in 1:numIntPoints, l in 1:numNodes
-            for kk in 1:dim
-                H[k*dim-(dim-kk), l*2-(dim-kk)] = h[(k-1)*numNodes+l]
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                Iidx = zeros(Int, numNodes * dim, numNodes * dim)
+                Jidx = zeros(Int, numNodes * dim, numNodes * dim)
+                for k in 1:numNodes*dim, l in 1:numNodes*dim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                nn2 = zeros(Int, 2 * numNodes)
+                H = zeros(rowsOfH * numIntPoints, dim * numNodes)
+                for k in 1:numIntPoints, l in 1:numNodes
+                    for kk in 1:dim
+                        H[k*dim-(dim-kk), l*2-(dim-kk)] = h[(k-1)*numNodes+l]
+                    end
+                end
+                M1 = zeros(dim * numNodes, dim * numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    M1 .*= 0
+                    for k in 1:numIntPoints
+                        H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
+                        M1 += H1' * H1 * jacDet[k] * intWeights[k]
+                    end
+                    M1 *= ρ * b
+                    for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, M1[:])
+                end
+                push!(nn, nnet)
             end
         end
-        M1 = zeros(dim * numNodes, dim * numNodes)
-        for j in 1:length(elemTags[i])
-            elem = elemTags[i][j]
-            for k in 1:numNodes
-                nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
-            end
-            jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
-            M1 .*= 0
-            for k in 1:numIntPoints
-                H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
-                M1 += H1' * H1 * jacDet[k] * intWeights[k]
-            end
-            M1 *= ρ * b
-            for k in 1:dim
-                nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
-            end
-            append!(I, nn2[Iidx[:]])
-            append!(J, nn2[Jidx[:]])
-            append!(V, M1[:])
-        end
-        push!(nn, nnet)
     end
     dof = problem.dim * problem.non
     M = sparse(I, J, V, dof, dof)
     if lumped == true
-    M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
+        M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
     end
+    dropzeros!(M)
     return M
 end
 
@@ -495,6 +530,7 @@ function applyBoundaryConditions!(problem, stiffMat, loadVec, supports)
     applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
     massMat = []
     dampMat = []
+    return
 end
 
 """
@@ -692,114 +728,124 @@ Types:
 - `S`: StressField
 """
 function solveStress(problem, q)
-    E = problem.E
-    ν = problem.ν
-    if problem.dim == 3 && problem.type == "Solid"
-        D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
-                                        ν 1-ν ν 0 0 0;
-                                        ν ν 1-ν 0 0 0;
-                                        0 0 0 (1-2ν)/2 0 0;
-                                        0 0 0 0 (1-2ν)/2 0;
-                                        0 0 0 0 0 (1-2ν)/2]
-
-        dim = 3
-        rowsOfB = 6
-        b = 1
-    elseif problem.dim == 2 && problem.type == "PlaneStress"
-        D = E / (1 - ν^2) * [1 ν 0;
-                             ν 1 0;
-                             0 0 (1-ν)/2]
-        dim = 2
-        rowsOfB = 3
-        b = problem.thickness
-    elseif problem.dim == 2 && problem.type == "PlaneStrain"
-        D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
-                                        ν 1-ν 0;
-                                        0 0 (1-2ν)/2]
-        dim = 2
-        rowsOfB = 3
-        b = 1
-    else
-        error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
-    end
+    gmsh.model.setCurrent(problem.name)
 
     nsteps = size(q, 2)
     σ = []
-
-    gmsh.model.setCurrent(problem.name)
-    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
     numElem = Int[]
-    for i in 1:length(elemTypes)
-        et = elemTypes[i]
-        elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-        s0 = zeros(rowsOfB * numNodes)
-        nodeCoord = zeros(numNodes * 3)
-        for k in 1:dim, j = 1:numNodes
-            nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+
+    for ipg in 1:length(problem.material)
+        phName, E, ν, ρ = problem.material[ipg]
+        dim = 0
+        if problem.dim == 3 && problem.type == "Solid"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+                ν 1-ν ν 0 0 0;
+                ν ν 1-ν 0 0 0;
+                0 0 0 (1-2ν)/2 0 0;
+                0 0 0 0 (1-2ν)/2 0;
+                0 0 0 0 0 (1-2ν)/2]
+
+            dim = 3
+            rowsOfB = 6
+            b = 1
+        elseif problem.dim == 2 && problem.type == "PlaneStress"
+            D = E / (1 - ν^2) * [1 ν 0;
+                ν 1 0;
+                0 0 (1-ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
+                ν 1-ν 0;
+                0 0 (1-2ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = 1
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
         end
-        comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
-        ∇h = reshape(dfun, :, numNodes)
-        nnet = zeros(Int, length(elemTags[i]), numNodes)
-        invJac = zeros(3, 3numNodes)
-        ∂h = zeros(3, numNodes * numNodes)
-        B = zeros(rowsOfB * numNodes, dim * numNodes)
-        nn2 = zeros(Int, dim * numNodes)
-        for j in 1:length(elemTags[i])
-            elem = elemTags[i][j]
-            for k in 1:numNodes
-                nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
-            end
-            jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
-            Jac = reshape(jac, 3, :)
-            for k in 1:numNodes
-                invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
-            end
-            ∂h .*= 0
-            for k in 1:numNodes, l in 1:numNodes
-                ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
-            end
-            B .*= 0
-            if dim == 2 && rowsOfB == 3
-                for k in 1:numNodes, l in 1:numNodes
-                    B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
-                    B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+
+        #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                s0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
                 end
-            elseif dim == 3 && rowsOfB == 6
-                for k in 1:numNodes, l in 1:numNodes
-                    B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
-                    B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
-                    B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
-                end
-            else
-                error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
-            end
-            push!(numElem, elem)
-            for k in 1:dim
-                nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
-            end
-            s = zeros(9numNodes, nsteps) # tensors have nine elements
-            for k in 1:numNodes
-                if rowsOfB == 6 && dim == 3
-                    B1 = B[k*6-5:k*6, 1:3*numNodes]
-                    for kk in 1:nsteps
-                        s0 = D * B1 * q[nn2, kk]
-                        s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
-                            s0[4], s0[2], s0[5],
-                            s0[6], s0[5], s0[3]]
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, dim * numNodes)
+                nn2 = zeros(Int, dim * numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
                     end
-                elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStress"
-                    B1 = B[k*3-2:k*3, 1:2*numNodes]
-                    for kk in 1:nsteps
-                        s0 = D * B1 * q[nn2, kk]
-                        s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
-                            s0[3], s0[2], 0,
-                            0, 0, 0]
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numNodes
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
                     end
-                else
-                    error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                    ∂h .*= 0
+                    for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    push!(numElem, elem)
+                    for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    s = zeros(9numNodes, nsteps) # tensors have nine elements
+                    for k in 1:numNodes
+                        if rowsOfB == 6 && dim == 3
+                            B1 = B[k*6-5:k*6, 1:3*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q[nn2, kk]
+                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
+                                    s0[4], s0[2], s0[5],
+                                    s0[6], s0[5], s0[3]]
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStress"
+                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q[nn2, kk]
+                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                    s0[3], s0[2], 0,
+                                    0, 0, 0]
+                            end
+                        else
+                            error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        end
+                    end
+                    push!(σ, s)
                 end
             end
-            push!(σ, s)
         end
     end
     sigma = StressField(σ, numElem, nsteps)
@@ -1201,8 +1247,8 @@ function plotOnPath(problem, pathName, field, points; numOfStep=0, name="path", 
     for i in 1:points
         pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
         cv[1:3] = pt1 - pt0
-        val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3])
-        if dis == 0
+	val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3])
+        if dis < 1e-5
             if numComponents == 1
                 v = val[1]
             elseif numComponents == 3
