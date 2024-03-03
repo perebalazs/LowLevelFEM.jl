@@ -8,23 +8,21 @@ import .gmsh
 export gmsh
 
 """
-    Problem(; E=..., ν=..., ρ=..., thickness=..., type=...)
+    Problem(names; thickness=..., type=...)
 
 A structure containing the most important data of the problem. 
 - name of the model (in gmsh)
 - type of the problem: 3D "Solid", "PlaneStrain" or "PlaneStress"
 - dimension of the problem, determined from `type`
-- material constants: Young's modulus, Poisson's ratio, mass density
+- material constants: Physical group, Young's modulus, Poisson's ratio,
+  mass density (in vector of tuples `names`)
 - thickness of the plate
 - number of nodes (non)
 
 Types:
-- `name`: string
+- `names`: Vector{Touple{String, Float64, Float64, Float64}}
 - `type`: string
 - `dim`: Integer
-- `E`: double
-- `ν`: double
-- `ρ`: double
 - `thickness`: double
 - `non`: Integer
 """
@@ -55,7 +53,7 @@ struct Problem
         for i in 1:length(elementTags)
             for j in 1:length(elementTags[i])
                 push!(elemTags, elementTags[i][j])
-	    end
+	        end
         end
         oldTags, newTags = gmsh.model.mesh.computeRenumbering("RCMK", elemTags)
         gmsh.model.mesh.renumberNodes(oldTags, newTags)
@@ -94,8 +92,8 @@ the mass density.
 Return: mat
 
 Types:
-- `mat`: Tuple(string, double, double, double)
-- `name`: string
+- `mat`: Tuple(String, Float64, Float64, Float64)
+- `name`: String
 - `E`: double
 - `ν`: double
 - `ρ`: double
@@ -154,8 +152,7 @@ Return: none
 Types:
 - ``: x
 """
-function generateMesh(problem, surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
-    gmsh.model.setCurrent(problem.name)
+function generateMesh(surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
     all = gmsh.model.getEntities(0)
     gmsh.model.mesh.setSize(all, elemSize)
     gmsh.model.mesh.setAlgorithm(2, surf, algorithm)
@@ -174,7 +171,7 @@ end
 
 
 """
-    FEM.stiffnessMatrix(problem; name, E=..., ν=...)
+    FEM.stiffnessMatrix(problem)
 
 Solves the stiffness matrix of the `problem`.
 
@@ -182,10 +179,7 @@ Return: `stiffMat`
 
 Types:
 - `problem`: Problem
-- `name`: string - unused
-- `E`: double - unused
-- `ν`: double - unused
-- `stiffMat`: Matrix
+- `stiffMat`: SparseMatrix
 """
 function stiffnessMatrix(problem; elements=[])
     gmsh.model.setCurrent(problem.name)
@@ -288,7 +282,7 @@ function stiffnessMatrix(problem; elements=[])
                     end
                     K1 .*= 0
                     for k in 1:numIntPoints
-                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes] # B1[...] .= B[...] ????
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes]
                         K1 += B1' * D * B1 * b * jacDet[k] * intWeights[k]
                     end
                     for k in 1:dim
@@ -309,7 +303,7 @@ function stiffnessMatrix(problem; elements=[])
 end
 
 """
-    FEM.massMatrix(problem; name, ρ=..., lumped=...)
+    FEM.massMatrix(problem; lumped=...)
 
 Solves the mass matrix of the `problem`. If `lumped` is true, solves lumped mass matrix.
 
@@ -317,10 +311,8 @@ Return: `massMat`
 
 Types:
 - `problem`: Problem
-- `name`: string - unused
-- `ρ`: double - unused
-- `lumped`: boolean
-- `massMat`: Matrix
+- `lumped`: Boolean
+- `massMat`: SparseMatrix
 """
 function massMatrix(problem; elements=[], lumped=true)
     gmsh.model.setCurrent(problem.name)
@@ -430,7 +422,7 @@ Return: `loadVec`
 
 Types:
 - `problem`: Problem
-- `loads`: Tuple(string, double, double, double)
+- `loads`: Vector{Tuple{String, Float64, Float64, Float64}}
 - `loadVec`: Vector
 """
 function loadVector(problem, loads)
@@ -521,9 +513,9 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `stiffMat`: Matrix 
+- `stiffMat`: SparseMatrix 
 - `loadVec`: Vector 
-- `supports`: Tuple(string, double, double, double)
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions!(problem, stiffMat, loadVec, supports)
     dof, dof = size(stiffMat)
@@ -547,9 +539,9 @@ Return: `stiffMat`, `loadVec`
 
 Types:
 - `problem`: Problem
-- `stiffMat`: Matrix 
+- `stiffMat`: SparseMatrix 
 - `loadVec`: Vector 
-- `supports`: Tuple(string, double, double, double)
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions(problem, stiffMat0, loadVec0, supports)
     dof, dof = size(stiffMat0)
@@ -571,8 +563,8 @@ Returns `tags` of elements of physical group `name`.
 Return: `tags`
 
 Types:
-- `name`: string
-- `tags`: vector of integers
+- `name`: String
+- `tags`: Vector{Integer}
 """
 function getTagForPhysicalName(name)
     dimTags = gmsh.model.getPhysicalGroups(-1)
@@ -583,7 +575,6 @@ function getTagForPhysicalName(name)
             error("Physical name '$name' does not exist.")
         end
     end
-    #display("$name $(dimTags[i])")
     return dimTags[i][2]
 end
 
@@ -599,9 +590,11 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `stiffMat`: Matrix 
-- `loadVec`: Vector 
-- `supports`: Tuple(string, double, double, double)
+- `stiffMat`: SparseMatrix 
+- `massMat`: SparseMatrix 
+- `dampMat`: SparseMatrix 
+- `loadVec`: Vector{Float64}
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
     gmsh.model.setCurrent(problem.name)
@@ -707,9 +700,9 @@ Solves the equation K*q=f for the displacement vector `q`. `K` is the stiffness 
 Return: `q`
 
 Types:
-- `K`: Matrix 
-- `f`: Vector 
-- `q`: Vector 
+- `K`: SparseMatrix 
+- `f`: Vector{Float64} 
+- `q`: Vector{Float64}
 """
 function solveDisplacement(K, f)
     return K \ f
@@ -726,7 +719,7 @@ Return: `S`
 
 Types:
 - `problem`: Problem
-- `q`: Vector
+- `q`: Vector{Float64}
 - `S`: StressField
 """
 function solveStress(problem, q)
@@ -768,7 +761,6 @@ function solveStress(problem, q)
             error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
-        #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
         for idm in 1:length(dimTags)
             dimTag = dimTags[idm]
@@ -865,11 +857,11 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `name`: string 
-- `u0`: Vector 
-- `ux`: Double 
-- `uy`: Double 
-- `uz`: Double 
+- `name`: String 
+- `u0`: Vector{Float64}
+- `ux`: Float64 
+- `uy`: Float64 
+- `uz`: Float64 
 """
 function initialDisplacement!(problem, name, u0; ux=1im, uy=1im, uz=1im)
     dim = problem.dim
@@ -903,11 +895,11 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `name`: string 
-- `v0`: Vector 
-- `vx`: Double 
-- `vy`: Double 
-- `vz`: Double 
+- `name`: String 
+- `v0`: Vector{Float64}
+- `vx`: Float64 
+- `vy`: Float64 
+- `vz`: Float64 
 """
 function initialVelocity!(problem, name, v0; vx=1im, vy=1im, vz=1im)
     initialDisplacement!(problem, name, v0, ux=vx, uy=vy, uz=vz)
@@ -924,11 +916,11 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `name`: string 
-- `f0`: Vector 
-- `fx`: Double 
-- `fy`: Double 
-- `fz`: Double 
+- `name`: String 
+- `f0`: Vector{Float64}
+- `fx`: Float64 
+- `fy`: Float64 
+- `fz`: Float64 
 """
 function nodalForce!(problem, name, f0; fx=1im, fy=1im, fz=1im)
     initialDisplacement!(problem, name, f0, ux=fx, uy=fy, uz=fz)
@@ -945,11 +937,11 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `name`: string 
-- `a0`: Vector 
-- `ax`: Double 
-- `ay`: Double 
-- `az`: Double 
+- `name`: String 
+- `a0`: Vector{Float64}
+- `ax`: Float64
+- `ay`: Float64
+- `az`: Float64
 """
 function nodalAcceleration!(problem, name, a0; ax=1im, ay=1im, az=1im)
     initialDisplacement!(problem, name, a0, ux=ax, uy=ay, uz=az)
@@ -964,18 +956,17 @@ matrix `K` and the mass matrix `M`.`
 Return: `Δt`
 
 Types:
-- `K`: Matrix
-- `M`: Matrix
-- `Δt`: Double 
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `Δt`: Float64 
 """
 function smallestPeriodTime(K, M)
     ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LM)
 
-    err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1])
-    if err > 300#1e-6 || true
+    err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
+    if err > 1e-3 # || true
         error("Túl nagy a hiba a legnagyobb sajátérték számításánál: $err")
     end
-    #Δt = 2π / √(real(ω²[1]))
     Δt = 2π / √(real(abs(ω²[1])))
     return Δt
 end
@@ -994,17 +985,17 @@ and a vector `t` of the time instants used.
 Return: `u`, `v`, `t`
 
 Types:
-- `K`: Matrix
-- `M`: Matrix
-- `C`: Matrix
-- `f`: Vector
-- `u0`: Vector
-- `v0`: Vector
-- `T`: Double 
-- `Δt`: Double 
-- `u`: Matrix
-- `v`: Matrix
-- `t`: Vector
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `C`: SparseMatrix
+- `f`: Vector{Float64}
+- `u0`: Vector{Float64}
+- `v0`: Vector{Float64}
+- `T`: Float64
+- `Δt`: Float64 
+- `u`: Matrix{Float64}
+- `v`: Matrix{Float64}
+- `t`: Vector{Float64}
 """
 function CDM(K, M, C, f, u0, v0, T, Δt)
     invM = spdiagm(1 ./ diag(M))
@@ -1057,11 +1048,12 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `q`: Vector or Matrix
-- `comp`: string
-- `t`: Vector
-- `name`: string
+- `q`: Vector{Matrix}
+- `comp`: String
+- `t`: Vector{Float64}
+- `name`: String
 - `visible`: Boolean
+- `tag`: Integer
 """
 function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
     gmsh.model.setCurrent(problem.name)
@@ -1129,11 +1121,12 @@ Return: `tag`
 Types:
 - `problem`: Problem
 - `S`: StressField
-- `comp`: string
-- `t`: Vector
-- `name`: string
+- `comp`: String
+- `t`: Vector{Float64}
+- `name`: String
 - `visible`: Boolean
 - `smooth`: Boolean
+- `tag`: Integer
 """
 function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, smooth=true)
     gmsh.model.setCurrent(problem.name)
@@ -1212,12 +1205,13 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `pathName`: string
+- `pathName`: String
 - `field`: Integer
 - `points`: Integer
 - `numOfStep`: Integer
 - `name`: String
 - `visible`: Boolean
+- `tag`: Integer
 """
 function plotOnPath(problem, pathName, field, points; numOfStep=0, name="path", visible=false)
     gmsh.model.setCurrent(problem.name)

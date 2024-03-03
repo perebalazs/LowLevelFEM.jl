@@ -40,13 +40,12 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] 3D (and 2D) beam structures
 - [ ] Shells
 - [ ] Giving loads and prescribed displacements with functions
-- [ ] Different material properties on physical groups
+- [x] Different material properties on physical groups
 - [ ] Contact problems,
   
   - [ ] in 2D,
   - [ ] in 3D,
   - [ ] with Lagrange multiplier method.
-- [ ] Using different materials within a model.
 - [ ] Defining and using coordinate systems,
   
   - [ ] cartesian at arbitrary position and arbitrary orientation,
