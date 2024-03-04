@@ -328,13 +328,13 @@ FEM.applyBoundaryConditions!(problem, K, M, C, f, [supp]);
 Tₘᵢₙ = FEM.smallestPeriodTime(K, M)
 q = FEM.solveDisplacement(K, f)
 
-dim, dim = size(K)
-u0 = zeros(dim)
-v0 = zeros(dim)
+dof, dof = size(K)
+u0 = zeros(dof)
+v0 = zeros(dof)
 FEM.initialDisplacement!(problem, "supp", u0, ux=0)
 FEM.initialVelocity!(problem, "body", v0, vx=1000)
 FEM.initialVelocity!(problem, "supp", v0, vx=0)
-f = zeros(dim)
+f = zeros(dof)
 
 E = problem.material[1][2]
 ρ = problem.material[1][4]
@@ -371,6 +371,8 @@ sanim = FEM.showStressResults(problem, Sanim, "s", t=t[1:sts], name="σ anim", v
 gmsh.fltk.run()
 gmsh.finalize()
 ```
+
+For more examples see [examples on GitHub](https://github.com/perebalazs/LowLevelFEM.jl/tree/main/examples)
 
 ---
 

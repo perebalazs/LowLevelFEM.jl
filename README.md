@@ -37,6 +37,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] 3D (and 2D) beam structures
 - [ ] Shells
 - [ ] Giving loads and prescribed displacements with functions
+- [ ] MultiPoint Constraint (like MPC184 in Ansys)
 - [x] Different material properties on physical groups
 - [ ] Contact problems,
   - [ ] in 2D,
@@ -61,14 +62,14 @@ Any suggestions are welcome.
 
 cantilever2D.jl
 ```Julia
-using LinearAlgebra, SparseArrays
 import LowLevelFEM as FEM
 using LowLevelFEM
 
 gmsh.initialize()
 
 gmsh.open("cantilever2D.geo")
-problem = FEM.Problem(type="PlaneStress")
+mat = FEM.material("body", E=2.e5, ν=0.3)
+problem = FEM.Problem([mat], type="PlaneStress")
 
 supp = FEM.displacementConstraint("supp", ux=0, uy=0)
 load = FEM.load("load", fy=-1)
@@ -130,14 +131,14 @@ Physical Curve("path", 8) = {5};
 
 cantilever3D.jl
 ```Julia
-using LinearAlgebra, SparseArrays
 import LowLevelFEM as FEM
 using LowLevelFEM
 
 gmsh.initialize()
 
 gmsh.open("cantilever3D.geo")
-problem = FEM.Problem()
+mat = FEM.material("body", E=2.e5, ν=0.3)
+problem = FEM.Problem([mat])
 
 supp = FEM.displacementConstraint("supp", ux=0, uy=0, uz=0)
 load = FEM.load("load", fy=-1)
@@ -199,6 +200,8 @@ Line(13) = {9, 10};
 
 Physical Curve("path", 16) = {13};
 ```
+
+For more examples see [Documentation](https://docs.juliahub.com/General/LowLevelFEM) or [examples on GitHub](https://github.com/perebalazs/LowLevelFEM.jl/tree/main/examples)
 
 ---
 

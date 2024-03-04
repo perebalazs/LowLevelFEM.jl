@@ -40,6 +40,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] 3D (and 2D) beam structures
 - [ ] Shells
 - [ ] Giving loads and prescribed displacements with functions
+- [ ] MultiPoint Constraint (like MPC184 in Ansys)
 - [x] Different material properties on physical groups
 - [ ] Contact problems,
   

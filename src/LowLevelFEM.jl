@@ -8,11 +8,12 @@ import .gmsh
 export gmsh
 
 """
-    Problem(names; thickness=..., type=...)
+    Problem(names; thickness=..., type=..., bandwidth=...)
 
 A structure containing the most important data of the problem. 
 - name of the model (in gmsh)
 - type of the problem: 3D "Solid", "PlaneStrain" or "PlaneStress"
+- bandwidth optimization using built-in `gmsh` function. Possibilities: "RCMK" (default), Hilbert" and "Metis"
 - dimension of the problem, determined from `type`
 - material constants: Physical group, Young's modulus, Poisson's ratio,
   mass density (in vector of tuples `names`)
@@ -21,9 +22,10 @@ A structure containing the most important data of the problem.
 
 Types:
 - `names`: Vector{Touple{String, Float64, Float64, Float64}}
-- `type`: string
+- `type`: String
+- `bandwidth`: String
 - `dim`: Integer
-- `thickness`: double
+- `thickness`: Float64
 - `non`: Integer
 """
 struct Problem
@@ -33,7 +35,7 @@ struct Problem
     material::Vector{Tuple{String, Float64, Float64, Float64}}
     thickness::Float64
     non::Int64
-    function Problem(mat; thickness=1, type="Solid")
+    function Problem(mat; thickness=1, type="Solid", bandwidth="RCMK")
         if type == "Solid"
             dim = 3
         elseif type == "PlaneStress"
@@ -55,8 +57,16 @@ struct Problem
                 push!(elemTags, elementTags[i][j])
 	        end
         end
-        oldTags, newTags = gmsh.model.mesh.computeRenumbering("RCMK", elemTags)
-        gmsh.model.mesh.renumberNodes(oldTags, newTags)
+
+        if bandwidth != "RCMK" && bandwidth != "Hilbert" && bandwidth != "Metis"
+            error("Problem: bandwidth can be 'Hilbert', 'Metis', or 'RCMK'. Now it is '$(bandwidth)'")
+        end
+
+        method = bandwidth == "none" ? "RCMK" : bandwidth
+        oldTags, newTags = gmsh.model.mesh.computeRenumbering(method, elemTags)
+        if bandwidth != "none"
+            gmsh.model.mesh.renumberNodes(oldTags, newTags)
+        end
 
         non = length(oldTags)
         return new(name, type, dim, material, thickness, non)
