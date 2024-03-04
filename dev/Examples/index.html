@@ -282,13 +282,13 @@ FEM.applyBoundaryConditions!(problem, K, M, C, f, [supp]);
 Tₘᵢₙ = FEM.smallestPeriodTime(K, M)
 q = FEM.solveDisplacement(K, f)
 
-dim, dim = size(K)
-u0 = zeros(dim)
-v0 = zeros(dim)
+dof, dof = size(K)
+u0 = zeros(dof)
+v0 = zeros(dof)
 FEM.initialDisplacement!(problem, &quot;supp&quot;, u0, ux=0)
 FEM.initialVelocity!(problem, &quot;body&quot;, v0, vx=1000)
 FEM.initialVelocity!(problem, &quot;supp&quot;, v0, vx=0)
-f = zeros(dim)
+f = zeros(dof)
 
 E = problem.material[1][2]
 ρ = problem.material[1][4]
@@ -323,4 +323,4 @@ Sanim = FEM.solveStress(problem, u[:, 1:sts])
 sanim = FEM.showStressResults(problem, Sanim, &quot;s&quot;, t=t[1:sts], name=&quot;σ anim&quot;, visible=false, smooth=false);
 
 gmsh.fltk.run()
-gmsh.finalize()</code></pre><hr/></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../Functions/">« Functions</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.3.0 on <span class="colophon-date" title="Sunday 3 March 2024 23:37">Sunday 3 March 2024</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+gmsh.finalize()</code></pre><p>For more examples see <a href="https://github.com/perebalazs/LowLevelFEM.jl/tree/main/examples">examples on GitHub</a></p><hr/></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../Functions/">« Functions</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.3.0 on <span class="colophon-date" title="Monday 4 March 2024 14:25">Monday 4 March 2024</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
