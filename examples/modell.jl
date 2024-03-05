@@ -5,7 +5,7 @@ gmsh.initialize()
 
 gmsh.open("modell.geo")
 mat = FEM.material("body", E=1.96e5, ν=0.25, ρ=7.874e-9)
-problem = FEM.Problem([mat], type="PlaneStress")
+problem = FEM.Problem([mat], type="PlaneStress", bandwidth="RCMK")
 
 supp = FEM.displacementConstraint("supp", ux=0, uy=0)
 load = FEM.load("load", fx=-10)
@@ -14,6 +14,8 @@ K = FEM.stiffnessMatrix(problem)
 M = FEM.massMatrix(problem, lumped=false)
 f = FEM.loadVector(problem, [load])
 C = K * 0
+
+display(K)
 
 FEM.applyBoundaryConditions!(problem, K, M, C, f, [supp])
 

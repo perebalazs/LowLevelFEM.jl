@@ -48,25 +48,37 @@ struct Problem
         name = gmsh.model.getCurrent()
         gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
         gmsh.option.setString("View.Format", "%.6g")
-        
+
         material = mat
         elemTags = []
-        elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(dim,-1)
-        for i in 1:length(elementTags)
-            for j in 1:length(elementTags[i])
-                push!(elemTags, elementTags[i][j])
-	        end
+        for ipg in 1:length(material)
+            phName, E, ν, ρ = material[ipg]
+            dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+            for idm in 1:length(dimTags)
+                dimTag = dimTags[idm]
+                edim = dimTag[1]
+                etag = dimTag[2]
+                elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
+                for i in 1:length(elementTags)
+                    for j in 1:length(elementTags[i])
+                        push!(elemTags, elementTags[i][j])
+                    end
+                end
+            end
         end
 
-        if bandwidth != "RCMK" && bandwidth != "Hilbert" && bandwidth != "Metis"
+        if bandwidth != "RCMK" && bandwidth != "Hilbert" && bandwidth != "Metis" && bandwidth != "none"
             error("Problem: bandwidth can be 'Hilbert', 'Metis', or 'RCMK'. Now it is '$(bandwidth)'")
         end
 
         method = bandwidth == "none" ? "RCMK" : bandwidth
         oldTags, newTags = gmsh.model.mesh.computeRenumbering(method, elemTags)
-        if bandwidth != "none"
-            gmsh.model.mesh.renumberNodes(oldTags, newTags)
+        if bandwidth == "none"
+            permOldTags = sortperm(oldTags)
+            sortNewTags = 1:length(oldTags)
+            newTags[permOldTags] = sortNewTags
         end
+        gmsh.model.mesh.renumberNodes(oldTags, newTags)
 
         non = length(oldTags)
         return new(name, type, dim, material, thickness, non)
