@@ -58,6 +58,9 @@ struct Problem
                 dimTag = dimTags[idm]
                 edim = dimTag[1]
                 etag = dimTag[2]
+                if edim != dim
+                    error("Problem: dimension of the problem ($dim) is different than the dimension of finite elements ($edim).")
+                end
                 elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
                 for i in 1:length(elementTags)
                     for j in 1:length(elementTags[i])
@@ -285,7 +288,7 @@ function stiffnessMatrix(problem; elements=[])
                     end
                     ∂h .*= 0
                     for k in 1:numIntPoints, l in 1:numNodes
-                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
                     end
                     B .*= 0
                     if dim == 2 && rowsOfB == 3
@@ -839,7 +842,7 @@ function solveStress(problem, q)
                     end
                     s = zeros(9numNodes, nsteps) # tensors have nine elements
                     for k in 1:numNodes
-                        if rowsOfB == 6 && dim == 3
+                        if rowsOfB == 6 && dim == 3 && problem.type == "Solid"
                             B1 = B[k*6-5:k*6, 1:3*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q[nn2, kk]
@@ -854,6 +857,7 @@ function solveStress(problem, q)
                                 s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
                                     s0[3], s0[2], 0,
                                     0, 0, 0]
+                                    # PlaneStain: σz ≠ 0
                             end
                         else
                             error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
@@ -1257,7 +1261,7 @@ function plotOnPath(problem, pathName, field, points; numOfStep=0, name="path", 
     for i in 1:points
         pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
         cv[1:3] = pt1 - pt0
-	val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3])
+        val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3])
         if dis < 1e-5
             if numComponents == 1
                 v = val[1]
