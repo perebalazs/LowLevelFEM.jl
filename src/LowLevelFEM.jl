@@ -1084,7 +1084,15 @@ Types:
 function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
     gmsh.model.setCurrent(problem.name)
     dim = problem.dim
-    nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
+    nodeTags = []
+    for ipg in 1:length(problem.material)
+        phName, E, ν, ρ = problem.material[ipg]
+        tag = getTagForPhysicalName(phName)
+        nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
+        append!(nodeTags, nT)
+    end
+
+    #nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
     non = length(nodeTags)
     uvec = gmsh.view.add(name)
     if size(q, 2) != length(t)
@@ -1157,8 +1165,8 @@ Types:
 function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, smooth=true)
     gmsh.model.setCurrent(problem.name)
     dim = problem.dim
-    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
-    elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
+    #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
+    #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
     if S.nsteps != length(t)
         error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
