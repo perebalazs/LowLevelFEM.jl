@@ -75,6 +75,8 @@ Physical Curve("path", 8) = {5};
 
 ## 3D Cantilever
 
+![$\sigma_x$ on deformed shape](pic/bending_3D.png)
+
 cantilever3D.jl
 ```Julia
 import LowLevelFEM as FEM
@@ -148,6 +150,14 @@ Physical Curve("path", 16) = {13};
 ```
 
 ## L-shaped plate
+
+![Mesh with a path for graphs](pic/Lshaped_mesh.png)
+
+![Fillet](pic/Lshaped_mesh2.png)
+
+![Equivalent stress](pic/sigma_eqv.png)
+
+![Equivalent stress on path](pic/sigma_eqv_path.png)
 
 LshapedPlate.jl
 ```Julia
