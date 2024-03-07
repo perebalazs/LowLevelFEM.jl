@@ -2,6 +2,10 @@
 
 ## 2D Cantilever
 
+![$\sigma_x$ on deformed shape](pic/bending_2D.png)
+
+![$\sigma_x$ and $\tau_{yx}$ on path](pic/bending_2D_path.png)
+
 cantilever2D.jl
 ```Julia
 import LowLevelFEM as FEM
@@ -260,6 +264,8 @@ Physical Curve("path", 10) = {8};
 ```
 
 ## Wave propagation in a plate
+
+![velocity field](pic/wave.mp4)
 
 wavePropagation.jl
 ```Julia
