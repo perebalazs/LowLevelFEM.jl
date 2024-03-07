@@ -3,7 +3,7 @@
 
 # LowLevelFEM
 
-Solution of a problem in linear elasticity using Finite Element Method consists of solution of the stiffness matrix $\mathbf{K}$ and load vector $\mathbf{f}$, modifying them according to the boundary conditions (getting $\tilde{\mathbf{K}}$ and $\tilde{\mathbf{f}}$), solving the displacement field $\mathbf{q}$ as the result of the system of equations $\tilde{\mathbf{K}}\mathbf{q}=\tilde{\mathbf{f}}$, solving the stress field from $\mathbf{q}$ and visualize them.
+Solution of a problem in linear elasticity using Finite Element Method consists of solution of the stiffness matrix ``\mathbf{K}`` and load vector $\mathbf{f}$, modifying them according to the boundary conditions (getting $\tilde{\mathbf{K}}$ and $\tilde{\mathbf{f}}$), solving the displacement field $\mathbf{q}$ as the result of the system of equations $\tilde{\mathbf{K}}\mathbf{q}=\tilde{\mathbf{f}}$, solving the stress field from $\mathbf{q}$ and visualize them.
 The above described steps can be easily performed using the LowLevelFEM package. Each step means a function with the appropriate parameters, while at any step it is possible to perform an arbitrary operation with the quantities calculated in the meantime. For example the strain energy can be solved as $U=\frac{1}{2}\mathbf{q}^T\mathbf{K}\mathbf{q}$, for which the code is simply ```U=q'*K*q/2.```(see Examples)
 
 # Features
@@ -44,12 +44,12 @@ The above described steps can be easily performed using the LowLevelFEM package.
   - [ ] in 3D,
   - [ ] with Lagrange multiplier method.
 - [ ] Defining and using coordinate systems,
-	- [ ] cartesian at arbitrary position and arbitrary orientation,
-	- [ ] cylindrical.
+  - [ ] cartesian at arbitrary position and arbitrary orientation,
+  - [ ] cylindrical.
 - [ ] Finite deformations.
 - [ ] Heat conduction problems,
-	- [ ] solving conductivity matrix,
-	- [ ] solving heat capacity matrix.
+  - [ ] solving conductivity matrix,
+  - [ ] solving heat capacity matrix.
 - [ ] Dynamic transient problems with HHT-α (or Newmark).
 - [ ] Linear buckling.
 - [ ] Modal analysis (eigenfrequencies, modal shapes).
@@ -61,6 +61,7 @@ Any suggestions are welcome.
 ## 2D Cantilever
 
 cantilever2D.jl
+
 ```Julia
 import LowLevelFEM as FEM
 using LowLevelFEM
@@ -100,6 +101,7 @@ gmsh.finalize()
 ```
 
 cantilever2D.geo
+
 ```gmsh
 SetFactory("OpenCASCADE");
 
@@ -130,6 +132,7 @@ Physical Curve("path", 8) = {5};
 ## 3D Cantilever
 
 cantilever3D.jl
+
 ```Julia
 import LowLevelFEM as FEM
 using LowLevelFEM
@@ -173,6 +176,7 @@ gmsh.finalize()
 ```
 
 cantilever3D.geo
+
 ```gmsh
 SetFactory("OpenCASCADE");
 
