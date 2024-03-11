@@ -1083,6 +1083,7 @@ Types:
 """
 function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
     gmsh.model.setCurrent(problem.name)
+    gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
     nodeTags = []
     for ipg in 1:length(problem.material)
@@ -1121,20 +1122,20 @@ function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
             end
             u = zeros(non)
             for i in 1:length(nodeTags)
-                u[i] = dim == 2 && k == 3 ? 0 : q[dim*nodeTags[i]-(dim-k)]
+                u[i] = dim == 2 && k == 3 ? 0 : q[dim*nodeTags[i]-(dim-k), j]
             end
         end
         gmsh.view.addHomogeneousModelData(uvec, j-1, problem.name, "NodeData", nodeTags, u, t[j], nc)
     end
 
     gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
-    gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 1)
+    gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 0)
     gmsh.view.option.setNumber(uvec, "TargetError", -1e-4)
     gmsh.view.option.setNumber(uvec, "MaxRecursionLevel", 1)
     if visible == false
         gmsh.view.option.setNumber(uvec, "Visible", 0)
     end
-    display("$comp..ok")
+    #display("$comp..ok")
     return uvec
 end
 
@@ -1164,6 +1165,7 @@ Types:
 """
 function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, smooth=true)
     gmsh.model.setCurrent(problem.name)
+    gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
     #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
     #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
@@ -1214,13 +1216,13 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
         gmsh.plugin.run("Smooth")
     end
 
-    gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 1)
+    gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 0)
     gmsh.view.option.setNumber(SS, "TargetError", -1e-4)
     gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
     if visible == false
         gmsh.view.option.setNumber(SS, "Visible", 0)
     end
-    display("$comp..ok")
+    #display("$comp..ok")
     return SS
 end
 
