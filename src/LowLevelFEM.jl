@@ -1227,13 +1227,13 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
 end
 
 """
-    FEM.plotOnPath(problem, pathName, field, points; numOfSteps=..., name=..., visible=...)
+    FEM.plotOnPath(problem, pathName, field, points; steps=..., name=..., visible=...)
 
 Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
 gmsh from which the data of a field is imported. `pathName` is the name of a
 physical group which contains a curve. The curve is devided into equal length
 intervals with number of `points` points. The field is shown at this points.
-`numOfSteps` is the sequence number of steps. `name` is the title of graph and
+`steps` is the sequence number of steps. `name` is the title of graph and
 `visible` is a true or false value to toggle on or off the initial visibility 
 in gmsh. This function returns the tag of View.
 
@@ -1244,12 +1244,12 @@ Types:
 - `pathName`: String
 - `field`: Integer
 - `points`: Integer
-- `numOfStep`: Integer
+- `step`: Integer
 - `name`: String
 - `visible`: Boolean
 - `tag`: Integer
 """
-function plotOnPath(problem, pathName, field, points; numOfStep=0, name="path", visible=false)
+function plotOnPath(problem, pathName, field, points; step=0, name="path", visible=false)
     gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
     i = 1
@@ -1260,7 +1260,7 @@ function plotOnPath(problem, pathName, field, points; numOfStep=0, name="path", 
         end
     end
     path = dimTags[i][2]
-    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, numOfStep)
+    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, step)
     bounds = gmsh.model.getParametrizationBounds(1, path)
     bound1 = bounds[1][1]
     bound2 = bounds[2][1]
@@ -1271,7 +1271,7 @@ function plotOnPath(problem, pathName, field, points; numOfStep=0, name="path", 
     for i in 1:points
         pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
         cv[1:3] = pt1 - pt0
-        val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3])
+        val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], step)
         if dis < 1e-5
             if numComponents == 1
                 v = val[1]
