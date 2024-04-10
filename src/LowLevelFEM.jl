@@ -1143,7 +1143,7 @@ end
     FEM.showStressResults(problem, S, comp; t=..., name=..., visible=..., smooth=...)
 
 Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
-the component of the field ("s", "sx", "sy", "sz", "sxy", "syz", "szx"),
+the component of the field ("s", "sx", "sy", "sz", "sxy", "syz", "szx", "seqv"),
 `t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
@@ -1181,6 +1181,23 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
         if comp == "s"
             σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
             nc = 9
+        elseif comp == "seqv"
+            nc = 1
+            σcomp = []
+            sizehint!(σcomp, length(numElem))
+            for i in 1:length(S.numElem)
+                seqv = zeros(div(size(σ[i], 1), 9))
+                for j in 1:(div(size(σ[i], 1), 9))
+                    sx = σ[i][9j-8, jj]
+                    sy = σ[i][9j-4, jj]
+                    sz = σ[i][9j-0, jj]
+                    sxy = σ[i][9j-7, jj]
+                    syz = σ[i][9j-3, jj]
+                    szx = σ[i][9j-6, jj]
+                    seqv[j] = √(((sx-sy)^2+(sy-sz)^2+(sz-sx)^2)/2. + 3*(sxy^2+syz^2+szx^2))
+                end
+                push!(σcomp, seqv)
+            end
         else
             nc = 1
             if comp == "sx"
@@ -1227,13 +1244,13 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
 end
 
 """
-    FEM.plotOnPath(problem, pathName, field, points; steps=..., name=..., visible=...)
+    FEM.plotOnPath(problem, pathName, field, points; step=..., name=..., visible=...)
 
 Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
 gmsh from which the data of a field is imported. `pathName` is the name of a
 physical group which contains a curve. The curve is devided into equal length
 intervals with number of `points` points. The field is shown at this points.
-`steps` is the sequence number of steps. `name` is the title of graph and
+`step` is the sequence number of displayed step. If no step is given, shows all the aviable steps as an animation. `name` is the title of graph and
 `visible` is a true or false value to toggle on or off the initial visibility 
 in gmsh. This function returns the tag of View.
 
@@ -1249,7 +1266,7 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function plotOnPath(problem, pathName, field, points; step=0, name="path", visible=false)
+function plotOnPath(problem, pathName, field, points; step=1im, name="path", visible=false)
     gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
     i = 1
@@ -1260,32 +1277,42 @@ function plotOnPath(problem, pathName, field, points; step=0, name="path", visib
         end
     end
     path = dimTags[i][2]
-    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, step)
+    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
     bounds = gmsh.model.getParametrizationBounds(1, path)
     bound1 = bounds[1][1]
     bound2 = bounds[2][1]
     step0 = (bound2 - bound1) / (points - 1)
-    cv = zeros(4)
+    nbstep = Int(gmsh.view.option.getNumber(field, "NbTimeStep"))
+    cv = zeros(3 + nbstep)
     CoordValue = []
     pt0 = gmsh.model.getValue(1, path, [bound1])
+    #val, dis = gmsh.view.probe(field, pt0[1], pt0[2], pt0[3])
+    #display(val)
+    if step == 1im
+        stepRange = 1:nbstep
+    else
+        stepRange = step + 1
+    end
     for i in 1:points
         pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
         cv[1:3] = pt1 - pt0
-        val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], step)
-        if dis < 1e-5
-            if numComponents == 1
-                v = val[1]
-            elseif numComponents == 3
-                v = √(val[1]^2 + val[1]^2 + val[1]^2)
-            elseif numComponents == 9
-                v = √(0.5 * ((val[1] - val[5])^2 + (val[5] - val[9])^2 + (val[9] - val[1])^2 + 6 * (val[2]^2 + val[3]^2 + val[6]^2)))
+        for j in 1:length(stepRange)
+            val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], stepRange[j] - 1)
+            if dis < 1e-5
+                if numComponents == 1
+                    v = val[1]
+                elseif numComponents == 3
+                    v = √(val[1]^2 + val[2]^2 + val[3]^2)
+                elseif numComponents == 9
+                    v = √(0.5 * ((val[1] - val[5])^2 + (val[5] - val[9])^2 + (val[9] - val[1])^2 + 6 * (val[2]^2 + val[3]^2 + val[6]^2)))
+                else
+                    error("Vagy skalár vagy vektor vagy tenzor...")
+                end
             else
-                error("Vagy skalás vagy vektor vagy tenzor...")
+                v = 0
             end
-        else
-            v = 0
+            cv[3+j] = v
         end
-        cv[4] = v
         append!(CoordValue, cv)
     end
     pathView = gmsh.view.add(name)
