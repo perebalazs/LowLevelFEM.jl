@@ -1,19 +1,20 @@
 //+
 SetFactory("OpenCASCADE");
+es = 0.5;
 //+
-Point(1) = {0, 0, 0, 1.0};
+Point(1) = {0, 0, 0, es};
 //+
-Point(2) = {100, 0, 0, 1.0};
+Point(2) = {100, 0, 0, es};
 //+
-Point(3) = {100, 49, 0, 1.0};
+Point(3) = {100, 49, 0, es};
 //+
-Point(4) = {100, 51, 0, 1.0};
+Point(4) = {100, 51, 0, es};
 //+
-Point(5) = {100, 100, 0, 1.0};
+Point(5) = {100, 100, 0, es};
 //+
-Point(6) = {0, 100, 0, 1.0};
+Point(6) = {0, 100, 0, es};
 //+
-Point(7) = {0, 50, 0, 1.0};
+Point(7) = {0, 50, 0, es};
 //+
 Line(1) = {1, 2};
 //+
@@ -34,17 +35,19 @@ Curve Loop(1) = {1, 2, 3, 4, 5, 6, 7};
 Plane Surface(1) = {1};
 
 //+
-Transfinite Curve {6, 7} = 51 Using Progression 1;
+Transfinite Curve {6, 7} = 101 Using Progression 1;
 //+
-Transfinite Curve {2, 4} = 50 Using Progression 1;
+Transfinite Curve {2, 4} = 99 Using Progression 1;
 //+
-Transfinite Curve {3} = 3 Using Progression 1;
+Transfinite Curve {3} = 5 Using Progression 1;
 //+
-Transfinite Curve {1, 5} = 101 Using Progression 1;
+Transfinite Curve {1, 5} = 201 Using Progression 1;
 //+
 Transfinite Surface {1} = {1,2,5,6};
 //+
-Recombine Surface {1};
+Transfinite Surface {1} Alternated;
+//+
+//Recombine Surface {1};
 
 
 Mesh 2;
