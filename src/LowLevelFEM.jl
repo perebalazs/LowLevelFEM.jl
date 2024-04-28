@@ -1244,17 +1244,22 @@ function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, 
 end
 
 """
-    FEM.plotOnPath(problem, pathName, field, points; step=..., name=..., visible=...)
+    FEM.plotOnPath(problem, pathName, field, points; step=..., plot=..., name=..., visible=...)
 
 Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
 gmsh from which the data of a field is imported. `pathName` is the name of a
 physical group which contains a curve. The curve is devided into equal length
 intervals with number of `points` points. The field is shown at this points.
-`step` is the sequence number of displayed step. If no step is given, shows all the aviable steps as an animation. `name` is the title of graph and
+`step` is the sequence number of displayed step. If no step is given, shows all 
+the aviable steps as an animation. If `plot` is true, additional return parameters 
+are given back, `x` is a vector of values in horizontal axis, `y` is a vector of 
+values in vertical axis of a plot (see `Plots` package). `name` is the title of graph and
 `visible` is a true or false value to toggle on or off the initial visibility 
 in gmsh. This function returns the tag of View.
 
 Return: `tag`
+or
+Return: `tag`, `x`, `y``
 
 Types:
 - `problem`: Problem
@@ -1262,13 +1267,19 @@ Types:
 - `field`: Integer
 - `points`: Integer
 - `step`: Integer
+- `plot`: Boolean
 - `name`: String
 - `visible`: Boolean
 - `tag`: Integer
+- `x`: Vector{Float64}
+- `y`: Vector{Float64}
 """
-function plotOnPath(problem, pathName, field, points; step=1im, name="path", visible=false)
+function plotOnPath(problem, pathName, field, points; step=1im, plot=false, name="path", visible=false)
     gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
+    if points < 2
+        error("plotOnPath: number of points is less than two (points = $points)!")
+    end
     i = 1
     while dimTags[i][1] != 1
         i += 1
@@ -1283,7 +1294,6 @@ function plotOnPath(problem, pathName, field, points; step=1im, name="path", vis
     bound2 = bounds[2][1]
     step0 = (bound2 - bound1) / (points - 1)
     nbstep = Int(gmsh.view.option.getNumber(field, "NbTimeStep"))
-    cv = zeros(3 + nbstep)
     CoordValue = []
     pt0 = gmsh.model.getValue(1, path, [bound1])
     #val, dis = gmsh.view.probe(field, pt0[1], pt0[2], pt0[3])
@@ -1291,12 +1301,17 @@ function plotOnPath(problem, pathName, field, points; step=1im, name="path", vis
     if step == 1im
         stepRange = 1:nbstep
     else
-        stepRange = step + 1
+        stepRange = step >= nbstep ? nbstep : step + 1
+        if step >= nbstep
+            warn("plotOnPath: step is greater than max. number of steps (max. number is chosen)  $step <==> $nbstep!")
+        end
     end
+    cv = zeros(3 + length(stepRange))
     for i in 1:points
         pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
         cv[1:3] = pt1 - pt0
         for j in 1:length(stepRange)
+            v = 0
             val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], stepRange[j] - 1)
             if dis < 1e-5
                 if numComponents == 1
@@ -1324,7 +1339,30 @@ function plotOnPath(problem, pathName, field, points; step=1im, name="path", vis
     if visible == false
         gmsh.view.option.setNumber(pathView, "Visible", 0)
     end
-    return pathView
+
+    if plot == true
+        step = step == 1im ? 0 : step
+        step = 0
+        x = zeros(points)
+        y = zeros(points)
+        y[1] = CoordValue[4+step]
+        x0 = 0
+        y0 = 0
+        z0 = 0
+        for i in 2:points
+            x1 = CoordValue[(length(stepRange)+3)*(i-1)+1]
+            y1 = CoordValue[(length(stepRange)+3)*(i-1)+2]
+            z1 = CoordValue[(length(stepRange)+3)*(i-1)+3]
+            x[i] = x[i-1] + √((x1 - x0)^2 + (y1 - y0)^2 + (z1 - z0)^2)
+            y[i] = CoordValue[(length(stepRange)+3)*(i-1)+4+step]
+            x0 = x1
+            y0 = y1
+            z0 = z1
+        end
+        return pathView, x, y
+    else
+        return pathView
+    end
 end
 
 end #module

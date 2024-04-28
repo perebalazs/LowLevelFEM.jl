@@ -45,9 +45,9 @@ Transfinite Curve {1, 5} = 201 Using Progression 1;
 //+
 Transfinite Surface {1} = {1,2,5,6};
 //+
-Transfinite Surface {1} Alternated;
+//Transfinite Surface {1} Alternated;
 //+
-//Recombine Surface {1};
+Recombine Surface {1};
 
 
 Mesh 2;
