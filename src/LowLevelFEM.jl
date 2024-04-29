@@ -1258,8 +1258,10 @@ values in vertical axis of a plot (see `Plots` package). `name` is the title of 
 in gmsh. This function returns the tag of View.
 
 Return: `tag`
+
 or
-Return: `tag`, `x`, `y``
+
+Return: `tag`, `x`, `y`
 
 Types:
 - `problem`: Problem
@@ -1303,7 +1305,7 @@ function plotOnPath(problem, pathName, field, points; step=1im, plot=false, name
     else
         stepRange = step >= nbstep ? nbstep : step + 1
         if step >= nbstep
-            warn("plotOnPath: step is greater than max. number of steps (max. number is chosen)  $step <==> $nbstep!")
+            @warn("plotOnPath: step is greater than max. number of steps (max. number is chosen)  $step <==> $(nbstep)!")
         end
     end
     cv = zeros(3 + length(stepRange))
