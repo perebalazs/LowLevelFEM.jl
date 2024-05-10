@@ -1030,7 +1030,6 @@ function CDM(K, M, C, f, u0, v0, T, Δt)
 
     u = zeros(dof, nsteps)
     v = zeros(dof, nsteps)
-    #p = zeros(nsteps)
     t = zeros(nsteps)
     kene = zeros(nsteps)
     sene = zeros(nsteps)
@@ -1059,6 +1058,123 @@ function CDM(K, M, C, f, u0, v0, T, Δt)
     end
     return u, v, t
 end
+
+"""
+    FEM.HHT(K, M, f, u0, v0, T, Δt; α=..., δ=..., γ=..., β=...)
+
+Solves a transient dynamic problem using central difference method (explicit).
+`K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
+`u0` is the initial displacement, `v0` is the initial velocity, `T` is the 
+upper bound ot the time intervall (lower bound is zero) and `Δt` is the time 
+step size. Returns the displacement vectors and velocity vectors in each time 
+step arranged in the columns of the two matrices `u` and `v` and a vector `t` 
+of the time instants used.
+
+Return: `u`, `v`, `t`
+
+Types:
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `f`: Vector{Float64}
+- `u0`: Vector{Float64}
+- `v0`: Vector{Float64}
+- `T`: Float64
+- `Δt`: Float64 
+- `u`: Matrix{Float64}
+- `v`: Matrix{Float64}
+- `t`: Vector{Float64}
+"""
+function HHT(K, M, f, u0, v0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    nsteps = ceil(Int64, T / Δt)
+    dof, dof = size(K)
+
+    u = zeros(dof, nsteps)
+    v = zeros(dof, nsteps)
+    t = zeros(nsteps)
+    kene = zeros(nsteps)
+    sene = zeros(nsteps)
+    diss = zeros(nsteps)
+
+    dt = Δt
+    dtdt = dt * dt
+
+    c0 = 1.0 / (β * dtdt)
+    c1 = γ / (β * dt)
+    c2 = 1.0 / (β * dt)
+    c3 = 0.5 / β - 1.0
+    c4 = γ / β - 1.0
+    c5 = dt / 2.0 * (γ / β - 2.0)
+    c6 = dt * (1.0 - γ)
+    c7 = γ * dt
+
+    a0 = M \ (f - K * u0)
+
+    u[:, 1] = u0
+    v[:, 1] = v0
+    t[1] = 0
+    kene[1] = dot(v0' * M, v0) / 2
+    sene[1] = dot(u0' * K, u0) / 2
+    
+    A = (α + 1) * K + M * c0
+    AA = lu(A)
+
+    for i in 2:nsteps
+        b = f + M * (u0 * c0 + v0 * c2 + a0 * c3) + α * K * u0
+        u1 = AA \ b
+        u[:, i] = u1
+        a1 = (u1 - u0) * c0 - v0 * c2 - a0 * c3
+        v1 = v0 + a0 * c6 + a1 * c7
+        v[:, i] = v1
+        t[i] = t[i-1] + Δt
+        kene[i] = dot(v1' * M, v1) / 2
+        sene[i] = dot(u1' * K, u1) / 2
+        #diss[i] = dot(v1' * C, v1)
+        u0 = u1
+        v0 = v1
+        a0 = a1
+    end
+    return u, v, t
+end
+
+function HHTaccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    x = zeros(n)
+    y = similar(x)
+    invT = range(0, length=n, stop=1/Tₘᵢₙ)
+    for i ∈ 1:n
+        ω = 2π * invT[i]
+        A1 = [1 0 -Δt^2*β
+            0 1 -Δt*γ
+            (1+α)*ω^2 0 1]
+        A2 = [1 Δt Δt^2*(0.5-β)
+            0 1 Δt*(1-γ)
+            α*ω^2 0 0]
+
+        A = A1 \ A2
+
+        eig = eigen(A)
+        ρ, idx = findmax(abs, eig.values)
+        λ = eig.values[idx]
+        σ = real(λ)
+        ε = imag(λ)
+        if type == "spectralRadius"
+            x[i] = log(invT[i] * Δt)
+            y[i] = ρ
+        elseif type == "dampingCharacter"
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = -log(ρ) / 2Ω
+            #y[i] = -log(ρ) / atan(ε, σ)
+        elseif type == "periodError"
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = 1 - Ω/(2π*Δt*invT[i])
+        else
+            error("HHTaccuracyAnalysis: $type")
+        end
+    end
+    return x, y
+end
+
 
 """
     FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)
@@ -1251,9 +1367,9 @@ gmsh from which the data of a field is imported. `pathName` is the name of a
 physical group which contains a curve. The curve is devided into equal length
 intervals with number of `points` points. The field is shown at this points.
 `step` is the sequence number of displayed step. If no step is given, shows all 
-the aviable steps as an animation. If `plot` is true, additional return parameters 
-are given back, `x` is a vector of values in horizontal axis, `y` is a vector of 
-values in vertical axis of a plot (see `Plots` package). `name` is the title of graph and
+the aviable steps as an animation. If `plot` is true, additional return parameter, a tuple of
+vectors is given back, in which `x` is a vector of values in horizontal axis, `y` is a vector
+of values in vertical axis of a plot (see `Plots` package). `name` is the title of graph and
 `visible` is a true or false value to toggle on or off the initial visibility 
 in gmsh. This function returns the tag of View.
 
@@ -1261,7 +1377,7 @@ Return: `tag`
 
 or
 
-Return: `tag`, `x`, `y`
+Return: `tag`, `xy`
 
 Types:
 - `problem`: Problem
@@ -1273,8 +1389,7 @@ Types:
 - `name`: String
 - `visible`: Boolean
 - `tag`: Integer
-- `x`: Vector{Float64}
-- `y`: Vector{Float64}
+- `xy`: Tuples{Vector{Float64},Vector{Float64}}
 """
 function plotOnPath(problem, pathName, field, points; step=1im, plot=false, name="path", visible=false)
     gmsh.model.setCurrent(problem.name)
@@ -1361,7 +1476,8 @@ function plotOnPath(problem, pathName, field, points; step=1im, plot=false, name
             y0 = y1
             z0 = z1
         end
-        return pathView, x, y
+        xy = x, y
+        return pathView, xy
     else
         return pathView
     end
