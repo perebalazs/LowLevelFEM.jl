@@ -1175,6 +1175,45 @@ function HHTaccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.
     return x, y
 end
 
+function RayleighDampingAccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, β=0.0)
+    x = zeros(n)
+    y = similar(x)
+    invT = range(1e-1, length=n, stop=1/Tₘᵢₙ)
+    for i ∈ 1:n
+        ω = 2π * invT[i]
+        ξ = α/ω + β*ω
+        Ω = Δt*ω
+        A = [2-2ξ*Ω-Ω^2 2ξ*Ω-1
+            1 0]
+
+        eig = eigen(A)
+        ρ, idx = findmax(abs, eig.values)
+        λ = eig.values[idx]
+        σ = real(λ)
+        ε = imag(λ)
+        if type == "spectralRadius"
+            x[i] = log(invT[i] * Δt)
+            y[i] = ρ
+        elseif type == "dampingCharacter"
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = -log(ρ) / 2Ω
+        elseif type == "dampingCharacter2"
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = -log(ρ) / 2Ω
+            y[i] /= √(1+y[i]^2)
+        elseif type == "periodError"
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = 1 - Ω/(2π*Δt*invT[i])
+        else
+            error("RayleighDampingAccuracyAnalysis: $type")
+        end
+    end
+    return x, y
+end
+
 
 """
     FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)
