@@ -1175,13 +1175,17 @@ function HHTaccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.
     return x, y
 end
 
-function RayleighDampingAccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, β=0.0)
+function RayleighDampingAccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, ξₘₐₓ=0.01, β=ξₘₐₓ*Tₘᵢₙ/2π, show_β=false)
+    if show_β == true
+        println("β = $β")
+    end
+    #Tₘᵢₙ /= √(1-ξₘₐₓ^2)
     x = zeros(n)
     y = similar(x)
     invT = range(1e-1, length=n, stop=1/Tₘᵢₙ)
     for i ∈ 1:n
         ω = 2π * invT[i]
-        ξ = α/ω + β*ω
+        ξ = α/ω + β*ω + ξₘₐₓ/2 / (2π*last(invT))^3 * ω^3
         Ω = Δt*ω
         A = [2-2ξ*Ω-Ω^2 2ξ*Ω-1
             1 0]
@@ -1196,17 +1200,12 @@ function RayleighDampingAccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, �
             y[i] = ρ
         elseif type == "dampingCharacter"
             x[i] = invT[i] * Δt
-            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
-            y[i] = -log(ρ) / 2Ω
-        elseif type == "dampingCharacter2"
-            x[i] = invT[i] * Δt
-            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
-            y[i] = -log(ρ) / 2Ω
-            y[i] /= √(1+y[i]^2)
+            Ω0 = √((log(ρ))^2 + (atan(ε,σ))^2 / 4)
+            y[i] = -log(ρ) / 2Ω0
         elseif type == "periodError"
             x[i] = invT[i] * Δt
-            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
-            y[i] = 1 - Ω/(2π*Δt*invT[i])
+            Ω0 = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = 1 - Ω0/(2π*Δt*invT[i])
         else
             error("RayleighDampingAccuracyAnalysis: $type")
         end

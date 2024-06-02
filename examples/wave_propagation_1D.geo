@@ -1,10 +1,10 @@
 //+
 SetFactory("OpenCASCADE");
-Rectangle(1) = {0, -5, 0, 100, 10, 0};
+Rectangle(1) = {0, -1, 0, 100, 2, 0};
 //+
-Transfinite Curve {4, 2} = 10 Using Progression 1;
+Transfinite Curve {4, 2} = 3 Using Progression 1;
 //+
-Transfinite Curve {3, 1} = 100 Using Progression 1;
+Transfinite Curve {3, 1} = 101 Using Progression 1;
 //+
 Transfinite Surface {1};
 //+
