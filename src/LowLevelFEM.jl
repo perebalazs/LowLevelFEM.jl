@@ -432,6 +432,39 @@ function massMatrix(problem; elements=[], lumped=true)
 end
 
 """
+    FEM.dampingMatrix(problem, K, M)
+
+Solves the mass matrix of the `problem`. If `lumped` is true, solves lumped mass matrix.
+
+Return: `dampingMatrix`
+
+Types:
+- `dampingMatrix`: SparseMatrix
+"""
+function dampingMatrix(M, K, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
+    dof, dof = size(M)
+    dof2, dof2 = size(K)
+    if dof != nnz(M)
+        error("dampingMatrix: M is not lumped!")
+    end
+    if dof != dof2
+        error("dampingMatrix: sizes of M and K are not match: $dof <--> $dof2!")
+    end
+    invM = spdiagm(1 ./ diag(M))
+    C = zeros(dof, dof)
+    MK = copy(K)
+    iMK = invM * K
+    C += α * M
+    C += β[1] * MK
+    for i in 2:length(β)
+        MK *= iMK
+        C += β[i] * MK
+    end
+    dropzeros!(C)
+    return C
+end
+
+"""
     FEM.loadVector(problem, loads)
 
 Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
@@ -974,6 +1007,30 @@ function nodalAcceleration!(problem, name, a0; ax=1im, ay=1im, az=1im)
 end
 
 """
+    FEM.largestPeriodTime(K, M)
+
+Solves the largest period of time for a dynamic problem given by stiffness
+matrix `K` and the mass matrix `M`.`
+
+Return: `Δt`
+
+Types:
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `Δt`: Float64 
+"""
+function largestPeriodTime(K, M)
+    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:SM)
+
+    err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
+    if err > 1e-3 # || true
+        error("Túl nagy a hiba a legnagyobb sajátérték számításánál: $err")
+    end
+    Δt = 2π / √(real(abs(ω²[1])))
+    return Δt
+end
+
+"""
     FEM.smallestPeriodTime(K, M)
 
 Solves the smallest period of time for a dynamic problem given by stiffness
@@ -1156,37 +1213,47 @@ function HHTaccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.
         λ = eig.values[idx]
         σ = real(λ)
         ε = imag(λ)
-        if type == "spectralRadius"
+        if type == "SR"
             x[i] = log(invT[i] * Δt)
             y[i] = ρ
-        elseif type == "dampingCharacter"
+        elseif type == "ADR"
             x[i] = invT[i] * Δt
             Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
             y[i] = -log(ρ) / 2Ω
             #y[i] = -log(ρ) / atan(ε, σ)
-        elseif type == "periodError"
+        elseif type == "PE"
             x[i] = invT[i] * Δt
             Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
             y[i] = 1 - Ω/(2π*Δt*invT[i])
         else
-            error("HHTaccuracyAnalysis: $type")
+            str1 = "HHTaccuracyAnalysis: wrong analysis type: $type\n"
+            str2 = "Possibilities:\n"
+            str3 = "\nSR: spectral radius\n"
+            str5 = "ADR: algorithmic damping ratio\n"
+            str6 = "PE: period error\n"
+            str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
+            str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
+            str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
+            error(str1*str2*str3*str5*str6*str7*str8*str9)
         end
     end
     return x, y
 end
 
-function RayleighDampingAccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, ξₘₐₓ=0.01, β=ξₘₐₓ*Tₘᵢₙ/2π, show_β=false)
+function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false)
     if show_β == true
         println("β = $β")
     end
     #Tₘᵢₙ /= √(1-ξₘₐₓ^2)
     x = zeros(n)
-    y = similar(x)
-    invT = range(1e-1, length=n, stop=1/Tₘᵢₙ)
+    y = zeros(n)
+    ω = range(ωₘᵢₙ, length=n, stop=ωₘₐₓ)
     for i ∈ 1:n
-        ω = 2π * invT[i]
-        ξ = α/ω + β*ω + ξₘₐₓ/2 / (2π*last(invT))^3 * ω^3
-        Ω = Δt*ω
+        ξ = α/ω[i]
+        for j in 1:length(β)
+            ξ += β[j] / 2 * ω[i]^(2j-1)
+        end
+        Ω = Δt * ω[i]
         A = [2-2ξ*Ω-Ω^2 2ξ*Ω-1
             1 0]
 
@@ -1195,19 +1262,33 @@ function RayleighDampingAccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, �
         λ = eig.values[idx]
         σ = real(λ)
         ε = imag(λ)
-        if type == "spectralRadius"
-            x[i] = log(invT[i] * Δt)
+        if type == "SR"
+            x[i] = log((ω[i] / 2π) * Δt)
             y[i] = ρ
-        elseif type == "dampingCharacter"
-            x[i] = invT[i] * Δt
+        elseif type == "ADR"
+            x[i] = (ω[i] / 2π) * Δt
             Ω0 = √((log(ρ))^2 + (atan(ε,σ))^2 / 4)
             y[i] = -log(ρ) / 2Ω0
-        elseif type == "periodError"
-            x[i] = invT[i] * Δt
+        elseif type == "PDR"
+            x[i] = (ω[i] / 2π) * Δt
+            for j in 1:length(β)
+                y[i] += β[j] / 2 * (2π * x[i] / Δt) ^ (2j-1)
+            end
+        elseif type == "PE"
+            x[i] = (ω[i] / 2π) * Δt
             Ω0 = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
-            y[i] = 1 - Ω0/(2π*Δt*invT[i])
+            y[i] = 1 - Ω0/(Δt*ω[i])
         else
-            error("RayleighDampingAccuracyAnalysis: $type")
+            str1 = "CDMaccuracyAnalysis: wrong analysis type: $type\n"
+            str2 = "Possibilities:\n"
+            str3 = "\nSR: spectral radius\n"
+            str4 = "PDR: physical damping ratio\n"
+            str5 = "ADR: algorithmic damping ratio\n"
+            str6 = "PE: period error\n"
+            str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
+            str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
+            str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
+            error(str1*str2*str3*str4*str5*str6*str7*str8*str9)
         end
     end
     return x, y
