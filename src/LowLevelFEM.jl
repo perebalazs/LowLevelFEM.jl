@@ -451,7 +451,7 @@ function dampingMatrix(M, K, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐ�
         error("dampingMatrix: sizes of M and K are not match: $dof <--> $dof2!")
     end
     invM = spdiagm(1 ./ diag(M))
-    C = zeros(dof, dof)
+    C = spzeros(dof, dof)
     MK = copy(K)
     iMK = invM * K
     C += α * M
@@ -1020,8 +1020,10 @@ Types:
 - `Δt`: Float64 
 """
 function largestPeriodTime(K, M)
-    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:SM)
-
+    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=0.01, maxiter=10000)
+    if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
+        ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+    end
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
         error("Túl nagy a hiba a legnagyobb sajátérték számításánál: $err")
@@ -1193,10 +1195,10 @@ function HHT(K, M, f, u0, v0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.
     return u, v, t
 end
 
-function HHTaccuracyAnalysis(Tₘᵢₙ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
     x = zeros(n)
     y = similar(x)
-    invT = range(0, length=n, stop=1/Tₘᵢₙ)
+    invT = range(ωₘᵢₙ/2π, length=n, stop=ωₘₐₓ/2π)
     for i ∈ 1:n
         ω = 2π * invT[i]
         A1 = [1 0 -Δt^2*β
