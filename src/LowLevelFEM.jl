@@ -1242,9 +1242,13 @@ function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
     return x, y
 end
 
-function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false)
+function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false, show_ξ=false)
     if show_β == true
         println("β = $β")
+    end
+    if show_ξ == true
+        ξ = [β[i] / 2 * ωₘₐₓ^((2i-1)) for i in 1:length(β)]
+        println("ξ = $ξ")
     end
     #Tₘᵢₙ /= √(1-ξₘₐₓ^2)
     x = zeros(n)
