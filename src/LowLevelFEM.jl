@@ -13,7 +13,8 @@ export gmsh
 A structure containing the most important data of the problem. 
 - name of the model (in gmsh)
 - type of the problem: 3D "Solid", "PlaneStrain" or "PlaneStress"
-- bandwidth optimization using built-in `gmsh` function. Possibilities: "RCMK" (default), Hilbert" and "Metis"
+- bandwidth optimization using built-in `gmsh` function.
+  Possibilities: "RCMK" (default), "Hilbert", "Metis" or "none"
 - dimension of the problem, determined from `type`
 - material constants: Physical group, Young's modulus, Poisson's ratio,
   mass density (in vector of tuples `names`)
@@ -391,11 +392,11 @@ function massMatrix(problem; elements=[], lumped=true)
                     Iidx[k, l] = l
                     Jidx[k, l] = k
                 end
-                nn2 = zeros(Int, 2 * numNodes)
+                nn2 = zeros(Int, dim * numNodes)
                 H = zeros(rowsOfH * numIntPoints, dim * numNodes)
                 for k in 1:numIntPoints, l in 1:numNodes
                     for kk in 1:dim
-                        H[k*dim-(dim-kk), l*2-(dim-kk)] = h[(k-1)*numNodes+l]
+                        H[k*dim-(dim-kk), l*dim-(dim-kk)] = h[(k-1)*numNodes+l]
                     end
                 end
                 M1 = zeros(dim * numNodes, dim * numNodes)
