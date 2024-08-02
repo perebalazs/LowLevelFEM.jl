@@ -1225,7 +1225,7 @@ Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
 [^3]: Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
     damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
-    https://doi.org/10.1007/s00419-023-02454-9
+    <https://doi.org/10.1007/s00419-023-02454-9>
 
 Return: `xy`
 
