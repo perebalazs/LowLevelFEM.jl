@@ -435,7 +435,7 @@ end
 """
     FEM.dampingMatrix(problem, K, M)
 
-Solves the mass matrix of the `problem`. If `lumped` is true, solves lumped mass matrix.
+Solves the damping matrix of the `problem`. 
 
 Return: `dampingMatrix`
 
@@ -1060,7 +1060,7 @@ end
 """
     FEM.CDM(K, M, C, f, u0, v0, T, Δt)
 
-Solves a transient dynamic problem using central difference method (explicit).
+Solves a transient dynamic problem using central difference method (CDM) (explicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `C` is the damping matrix,
 `f` is the load vector, `u0` is the initial displacement, `v0` is the initial
 velocity, `T` is the upper bound ot the time intervall (lower bound is zero)
@@ -1122,13 +1122,18 @@ end
 """
     FEM.HHT(K, M, f, u0, v0, T, Δt; α=..., δ=..., γ=..., β=...)
 
-Solves a transient dynamic problem using central difference method (explicit).
+Solves a transient dynamic problem using HHT-α method [1] (implicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
 `u0` is the initial displacement, `v0` is the initial velocity, `T` is the 
 upper bound ot the time intervall (lower bound is zero) and `Δt` is the time 
 step size. Returns the displacement vectors and velocity vectors in each time 
 step arranged in the columns of the two matrices `u` and `v` and a vector `t` 
-of the time instants used.
+of the time instants used. For the meaning of `α`, `β` and `γ` see [1]. If
+`δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
+
+[1] Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
+    numerical dissipation for time integration algorithms in structural 
+    dynamics." Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
 
 Return: `u`, `v`, `t`
 
@@ -1140,6 +1145,10 @@ Types:
 - `v0`: Vector{Float64}
 - `T`: Float64
 - `Δt`: Float64 
+- `α`: Float64
+- `β`: Float64
+- `γ`: Float64
+- `δ`: Float64
 - `u`: Matrix{Float64}
 - `v`: Matrix{Float64}
 - `t`: Vector{Float64}
@@ -1196,6 +1205,47 @@ function HHT(K, M, f, u0, v0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.
     return u, v, t
 end
 
+"""
+    FEM.HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+
+Gives some functions (graphs) for accuracy analysis of the HHT-α method. 
+`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
+Kϕ=ω²Mϕ eigenvalue problem, `Δt` is the time step size. `type` is one of the
+following values:
+"SR": spectral radius
+"ADR": algorithmic damping ratio
+"PE": period error
+For details see [2,3]
+`n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
+see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)``)
+
+[1] Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
+    numerical dissipation for time integration algorithms in structural 
+    dynamics." Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
+
+[2] Belytschko, Ted, and Thomas JR, Hughes: "Computational methods for 
+    transient analysis", North-Holland, (1983).
+
+[3] Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
+    damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
+    https://doi.org/10.1007/s00419-023-02454-9
+
+Return: `xy`
+
+Types:
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `ωₘᵢₙ`: Float64
+- `ωₘₐₓ`: Float64
+- `Δt`: Float64 
+- `n`: Int64
+- `α`: Float64
+- `β`: Float64
+- `γ`: Float64
+- `δ`: Float64
+- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+"""
 function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
     x = zeros(n)
     y = similar(x)
@@ -1243,6 +1293,41 @@ function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
     return x, y
 end
 
+"""
+    FEM.CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=..., ξ=..., β=..., show_β=..., show_ξ=...)
+
+Gives some functions (graphs) for accuracy analysis of the CDM method. 
+`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
+Kϕ=ω²Mϕ eigenvalue problem, `Δt` is the time step size. `type` is one of the
+following values:
+"SR": spectral radius
+"PDR": physical damping ratio
+"ADR": algorithmic damping ratio
+"PE": period error
+For details see [1]
+`n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
+see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)``)
+
+[1] Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
+    damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
+    https://doi.org/10.1007/s00419-023-02454-9
+
+Return: `xy`
+
+Types:
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `ωₘᵢₙ`: Float64
+- `ωₘₐₓ`: Float64
+- `Δt`: Float64 
+- `n`: Int64
+- `α`: Float64
+- `β`: Float64
+- `γ`: Float64
+- `δ`: Float64
+- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+"""
 function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false, show_ξ=false)
     if show_β == true
         println("β = $β")
