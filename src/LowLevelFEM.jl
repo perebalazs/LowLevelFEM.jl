@@ -1215,7 +1215,7 @@ following values:
 - "SR": spectral radius
 - "ADR": algorithmic damping ratio
 - "PE": period error
-For details see [^2] and [^3]
+For details see [^2] and [^3]. 
 `n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
 see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
@@ -1300,7 +1300,7 @@ following values:
 - "PDR": physical damping ratio
 - "ADR": algorithmic damping ratio
 - "PE": period error
-For details see [^3]
+For details see [^3]. 
 `n` is the number of points in the graph.
 
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
