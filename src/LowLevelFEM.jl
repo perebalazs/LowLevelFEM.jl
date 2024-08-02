@@ -1027,7 +1027,7 @@ function largestPeriodTime(K, M)
     end
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        error("Túl nagy a hiba a legnagyobb sajátérték számításánál: $err")
+        error("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
     Δt = 2π / √(real(abs(ω²[1])))
     return Δt
@@ -1051,7 +1051,7 @@ function smallestPeriodTime(K, M)
 
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        error("Túl nagy a hiba a legnagyobb sajátérték számításánál: $err")
+        error("The error in the calculation of the largest eigenvalue is too large: $err")
     end
     Δt = 2π / √(real(abs(ω²[1])))
     return Δt
@@ -1212,9 +1212,9 @@ Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1].
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
 Kϕ=ω²Mϕ eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
-"SR": spectral radius
-"ADR": algorithmic damping ratio
-"PE": period error
+- "SR": spectral radius
+- "ADR": algorithmic damping ratio
+- "PE": period error
 For details see [^2] and [^3]
 `n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
 see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
@@ -1300,10 +1300,10 @@ Gives some functions (graphs) for accuracy analysis of the CDM method.
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
 Kϕ=ω²Mϕ eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
-"SR": spectral radius
-"PDR": physical damping ratio
-"ADR": algorithmic damping ratio
-"PE": period error
+- "SR": spectral radius
+- "PDR": physical damping ratio
+- "ADR": algorithmic damping ratio
+- "PE": period error
 For details see [^1]
 `n` is the number of points in the graph.
 
