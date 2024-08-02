@@ -1220,10 +1220,6 @@ For details see [^2] and [^3]
 see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
-[^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
-    numerical dissipation for time integration algorithms in structural 
-    dynamics." Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
-
 [^2]: Belytschko, Ted, and Thomas JR, Hughes: "Computational methods for 
     transient analysis", North-Holland, (1983).
 
@@ -1304,14 +1300,10 @@ following values:
 - "PDR": physical damping ratio
 - "ADR": algorithmic damping ratio
 - "PE": period error
-For details see [^1]
+For details see [^3]
 `n` is the number of points in the graph.
 
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
-
-[^1]: Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
-    damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
-    https://doi.org/10.1007/s00419-023-02454-9
 
 Return: `xy`
 
