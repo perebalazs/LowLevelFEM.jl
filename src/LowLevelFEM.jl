@@ -1122,7 +1122,7 @@ end
 """
     FEM.HHT(K, M, f, u0, v0, T, Δt; α=..., δ=..., γ=..., β=...)
 
-Solves a transient dynamic problem using HHT-α method [1] (implicit).
+Solves a transient dynamic problem using HHT-α method[^1] (implicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
 `u0` is the initial displacement, `v0` is the initial velocity, `T` is the 
 upper bound ot the time intervall (lower bound is zero) and `Δt` is the time 
@@ -1131,7 +1131,7 @@ step arranged in the columns of the two matrices `u` and `v` and a vector `t`
 of the time instants used. For the meaning of `α`, `β` and `γ` see [1]. If
 `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
 
-[1] Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
+[^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
     numerical dissipation for time integration algorithms in structural 
     dynamics." Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
 
@@ -1208,26 +1208,26 @@ end
 """
     FEM.HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
 
-Gives some functions (graphs) for accuracy analysis of the HHT-α method. 
+Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1]. 
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
 Kϕ=ω²Mϕ eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
 "SR": spectral radius
 "ADR": algorithmic damping ratio
 "PE": period error
-For details see [2, 3]
+For details see [^2] and [^3]
 `n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
 see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
-Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)``)
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
-[1] Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
+[^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
     numerical dissipation for time integration algorithms in structural 
     dynamics." Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
 
-[2] Belytschko, Ted, and Thomas JR, Hughes: "Computational methods for 
+[^2]: Belytschko, Ted, and Thomas JR, Hughes: "Computational methods for 
     transient analysis", North-Holland, (1983).
 
-[3] Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
+[^3]: Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
     damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
     https://doi.org/10.1007/s00419-023-02454-9
 
@@ -1304,12 +1304,12 @@ following values:
 "PDR": physical damping ratio
 "ADR": algorithmic damping ratio
 "PE": period error
-For details see [1]
-`n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
-see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
-Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)``)
+For details see [^1]
+`n` is the number of points in the graph.
 
-[1] Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+
+[^1]: Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
     damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
     https://doi.org/10.1007/s00419-023-02454-9
 
