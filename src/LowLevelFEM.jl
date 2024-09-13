@@ -439,7 +439,7 @@ Generates the damping matrix for proportitional damping case. **C**=α**M**+β**
 or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅. The latter corresponds 
 to the damping characteristic characterized by a power series consisting of powers
 of the natural frequencies with odd exponents, where ξᵢ are the values ​​of the 
-individual members of the series corresponding to the omega max value. βᵢ are the 
+individual members of the series corresponding to the ωₘₐₓ value. βᵢ are the 
 coefficients of the series. Either ξ or β must be specified. ξ or β are scalars or 
 vectors. `K` is the stiffness matrix, `M` is the mass matrix and `ωₘₐₓ` is the 
 largest natural frequency.
