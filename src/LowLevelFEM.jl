@@ -440,7 +440,7 @@ or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅
 to the damping characteristic characterized by a power series consisting of powers
 of the natural frequencies with odd exponents, where ξᵢ are the values ​​of the 
 individual members of the series corresponding to the ωₘₐₓ value. βᵢ are the 
-coefficients of the series. Either ξ or β must be specified. ξ or β are scalars or 
+coefficients of the series. (see [4]) Either ξ or β must be specified. ξ or β are scalars or 
 vectors. `K` is the stiffness matrix, `M` is the mass matrix and `ωₘₐₓ` is the 
 largest natural frequency.
 
@@ -1223,7 +1223,7 @@ end
 
 Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1]. 
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
-Kϕ=ω²Mϕ eigenvalue problem, `Δt` is the time step size. `type` is one of the
+**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
 - "SR": spectral radius
 - "ADR": algorithmic damping ratio
@@ -1307,16 +1307,26 @@ end
 
 Gives some functions (graphs) for accuracy analysis of the CDM method. 
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
-Kϕ=ω²Mϕ eigenvalue problem, `Δt` is the time step size. `type` is one of the
+**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
 - "SR": spectral radius
 - "PDR": physical damping ratio
 - "ADR": algorithmic damping ratio
 - "PE": period error
 For details see [^3]. 
-`n` is the number of points in the graph.
+`n` is the number of points in the graph. The damping matrix is assembled in the 
+following ways: **C**=α**M**+β**K** or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅. 
+The latter corresponds to the damping characteristic characterized by a power series 
+consisting of powers of the natural frequencies with odd exponents, where ξᵢ are the values 
+​​of the individual members of the series corresponding to the ωₘₐₓ value. βᵢ are the 
+coefficients of the series. (see [4]) Either ξ or β must be specified. ξ or β are scalars or 
+vectors. If `show_β` or `show_ξ` is `true`, the corresponding `β` or `ξ` values will be 
+sent to the output.
 
-Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+[^4]: Serfőző, D., Pere, B.: An effective reduction method with Caughey damping for spurious 
+oscillations in dynamic problems, preprint, https://doi.org/10.21203/rs.3.rs-3930320/v1
+
+    Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
 Return: `xy`
 
