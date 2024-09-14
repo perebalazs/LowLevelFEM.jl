@@ -1322,10 +1322,10 @@ individual members of the series corresponding to the ωₘₐₓ value. βᵢ (
 coefficients of the series. (see [^4]) Either `ξ` or `β` must be specified. `ξ` or `β` are scalars or 
 vectors. If `show_β` or `show_ξ` is `true`, the corresponding `β` or `ξ` values will be 
 sent to the output.
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
-[^4]: Serfőző, D., Pere, B.: An effective reduction method with Caughey damping for spurious oscillations in dynamic problems, preprint, https://doi.org/10.21203/rs.3.rs-3930320/v1
-
-    Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+[^4]: Serfőző, D., Pere, B.: An effective reduction method with Caughey damping for 
+    spurious oscillations in dynamic problems, preprint, <https://doi.org/10.21203/rs.3.rs-3930320/v1>
 
 Return: `xy`
 
