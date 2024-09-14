@@ -440,7 +440,7 @@ or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅
 to the damping characteristic characterized by a power series consisting of powers
 of the natural frequencies with odd exponents, where ξᵢ are the values ​​of the 
 individual members of the series corresponding to the ωₘₐₓ value. βᵢ are the 
-coefficients of the series. (see [4]) Either ξ or β must be specified. ξ or β are scalars or 
+coefficients of the series. (see [^4]) Either ξ or β must be specified. ξ or β are scalars or 
 vectors. `K` is the stiffness matrix, `M` is the mass matrix and `ωₘₐₓ` is the 
 largest natural frequency.
 
@@ -1319,7 +1319,7 @@ following ways: **C**=α**M**+β**K** or **C**=α**M**+β₁**K**+β₂**KM⁻¹
 The latter corresponds to the damping characteristic characterized by a power series 
 consisting of powers of the natural frequencies with odd exponents, where ξᵢ are the values 
 ​​of the individual members of the series corresponding to the ωₘₐₓ value. βᵢ are the 
-coefficients of the series. (see [4]) Either ξ or β must be specified. ξ or β are scalars or 
+coefficients of the series. (see [^4]) Either ξ or β must be specified. ξ or β are scalars or 
 vectors. If `show_β` or `show_ξ` is `true`, the corresponding `β` or `ξ` values will be 
 sent to the output.
 
