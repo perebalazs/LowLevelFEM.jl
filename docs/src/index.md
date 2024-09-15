@@ -7,19 +7,19 @@ The above described steps can be easily performed using the LowLevelFEM package.
 
 - Sketching the geometry, making the FE mesh with [GMSH](https://gmsh.info).
 - Solving problems from linear elasticity,
-  
+
   - 2D problems,
     - Plane stress,
     - Plane strain,
   - 3D problem (solid body),
 - which means the creation of the stiffness matrix $\mathbf{K}$ of the problem using arbitrary
-  
+
   - element types (line, triangle, rectangle, tetrahedron, hexahedron, pyramid, wedge)
   - approximation order (up to ten, Lagrange polynomials)
 - Applying
-  
+
   - distributed forces on arbitrary *physical groups* (see [GMSH](https://gmsh.info)),
-    
+
     - Lines (in 2D: surface force, in 3D: edge force),
     - Surfaces (in 2D: body force, in 3D: traction),
     - Volumes (in 3D: body force),
@@ -30,30 +30,35 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - Solution of static and dynamic (transient with central difference method) problems,
 - which means the generations of the mass matrix $\mathbf{M}$.
 - Displaying the results (scalar or vector displacements, scalar or tensor stresses) with [GMSH](https://gmsh.info).
-  
+
   - When dynamic problems are solved animations are also possible (click on $\triangleright$).
 - Plotting arbitrary results on paths.
+- Solves the damping matrix of structures in case of proportional damping
+
+  - using Rayleigh-damping (**C**=α**M**+β**K**) or
+  - using Caughey-damping (**C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅).
 
 ## Planned features
 
+- [ ] 3D (and  2D) truss structures
 - [ ] 2D axisymmetric problem
 - [ ] 3D (and 2D) beam structures
 - [ ] Shells
 - [ ] Giving loads and prescribed displacements with functions
 - [ ] MultiPoint Constraint (like MPC184 in Ansys)
-- [x] Different material properties on physical groups
+- [X] Different material properties on physical groups
 - [ ] Contact problems,
-  
+
   - [ ] in 2D,
   - [ ] in 3D,
   - [ ] with Lagrange multiplier method.
 - [ ] Defining and using coordinate systems,
-  
+
   - [ ] cartesian at arbitrary position and arbitrary orientation,
   - [ ] cylindrical.
 - [ ] Finite deformations.
 - [ ] Heat conduction problems,
-  
+
   - [ ] solving conductivity matrix,
   - [ ] solving heat capacity matrix.
 - [ ] Dynamic transient problems with HHT-α (or Newmark).
@@ -61,4 +66,3 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] Modal analysis (eigenfrequencies, modal shapes).
 
 Any suggestions are welcome.
-
