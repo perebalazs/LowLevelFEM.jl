@@ -56,6 +56,10 @@ The above described steps can be easily performed using the LowLevelFEM package.
 
   - [ ] cartesian at arbitrary position and arbitrary orientation,
   - [ ] cylindrical.
+- [ ] Defining load vector as a function of x, y and z.
+- [ ] Defining displacement boundary conditions as a function of x, y and z.
+- [ ] Defining displacement initial condition as a function of x, y and z.
+- [ ] Defining velocity initial condition as a function of x, y and z.
 - [ ] Finite deformations.
 - [ ] Heat conduction problems,
 
