@@ -435,7 +435,7 @@ end
 """
     FEM.dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=..., β=...)
 
-Generates the damping matrix for proportitional damping case. **C**=α**M**+β**K**
+Generates the damping matrix for proportional damping case. **C**=α**M**+β**K**
 or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅. The latter corresponds 
 to the damping characteristic characterized by a power series consisting of powers
 of the natural frequencies with odd exponents. ξᵢ (`ξ` in the argument list) are the values ​​of the 
