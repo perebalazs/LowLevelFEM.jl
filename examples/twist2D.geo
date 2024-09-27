@@ -26,9 +26,9 @@ Physical Curve("supp", 6) = {1};
 Physical Curve("load", 7) = {3};
 
 //+
-Transfinite Curve {4, 2} = 3 Using Progression 1;
+Transfinite Curve {4, 2} = 11 Using Progression 1;
 //+
-Transfinite Curve {1, 3} = 2 Using Progression 1;
+Transfinite Curve {1, 3} = 6 Using Progression 1;
 //+
 Transfinite Surface {1};
 //+

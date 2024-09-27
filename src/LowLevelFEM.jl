@@ -417,9 +417,9 @@ function stiffnessMatrixAXI(problem; elements=[])
                     B .*= 0
                     if dim == 2 && rowsOfB == 4
                         for k in 1:numIntPoints, l in 1:numNodes
-                            B[k*4-0, l*2-0] = B[k*4-3, l*2-1] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*4-2, l*2-1] = B[k*4-3, l*2-0] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*4-1, l*2-0] = h[l, k] / r[k]
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = h[l, k] / r[k]
                         end
                     else
                         error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
