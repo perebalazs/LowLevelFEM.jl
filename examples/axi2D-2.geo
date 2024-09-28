@@ -41,7 +41,7 @@ Physical Surface("body1", 10) = {1};
 //+
 Physical Surface("body2", 11) = {2};
 //+
-//Recombine Surface {1, 2};
+Recombine Surface {1, 2};
 //+
 Transfinite Curve {6, 5, 3, 2, 1, 4, 7} = 3 Using Progression 1;
 //+

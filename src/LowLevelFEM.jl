@@ -1009,6 +1009,14 @@ function solveStress(problem, q)
             dim = 2
             rowsOfB = 3
             b = 1
+        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
+                ν 1-ν ν 0;
+                ν ν 1-ν 0;
+                0 0 0 (1-2ν)/2]
+            dim = 2
+            rowsOfB = 4
+            b = 1
         else
             error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
         end
@@ -1019,6 +1027,11 @@ function solveStress(problem, q)
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2 = similar(ncoord)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
             for i in 1:length(elemTypes)
                 et = elemTypes[i]
                 elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
@@ -1029,11 +1042,14 @@ function solveStress(problem, q)
                 end
                 comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
                 ∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
                 nnet = zeros(Int, length(elemTags[i]), numNodes)
                 invJac = zeros(3, 3numNodes)
                 ∂h = zeros(3, numNodes * numNodes)
                 B = zeros(rowsOfB * numNodes, dim * numNodes)
                 nn2 = zeros(Int, dim * numNodes)
+                r = zeros(numNodes)
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
                     for k in 1:numNodes
@@ -1043,6 +1059,7 @@ function solveStress(problem, q)
                     Jac = reshape(jac, 3, :)
                     for k in 1:numNodes
                         invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
                     end
                     ∂h .*= 0
                     for k in 1:numNodes, l in 1:numNodes
@@ -1059,6 +1076,12 @@ function solveStress(problem, q)
                             B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
                             B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
                             B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 2 && rowsOfB == 4
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = h[l, k] / r[k]
                         end
                     else
                         error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
@@ -1085,6 +1108,14 @@ function solveStress(problem, q)
                                     s0[3], s0[2], 0,
                                     0, 0, 0]
                                     # PlaneStain: σz ≠ 0
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == "AxiSymmetric"
+                            B1 = B[k*4-3:k*4, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q[nn2, kk]
+                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
+                                    s0[4], s0[3], 0,
+                                    0, 0, s0[2]]
                             end
                         else
                             error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
