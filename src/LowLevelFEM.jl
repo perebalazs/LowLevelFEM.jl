@@ -12,7 +12,9 @@ export gmsh
 
 A structure containing the most important data of the problem. 
 - name of the model (in gmsh)
-- type of the problem: 3D "Solid", "PlaneStrain" or "PlaneStress"
+- type of the problem: 3D "Solid", "PlaneStrain", "PlaneStress" or "AxiSymmetric"
+  In the case of "AxiSymmetric", the axis of symmetry is the "y" axis, 
+  while the geometry must be drawn in the positive "x" half-plane.
 - bandwidth optimization using built-in `gmsh` function.
   Possibilities: "RCMK" (default), "Hilbert", "Metis" or "none"
 - dimension of the problem, determined from `type`
@@ -447,53 +449,6 @@ function stiffnessMatrixAXI(problem; elements=[])
     return K
 end
 
-#=
-gmsh.model.mesh.getNodes(dim = -1, tag = -1, includeBoundary = false,
-returnParametricCoord = true)
-Get the nodes classified on the entity of dimension `dim` and tag `tag`. If
-`tag` < 0, get the nodes for all entities of dimension `dim`. If `dim` and `tag`
-are negative, get all the nodes in the mesh. `nodeTags` contains the node tags
-(their unique, strictly positive identification numbers). `coord` is a vector of
-length 3 times the length of `nodeTags` that contains the x, y, z coordinates of
-the nodes, concatenated: [n1x, n1y, n1z, n2x, ...]. If `dim` >= 0 and
-`returnParamtricCoord` is set, `parametricCoord` contains the parametric
-coordinates ([u1, u2, ...] or [u1, v1, u2, ...]) of the nodes, if available. The
-length of `parametricCoord` can be 0 or `dim` times the length of `nodeTags`. If
-`includeBoundary` is set, also return the nodes classified on the boundary of
-the entity (which will be reparametrized on the entity if `dim` >= 0 in order to
-compute their parametric coordinates).
-Return `nodeTags`, `coord`, `parametricCoord`.
-Types:
-- `nodeTags`: vector of sizes
-- `coord`: vector of doubles
-- `parametricCoord`: vector of doubles
-- `dim`: integer
-- `tag`: integer
-- `includeBoundary`: boolean
-- `returnParametricCoord`: boolean
-
-gmsh.model.mesh.getElements(dim = -1, tag = -1)
-Get the elements classified on the entity of dimension `dim` and tag `tag`. If
-`tag` < 0, get the elements for all entities of dimension `dim`. If `dim` and
-`tag` are negative, get all the elements in the mesh. `elementTypes` contains
-the MSH types of the elements (e.g. `2` for 3-node triangles: see
-`getElementProperties` to obtain the properties for a given element type).
-`elementTags` is a vector of the same length as `elementTypes`; each entry is a
-vector containing the tags (unique, strictly positive identifiers) of the
-elements of the corresponding type. `nodeTags` is also a vector of the same
-length as `elementTypes`; each entry is a vector of length equal to the number
-of elements of the given type times the number N of nodes for this type of
-element, that contains the node tags of all the elements of the given type,
-concatenated: [e1n1, e1n2, ..., e1nN, e2n1, ...].
-Return `elementTypes`, `elementTags`, `nodeTags`.
-Types:
-- `elementTypes`: vector of integers
-- `elementTags`: vector of vectors of sizes
-- `nodeTags`: vector of vectors of sizes
-- `dim`: integer
-- `tag`: integer
-=#
-
 """
     FEM.massMatrix(problem; lumped=...)
 
@@ -534,6 +489,10 @@ function massMatrix(problem; elements=[], lumped=true)
             dim = 2
             rowsOfH = 2
             b = 1
+        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+            dim = 2
+            rowsOfH = 2
+            b = 1
         else
             error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
         end
@@ -544,6 +503,11 @@ function massMatrix(problem; elements=[], lumped=true)
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2 = similar(ncoord)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
             for i in 1:length(elemTypes)
                 et = elemTypes[i]
                 elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
@@ -566,24 +530,47 @@ function massMatrix(problem; elements=[], lumped=true)
                     end
                 end
                 M1 = zeros(dim * numNodes, dim * numNodes)
-                for j in 1:length(elemTags[i])
-                    elem = elemTags[i][j]
-                    for k in 1:numNodes
-                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                if problem.type != "AxiSymmetric"
+                    for j in 1:length(elemTags[i])
+                        elem = elemTags[i][j]
+                        for k in 1:numNodes
+                            nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                        end
+                        jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                        M1 .*= 0
+                        for k in 1:numIntPoints
+                            H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
+                            M1 += H1' * H1 * jacDet[k] * intWeights[k]
+                        end
+                        M1 *= ρ * b
+                        for k in 1:dim
+                            nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                        end
+                        append!(I, nn2[Iidx[:]])
+                        append!(J, nn2[Jidx[:]])
+                        append!(V, M1[:])
                     end
-                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
-                    M1 .*= 0
-                    for k in 1:numIntPoints
-                        H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
-                        M1 += H1' * H1 * jacDet[k] * intWeights[k]
+                elseif problem.type == "AxiSymmetric"
+                    for j in 1:length(elemTags[i])
+                        elem = elemTags[i][j]
+                        for k in 1:numNodes
+                            nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                        end
+                        jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                        M1 .*= 0
+                        for k in 1:numIntPoints
+                            r = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                            H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
+                            M1 += H1' * H1 * jacDet[k] * r * intWeights[k]
+                        end
+                        M1 *= 2π * ρ * b
+                        for k in 1:dim
+                            nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                        end
+                        append!(I, nn2[Iidx[:]])
+                        append!(J, nn2[Jidx[:]])
+                        append!(V, M1[:])
                     end
-                    M1 *= ρ * b
-                    for k in 1:dim
-                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
-                    end
-                    append!(I, nn2[Iidx[:]])
-                    append!(J, nn2[Jidx[:]])
-                    append!(V, M1[:])
                 end
                 push!(nn, nnet)
             end
@@ -1107,6 +1094,14 @@ function solveStress(problem, q)
                                 s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
                                     s0[3], s0[2], 0,
                                     0, 0, 0]
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStrain"
+                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q[nn2, kk]
+                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                    s0[3], s0[2], 0,
+                                    0, 0, ν*(s0[1]+s0[2])]
                                     # PlaneStain: σz ≠ 0
                             end
                         elseif rowsOfB == 4 && dim == 2 && problem.type == "AxiSymmetric"
