@@ -38,7 +38,7 @@ struct Problem
     material::Vector{Tuple{String, Float64, Float64, Float64}}
     thickness::Float64
     non::Int64
-    function Problem(mat; thickness=1, type="Solid", bandwidth="RCMK")
+    function Problem(mat; thickness=1, type="Solid", bandwidth="none")
         if type == "Solid"
             dim = 3
         elseif type == "PlaneStress"
@@ -76,7 +76,7 @@ struct Problem
         end
 
         if bandwidth != "RCMK" && bandwidth != "Hilbert" && bandwidth != "Metis" && bandwidth != "none"
-            error("Problem: bandwidth can be 'Hilbert', 'Metis', or 'RCMK'. Now it is '$(bandwidth)'")
+            error("Problem: bandwidth can be 'Hilbert', 'Metis', 'RCMK' or 'none'. Now it is '$(bandwidth)'")
         end
 
         method = bandwidth == "none" ? "RCMK" : bandwidth
@@ -352,6 +352,7 @@ function stiffnessMatrixAXI(problem; elements=[])
     sizehint!(I, lengthOfIJV)
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
         phName, E, ν, ρ = problem.material[ipg]
@@ -375,7 +376,6 @@ function stiffnessMatrixAXI(problem; elements=[])
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
             nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            ncoord2 = similar(ncoord)
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -473,6 +473,7 @@ function massMatrix(problem; elements=[], lumped=true)
     sizehint!(I, lengthOfIJV)
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
         phName, E, ν, ρ = problem.material[ipg]
@@ -504,7 +505,6 @@ function massMatrix(problem; elements=[], lumped=true)
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
             nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            ncoord2 = similar(ncoord)
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -657,6 +657,7 @@ function loadVector(problem, loads)
     non = problem.non
     dof = pdim * non
     fp = zeros(dof)
+    ncoord2 = zeros(3 * problem.non)
     for n in 1:length(loads)
         name, fx, fy, fz = loads[n]
         if problem.dim == 3
@@ -672,8 +673,7 @@ function loadVector(problem, loads)
             dim = dimTag[1]
             tag = dimTag[2]
             elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            ncoord2 = similar(ncoord)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -967,6 +967,7 @@ function solveStress(problem, q)
     nsteps = size(q, 2)
     σ = []
     numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
         phName, E, ν, ρ = problem.material[ipg]
@@ -1015,7 +1016,6 @@ function solveStress(problem, q)
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
             nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            ncoord2 = similar(ncoord)
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]

@@ -41,7 +41,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 ## Planned features
 
 - [ ] 3D (and  2D) truss structures
-- [ ] 2D axisymmetric problem
+- [x] 2D axisymmetric problem
 - [ ] 3D (and 2D) beam structures
 - [ ] Shells
 - [ ] Giving loads and prescribed displacements with functions
@@ -65,7 +65,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 
   - [ ] solving conductivity matrix,
   - [ ] solving heat capacity matrix.
-- [ ] Dynamic transient problems with HHT-α (or Newmark).
+- [x] Dynamic transient problems with HHT-α (or Newmark).
 - [ ] Linear buckling.
 - [ ] Modal analysis (eigenfrequencies, modal shapes).
 
