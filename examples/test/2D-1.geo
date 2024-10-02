@@ -4,9 +4,9 @@ Rectangle(1) = {1, 0, 0, 10, 10, 0};
 
 
 //+
-Transfinite Curve {4, 2} = 100 Using Progression 1;
+Transfinite Curve {4, 2} = 1000 Using Progression 1;
 //+
-Transfinite Curve {3, 1} = 100 Using Progression 1;
+Transfinite Curve {3, 1} = 1000 Using Progression 1;
 //+
 Transfinite Surface {1};
 //+

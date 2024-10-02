@@ -704,7 +704,23 @@ function loadVector(problem, loads)
                     Jac = reshape(jac, 3, :)
                     f1 .*= 0
                     for j in 1:numIntPoints
-                        r = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        y = 0
+                        z = 0
+                        if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
+                            y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                            z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                            if isa(fx, Function)
+                                f[1] = fx(x, y, z)
+                            end
+                            if isa(fy, Function)
+                                f[2] = fy(x, y, z)
+                            end
+                            if isa(fz, Function) && problem.dim == 3
+                                f[3] = fz(x, y, z)
+                            end
+                        end
+                        r = x
                         H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
                         ############### NANSON ###########################################
                         if pdim == 3 && dim == 3
