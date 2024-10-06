@@ -32,7 +32,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - Applying initial conditions on arbitrary points, edges, surfaces, volumes and on combinations of them.
 - Solution of static and dynamic (transient with central difference method) problems,
 - which means the generations of the mass matrix $\mathbf{M}$.
-- Displaying the results (scalar or vector displacements, scalar or tensor stresses) with [GMSH](https://gmsh.info).
+- Displaying the results (scalar or vector displacements, scalar or tensor stresses and strains) with [GMSH](https://gmsh.info).
 
   - When dynamic problems are solved animations are also possible (click on $\triangleright$).
 - Plotting arbitrary results on paths.
@@ -47,7 +47,8 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [x] 2D axisymmetric problem
 - [ ] 3D (and 2D) beam structures
 - [ ] Shells
-- [ ] Giving loads and prescribed displacements with functions
+- [x] Giving loads with functions
+- [ ] Giving prescribed displacements with functions
 - [ ] MultiPoint Constraint (like MPC184 in Ansys)
 - [X] Different material properties on physical groups
 - [ ] Contact problems,
@@ -59,7 +60,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 
   - [ ] cartesian at arbitrary position and arbitrary orientation,
   - [ ] cylindrical.
-- [ ] Defining load vector as a function of x, y and z.
+- [x] Defining load vector as a function of x, y and z.
 - [ ] Defining displacement boundary conditions as a function of x, y and z.
 - [ ] Defining displacement initial condition as a function of x, y and z.
 - [ ] Defining velocity initial condition as a function of x, y and z.

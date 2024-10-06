@@ -48,7 +48,7 @@ struct Problem
         elseif type == "AxiSymmetric"
             dim = 2
         else
-            error("Problem = $type ????")
+            error("Problem type can be: 'Solid', PlaneStress', 'PlaneStrain' and 'AxiSymmetric'. Now problem type = $type ????")
         end
         name = gmsh.model.getCurrent()
         gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
@@ -96,7 +96,7 @@ end
 """
     StressField(sigma, numElem, nsteps)
 
-A structure containing the data of a stress field. 
+A structure containing the data of a stress or strain field. 
 - sigma: vector of ElementNodeData type stress data (see gmsh.jl)
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in sigma (for animations).
@@ -156,7 +156,9 @@ end
     FEM.load(name; fx=..., fy=..., fz=...)
 
 Gives the intensity of distributed load on `name` physical group. At least one `fx`, 
-`fy` or `fz` value have to be given (depending on the dimension of the problem).
+`fy` or `fz` value have to be given (depending on the dimension of the problem). `fx`, 
+`fy` or `fz` can be a constant value, or a function of `x`, `y` and `z`.
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.load(problem, fx=fn)`)
 
 Return: none
 
@@ -964,24 +966,24 @@ function solveDisplacement(K, f)
 end
 
 """
-    FEM.solveStress(problem, q)
+    FEM.solveStrain(problem, q)
 
-Solves the stress field `S` from displacement vector `q`. Stress field is given
+Solves the strain field `E` from displacement vector `q`. Strain field is given
 per elements, so it usually contains jumps at the boundary of elements. Details
 of mesh is available in `problem`.
 
-Return: `S`
+Return: `E`
 
 Types:
 - `problem`: Problem
 - `q`: Vector{Float64}
-- `S`: StressField
+- `E`: StressField
 """
-function solveStress(problem, q)
+function solveStrain(problem, q)
     gmsh.model.setCurrent(problem.name)
 
     nsteps = size(q, 2)
-    σ = []
+    ε = []
     numElem = Int[]
     ncoord2 = zeros(3 * problem.non)
 
@@ -989,40 +991,23 @@ function solveStress(problem, q)
         phName, E, ν, ρ = problem.material[ipg]
         dim = 0
         if problem.dim == 3 && problem.type == "Solid"
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
-                ν 1-ν ν 0 0 0;
-                ν ν 1-ν 0 0 0;
-                0 0 0 (1-2ν)/2 0 0;
-                0 0 0 0 (1-2ν)/2 0;
-                0 0 0 0 0 (1-2ν)/2]
-
             dim = 3
             rowsOfB = 6
             b = 1
         elseif problem.dim == 2 && problem.type == "PlaneStress"
-            D = E / (1 - ν^2) * [1 ν 0;
-                ν 1 0;
-                0 0 (1-ν)/2]
             dim = 2
             rowsOfB = 3
             b = problem.thickness
         elseif problem.dim == 2 && problem.type == "PlaneStrain"
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
-                ν 1-ν 0;
-                0 0 (1-2ν)/2]
             dim = 2
             rowsOfB = 3
             b = 1
         elseif problem.dim == 2 && problem.type == "AxiSymmetric"
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
-                ν 1-ν ν 0;
-                ν ν 1-ν 0;
-                0 0 0 (1-2ν)/2]
             dim = 2
             rowsOfB = 4
             b = 1
         else
-            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("solveStrain: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -1087,7 +1072,184 @@ function solveStress(problem, q)
                             B[k*4-2, l*2-1] = h[l, k] / r[k]
                         end
                     else
-                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                        error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    push!(numElem, elem)
+                    for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    e = zeros(9numNodes, nsteps) # tensors have nine elements
+                    for k in 1:numNodes
+                        if rowsOfB == 6 && dim == 3 && problem.type == "Solid"
+                            B1 = B[k*6-5:k*6, 1:3*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * q[nn2, kk]
+                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], e0[6],
+                                    e0[4], e0[2], e0[5],
+                                    e0[6], e0[5], e0[3]]
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStress"
+                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * q[nn2, kk]
+                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
+                                    e0[3], e0[2], 0,
+                                    0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStrain"
+                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * q[nn2, kk]
+                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
+                                    e0[3], e0[2], 0,
+                                    0, 0, 0]
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == "AxiSymmetric"
+                            B1 = B[k*4-3:k*4, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * q[nn2, kk]
+                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], 0,
+                                    e0[4], e0[3], 0,
+                                    0, 0, e0[2]]
+                            end
+                        else
+                            error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        end
+                    end
+                    push!(ε, e)
+                end
+            end
+        end
+    end
+    epsilon = StressField(ε, numElem, nsteps)
+    return epsilon
+end
+
+"""
+    FEM.solveStress(problem, q)
+
+Solves the stress field `S` from displacement vector `q`. Stress field is given
+per elements, so it usually contains jumps at the boundary of elements. Details
+of mesh is available in `problem`.
+
+Return: `S`
+
+Types:
+- `problem`: Problem
+- `q`: Vector{Float64}
+- `S`: StressField
+"""
+function solveStress(problem, q)
+    gmsh.model.setCurrent(problem.name)
+
+    nsteps = size(q, 2)
+    σ = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+
+    for ipg in 1:length(problem.material)
+        phName, E, ν, ρ = problem.material[ipg]
+        dim = 0
+        if problem.dim == 3 && problem.type == "Solid"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+                ν 1-ν ν 0 0 0;
+                ν ν 1-ν 0 0 0;
+                0 0 0 (1-2ν)/2 0 0;
+                0 0 0 0 (1-2ν)/2 0;
+                0 0 0 0 0 (1-2ν)/2]
+
+            dim = 3
+            rowsOfB = 6
+            b = 1
+        elseif problem.dim == 2 && problem.type == "PlaneStress"
+            D = E / (1 - ν^2) * [1 ν 0;
+                ν 1 0;
+                0 0 (1-ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
+                ν 1-ν 0;
+                0 0 (1-2ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
+                ν 1-ν ν 0;
+                ν ν 1-ν 0;
+                0 0 0 (1-2ν)/2]
+            dim = 2
+            rowsOfB = 4
+            b = 1
+        else
+            error("solveStress: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                s0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, dim * numNodes)
+                nn2 = zeros(Int, dim * numNodes)
+                r = zeros(numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numNodes
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    ∂h .*= 0
+                    for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 2 && rowsOfB == 4
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = h[l, k] / r[k]
+                        end
+                    else
+                        error("solveStress: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     push!(numElem, elem)
                     for k in 1:dim
@@ -1701,6 +1863,93 @@ function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
     end
     #display("$comp..ok")
     return uvec
+end
+
+"""
+    FEM.showStrainResults(problem, E, comp; t=..., name=..., visible=..., smooth=...)
+
+Loads strain results into a View in gmsh. `E` is a strain field to show, `comp` is
+the component of the field ("e", "ex", "ey", "ez", "exy", "eyz", "ezx"),
+`t` is a vector of time steps (same length as the number of stress states),
+`name` is a title to display, `visible` is a true or false value to toggle on or
+off the initial visibility in gmsh and `smooth` is a true of false value to toggle
+smoothing the stress field on or off. If length of `t` is more than one, then a 
+sequence of results will be shown (eg. as an animation). This function returns
+the tag of View.
+
+Return: `tag`
+
+Types:
+- `problem`: Problem
+- `E`: StressField
+- `comp`: String
+- `t`: Vector{Float64}
+- `name`: String
+- `visible`: Boolean
+- `smooth`: Boolean
+- `tag`: Integer
+"""
+function showStrainResults(problem, E, comp; t=[0.0], name="ε", visible=false, smooth=true)
+    gmsh.model.setCurrent(problem.name)
+    gmsh.option.setNumber("Mesh.VolumeEdges", 0)
+    dim = problem.dim
+    #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
+    #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
+    if E.nsteps != length(t)
+        error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
+    end
+    EE = gmsh.view.add(name)
+    ε = E.sigma
+    numElem = E.numElem
+    for jj in 1:length(t)
+
+        k = 1im
+        if comp == "e"
+            εcomp = [ε[i][:,jj] for i in 1:length(E.numElem)]
+            nc = 9
+        else
+            nc = 1
+            if comp == "ex"
+                k = 8
+            elseif comp == "ey"
+                k = 4
+            elseif comp == "ez"
+                k = 0
+            elseif comp == "exy" || comp == "eyx"
+                k = 7
+            elseif comp == "eyz" || comp == "ezy"
+                k = 3
+            elseif comp == "ezx" || comp == "exz"
+                k = 6
+            else
+                error("ShowStressResults: component is $comp ????")
+            end
+            εcomp = []
+            sizehint!(εcomp, length(numElem))
+            for i in 1:length(E.numElem)
+                ex = zeros(div(size(ε[i], 1), 9))
+                for j in 1:(div(size(ε[i], 1), 9))
+                    ex[j] = ε[i][9j-k, jj]
+                end
+                push!(εcomp, ex)
+            end
+        end
+        gmsh.view.addModelData(EE, jj-1, problem.name, "ElementNodeData", numElem, εcomp, t[jj], nc)
+    end
+
+    if smooth == true
+        gmsh.plugin.setNumber("Smooth", "View", -1)
+        gmsh.plugin.run("Smooth")
+    end
+
+    gmsh.view.option.setNumber(EE, "AdaptVisualizationGrid", 0)
+    gmsh.view.option.setNumber(EE, "TargetError", -1e-4)
+    gmsh.view.option.setNumber(EE, "MaxRecursionLevel", 1)
+    if visible == false
+        gmsh.view.option.setNumber(EE, "Visible", 0)
+    end
+    #display("$comp..ok")
+    return EE
 end
 
 """
