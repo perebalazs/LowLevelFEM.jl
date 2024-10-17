@@ -639,8 +639,10 @@ end
 Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
 `name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
 It can solve traction or body force depending on the problem.
+In case of 2D problems and Point physical group means concentrated force.
 In case of 2D problems and Line physical group means surface force.
 In case of 2D problems and Surface physical group means body force.
+In case of 3D problems and Point physical group means concentrated force.
 In case of 3D problems and Line physical group means edge force.
 In case of 3D problems and Surface physical group means surface force.
 In case of 3D problems and Volume physical group means body force.
@@ -742,6 +744,10 @@ function loadVector(problem, loads)
                             Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
                         elseif pdim == 2 && dim == 1 && problem.type == "AxiSymmetric"
                             Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                        elseif pdim == 3 && dim == 0
+                            Ja = 1
+                        elseif pdim == 2 && dim == 0
+                            Ja = 1
                         else
                             error("applyBoundaryConditions: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
