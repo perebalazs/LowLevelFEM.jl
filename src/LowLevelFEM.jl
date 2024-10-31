@@ -688,7 +688,7 @@ function loadVector(problem, loads)
                 numIntPoints = length(intWeights)
                 comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
                 h = reshape(fun, :, numIntPoints)
-                nnet = zeros(Int, length(elementTags[i]), numNodes)
+                nnet = zeros(Int, length(elementTags[ii]), numNodes)
                 H = zeros(pdim * numIntPoints, pdim * numNodes)
                 for j in 1:numIntPoints
                     for k in 1:numNodes
@@ -702,7 +702,7 @@ function loadVector(problem, loads)
                 for l in 1:length(elementTags[ii])
                     elem = elementTags[ii][l]
                     for k in 1:numNodes
-                        nnet[l, k] = elemNodeTags[i][(l-1)*numNodes+k]
+                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
                     end
                     jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                     Jac = reshape(jac, 3, :)
