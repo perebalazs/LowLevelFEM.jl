@@ -868,26 +868,36 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
         name, ux, uy, uz = supports[i]
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
         if ux != 1im
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
-            f0 = stiffMat[:, nodeTagsX] * ux
-            f0 = sum(f0, dims=2)
+            if isa(ux, Function)
+                uux = ux.(xx, yy, zz)
+                f0 = stiffMat[:, nodeTagsX] * uux
+            else
+                f0 = stiffMat[:, nodeTagsX] * ux
+                f0 = sum(f0, dims=2)
+            end
             loadVec .-= f0
         end
         if uy != 1im
-            nodeTagsX = copy(nodeTags)
-            nodeTagsX *= pdim
-            nodeTagsX .-= (pdim - 2)
-            f0 = stiffMat[:, nodeTagsX] * uy
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim - 2)
+            f0 = stiffMat[:, nodeTagsY] * uy
             f0 = sum(f0, dims=2)
             loadVec .-= f0
         end
         if pdim == 3 && uz != 1im
-            nodeTagsY = copy(nodeTags)
-            nodeTagsY *= 3
-            f0 = stiffMat[:, nodeTagsY] * uz
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= 3
+            f0 = stiffMat[:, nodeTagsZ] * uz
             f0 = sum(f0, dims=2)
             loadVec .-= f0
         end
@@ -897,11 +907,21 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
         name, ux, uy, uz = supports[i]
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
         if ux != 1im
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
+            if isa(ux, Function)
+                uux = ux.(xx, yy, zz)
+            end
+            jj = 0
             for j ∈ nodeTagsX
+                jj += 1
                 stiffMat[j, :] .= 0
                 stiffMat[:, j] .= 0
                 stiffMat[j, j] = 1
@@ -911,7 +931,11 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 dampMat[j, :] .= 0
                 dampMat[:, j] .= 0
                 dampMat[j, j] = 1
-                loadVec[j] = ux
+                if isa(ux, Function)
+                    loadVec[j] = uux[jj]
+                else
+                    loadVec[j] = ux
+                end
             end
         end
         if uy != 1im
