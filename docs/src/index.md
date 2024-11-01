@@ -45,7 +45,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] 3D (and 2D) beam structures
 - [ ] Shells
 - [x] Giving loads with functions
-- [ ] Giving prescribed displacements with functions
+- [x] Giving prescribed displacements with functions
 - [ ] MultiPoint Constraint (like MPC184 in Ansys)
 - [X] Different material properties on physical groups
 - [ ] Contact problems,
@@ -58,7 +58,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
   - [ ] cartesian at arbitrary position and arbitrary orientation,
   - [ ] cylindrical.
 - [x] Defining load vector as a function of x, y and z.
-- [ ] Defining displacement boundary conditions as a function of x, y and z.
+- [x] Defining displacement boundary conditions as a function of x, y and z.
 - [ ] Defining displacement initial condition as a function of x, y and z.
 - [ ] Defining velocity initial condition as a function of x, y and z.
 - [ ] Finite deformations.
