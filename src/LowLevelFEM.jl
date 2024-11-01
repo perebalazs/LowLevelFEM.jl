@@ -124,9 +124,9 @@ Return: mat
 Types:
 - `mat`: Tuple(String, Float64, Float64, Float64)
 - `name`: String
-- `E`: double
-- `ν`: double
-- `ρ`: double
+- `E`: Float64
+- `ν`: Float64
+- `ρ`: Float64
 """
 function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9)
     mat = name, E, ν, ρ
@@ -138,14 +138,15 @@ end
 
 Gives the displacement constraints on `name` physical group. At least one `ux`, 
 `uy` or `uz` value have to be given (depending on the dimension of the problem).
-
+`ux`, `uy` or `uz` can be a constant value, or a function of `x`, `y` and `z`.
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.displacementConstraint("support1", ux=fn)`)
 Return: none
 
 Types:
 - `name`: string
-- `ux`: double
-- `uy`: double
-- `uz`: double
+- `ux`: Float64 of Function
+- `uy`: Float64 of Function
+- `uz`: Float64 of Function
 """
 function displacementConstraint(name; ux=1im, uy=1im, uz=1im)
     bc0 = name, ux, uy, uz
@@ -158,15 +159,15 @@ end
 Gives the intensity of distributed load on `name` physical group. At least one `fx`, 
 `fy` or `fz` value have to be given (depending on the dimension of the problem). `fx`, 
 `fy` or `fz` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.load(problem, fx=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("load1", fx=fn)`)
 
 Return: none
 
 Types:
 - `name`: string
-- `ux`: double
-- `uy`: double
-- `uz`: double
+- `fx`: Float64 of Function
+- `fy`: Float64 of Function
+- `fz`: Float64 of Function
 """
 function load(name; fx=0, fy=0, fz=0)
     ld0 = name, fx, fy, fz
@@ -890,15 +891,25 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 2)
-            f0 = stiffMat[:, nodeTagsY] * uy
-            f0 = sum(f0, dims=2)
+            if isa(uy, Function)
+                uuy = uy.(xx, yy, zz)
+                f0 = stiffMat[:, nodeTagsY] * uuy
+            else
+                f0 = stiffMat[:, nodeTagsY] * uy
+                f0 = sum(f0, dims=2)
+            end
             loadVec .-= f0
         end
         if pdim == 3 && uz != 1im
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= 3
-            f0 = stiffMat[:, nodeTagsZ] * uz
-            f0 = sum(f0, dims=2)
+            if isa(uz, Function)
+                uuz = uz.(xx, yy, zz)
+                f0 = stiffMat[:, nodeTagsZ] * uuz
+            else
+                f0 = stiffMat[:, nodeTagsZ] * uz
+                f0 = sum(f0, dims=2)
+            end
             loadVec .-= f0
         end
     end
@@ -939,10 +950,15 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
             end
         end
         if uy != 1im
-            nodeTagsX = copy(nodeTags)
-            nodeTagsX *= pdim
-            nodeTagsX .-= (pdim-2)
-            for j ∈ nodeTagsX
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim-2)
+            if isa(uy, Function)
+                uuy = uy.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsY
+                jj += 1
                 stiffMat[j, :] .= 0
                 stiffMat[:, j] .= 0
                 stiffMat[j, j] = 1
@@ -952,13 +968,22 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 dampMat[j, :] .= 0
                 dampMat[:, j] .= 0
                 dampMat[j, j] = 1
-                loadVec[j] = uy
+                if isa(uy, Function)
+                    loadVec[j] = uuy[jj]
+                else
+                    loadVec[j] = uy
+                end
             end
         end
         if pdim == 3 && uz != 1im
-            nodeTagsY = copy(nodeTags)
-            nodeTagsY *= 3
-            for j ∈ nodeTagsY
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= 3
+            if isa(uz, Function)
+                uuz = uz.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsZ
+                jj += 1
                 stiffMat[j, :] .= 0
                 stiffMat[:, j] .= 0
                 stiffMat[j, j] = 1
@@ -968,7 +993,11 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 dampMat[j, :] .= 0
                 dampMat[:, j] .= 0
                 dampMat[j, j] = 1
-                loadVec[j] = uz
+                if isa(uz, Function)
+                    loadVec[j] = uuz[jj]
+                else
+                    loadVec[j] = uz
+                end
             end
         end
     end
