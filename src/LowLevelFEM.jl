@@ -2153,58 +2153,59 @@ function plotOnPath(problem, pathName, field, points; step=1im, plot=false, name
     if points < 2
         error("plotOnPath: number of points is less than two (points = $points)!")
     end
-    i = 1
-    while dimTags[i][1] != 1
-        i += 1
-        if i > length(dimTags)
+    CoordValue = []
+    pt0 = [0, 0, 0]
+    pt1 = pt0
+    stepRange = 1:2
+    for ii ∈ 1:length(dimTags)
+        if dimTags[ii][1] != 1
             error("Physical name '$name' with dimension ONE does not exist.")
         end
-    end
-    path = dimTags[i][2]
-    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
-    bounds = gmsh.model.getParametrizationBounds(1, path)
-    bound1 = bounds[1][1]
-    bound2 = bounds[2][1]
-    step0 = (bound2 - bound1) / (points - 1)
-    nbstep = Int(gmsh.view.option.getNumber(field, "NbTimeStep"))
-    CoordValue = []
-    pt0 = gmsh.model.getValue(1, path, [bound1])
-    #val, dis = gmsh.view.probe(field, pt0[1], pt0[2], pt0[3])
-    #display(val)
-    if step == 1im
-        stepRange = 1:nbstep
-    else
-        stepRange = step >= nbstep ? nbstep : step + 1
-        if step >= nbstep
-            @warn("plotOnPath: step is greater than max. number of steps (max. number is chosen)  $step <==> $(nbstep)!")
+        path = dimTags[ii][2]
+        dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
+        bounds = gmsh.model.getParametrizationBounds(1, path)
+        bound1 = bounds[1][1]
+        bound2 = bounds[2][1]
+        step0 = (bound2 - bound1) / (points - 1)
+        nbstep = Int(gmsh.view.option.getNumber(field, "NbTimeStep"))
+        if ii == 1
+            pt0 = gmsh.model.getValue(1, path, [bound1])
         end
-    end
-    cv = zeros(3 + length(stepRange))
-    for i in 1:points
-        pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
-        cv[1:3] = pt1 - pt0
-        for j in 1:length(stepRange)
-            v = 0
-            val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], stepRange[j] - 1)
-            if dis < 1e-5
-                if numComponents == 1
-                    v = val[1]
-                elseif numComponents == 3
-                    v = √(val[1]^2 + val[2]^2 + val[3]^2)
-                elseif numComponents == 9
-                    v = √(0.5 * ((val[1] - val[5])^2 + (val[5] - val[9])^2 + (val[9] - val[1])^2 + 6 * (val[2]^2 + val[3]^2 + val[6]^2)))
-                else
-                    error("Vagy skalár vagy vektor vagy tenzor...")
-                end
-            else
-                v = 0
+        if step == 1im
+            stepRange = 1:nbstep
+        else
+            stepRange = step >= nbstep ? nbstep : step + 1
+            if step >= nbstep
+                @warn("plotOnPath: step is greater than max. number of steps (max. number is chosen)  $step <==> $(nbstep)!")
             end
-            cv[3+j] = v
         end
-        append!(CoordValue, cv)
+        cv = zeros(3 + length(stepRange))
+        for i in 1:points
+            pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
+            cv[1:3] = pt1 - pt0
+            for j in 1:length(stepRange)
+                v = 0
+                val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], stepRange[j] - 1)
+                if dis < 1e-5
+                    if numComponents == 1
+                        v = val[1]
+                    elseif numComponents == 3
+                        v = √(val[1]^2 + val[2]^2 + val[3]^2)
+                    elseif numComponents == 9
+                        v = √(0.5 * ((val[1] - val[5])^2 + (val[5] - val[9])^2 + (val[9] - val[1])^2 + 6 * (val[2]^2 + val[3]^2 + val[6]^2)))
+                    else
+                        error("Vagy skalár vagy vektor vagy tenzor...")
+                    end
+                else
+                    v = 0
+                end
+                cv[3+j] = v
+            end
+            append!(CoordValue, cv)
+        end
     end
     pathView = gmsh.view.add(name)
-    gmsh.view.addListData(pathView, "SP", points, CoordValue)
+    gmsh.view.addListData(pathView, "SP", points * length(dimTags), CoordValue)
 
     gmsh.view.option.setNumber(pathView, "Type", 2)
     gmsh.view.option.setNumber(pathView, "Axes", 1)
@@ -2215,14 +2216,13 @@ function plotOnPath(problem, pathName, field, points; step=1im, plot=false, name
 
     if plot == true
         step = step == 1im ? 0 : step
-        step = 0
-        x = zeros(points)
-        y = zeros(points)
+        x = zeros(points * length(dimTags))
+        y = zeros(points * length(dimTags))
         y[1] = CoordValue[4+step]
         x0 = 0
         y0 = 0
         z0 = 0
-        for i in 2:points
+        for i in 2:points * length(dimTags)
             x1 = CoordValue[(length(stepRange)+3)*(i-1)+1]
             y1 = CoordValue[(length(stepRange)+3)*(i-1)+2]
             z1 = CoordValue[(length(stepRange)+3)*(i-1)+3]
