@@ -35,18 +35,23 @@ struct Problem
     name::String
     type::String
     dim::Int64
+    pdim::Int64
     material::Vector{Tuple{String, Float64, Float64, Float64}}
     thickness::Float64
     non::Int64
     function Problem(mat; thickness=1, type="Solid", bandwidth="none")
         if type == "Solid"
             dim = 3
+            pdim = 3
         elseif type == "PlaneStress"
             dim = 2
+            pdim = 2
         elseif type == "PlaneStrain"
             dim = 2
+            pdim = 2
         elseif type == "AxiSymmetric"
             dim = 2
+            pdim = 2
         else
             error("Problem type can be: 'Solid', PlaneStress', 'PlaneStrain' and 'AxiSymmetric'. Now problem type = $type ????")
         end
@@ -89,7 +94,7 @@ struct Problem
         gmsh.model.mesh.renumberNodes(oldTags, newTags)
 
         non = length(oldTags)
-        return new(name, type, dim, material, thickness, non)
+        return new(name, type, dim, pdim, material, thickness, non)
     end
 end
 
@@ -1866,16 +1871,24 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
+function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
+    pdim = problem.pdim
     nodeTags = []
-    for ipg in 1:length(problem.material)
-        phName, E, ν, ρ = problem.material[ipg]
+    if problem.type == "Reynolds"
+        phName = problem.geometry.phName
         tag = getTagForPhysicalName(phName)
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
         append!(nodeTags, nT)
+    else
+        for ipg in 1:length(problem.material)
+            phName, E, ν, ρ = problem.material[ipg]
+            tag = getTagForPhysicalName(phName)
+            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
+            append!(nodeTags, nT)
+        end
     end
 
     #nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
@@ -1890,13 +1903,13 @@ function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
             nc = 3
             u = zeros(3 * non)
             for i in 1:length(nodeTags)
-                u[3i-2] = q[dim*nodeTags[i]-(dim-1), j]
-                u[3i-1] = q[dim*nodeTags[i]-(dim-2), j]
-                u[3i-0] = dim == 3 ? q[dim*nodeTags[i]-(dim-3), j] : 0
+                u[3i-2] = q[pdim*nodeTags[i]-(pdim-1), j]
+                u[3i-1] = pdim > 1 ? q[pdim*nodeTags[i]-(pdim-2), j] : 0
+                u[3i-0] = pdim == 3 ? q[pdim*nodeTags[i]-(pdim-3), j] : 0
             end
         else
             nc = 1
-            if comp == "ux" || comp == "vx"
+            if comp == "ux" || comp == "vx" || comp == "p"
                 k = 1
             elseif comp == "uy" || comp == "vy"
                 k = 2
@@ -1907,7 +1920,8 @@ function showDoFResults(problem, q, comp; t=[0.0], name="u", visible=false)
             end
             u = zeros(non)
             for i in 1:length(nodeTags)
-                u[i] = dim == 2 && k == 3 ? 0 : q[dim*nodeTags[i]-(dim-k), j]
+                #u[i] = pdim == 2 && k == 3 ? 0 : q[pdim*nodeTags[i]-(pdim-k), j]
+                u[i] = k > pdim ? 0 : q[pdim*nodeTags[i]-(pdim-k), j]
             end
         end
         gmsh.view.addHomogeneousModelData(uvec, j-1, problem.name, "NodeData", nodeTags, u, t[j], nc)
