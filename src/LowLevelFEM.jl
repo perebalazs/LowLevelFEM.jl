@@ -8,11 +8,44 @@ import .gmsh
 export gmsh
 
 """
+    Material(phName, E, ν, ρ, k, c)
+
+A structure containing the material constants. 
+- E: elastic modulus,
+- ν: Poisson's ratio,
+- ρ: mass density,
+- k: heat conductivity,
+- c: specific heat,
+- λ: coefficient of heat convection.
+`phName` is the name of the physical group where the given material is used.
+
+Types:
+- `phName`: String
+- `E`: Float64
+- `ν`: Float64
+- `ρ`: Float64
+- `k`: Float64
+- `c`: Float64
+- `λ`: Float64
+"""
+struct Material
+    phName::String
+    E::Float64
+    ν::Float64
+    ρ::Float64
+    k::Float64
+    c::Float64
+    λ::Float64
+end
+
+
+"""
     Problem(names; thickness=..., type=..., bandwidth=...)
 
 A structure containing the most important data of the problem. 
 - name of the model (in gmsh)
-- type of the problem: 3D "Solid", "PlaneStrain", "PlaneStress" or "AxiSymmetric"
+- type of the problem: 3D "Solid", "PlaneStrain", "PlaneStress", "AxiSymmetric",
+  "PlaneHeatConduction", "HeatConduction", AxiSymmetricHeatConduction".
   In the case of "AxiSymmetric", the axis of symmetry is the "y" axis, 
   while the geometry must be drawn in the positive "x" half-plane.
 - bandwidth optimization using built-in `gmsh` function.
@@ -36,7 +69,7 @@ struct Problem
     type::String
     dim::Int64
     pdim::Int64
-    material::Vector{Tuple{String, Float64, Float64, Float64}}
+    material::Vector{Material}
     thickness::Float64
     non::Int64
     function Problem(mat; thickness=1, type="Solid", bandwidth="none")
@@ -52,8 +85,17 @@ struct Problem
         elseif type == "AxiSymmetric"
             dim = 2
             pdim = 2
+        elseif type == "PlaneHeatConduction"
+            dim = 2
+            pdim = 1
+        elseif type == "HeatConduction"
+            dim = 3
+            pdim = 1
+        elseif type == "AxiSymmetricHeatConduction"
+            dim = 2
+            pdim = 1
         else
-            error("Problem type can be: 'Solid', PlaneStress', 'PlaneStrain' and 'AxiSymmetric'. Now problem type = $type ????")
+            error("Problem type can be: 'Solid', PlaneStress', 'PlaneStrain', 'AxiSymmetric', 'PlaneHeatConduction', 'HeatConduction' or 'AxiSymmetricHeatConduction'. Now problem type = $type ????")
         end
         name = gmsh.model.getCurrent()
         gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
@@ -62,7 +104,7 @@ struct Problem
         material = mat
         elemTags = []
         for ipg in 1:length(material)
-            phName, E, ν, ρ = material[ipg]
+            phName = material[ipg].phName
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -99,7 +141,7 @@ struct Problem
 end
 
 """
-    StressField(sigma, numElem, nsteps)
+    TensorField(sigma, numElem, nsteps)
 
 A structure containing the data of a stress or strain field. 
 - sigma: vector of ElementNodeData type stress data (see gmsh.jl)
@@ -111,7 +153,7 @@ Types:
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
 """
-struct StressField
+struct TensorField
     sigma::Vector{Matrix{Float64}}
     numElem::Vector{Int}
     nsteps::Int
@@ -133,9 +175,8 @@ Types:
 - `ν`: Float64
 - `ρ`: Float64
 """
-function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9)
-    mat = name, E, ν, ρ
-    return mat
+function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, λ=0.01)
+    return Material(name, E, ν, ρ, k, c, λ)
 end
 
 """
@@ -148,7 +189,7 @@ Gives the displacement constraints on `name` physical group. At least one `ux`,
 Return: none
 
 Types:
-- `name`: string
+- `name`: String
 - `ux`: Float64 of Function
 - `uy`: Float64 of Function
 - `uz`: Float64 of Function
@@ -169,7 +210,7 @@ Gives the intensity of distributed load on `name` physical group. At least one `
 Return: none
 
 Types:
-- `name`: string
+- `name`: String
 - `fx`: Float64 of Function
 - `fy`: Float64 of Function
 - `fz`: Float64 of Function
@@ -179,6 +220,43 @@ function load(name; fx=0, fy=0, fz=0)
     return ld0
 end
 
+"""
+    FEM.temperatureConstraint(name; T=...)
+
+Gives the temperature constraints on `name` physical group. 
+`T` can be a constant value, or a function of `x`, `y` and `z`.
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.temperatureConstraint("surf1", T=fn)`)
+Return: none
+
+Types:
+- `name`: String
+- `T`: Float64 of Function
+"""
+function temperatureConstraint(name; T=1im)
+    bc0 = name, T
+    return bc0
+end
+
+"""
+    FEM.heatFlux(name; qx=..., qy=..., qz=...)
+
+Gives the heat flux on `name` physical group. At least one `qx`, 
+`qy` or `qz` value have to be given (depending on the dimension of the problem).
+`qx`, `qy` or `qz` can be a constant value, or a function of `x`, `y` and `z`.
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("flux1", qx=fn)`)
+
+Return: none
+
+Types:
+- `name`: String
+- `qx`: Float64 of Function
+- `qy`: Float64 of Function
+- `qz`: Float64 of Function
+"""
+function load(name; qx=0, qy=0, qz=0)
+    fl0 = name, qx, qy, qz
+    return fl0
+end
 
 """
     FEM.generateMesh(problem, surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
@@ -241,7 +319,9 @@ function stiffnessMatrixSolid(problem; elements=[])
     sizehint!(V, lengthOfIJV)
 
     for ipg in 1:length(problem.material)
-        phName, E, ν, ρ = problem.material[ipg]
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
         dim = 0
         if problem.dim == 3 && problem.type == "Solid"
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
@@ -363,7 +443,9 @@ function stiffnessMatrixAXI(problem; elements=[])
     ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
-        phName, E, ν, ρ = problem.material[ipg]
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
         dim = 0
         if problem.dim == 2 && problem.type == "AxiSymmetric"
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
@@ -484,7 +566,8 @@ function massMatrix(problem; elements=[], lumped=true)
     ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
-        phName, E, ν, ρ = problem.material[ipg]
+        phName = problem.material[ipg].phName
+        ρ = problem.material[ipg].ρ
         dim = 0
         if problem.dim == 3 && problem.type == "Solid"
             dim = 3
@@ -1041,7 +1124,7 @@ Return: `E`
 Types:
 - `problem`: Problem
 - `q`: Vector{Float64}
-- `E`: StressField
+- `E`: TensorField
 """
 function solveStrain(problem, q)
     gmsh.model.setCurrent(problem.name)
@@ -1052,7 +1135,8 @@ function solveStrain(problem, q)
     ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
-        phName, E, ν, ρ = problem.material[ipg]
+        phName = problem.material[ipg].phName
+        ν = problem.material[ipg].ν
         dim = 0
         if problem.dim == 3 && problem.type == "Solid"
             dim = 3
@@ -1185,7 +1269,7 @@ function solveStrain(problem, q)
             end
         end
     end
-    epsilon = StressField(ε, numElem, nsteps)
+    epsilon = TensorField(ε, numElem, nsteps)
     return epsilon
 end
 
@@ -1201,7 +1285,7 @@ Return: `S`
 Types:
 - `problem`: Problem
 - `q`: Vector{Float64}
-- `S`: StressField
+- `S`: TensorField
 """
 function solveStress(problem, q)
     gmsh.model.setCurrent(problem.name)
@@ -1212,7 +1296,9 @@ function solveStress(problem, q)
     ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
-        phName, E, ν, ρ = problem.material[ipg]
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
         dim = 0
         if problem.dim == 3 && problem.type == "Solid"
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
@@ -1363,7 +1449,7 @@ function solveStress(problem, q)
             end
         end
     end
-    sigma = StressField(σ, numElem, nsteps)
+    sigma = TensorField(σ, numElem, nsteps)
     return sigma
 end
 
@@ -1884,7 +1970,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
         append!(nodeTags, nT)
     else
         for ipg in 1:length(problem.material)
-            phName, E, ν, ρ = problem.material[ipg]
+            phName = problem.material[ipg].phName
             tag = getTagForPhysicalName(phName)
             nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
             append!(nodeTags, nT)
@@ -1954,7 +2040,7 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `E`: StressField
+- `E`: TensorField
 - `comp`: String
 - `t`: Vector{Float64}
 - `name`: String
@@ -2041,7 +2127,7 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `S`: StressField
+- `S`: TensorField
 - `comp`: String
 - `t`: Vector{Float64}
 - `name`: String
