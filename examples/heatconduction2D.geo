@@ -13,7 +13,7 @@ Recombine Surface {1};
 Transfinite Line {2,4} = 4;
 Transfinite Line {1,3} = 31;
 Transfinite Surface {1};
-Mesh.ElementOrder = 3;
+Mesh.ElementOrder = 1;
 
 SetName "bending2D";
 Mesh 2;

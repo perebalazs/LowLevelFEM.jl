@@ -233,7 +233,7 @@ Types:
 - `T`: Float64 of Function
 """
 function temperatureConstraint(name; T=1im)
-    bc0 = name, T
+    bc0 = name, T, 1im, 1im
     return bc0
 end
 
@@ -967,6 +967,7 @@ Types:
 function loadVector(problem, loads)
     gmsh.model.setCurrent(problem.name)
     pdim = problem.pdim
+    DIM = problem.dim
     b = problem.thickness
     non = problem.non
     dof = pdim * non
@@ -1030,36 +1031,38 @@ function loadVector(problem, loads)
                                 f[1] = fx(x, y, z)
                             end
                             if isa(fy, Function)
-                                f[2] = fy(x, y, z)
+                                f[2] = fy(x, y, z) && problem.pdim > 1
                             end
-                            if isa(fz, Function) && problem.dim == 3
+                            if isa(fz, Function) && problem.pdim == 3
                                 f[3] = fz(x, y, z)
                             end
                         end
                         r = x
                         H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
-                        ############### NANSON ###########################################
-                        if pdim == 3 && dim == 3
+                        ############### NANSON ######## 3D ###################################
+                        if DIM == 3 && dim == 3
                             Ja = jacDet[j]
-                        elseif pdim == 3 && dim == 2
+                        elseif DIM == 3 && dim == 2
                             xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
                             yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
                             zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
                             Ja = √(xy^2 + yz^2 + zx^2)
-                        elseif pdim == 3 && dim == 1
+                        elseif DIM == 3 && dim == 1
                             Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
-                        elseif pdim == 2 && dim == 2 && problem.type != "AxiSymmetric"
+                        elseif DIM == 3 && dim == 0
+                            Ja = 1
+                        ############ 2D #######################################################
+                        elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
                             Ja = jacDet[j] * b
-                        elseif pdim == 2 && dim == 2 && problem.type == "AxiSymmetric"
+                        elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
                             Ja = 2π * jacDet[j] * r
-                        elseif pdim == 2 && dim == 1 && problem.type != "AxiSymmetric"
+                        elseif DIM == 2 dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
                             Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
-                        elseif pdim == 2 && dim == 1 && problem.type == "AxiSymmetric"
+                        elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
                             Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
-                        elseif pdim == 3 && dim == 0
+                        elseif DIM == 2 && dim == 0
                             Ja = 1
-                        elseif pdim == 2 && dim == 0
-                            Ja = 1
+                        ############ 1D #######################################################
                         else
                             error("applyBoundaryConditions: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
@@ -1174,7 +1177,7 @@ Types:
 function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
     gmsh.model.setCurrent(problem.name)
     dof, dof = size(stiffMat)
-    pdim = problem.dim
+    pdim = problem.pdim
 
     for i in 1:length(supports)
         name, ux, uy, uz = supports[i]
@@ -2218,7 +2221,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
             end
         else
             nc = 1
-            if comp == "ux" || comp == "vx" || comp == "p"
+            if comp == "ux" || comp == "vx" || comp == "p" || comp == "T"
                 k = 1
             elseif comp == "uy" || comp == "vy"
                 k = 2
