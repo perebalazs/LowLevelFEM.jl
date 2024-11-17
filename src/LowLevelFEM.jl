@@ -221,6 +221,27 @@ function load(name; fx=0, fy=0, fz=0)
 end
 
 """
+    FEM.elasticSupport(name; kx=..., ky=..., kz=...)
+
+Gives the distributed stiffness of the elastic support on `name` physical group.
+`kx`, `ky` or `kz` can be a constant value, or a function of `x`, `y` and `z`.
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.elasticSupport("supp1", kx=fn)`)
+Default values are 1.
+
+Return: none
+
+Types:
+- `name`: String
+- `kx`: Float64 of Function
+- `ky`: Float64 of Function
+- `kz`: Float64 of Function
+"""
+function elasticSupport(name; kx=1, ky=1, kz=1)
+    es0 = name, kx, ky, kz
+    return es0
+end
+
+"""
     FEM.temperatureConstraint(name; T=...)
 
 Gives the temperature constraints on `name` physical group. 
@@ -675,7 +696,7 @@ function heatCondMatrixAXI(problem; elements=[])
         dim = problem.dim
         pdim = problem.pdim
         if problem.dim == 2 && problem.type == "AxiSymmetricHeatConduction"
-            rowsOfB = 4
+            rowsOfB = 2
         else
             error("heatCondMatrixAXI: dimension is $(problem.dim), problem type is $(problem.type).")
         end
@@ -730,7 +751,7 @@ function heatCondMatrixAXI(problem; elements=[])
                     B .*= 0
                     if dim == 2 && rowsOfB == 2
                         for k in 1:numIntPoints, l in 1:numNodes
-                            B[k*rowsOfB-2, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
                             B[k*rowsOfB-0, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
                             #B[k*rowsOfB-2, l*pdim-1] = h[l, k] / r[k]
                         end
@@ -788,22 +809,19 @@ function massMatrix(problem; elements=[], lumped=true)
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
+        dim = problem.dim
+        pdim = problem.pdim
         ρ = problem.material[ipg].ρ
-        dim = 0
         if problem.dim == 3 && problem.type == "Solid"
-            dim = 3
             rowsOfH = 3
             b = 1
         elseif problem.dim == 2 && problem.type == "PlaneStress"
-            dim = 2
             rowsOfH = 2
             b = problem.thickness
         elseif problem.dim == 2 && problem.type == "PlaneStrain"
-            dim = 2
             rowsOfH = 2
             b = 1
         elseif problem.dim == 2 && problem.type == "AxiSymmetric"
-            dim = 2
             rowsOfH = 2
             b = 1
         else
@@ -828,20 +846,20 @@ function massMatrix(problem; elements=[], lumped=true)
                 comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
                 h = reshape(fun, :, numIntPoints)
                 nnet = zeros(Int, length(elemTags[i]), numNodes)
-                Iidx = zeros(Int, numNodes * dim, numNodes * dim)
-                Jidx = zeros(Int, numNodes * dim, numNodes * dim)
-                for k in 1:numNodes*dim, l in 1:numNodes*dim
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
                     Iidx[k, l] = l
                     Jidx[k, l] = k
                 end
-                nn2 = zeros(Int, dim * numNodes)
-                H = zeros(rowsOfH * numIntPoints, dim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                H = zeros(rowsOfH * numIntPoints, pdim * numNodes)
                 for k in 1:numIntPoints, l in 1:numNodes
-                    for kk in 1:dim
-                        H[k*dim-(dim-kk), l*dim-(dim-kk)] = h[(k-1)*numNodes+l]
+                    for kk in 1:pdim
+                        H[k*pdim-(pdim-kk), l*pdim-(pdim-kk)] = h[(k-1)*numNodes+l]
                     end
                 end
-                M1 = zeros(dim * numNodes, dim * numNodes)
+                M1 = zeros(pdim * numNodes, pdim * numNodes)
                 if problem.type != "AxiSymmetric"
                     for j in 1:length(elemTags[i])
                         elem = elemTags[i][j]
@@ -851,12 +869,12 @@ function massMatrix(problem; elements=[], lumped=true)
                         jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                         M1 .*= 0
                         for k in 1:numIntPoints
-                            H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
+                            H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
                             M1 += H1' * H1 * jacDet[k] * intWeights[k]
                         end
                         M1 *= ρ * b
-                        for k in 1:dim
-                            nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                        for k in 1:pdim
+                            nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                         end
                         append!(I, nn2[Iidx[:]])
                         append!(J, nn2[Jidx[:]])
@@ -872,12 +890,12 @@ function massMatrix(problem; elements=[], lumped=true)
                         M1 .*= 0
                         for k in 1:numIntPoints
                             r = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
-                            H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
+                            H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
                             M1 += H1' * H1 * jacDet[k] * r * intWeights[k]
                         end
                         M1 *= 2π * ρ * b
-                        for k in 1:dim
-                            nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                        for k in 1:pdim
+                            nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                         end
                         append!(I, nn2[Iidx[:]])
                         append!(J, nn2[Jidx[:]])
@@ -888,7 +906,142 @@ function massMatrix(problem; elements=[], lumped=true)
             end
         end
     end
-    dof = problem.dim * problem.non
+    dof = problem.pdim * problem.non
+    M = sparse(I, J, V, dof, dof)
+    if lumped == true
+        M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
+    end
+    dropzeros!(M)
+    return M
+end
+
+"""
+    FEM.heatCapacityMatrix(problem; lumped=...)
+
+Solves the heat capacity matrix of the `problem`. If `lumped` is true, solves lumped heat capacity matrix.
+
+Return: `heatCapMat`
+
+Types:
+- `problem`: Problem
+- `lumped`: Boolean
+- `massMat`: SparseMatrix
+"""
+function heatCapacityMatrix(problem; elements=[], lumped=true)
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        dim = problem.dim
+        pdim = problem.pdim
+        c = problem.material[ipg].c
+        ρ = problem.material[ipg].ρ
+        if problem.dim == 3 && problem.type == "Solid"
+            rowsOfH = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == "PlaneStress"
+            rowsOfH = 2
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+            rowsOfH = 2
+            b = 1
+        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+            rowsOfH = 2
+            b = 1
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                nn2 = zeros(Int, pdim * numNodes)
+                H = zeros(rowsOfH * numIntPoints, pdim * numNodes)
+                for k in 1:numIntPoints, l in 1:numNodes
+                    for kk in 1:pdim
+                        H[k*pdim-(pdim-kk), l*pdim-(pdim-kk)] = h[(k-1)*numNodes+l]
+                    end
+                end
+                M1 = zeros(pdim * numNodes, pdim * numNodes)
+                if problem.type != "AxiSymmetric"
+                    for j in 1:length(elemTags[i])
+                        elem = elemTags[i][j]
+                        for k in 1:numNodes
+                            nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                        end
+                        jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                        M1 .*= 0
+                        for k in 1:numIntPoints
+                            H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
+                            M1 += H1' * H1 * jacDet[k] * intWeights[k]
+                        end
+                        M1 *= c * ρ * b
+                        for k in 1:pdim
+                            nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                        end
+                        append!(I, nn2[Iidx[:]])
+                        append!(J, nn2[Jidx[:]])
+                        append!(V, M1[:])
+                    end
+                elseif problem.type == "AxiSymmetric"
+                    for j in 1:length(elemTags[i])
+                        elem = elemTags[i][j]
+                        for k in 1:numNodes
+                            nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                        end
+                        jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                        M1 .*= 0
+                        for k in 1:numIntPoints
+                            r = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                            H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
+                            M1 += H1' * H1 * jacDet[k] * r * intWeights[k]
+                        end
+                        M1 *= 2π * c * ρ * b
+                        for k in 1:pdim
+                            nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                        end
+                        append!(I, nn2[Iidx[:]])
+                        append!(J, nn2[Jidx[:]])
+                        append!(V, M1[:])
+                    end
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
     M = sparse(I, J, V, dof, dof)
     if lumped == true
         M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
@@ -939,6 +1092,162 @@ function dampingMatrix(M, K, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐ�
         MK *= iMK
         C += β[i] * MK
     end
+    dropzeros!(C)
+    return C
+end
+
+"""
+    FEM.elasticSupportMatrix(problem, elSupp)
+
+Solves the elastic support matrix of the `problem`. `elSupp` is a vector of elastic
+supports defined in function `FEM.elasticSupport`.
+
+Return: `elSuppMat`
+
+Types:
+- `problem`: Problem
+- `lumped`: Boolean
+- `elSuppMat`: SparseMatrix
+"""
+function elasticSupportMatrix(problem, elSupports)
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+
+    pdim = problem.pdim
+    DIM = problem.dim
+    b = problem.thickness
+    non = problem.non
+    dof = pdim * non
+    ncoord2 = zeros(3 * problem.non)
+    for n in 1:length(elSupports)
+        name, kx, ky, kz = elSupports[n]
+        if problem.pdim == 3
+            f = [kx, ky, kz]
+        elseif problem.pdim == 2
+            f = [kx, ky]
+        elseif problem.pdim == 1
+            f = [kx]
+        else
+            error("elasticSupportMatrix: dimension of the problem is $(problem.pdim).")
+        end
+        dimTags = gmsh.model.getEntitiesForPhysicalName(name)
+        for i ∈ 1:length(dimTags)
+            dimTag = dimTags[i]
+            dim = dimTag[1]
+            tag = dimTag[2]
+            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for ii in 1:length(elementTypes)
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+                nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order+1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elementTags[ii]), numNodes)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                H = zeros(pdim * numIntPoints, pdim * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdim
+                            H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                        end
+                    end
+                end
+                C1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                for l in 1:length(elementTags[ii])
+                    elem = elementTags[ii][l]
+                    for k in 1:numNodes
+                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    C1 .*= 0
+                    for j in 1:numIntPoints
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        y = 0
+                        z = 0
+                        if isa(kx, Function) || isa(ky, Function) || isa(kz, Function)
+                            y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                            z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                            if isa(kx, Function)
+                                f[1] = kx(x, y, z)
+                            end
+                            if isa(fy, Function)
+                                f[2] = ky(x, y, z) && problem.pdim > 1
+                            end
+                            if isa(fz, Function) && problem.pdim == 3
+                                f[3] = kz(x, y, z)
+                            end
+                        end
+                        r = x
+                        if pdim == 3
+                            kk = [f[1] 0 0; 0 f[2] 0; 0 0 f[3]]
+                        elseif pdim == 2
+                            kk = [f[1] 0; 0 f[2]]
+                        elseif pdim == 1
+                            kk = [f[1]]
+                        end
+                        H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                        ############### NANSON ######## 3D ###################################
+                        if DIM == 3 && dim == 3
+                            Ja = jacDet[j]
+                        elseif DIM == 3 && dim == 2
+                            xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                            yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                            zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                            Ja = √(xy^2 + yz^2 + zx^2)
+                        elseif DIM == 3 && dim == 1
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                        elseif DIM == 3 && dim == 0
+                            Ja = 1
+                        ############ 2D #######################################################
+                        elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                            Ja = jacDet[j] * b
+                        elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                            Ja = 2π * jacDet[j] * r
+                        elseif DIM == 2 dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                        elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                            Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                        elseif DIM == 2 && dim == 0
+                            Ja = 1
+                        ############ 1D #######################################################
+                        else
+                            error("applyBoundaryConditions: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                        end
+                        C1 += H1' * kk * H1 * Ja * intWeights[j]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, C1[:])
+                end
+            end
+        end
+    end
+
+    C = sparse(I, J, V, dof, dof)
     dropzeros!(C)
     return C
 end
