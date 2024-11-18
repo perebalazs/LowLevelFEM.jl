@@ -234,7 +234,7 @@ Types:
 - `ky`: Float64 or Function
 - `kz`: Float64 or Function
 """
-function elasticSupport(name; kx=1, ky=1, kz=1)
+function elasticSupport(name; kx=0, ky=0, kz=0)
     es0 = name, kx, ky, kz
     return es0
 end
@@ -289,9 +289,9 @@ Types:
 - `λ`: Float64
 - `Tₐ`: Float64
 """
-function heatConvection(name; λ=10, Tₐ=20)
+function heatConvection(name; h=10, Tₐ=20)
     p = 2im
-    hcv0 = name, λ, Tₐ, p
+    hcv0 = name, h, Tₐ, p
     return hcv0
 end
 
@@ -1322,14 +1322,15 @@ function loadVector(problem, loads)
     fp = zeros(dof)
     ncoord2 = zeros(3 * problem.non)
     for n in 1:length(loads)
-        display("loads[n] =$(loads[n])")
         name, fx, fy, fz = loads[n]
         if problem.pdim == 3
             f = [fx, fy, fz]
         elseif problem.pdim == 2
             f = [fx, fy]
-        elseif problem.pdim == 1
+        elseif problem.pdim == 1 && fz != 2im
             f = [fx]
+        elseif problem.pdim == 1 && fz == 2im
+            f = [fx] * fy
         else
             error("loadVector: dimension of the problem is $(problem.dim).")
         end
@@ -1688,6 +1689,25 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
 end
 
 """
+    FEM.applyElasticSupport!(problem, stiffMat, elastSupp)
+
+Applies elastic support boundary conditions `elastSupp` on a stiffness matrix
+`stiffMat`. Mesh details are in `problem`. `elastSupp` is a tuple of `name`
+of physical group and prescribed `kx`, `ky` and `kz` stiffnesses.
+
+Return: none
+
+Types:
+- `problem`: Problem
+- `stiffMat`: SparseMatrix 
+- `elastSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
+"""
+function applyElasticSupport!(problem, stiffMat, elastSupp)
+    C0 = elasticSupportMatrix(problem, elastSupp)
+    stiffMat .+= C0
+end
+
+"""
     FEM.applyHeatConvection(problem, heatCondMat, heatFluxVec, heatConv)
 
 Applies heat convectiom boundary conditions `heatConv` on a heat conduction matrix
@@ -1706,8 +1726,8 @@ Types:
 function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
     hf0 = heatConvectionVector(problem, heatConv)
     C0 = heatConvectionMatrix(problem, heatConv)
-    heatCondMat -= C0
-    heatFluxVec -= hf0
+    heatCondMat .+= C0
+    heatFluxVec .+= hf0
 end
 
 """
