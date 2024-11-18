@@ -16,7 +16,6 @@ A structure containing the material constants.
 - ρ: mass density,
 - k: heat conductivity,
 - c: specific heat,
-- λ: coefficient of heat convection.
 `phName` is the name of the physical group where the given material is used.
 
 Types:
@@ -26,7 +25,6 @@ Types:
 - `ρ`: Float64
 - `k`: Float64
 - `c`: Float64
-- `λ`: Float64
 """
 struct Material
     phName::String
@@ -35,7 +33,6 @@ struct Material
     ρ::Float64
     k::Float64
     c::Float64
-    λ::Float64
 end
 
 
@@ -175,8 +172,8 @@ Types:
 - `ν`: Float64
 - `ρ`: Float64
 """
-function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, λ=0.01)
-    return Material(name, E, ν, ρ, k, c, λ)
+function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8)
+    return Material(name, E, ν, ρ, k, c)
 end
 
 """
@@ -186,13 +183,14 @@ Gives the displacement constraints on `name` physical group. At least one `ux`,
 `uy` or `uz` value have to be given (depending on the dimension of the problem).
 `ux`, `uy` or `uz` can be a constant value, or a function of `x`, `y` and `z`.
 (E.g. `fn(x,y,z)=5*(5-x)); FEM.displacementConstraint("support1", ux=fn)`)
-Return: none
+
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
-- `ux`: Float64 of Function
-- `uy`: Float64 of Function
-- `uz`: Float64 of Function
+- `ux`: Float64 or Function
+- `uy`: Float64 or Function
+- `uz`: Float64 or Function
 """
 function displacementConstraint(name; ux=1im, uy=1im, uz=1im)
     bc0 = name, ux, uy, uz
@@ -207,13 +205,13 @@ Gives the intensity of distributed load on `name` physical group. At least one `
 `fy` or `fz` can be a constant value, or a function of `x`, `y` and `z`.
 (E.g. `fn(x,y,z)=5*(5-x)); FEM.load("load1", fx=fn)`)
 
-Return: none
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
-- `fx`: Float64 of Function
-- `fy`: Float64 of Function
-- `fz`: Float64 of Function
+- `fx`: Float64 or Function
+- `fy`: Float64 or Function
+- `fz`: Float64 or Function
 """
 function load(name; fx=0, fy=0, fz=0)
     ld0 = name, fx, fy, fz
@@ -228,13 +226,13 @@ Gives the distributed stiffness of the elastic support on `name` physical group.
 (E.g. `fn(x,y,z)=5*(5-x)); FEM.elasticSupport("supp1", kx=fn)`)
 Default values are 1.
 
-Return: none
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
-- `kx`: Float64 of Function
-- `ky`: Float64 of Function
-- `kz`: Float64 of Function
+- `kx`: Float64 or Function
+- `ky`: Float64 or Function
+- `kz`: Float64 or Function
 """
 function elasticSupport(name; kx=1, ky=1, kz=1)
     es0 = name, kx, ky, kz
@@ -247,11 +245,12 @@ end
 Gives the temperature constraints on `name` physical group. 
 `T` can be a constant value, or a function of `x`, `y` and `z`.
 (E.g. `fn(x,y,z)=5*(5-x)); FEM.temperatureConstraint("surf1", T=fn)`)
-Return: none
+
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
-- `T`: Float64 of Function
+- `T`: Float64 or Function
 """
 function temperatureConstraint(name; T=1im)
     bc0 = name, T, 1im, 1im
@@ -265,15 +264,35 @@ Gives the heat flux normal to the surface of `name` physical group.
 `qn` can be a constant value, or a function of `x`, `y` and `z`.
 (E.g. `fn(x,y,z)=5*(5-x)); FEM.load("flux1", qn=fn)`)
 
-Return: none
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
-- `qn`: Float64 of Function
+- `qn`: Float64 or Function
 """
 function heatFlux(name; qn=0)
     fl0 = name, -qn, 0, 0
     return fl0
+end
+
+"""
+    FEM.heatConvection(name; λ=..., Tₐ=...)
+
+Gives the heat convection of the surface given with `name` physical group.
+`λ` is the heat convection coefficient of the surrounding media,
+`Tₐ` is the ambient temperature.
+
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+
+Types:
+- `name`: String
+- `λ`: Float64
+- `Tₐ`: Float64
+"""
+function heatConvection(name; λ=10, Tₐ=20)
+    p = 2im
+    hcv0 = name, λ, Tₐ, p
+    return hcv0
 end
 
 """
@@ -1100,7 +1119,8 @@ end
     FEM.elasticSupportMatrix(problem, elSupp)
 
 Solves the elastic support matrix of the `problem`. `elSupp` is a vector of elastic
-supports defined in function `FEM.elasticSupport`.
+supports defined in function `FEM.elasticSupport`. This matrix must be added
+to the stiffness matrix.
 
 Return: `elSuppMat`
 
@@ -1253,6 +1273,25 @@ function elasticSupportMatrix(problem, elSupports)
 end
 
 """
+    FEM.heatConvectionMatrix(problem, heatConvection)
+
+Solves the heat convection matrix of the `problem`. `heatConvection` 
+is a vector of heat convection boundary condicions defined in function
+`FEM.heatConduction`. This matrix must be substracted from the heat
+conduction matrix.
+
+Return: `heatConvMat`
+
+Types:
+- `problem`: Problem
+- `lumped`: Boolean
+- `elSuppMat`: SparseMatrix
+"""
+function heatConvectionMatrix(problem, heatConvection)
+    return elasticSupportMatrix(problem, heatConvection)
+end
+
+"""
     FEM.loadVector(problem, loads)
 
 Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
@@ -1283,6 +1322,7 @@ function loadVector(problem, loads)
     fp = zeros(dof)
     ncoord2 = zeros(3 * problem.non)
     for n in 1:length(loads)
+        display("loads[n] =$(loads[n])")
         name, fx, fy, fz = loads[n]
         if problem.pdim == 3
             f = [fx, fy, fz]
@@ -1386,6 +1426,23 @@ function loadVector(problem, loads)
         end
     end
     return fp
+end
+
+"""
+    FEM.heatConvectionVector(problem, heatConvection)
+
+Solves a heat convection vector of `problem`. `heatConvection` is a tuple of name of physical group 
+`name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
+
+Return: `heatConvVec`
+
+Types:
+- `problem`: Problem
+- `heatConvection`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `heatConvVec`: Vector
+"""
+function heatConvectionVector(problem, heatConvection)
+    return loadVector(problem, heatConvection)
 end
 
 """
@@ -1628,6 +1685,29 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
     dropzeros!(stiffMat)
     dropzeros!(massMat)
     dropzeros!(dampMat)
+end
+
+"""
+    FEM.applyHeatConvection(problem, heatCondMat, heatFluxVec, heatConv)
+
+Applies heat convectiom boundary conditions `heatConv` on a heat conduction matrix
+`heatCondMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `heatCond`
+is a tuple of `name` of physical group and prescribed heat convection coefficient `λ`
+and ambient temperature `Tₐ`.
+
+Return: none
+
+Types:
+- `problem`: Problem
+- `heatCondMat`: SparseMatrix 
+- `heatFluxVec`: Vector 
+- `heatConv`: Vector{Tuple{String, Float64, Float64, Float64}}
+"""
+function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
+    hf0 = heatConvectionVector(problem, heatConv)
+    C0 = heatConvectionMatrix(problem, heatConv)
+    heatCondMat -= C0
+    heatFluxVec -= hf0
 end
 
 """
