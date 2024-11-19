@@ -16,6 +16,7 @@ A structure containing the material constants.
 - ρ: mass density,
 - k: heat conductivity,
 - c: specific heat,
+- α: heat expansion coefficient
 `phName` is the name of the physical group where the given material is used.
 
 Types:
@@ -25,6 +26,7 @@ Types:
 - `ρ`: Float64
 - `k`: Float64
 - `c`: Float64
+- `α`: Float64
 """
 struct Material
     phName::String
@@ -33,6 +35,7 @@ struct Material
     ρ::Float64
     k::Float64
     c::Float64
+    α::Float64
 end
 
 
@@ -172,8 +175,8 @@ Types:
 - `ν`: Float64
 - `ρ`: Float64
 """
-function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8)
-    return Material(name, E, ν, ρ, k, c)
+function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5)
+    return Material(name, E, ν, ρ, k, c, α)
 end
 
 """
@@ -276,17 +279,17 @@ function heatFlux(name; qn=0)
 end
 
 """
-    FEM.heatConvection(name; λ=..., Tₐ=...)
+    FEM.heatConvection(name; h=..., Tₐ=...)
 
 Gives the heat convection of the surface given with `name` physical group.
-`λ` is the heat convection coefficient of the surrounding media,
+`h` is the heat transfer coefficient of the surrounding media,
 `Tₐ` is the ambient temperature.
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
-- `λ`: Float64
+- `h`: Float64
 - `Tₐ`: Float64
 """
 function heatConvection(name; h=10, Tₐ=20)
@@ -1447,6 +1450,294 @@ function heatConvectionVector(problem, heatConvection)
 end
 
 """
+    FEM.thermalLoadVector(problem, T; T₀=...)
+
+Solves the thermal load vector from a temperature field `To` for problem `problem`.
+`T₀` is the initial temperature field.
+
+Return: `thermLoadVec`
+
+Types:
+- `problem`: Problem
+- `T`: Vector{Float64}
+- `T₀`: Vector{Float64}
+- `thermLoadVec`: Vector{Float64}
+"""
+function thermalLoadVector(problem, T; T₀=1im)
+    if problem.type == "AxiSymmetricHeatConduction"
+        return thermalLoadVectorAXI(problem, T, T₀=T₀)
+    else
+        return thermalLoadVectorSolid(problem, T, T₀=T₀)
+    end
+end
+
+function thermalLoadVectorSolid(problem, T; T₀=1im)
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    #lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    #nn = []
+    #I = []
+    #J = []
+    #V = []
+    #V = convert(Vector{Float64}, V)
+    #sizehint!(I, lengthOfIJV)
+    #sizehint!(J, lengthOfIJV)
+    #sizehint!(V, lengthOfIJV)
+    dim = problem.dim
+    pdim = problem.pdim
+    dof = problem.non * pdim
+    fT = zeros(dof)
+    if T₀ == 1im
+        T₀ = zeros(problem.non)
+    end
+    if size(T) != size(T₀) || size(T,1) != problem.non
+        error("thermalLoadVectorSolid: size of T [$(size(T))] != size of T₀ [$(size(T₀))], non=$(problem.non)")
+    end
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        α = problem.material[ipg].α
+        if problem.dim == 3 && problem.type == "Solid"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+                ν 1-ν ν 0 0 0;
+                ν ν 1-ν 0 0 0;
+                0 0 0 (1-2ν)/2 0 0;
+                0 0 0 0 (1-2ν)/2 0;
+                0 0 0 0 0 (1-2ν)/2]
+
+            rowsOfB = 6
+            b = α
+            E0 = [1,1,1,0,0,0]
+        elseif problem.dim == 2 && problem.type == "PlaneStress"
+            D = E / (1 - ν^2) * [1 ν 0;
+                ν 1 0;
+                0 0 (1-ν)/2]
+            rowsOfB = 3
+            b = problem.thickness * α
+            E0 = [1,1,0]
+        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
+                ν 1-ν 0;
+                0 0 (1-2ν)/2]
+            rowsOfB = 3
+            b = α
+            E0 = [1,1,0]
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                pdimT = 1
+                H = zeros(pdimT * numIntPoints, pdimT * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdimT
+                            H[j*pdimT-(pdimT-l), k*pdimT-(pdimT-l)] = h[k, j]
+                        end
+                    end
+                end
+                invJac = zeros(3, 3numIntPoints)
+                #Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                #Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                #for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                #    Iidx[k, l] = l
+                #    Jidx[k, l] = k
+                #end
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                f1 = zeros(pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                nn1 = zeros(Int, pdimT * numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    for k in 1:pdimT
+                        nn1[k:pdimT:pdimT*numNodes] = pdimT * nnet[j, 1:numNodes] .- (pdimT - k)
+                    end
+                    f1 .*= 0
+                    for k in 1:numIntPoints
+                        pdimT = 1
+                        H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        #display("B1: $(size(B1))")
+                        #display("D: $(size(D))")
+                        #display("E0: $(size(E0))")
+                        #display("H1: $(size(H1))")
+                        #display("T: $(size(T[nn2]))")
+                        f1 += B1' * D * E0 * H1 * (T[nn1] - T₀[nn1]) * b * jacDet[k] * intWeights[k]
+                    end
+                    fT[nn2] += f1
+                    #append!(I, nn2[Iidx[:]])
+                    #append!(J, nn2[Jidx[:]])
+                    #append!(V, K1[:])
+                end
+                #push!(nn, nnet)
+            end
+        end
+    end
+    #K = sparse(I, J, V, dof, dof)
+    #dropzeros!(K)
+    return fT
+end
+
+function thermalLoadVectorAXI(problem, T; T₀=1im)
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim = problem.dim
+        pdim = problem.pdim
+        if problem.dim == 2 && problem.type == "AxiSymmetric"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
+                ν 1-ν ν 0;
+                ν ν 1-ν 0;
+                0 0 0 (1-2ν)/2]
+
+            rowsOfB = 4
+        else
+            error("stiffnessMatrixAxiSymmetric: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                r = zeros(numIntPoints)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 4
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-3, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = B[k*rowsOfB-0, l*pdim-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-1] = h[l, k] / r[k]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    K1 .*= 0
+                    for k in 1:numIntPoints
+                        #r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 += 2π * B1' * D * B1 * r[k] * jacDet[k] * intWeights[k]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return K
+end
+
+"""
     FEM.applyBoundaryConditions!(problem, stiffMat, loadVec, supports)
 
 Applies displacement boundary conditions `supports` on a stiffness matrix
@@ -1712,7 +2003,7 @@ end
 
 Applies heat convectiom boundary conditions `heatConv` on a heat conduction matrix
 `heatCondMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `heatCond`
-is a tuple of `name` of physical group and prescribed heat convection coefficient `λ`
+is a tuple of `name` of physical group and prescribed heat transfer coefficient `h`
 and ambient temperature `Tₐ`.
 
 Return: none
@@ -1745,6 +2036,23 @@ Types:
 """
 function solveDisplacement(K, f)
     return K \ f
+end
+
+"""
+    FEM.solveTemperature(K, q)
+
+Solves the equation K*T=q for the temperature vector `T`. `K` is the heat conduction matrix,
+`q` is the heat flux vector.
+
+Return: `T`
+
+Types:
+- `K`: SparseMatrix 
+- `q`: Vector{Float64} 
+- `T`: Vector{Float64}
+"""
+function solveTemperature(K, q)
+    return K \ q
 end
 
 """
@@ -2683,7 +2991,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStrainResults(problem, E, comp; t=[0.0], name="ε", visible=false, smooth=true)
+function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, smooth=true)
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -2770,7 +3078,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(problem, S, comp; t=[0.0], name="σ", visible=false, smooth=true)
+function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
