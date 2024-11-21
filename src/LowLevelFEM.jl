@@ -2230,18 +2230,25 @@ Types:
 - `q`: Vector{Float64}
 - `S`: TensorField
 """
-function solveStress(problem, q)
+function solveStress(problem, q; T=1im, T₀=1im)
     gmsh.model.setCurrent(problem.name)
 
     nsteps = size(q, 2)
     σ = []
     numElem = Int[]
     ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    if T₀ == 1im
+        T₀ = zeros(problem.non)
+    end
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
         E = problem.material[ipg].E
         ν = problem.material[ipg].ν
+        α = problem.material[ipg].α
+        ακ = α * E / ν / (1 - 2ν)
         dim = 0
         if problem.dim == 3 && problem.type == "Solid"
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
@@ -2254,6 +2261,7 @@ function solveStress(problem, q)
             dim = 3
             rowsOfB = 6
             b = 1
+            E0 = [1,1,1,0,0,0]
         elseif problem.dim == 2 && problem.type == "PlaneStress"
             D = E / (1 - ν^2) * [1 ν 0;
                 ν 1 0;
@@ -2261,6 +2269,7 @@ function solveStress(problem, q)
             dim = 2
             rowsOfB = 3
             b = problem.thickness
+            E0 = [1,1,0]
         elseif problem.dim == 2 && problem.type == "PlaneStrain"
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
                 ν 1-ν 0;
@@ -2268,6 +2277,7 @@ function solveStress(problem, q)
             dim = 2
             rowsOfB = 3
             b = 1
+            E0 = [1,1,0]
         elseif problem.dim == 2 && problem.type == "AxiSymmetric"
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
                 ν 1-ν ν 0;
@@ -2303,10 +2313,20 @@ function solveStress(problem, q)
                 comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
                 h = reshape(fun, :, numNodes)
                 nnet = zeros(Int, length(elemTags[i]), numNodes)
+                pdimT = 1
+                H = zeros(pdimT * numNodes, pdimT * numNodes)
+                for j in 1:numNodes
+                    for k in 1:numNodes
+                        for l in 1:pdimT
+                            H[j*pdimT-(pdimT-l), k*pdimT-(pdimT-l)] = h[k, j]
+                        end
+                    end
+                end
                 invJac = zeros(3, 3numNodes)
                 ∂h = zeros(3, numNodes * numNodes)
                 B = zeros(rowsOfB * numNodes, dim * numNodes)
-                nn2 = zeros(Int, dim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                nn1 = zeros(Int, pdimT * numNodes)
                 r = zeros(numNodes)
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
@@ -2324,18 +2344,18 @@ function solveStress(problem, q)
                         ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
                     end
                     B .*= 0
-                    if dim == 2 && rowsOfB == 3
+                    if pdim == 2 && rowsOfB == 3
                         for k in 1:numNodes, l in 1:numNodes
-                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
                         end
-                    elseif dim == 3 && rowsOfB == 6
+                    elseif pdim == 3 && rowsOfB == 6
                         for k in 1:numNodes, l in 1:numNodes
-                            B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
                         end
-                    elseif dim == 2 && rowsOfB == 4
+                    elseif pdim == 2 && rowsOfB == 4
                         for k in 1:numNodes, l in 1:numNodes
                             B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
                             B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
@@ -2345,31 +2365,46 @@ function solveStress(problem, q)
                         error("solveStress: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     push!(numElem, elem)
-                    for k in 1:dim
-                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    for k in 1:pdimT
+                        nn1[k:pdimT:pdimT*numNodes] = pdimT * nnet[j, 1:numNodes] .- (pdimT - k)
                     end
                     s = zeros(9numNodes, nsteps) # tensors have nine elements
                     for k in 1:numNodes
-                        if rowsOfB == 6 && dim == 3 && problem.type == "Solid"
-                            B1 = B[k*6-5:k*6, 1:3*numNodes]
+                        if rowsOfB == 6 && pdim == 3 && problem.type == "Solid"
+                            H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                            B1 = B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q[nn2, kk]
+                                if T != 1im
+                                    s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
+                                end
                                 s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
                                     s0[4], s0[2], s0[5],
                                     s0[6], s0[5], s0[3]]
                             end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStress"
-                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                        elseif rowsOfB == 3 && pdim == 2 && problem.type == "PlaneStress"
+                            H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                            B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q[nn2, kk]
+                                if T != 1im
+                                    s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
+                                end
                                 s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
                                     s0[3], s0[2], 0,
                                     0, 0, 0]
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStrain"
-                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                            H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                            B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q[nn2, kk]
+                                if T != 1im
+                                    s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
+                                end
                                 s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
                                     s0[3], s0[2], 0,
                                     0, 0, ν*(s0[1]+s0[2])]
@@ -2998,7 +3033,7 @@ function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, 
     #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
     #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
     if E.nsteps != length(t)
-        error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
+        error("showStrainResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     EE = gmsh.view.add(name)
     ε = E.sigma
