@@ -141,22 +141,47 @@ struct Problem
 end
 
 """
+    VectorField(sigma, numElem, nsteps)
+
+A structure containing the data of a heat flux field. 
+- sigma: vector of ElementNodeData type heat flux data (see gmsh.jl)
+- numElem: vector of tags of elements
+- nsteps: number of stress fields stored in sigma (for animations).
+- type: type of data (eg. stress "s", strain "s", heat flux "q")
+
+Types:
+- `sigma`: Vector{Matrix{Float64}}
+- `numElem`: Vector{Integer}
+- `nsteps`: Integer
+- `type`: String
+"""
+struct VectorField
+    sigma::Vector{Matrix{Float64}}
+    numElem::Vector{Int}
+    nsteps::Int
+    type::String
+end
+
+"""
     TensorField(sigma, numElem, nsteps)
 
 A structure containing the data of a stress or strain field. 
 - sigma: vector of ElementNodeData type stress data (see gmsh.jl)
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in sigma (for animations).
+- type: type of data (eg. stress "s", strain "s", heat flux "q")
 
 Types:
 - `sigma`: Vector{Matrix{Float64}}
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
+- `type`: String
 """
 struct TensorField
     sigma::Vector{Matrix{Float64}}
     numElem::Vector{Int}
     nsteps::Int
+    type::String
 end
 
 """
@@ -1602,7 +1627,7 @@ function thermalLoadVectorSolid(problem, T; T₀=1im)
                     end
                     f1 .*= 0
                     for k in 1:numIntPoints
-                        pdimT = 1
+                        #pdimT = 1
                         H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
                         #display("B1: $(size(B1))")
@@ -1629,23 +1654,32 @@ end
 function thermalLoadVectorAXI(problem, T; T₀=1im)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
-    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
-    nn = []
-    I = []
-    J = []
-    V = []
-    V = convert(Vector{Float64}, V)
-    sizehint!(I, lengthOfIJV)
-    sizehint!(J, lengthOfIJV)
-    sizehint!(V, lengthOfIJV)
+    #lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    #nn = []
+    #I = []
+    #J = []
+    #V = []
+    #V = convert(Vector{Float64}, V)
+    #sizehint!(I, lengthOfIJV)
+    #sizehint!(J, lengthOfIJV)
+    #sizehint!(V, lengthOfIJV)
+    dim = problem.dim
+    pdim = problem.pdim
+    dof = problem.non * pdim
+    fT = zeros(dof)
+    if T₀ == 1im
+        T₀ = zeros(problem.non)
+    end
+    if size(T) != size(T₀) || size(T,1) != problem.non
+        error("thermalLoadVectorSolid: size of T [$(size(T))] != size of T₀ [$(size(T₀))], non=$(problem.non)")
+    end
     ncoord2 = zeros(3 * problem.non)
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
         E = problem.material[ipg].E
         ν = problem.material[ipg].ν
-        dim = problem.dim
-        pdim = problem.pdim
+        α = problem.material[ipg].α
         if problem.dim == 2 && problem.type == "AxiSymmetric"
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
                 ν 1-ν ν 0;
@@ -1653,6 +1687,8 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
                 0 0 0 (1-2ν)/2]
 
             rowsOfB = 4
+            b = α
+            E0 = [1,1,1,0]
         else
             error("stiffnessMatrixAxiSymmetric: dimension is $(problem.dim), problem type is $(problem.type).")
         end
@@ -1677,17 +1713,27 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
                 comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
                 h = reshape(fun, :, numIntPoints)
                 nnet = zeros(Int, length(elemTags[i]), numNodes)
-                invJac = zeros(3, 3numIntPoints)
-                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
-                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
-                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
-                    Iidx[k, l] = l
-                    Jidx[k, l] = k
+                pdimT = 1
+                H = zeros(pdimT * numIntPoints, pdimT * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdimT
+                            H[j*pdimT-(pdimT-l), k*pdimT-(pdimT-l)] = h[k, j]
+                        end
+                    end
                 end
+                invJac = zeros(3, 3numIntPoints)
+                #Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                #Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                #for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                #    Iidx[k, l] = l
+                #    Jidx[k, l] = k
+                #end
                 ∂h = zeros(dim, numNodes * numIntPoints)
                 B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
-                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                f1 = zeros(pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
+                nn1 = zeros(Int, pdimT * numNodes)
                 r = zeros(numIntPoints)
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
@@ -1714,27 +1760,32 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
                     else
                         error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
-                    K1 .*= 0
-                    for k in 1:numIntPoints
-                        #r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
-                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
-                        K1 += 2π * B1' * D * B1 * r[k] * jacDet[k] * intWeights[k]
-                    end
+                    f1 .*= 0
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
-                    append!(I, nn2[Iidx[:]])
-                    append!(J, nn2[Jidx[:]])
-                    append!(V, K1[:])
+                    for k in 1:pdim
+                        nn1[k:pdimT:pdimT*numNodes] = pdimT * nnet[j, 1:numNodes] .- (pdimT - k)
+                    end
+                    for k in 1:numIntPoints
+                        #r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                        H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 += 2π * B1' * D * E0  * H1 * (T[nn1] - T₀[nn1]) * b * r[k] * jacDet[k] * intWeights[k]
+                    end
+                    fT[nn2] += f1
+                    #append!(I, nn2[Iidx[:]])
+                    #append!(J, nn2[Jidx[:]])
+                    #append!(V, K1[:])
                 end
-                push!(nn, nnet)
+                #push!(nn, nnet)
             end
         end
     end
-    dof = problem.pdim * problem.non
-    K = sparse(I, J, V, dof, dof)
-    dropzeros!(K)
-    return K
+    #dof = problem.pdim * problem.non
+    #K = sparse(I, J, V, dof, dof)
+    #dropzeros!(K)
+    return fT
 end
 
 """
@@ -2072,6 +2123,7 @@ Types:
 function solveStrain(problem, q)
     gmsh.model.setCurrent(problem.name)
 
+    type = "e"
     nsteps = size(q, 2)
     ε = []
     numElem = Int[]
@@ -2212,7 +2264,7 @@ function solveStrain(problem, q)
             end
         end
     end
-    epsilon = TensorField(ε, numElem, nsteps)
+    epsilon = TensorField(ε, numElem, nsteps, type)
     return epsilon
 end
 
@@ -2233,6 +2285,7 @@ Types:
 function solveStress(problem, q; T=1im, T₀=1im)
     gmsh.model.setCurrent(problem.name)
 
+    type = "s"
     nsteps = size(q, 2)
     σ = []
     numElem = Int[]
@@ -2324,7 +2377,7 @@ function solveStress(problem, q; T=1im, T₀=1im)
                 end
                 invJac = zeros(3, 3numNodes)
                 ∂h = zeros(3, numNodes * numNodes)
-                B = zeros(rowsOfB * numNodes, dim * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
                 nn1 = zeros(Int, pdimT * numNodes)
                 r = zeros(numNodes)
@@ -2427,7 +2480,152 @@ function solveStress(problem, q; T=1im, T₀=1im)
             end
         end
     end
-    sigma = TensorField(σ, numElem, nsteps)
+    sigma = TensorField(σ, numElem, nsteps, type)
+    return sigma
+end
+
+"""
+    FEM.solveHeatFlux(problem, T)
+
+Solves the heat flux field `q` from temperature vector `T`. heat flux is given
+per elements, so it usually contains jumps at the boundary of elements. Details
+of mesh is available in `problem`.
+
+Return: `q`
+
+Types:
+- `problem`: Problem
+- `T`: Vector{Float64}
+- `q`: VectorField
+"""
+function solveHeatFlux(problem, T)
+    gmsh.model.setCurrent(problem.name)
+
+    type = "q"
+    nsteps = size(T, 2)
+    σ = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        kT = -problem.material[ipg].k
+        dim = 0
+        if problem.dim == 3 && problem.type == "HeatConduction"
+            dim = 3
+            rowsOfB = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == "PlaneHeatConduction"
+            dim = 2
+            rowsOfB = 2
+            b = 1
+        elseif problem.dim == 2 && problem.type == "AxiSymmetricHeatConduction"
+            dim = 2
+            rowsOfB = 2
+            b = 1
+        else
+            error("solveStress: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                s0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                pdimT = 1
+                H = zeros(pdimT * numNodes, pdimT * numNodes)
+                for j in 1:numNodes
+                    for k in 1:numNodes
+                        for l in 1:pdimT
+                            H[j*pdimT-(pdimT-l), k*pdimT-(pdimT-l)] = h[k, j]
+                        end
+                    end
+                end
+                invJac = zeros(3, 3numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                r = zeros(numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numNodes
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    ∂h .*= 0
+                    for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    B .*= 0
+                    if pdim == 1 && rowsOfB == 2
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-1, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif pdim == 1 && rowsOfB == 3
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-2, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-0] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    else
+                        error("solveStress: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    push!(numElem, elem)
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    s = zeros(3numNodes, nsteps) # vectors have three elements
+                    for k in 1:numNodes
+                        if rowsOfB == 3 && pdim == 1
+                            #H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                            B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = B1 * T[nn2, kk] * kT
+                                s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], s0[3]]
+                            end
+                        elseif rowsOfB == 2 && pdim == 1
+                            #H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                            B1 = B[k*rowsOfB-1:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = B1 * T[nn2, kk] * kT
+                                s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], 0]
+                            end
+                        else
+                            error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        end
+                    end
+                    push!(σ, s)
+                end
+            end
+        end
+    end
+    sigma = VectorField(σ, numElem, nsteps, type)
     return sigma
 end
 
@@ -2941,19 +3139,21 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
     dim = problem.dim
     pdim = problem.pdim
     nodeTags = []
+    ##############################################################################
     if problem.type == "Reynolds"
         phName = problem.geometry.phName
         tag = getTagForPhysicalName(phName)
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
         append!(nodeTags, nT)
-    else
+    ##############################################################################
+    else #########################################################################
         for ipg in 1:length(problem.material)
             phName = problem.material[ipg].phName
             tag = getTagForPhysicalName(phName)
             nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
             append!(nodeTags, nT)
         end
-    end
+    end #########################################################################
 
     #nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
     non = length(nodeTags)
@@ -3090,6 +3290,33 @@ function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, 
 end
 
 """
+    FEM.showElementResults(problem, F, comp; t=..., name=..., visible=..., smooth=...)
+
+Same as `ShowStressResults` or `showStrainResults`, depending on the type of `F` data field.
+
+Return: `tag`
+
+Types:
+- `problem`: Problem
+- `F`: TensorField
+- `comp`: String
+- `t`: Vector{Float64}
+- `name`: String
+- `visible`: Boolean
+- `smooth`: Boolean
+- `tag`: Integer
+"""
+function showElementResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    if F.type == "e"
+        return showStrainResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    elseif F.type == "s"
+        return showStressResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    else
+        error("showElementResults: type is '$type'")
+    end
+end
+
+"""
     FEM.showStressResults(problem, S, comp; t=..., name=..., visible=..., smooth=...)
 
 Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
@@ -3171,6 +3398,101 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
                 sx = zeros(div(size(σ[i], 1), 9))
                 for j in 1:(div(size(σ[i], 1), 9))
                     sx[j] = σ[i][9j-k, jj]
+                end
+                push!(σcomp, sx)
+            end
+        end
+        gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
+    end
+
+    if smooth == true
+        gmsh.plugin.setNumber("Smooth", "View", -1)
+        gmsh.plugin.run("Smooth")
+    end
+
+    gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 0)
+    gmsh.view.option.setNumber(SS, "TargetError", -1e-4)
+    gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
+    if visible == false
+        gmsh.view.option.setNumber(SS, "Visible", 0)
+    end
+    #display("$comp..ok")
+    return SS
+end
+
+"""
+    FEM.showStressResults(problem, S, comp; t=..., name=..., visible=..., smooth=...)
+
+Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
+the component of the field ("s", "sx", "sy", "sz", "sxy", "syz", "szx", "seqv"),
+`t` is a vector of time steps (same length as the number of stress states),
+`name` is a title to display, `visible` is a true or false value to toggle on or
+off the initial visibility in gmsh and `smooth` is a true of false value to toggle
+smoothing the stress field on or off. If length of `t` is more than one, then a 
+sequence of results will be shown (eg. as an animation). This function returns
+the tag of View.
+
+Return: `tag`
+
+Types:
+- `problem`: Problem
+- `S`: TensorField
+- `comp`: String
+- `t`: Vector{Float64}
+- `name`: String
+- `visible`: Boolean
+- `smooth`: Boolean
+- `tag`: Integer
+"""
+function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    gmsh.model.setCurrent(problem.name)
+    gmsh.option.setNumber("Mesh.VolumeEdges", 0)
+    dim = problem.dim
+    #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
+    #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
+    if S.nsteps != length(t)
+        error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
+    end
+    SS = gmsh.view.add(name)
+    σ = S.sigma
+    numElem = S.numElem
+    for jj in 1:length(t)
+
+        k = 1im
+        if comp == "qvec"
+            σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
+            nc = 3
+        elseif comp == "q"
+            nc = 1
+            σcomp = []
+            sizehint!(σcomp, length(numElem))
+            for i in 1:length(S.numElem)
+                seqv = zeros(div(size(σ[i], 1), 3))
+                for j in 1:(div(size(σ[i], 1), 3))
+                    sx = σ[i][3j-2, jj]
+                    sy = σ[i][3j-1, jj]
+                    sz = σ[i][3j-0, jj]
+                    seqv[j] = √(sx^2+sy^2+sz^2)
+                end
+                push!(σcomp, seqv)
+            end
+        else
+            nc = 1
+            if comp == "qx"
+                k = 2
+            elseif comp == "qy"
+                k = 1
+            elseif comp == "qz"
+                k = 0
+            else
+                error("ShowHeatFluxResults: component is $comp ????")
+            end
+            σcomp = []
+            sizehint!(σcomp, length(numElem))
+            for i in 1:length(S.numElem)
+                sx = zeros(div(size(σ[i], 1), 3))
+                for j in 1:(div(size(σ[i], 1), 3))
+                    sx[j] = σ[i][3j-k, jj]
                 end
                 push!(σcomp, sx)
             end
