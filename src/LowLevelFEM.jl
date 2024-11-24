@@ -299,7 +299,9 @@ Types:
 - `qn`: Float64 or Function
 """
 function heatFlux(name; qn=0)
-    fl0 = name, -qn, 0, 0
+    p1 =.0
+    p2 =.0
+    fl0 = name, qn, p1, p2
     return fl0
 end
 
@@ -317,7 +319,7 @@ Types:
 - `h`: Float64
 - `Tₐ`: Float64
 """
-function heatConvection(name; h=10, Tₐ=20)
+function heatConvection(name; h=10., Tₐ=20.)
     p = 2im
     hcv0 = name, h, Tₐ, p
     return hcv0
@@ -1351,14 +1353,12 @@ function loadVector(problem, loads)
     ncoord2 = zeros(3 * problem.non)
     for n in 1:length(loads)
         name, fx, fy, fz = loads[n]
-        if problem.pdim == 3
-            f = [fx, fy, fz]
-        elseif problem.pdim == 2
-            f = [fx, fy]
-        elseif problem.pdim == 1 && fz != 2im
-            f = [fx]
-        elseif problem.pdim == 1 && fz == 2im
-            f = [fx] * fy
+        if pdim == 3
+            f = [.0, .0, .0]
+        elseif pdim == 2
+            f = [.0, .0]
+        elseif pdim == 1
+            f = [.0]
         else
             error("loadVector: dimension of the problem is $(problem.dim).")
         end
@@ -1405,15 +1405,17 @@ function loadVector(problem, loads)
                         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
                             y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                            if isa(fx, Function)
-                                f[1] = fx(x, y, z)
-                            end
-                            if isa(fy, Function)
-                                f[2] = fy(x, y, z) && problem.pdim > 1
-                            end
-                            if isa(fz, Function) && problem.pdim == 3
-                                f[3] = fz(x, y, z)
-                            end
+                        end
+                        if fz == 2im
+                            f[1] = isa(fx, Function) ? fx(x, y, z) * fy : fx * fy
+                        else
+                            f[1] = isa(fx, Function) ? fx(x, y, z) : fx
+                        end
+                        if pdim > 1
+                            f[2] = isa(fy, Function) ? fy(x, y, z) : fy
+                        end
+                        if pdim == 3
+                            f[3] = isa(fz, Function) ? fz(x, y, z) : fz
                         end
                         r = x
                         H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
@@ -1434,7 +1436,7 @@ function loadVector(problem, loads)
                             Ja = jacDet[j] * b
                         elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
                             Ja = 2π * jacDet[j] * r
-                        elseif DIM == 2 dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
                             Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
                         elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
                             Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
@@ -1489,7 +1491,7 @@ Types:
 - `thermLoadVec`: Vector{Float64}
 """
 function thermalLoadVector(problem, T; T₀=1im)
-    if problem.type == "AxiSymmetricHeatConduction"
+    if problem.type == "AxiSymmetric"
         return thermalLoadVectorAXI(problem, T, T₀=T₀)
     else
         return thermalLoadVectorSolid(problem, T, T₀=T₀)
@@ -1550,7 +1552,7 @@ function thermalLoadVectorSolid(problem, T; T₀=1im)
             b = α
             E0 = [1,1,0]
         else
-            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("thermalLoadVectorSolid: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -1764,14 +1766,14 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
-                    for k in 1:pdim
+                    for k in 1:pdimT
                         nn1[k:pdimT:pdimT*numNodes] = pdimT * nnet[j, 1:numNodes] .- (pdimT - k)
                     end
                     for k in 1:numIntPoints
                         #r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
                         H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
-                        K1 += 2π * B1' * D * E0  * H1 * (T[nn1] - T₀[nn1]) * b * r[k] * jacDet[k] * intWeights[k]
+                        f1 += 2π * B1' * D * E0  * H1 * (T[nn1] - T₀[nn1]) * b * r[k] * jacDet[k] * intWeights[k]
                     end
                     fT[nn2] += f1
                     #append!(I, nn2[Iidx[:]])
@@ -2069,7 +2071,8 @@ function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
     hf0 = heatConvectionVector(problem, heatConv)
     C0 = heatConvectionMatrix(problem, heatConv)
     heatCondMat .+= C0
-    heatFluxVec .+= hf0
+    heatFluxVec .-= hf0
+    return nothing
 end
 
 """
