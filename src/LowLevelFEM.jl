@@ -299,10 +299,32 @@ Types:
 - `qn`: Float64 or Function
 """
 function heatFlux(name; qn=0)
-    p1 =.0
-    p2 =.0
-    fl0 = name, qn, p1, p2
+    p1 =0
+    p2 =0
+    qn0 = -qn
+    fl0 = name, qn0, p1, p2
     return fl0
+end
+
+"""
+    FEM.heatSource(name; h=...)
+
+Gives the body heat source in `name` physical group.
+`h` can be a constant value, or a function of `x`, `y` and `z`.
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("source1", h=fn)`)
+
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+
+Types:
+- `name`: String
+- `h`: Float64 or Function
+"""
+function heatSource(name; h=0)
+    p1 =0
+    p2 =0
+    h0 = -h
+    sr0 = name, h0, p1, p2
+    return sr0
 end
 
 """
@@ -1181,11 +1203,11 @@ function elasticSupportMatrix(problem, elSupports)
     for n in 1:length(elSupports)
         name, kx, ky, kz = elSupports[n]
         if problem.pdim == 3
-            f = [kx, ky, kz]
+            f = [0, 0, 0]
         elseif problem.pdim == 2
-            f = [kx, ky]
+            f = [0, 0]
         elseif problem.pdim == 1
-            f = [kx]
+            f = [0]
         else
             error("elasticSupportMatrix: dimension of the problem is $(problem.pdim).")
         end
@@ -1238,15 +1260,13 @@ function elasticSupportMatrix(problem, elSupports)
                         if isa(kx, Function) || isa(ky, Function) || isa(kz, Function)
                             y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                            if isa(kx, Function)
-                                f[1] = kx(x, y, z)
-                            end
-                            if isa(fy, Function)
-                                f[2] = ky(x, y, z) && problem.pdim > 1
-                            end
-                            if isa(fz, Function) && problem.pdim == 3
-                                f[3] = kz(x, y, z)
-                            end
+                        end
+                        f[1] = isa(kx, Function) ? kx(x, y, z) : kx
+                        if problem.pdim > 1
+                            f[2] = isa(ky, Function) ? ky(x, y, z) : ky
+                        end
+                        if problem.pdim == 3
+                            f[3] = isa(kz, Function) ? kz(x, y, z) : kz
                         end
                         r = x
                         if pdim == 3
@@ -1274,7 +1294,7 @@ function elasticSupportMatrix(problem, elSupports)
                             Ja = jacDet[j] * b
                         elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
                             Ja = 2π * jacDet[j] * r
-                        elseif DIM == 2 dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
                             Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
                         elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
                             Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
@@ -1457,6 +1477,57 @@ function loadVector(problem, loads)
         end
     end
     return fp
+end
+
+"""
+    FEM.heatFluxVector(problem, heatFlux)
+
+Solves a heat flux or heat source vector of `problem`. `heatFlux` is a tuple of name of physical group 
+`name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
+It can solve heat flux depending on the problem.
+In case of 2D problems and Point physical group means concentrated heat flux.
+In case of 2D problems and Line physical group means surface heat flux.
+In case of 2D problems and Surface physical group means body heat source.
+In case of 3D problems and Point physical group means concentrated heat flux.
+In case of 3D problems and Line physical group means edge heat source.
+In case of 3D problems and Surface physical group means surface heat flux.
+In case of 3D problems and Volume physical group means body heat source.
+
+Return: `heatFluxVec`
+
+Types:
+- `problem`: Problem
+- `heatFlux`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `heatFluxVec`: Vector
+"""
+function heatFluxVector(problem, loads)
+    return loadVector(problem, loads)
+end
+
+"""
+    FEM.heatSourceVector(problem, heatSource)
+
+Solves a heat flux or heat source vector of `problem`. `heatSource` is a tuple of name of physical group 
+`name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
+It can solve heat flux depending on the problem.
+In case of 2D problems and Point physical group means concentrated heat flux.
+In case of 2D problems and Line physical group means surface heat flux.
+In case of 2D problems and Surface physical group means body heat source.
+In case of 3D problems and Point physical group means concentrated heat flux.
+In case of 3D problems and Line physical group means edge heat source.
+In case of 3D problems and Surface physical group means surface heat flux.
+In case of 3D problems and Volume physical group means body heat source.
+Same as the `heatFluxVector` function.
+
+Return: `heatSourceVec`
+
+Types:
+- `problem`: Problem
+- `heatSource`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `heatSourceVec`: Vector
+"""
+function heatSourceVector(problem, loads)
+    return loadVector(problem, loads)
 end
 
 """
@@ -2071,7 +2142,7 @@ function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
     hf0 = heatConvectionVector(problem, heatConv)
     C0 = heatConvectionMatrix(problem, heatConv)
     heatCondMat .+= C0
-    heatFluxVec .-= hf0
+    heatFluxVec .+= hf0
     return nothing
 end
 
