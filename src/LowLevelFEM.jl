@@ -97,6 +97,9 @@ struct Problem
         else
             error("Problem type can be: 'Solid', PlaneStress', 'PlaneStrain', 'AxiSymmetric', 'PlaneHeatConduction', 'HeatConduction' or 'AxiSymmetricHeatConduction'. Now problem type = $type ????")
         end
+        if !isa(mat, Vector)
+            error("Problem: materials are not arranged in a vector. Put them in [...]")
+        end
         name = gmsh.model.getCurrent()
         gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
         gmsh.option.setString("View.Format", "%.6g")
@@ -1194,6 +1197,9 @@ function elasticSupportMatrix(problem, elSupports)
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
 
+    if !isa(elSupports, Vector)
+        error("elasticSupportMatrix: elastic supports are not arranged in a vector. Put them in [...]")
+    end
     pdim = problem.pdim
     DIM = problem.dim
     b = problem.thickness
@@ -1338,6 +1344,9 @@ Types:
 - `elSuppMat`: SparseMatrix
 """
 function heatConvectionMatrix(problem, heatConvection)
+    if !isa(heatConvection, Vector)
+        error("heatConvection: heat convections are not arranged in a vector. Put them in [...]")
+    end
     return elasticSupportMatrix(problem, heatConvection)
 end
 
@@ -1364,6 +1373,9 @@ Types:
 """
 function loadVector(problem, loads)
     gmsh.model.setCurrent(problem.name)
+    if !isa(loads, Vector)
+        error("loadVector: loads are not arranged in a vector. Put them in [...]")
+    end
     pdim = problem.pdim
     DIM = problem.dim
     b = problem.thickness
@@ -1501,6 +1513,9 @@ Types:
 - `heatFluxVec`: Vector
 """
 function heatFluxVector(problem, loads)
+    if !isa(loads, Vector)
+        error("heatFluxVector: heat fluxes are not arranged in a vector. Put them in [...]")
+    end
     return loadVector(problem, loads)
 end
 
@@ -1527,6 +1542,9 @@ Types:
 - `heatSourceVec`: Vector
 """
 function heatSourceVector(problem, loads)
+    if !isa(loads, Vector)
+        error("heatSource: heat sources are not arranged in a vector. Put them in [...]")
+    end
     return loadVector(problem, loads)
 end
 
@@ -1544,6 +1562,9 @@ Types:
 - `heatConvVec`: Vector
 """
 function heatConvectionVector(problem, heatConvection)
+    if !isa(heatConvection, Vector)
+        error("heatConvectionVector: heat convections are not arranged in a vector. Put them in [...]")
+    end
     return loadVector(problem, heatConvection)
 end
 
@@ -1572,15 +1593,6 @@ end
 function thermalLoadVectorSolid(problem, T; T₀=1im)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
-    #lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
-    #nn = []
-    #I = []
-    #J = []
-    #V = []
-    #V = convert(Vector{Float64}, V)
-    #sizehint!(I, lengthOfIJV)
-    #sizehint!(J, lengthOfIJV)
-    #sizehint!(V, lengthOfIJV)
     dim = problem.dim
     pdim = problem.pdim
     dof = problem.non * pdim
@@ -1652,12 +1664,6 @@ function thermalLoadVectorSolid(problem, T; T₀=1im)
                     end
                 end
                 invJac = zeros(3, 3numIntPoints)
-                #Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
-                #Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
-                #for k in 1:numNodes*pdim, l in 1:numNodes*pdim
-                #    Iidx[k, l] = l
-                #    Jidx[k, l] = k
-                #end
                 ∂h = zeros(dim, numNodes * numIntPoints)
                 B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
                 f1 = zeros(pdim * numNodes)
@@ -1700,42 +1706,21 @@ function thermalLoadVectorSolid(problem, T; T₀=1im)
                     end
                     f1 .*= 0
                     for k in 1:numIntPoints
-                        #pdimT = 1
                         H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
-                        #display("B1: $(size(B1))")
-                        #display("D: $(size(D))")
-                        #display("E0: $(size(E0))")
-                        #display("H1: $(size(H1))")
-                        #display("T: $(size(T[nn2]))")
                         f1 += B1' * D * E0 * H1 * (T[nn1] - T₀[nn1]) * b * jacDet[k] * intWeights[k]
                     end
                     fT[nn2] += f1
-                    #append!(I, nn2[Iidx[:]])
-                    #append!(J, nn2[Jidx[:]])
-                    #append!(V, K1[:])
                 end
-                #push!(nn, nnet)
             end
         end
     end
-    #K = sparse(I, J, V, dof, dof)
-    #dropzeros!(K)
     return fT
 end
 
 function thermalLoadVectorAXI(problem, T; T₀=1im)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
-    #lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
-    #nn = []
-    #I = []
-    #J = []
-    #V = []
-    #V = convert(Vector{Float64}, V)
-    #sizehint!(I, lengthOfIJV)
-    #sizehint!(J, lengthOfIJV)
-    #sizehint!(V, lengthOfIJV)
     dim = problem.dim
     pdim = problem.pdim
     dof = problem.non * pdim
@@ -1796,12 +1781,6 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
                     end
                 end
                 invJac = zeros(3, 3numIntPoints)
-                #Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
-                #Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
-                #for k in 1:numNodes*pdim, l in 1:numNodes*pdim
-                #    Iidx[k, l] = l
-                #    Jidx[k, l] = k
-                #end
                 ∂h = zeros(dim, numNodes * numIntPoints)
                 B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
                 f1 = zeros(pdim * numNodes)
@@ -1841,23 +1820,15 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
                         nn1[k:pdimT:pdimT*numNodes] = pdimT * nnet[j, 1:numNodes] .- (pdimT - k)
                     end
                     for k in 1:numIntPoints
-                        #r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
                         H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
                         f1 += 2π * B1' * D * E0  * H1 * (T[nn1] - T₀[nn1]) * b * r[k] * jacDet[k] * intWeights[k]
                     end
                     fT[nn2] += f1
-                    #append!(I, nn2[Iidx[:]])
-                    #append!(J, nn2[Jidx[:]])
-                    #append!(V, K1[:])
                 end
-                #push!(nn, nnet)
             end
         end
     end
-    #dof = problem.pdim * problem.non
-    #K = sparse(I, J, V, dof, dof)
-    #dropzeros!(K)
     return fT
 end
 
@@ -1878,6 +1849,9 @@ Types:
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions!(problem, stiffMat, loadVec, supports)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+    end
     dof, dof = size(stiffMat)
     massMat = spzeros(dof, dof)
     dampMat = spzeros(dof, dof)
@@ -1904,6 +1878,9 @@ Types:
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions(problem, stiffMat0, loadVec0, supports)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
+    end
     dof, dof = size(stiffMat0)
     massMat = spzeros(dof, dof)
     dampMat = spzeros(dof, dof)
@@ -1957,6 +1934,9 @@ Types:
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+    end
     gmsh.model.setCurrent(problem.name)
     dof, dof = size(stiffMat)
     pdim = problem.pdim
@@ -2118,6 +2098,9 @@ Types:
 - `elastSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyElasticSupport!(problem, stiffMat, elastSupp)
+    if !isa(elastSupp, Vector)
+        error("applyElasticSupport!: elastic supports are not arranged in a vector. Put them in [...]")
+    end
     C0 = elasticSupportMatrix(problem, elastSupp)
     stiffMat .+= C0
 end
@@ -2139,6 +2122,9 @@ Types:
 - `heatConv`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
+    if !isa(heatConv, Vector)
+        error("applyHeatConvection!: heat convections are not arranged in a vector. Put them in [...]")
+    end
     hf0 = heatConvectionVector(problem, heatConv)
     C0 = heatConvectionMatrix(problem, heatConv)
     heatCondMat .+= C0
@@ -3258,7 +3244,6 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
             end
             u = zeros(non)
             for i in 1:length(nodeTags)
-                #u[i] = pdim == 2 && k == 3 ? 0 : q[pdim*nodeTags[i]-(pdim-k), j]
                 u[i] = k > pdim ? 0 : q[pdim*nodeTags[i]-(pdim-k), j]
             end
         end
@@ -3272,7 +3257,6 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
     if visible == false
         gmsh.view.option.setNumber(uvec, "Visible", 0)
     end
-    #display("$comp..ok")
     return uvec
 end
 
