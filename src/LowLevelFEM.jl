@@ -8,7 +8,7 @@ import .gmsh
 export gmsh
 
 """
-    Material(phName, E, ν, ρ, k, c)
+    Material(phName, E, ν, ρ, k, c, α)
 
 A structure containing the material constants. 
 - E: elastic modulus,
@@ -40,24 +40,25 @@ end
 
 
 """
-    Problem(names; thickness=..., type=..., bandwidth=...)
+    Problem(materials; thickness=..., type=..., bandwidth=...)
 
 A structure containing the most important data of the problem. 
-- name of the model (in gmsh)
+- Parts of the model with their material constants. More materials can be given. (see `material` function)
 - type of the problem: 3D "Solid", "PlaneStrain", "PlaneStress", "AxiSymmetric",
-  "PlaneHeatConduction", "HeatConduction", AxiSymmetricHeatConduction".
+  "PlaneHeatConduction", "HeatConduction", "AxiSymmetricHeatConduction".
   In the case of "AxiSymmetric", the axis of symmetry is the "y" axis, 
   while the geometry must be drawn in the positive "x" half-plane.
 - bandwidth optimization using built-in `gmsh` function.
-  Possibilities: "RCMK" (default), "Hilbert", "Metis" or "none"
+  Possibilities: "RCMK", "Hilbert", "Metis" or "none" (default)
 - dimension of the problem, determined from `type`
-- material constants: Physical group, Young's modulus, Poisson's ratio,
-  mass density (in vector of tuples `names`)
+- material constants: Young's modulus, Poisson's ratio,
+  mass density, heat conduction corfficient, specific heat, heat 
+  expansion coefficient (in a vector of material structure `materials`)
 - thickness of the plate
 - number of nodes (non)
 
 Types:
-- `names`: Vector{Touple{String, Float64, Float64, Float64}}
+- `materials`: Material
 - `type`: String
 - `bandwidth`: String
 - `dim`: Integer
@@ -188,20 +189,24 @@ struct TensorField
 end
 
 """
-    FEM.material(name; E=2.0e5, ν=0.3, ρ=7.85e-9)
+    FEM.material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5)
 
-Returns a tuple in which `name` is the name of a physical group, 
+Returns a structure in which `name` is the name of a physical group, 
 `E` is the modulus of elasticity, `ν` Poisson's ratio and `ρ` is
-the mass density.
+the mass density, `k` is the heat conductivity, `c` is the specific
+heat, `α` is the coefficient of heat expansion.
 
 Return: mat
 
 Types:
-- `mat`: Tuple(String, Float64, Float64, Float64)
+- `mat`: Material
 - `name`: String
 - `E`: Float64
 - `ν`: Float64
 - `ρ`: Float64
+- `k`: Float64
+- `c`: Float64
+- `α`: Float64
 """
 function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5)
     return Material(name, E, ν, ρ, k, c, α)
@@ -1001,7 +1006,7 @@ Types:
 - `lumped`: Boolean
 - `massMat`: SparseMatrix
 """
-function heatCapacityMatrix(problem; elements=[], lumped=true)
+function heatCapacityMatrix(problem; elements=[], lumped=false)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -1181,7 +1186,7 @@ Return: `elSuppMat`
 
 Types:
 - `problem`: Problem
-- `lumped`: Boolean
+- `elSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
 - `elSuppMat`: SparseMatrix
 """
 function elasticSupportMatrix(problem, elSupports)
@@ -1340,8 +1345,8 @@ Return: `heatConvMat`
 
 Types:
 - `problem`: Problem
-- `lumped`: Boolean
-- `elSuppMat`: SparseMatrix
+- `heatConvection`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `heatConvMat`: SparseMatrix
 """
 function heatConvectionMatrix(problem, heatConvection)
     if !isa(heatConvection, Vector)
@@ -2106,7 +2111,7 @@ function applyElasticSupport!(problem, stiffMat, elastSupp)
 end
 
 """
-    FEM.applyHeatConvection(problem, heatCondMat, heatFluxVec, heatConv)
+    FEM.applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
 
 Applies heat convectiom boundary conditions `heatConv` on a heat conduction matrix
 `heatCondMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `heatCond`
@@ -3574,7 +3579,7 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
 end
 
 """
-    FEM.plotOnPath(problem, pathName, field, points; step=..., plot=..., name=..., visible=...)
+    FEM.plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=...)
 
 Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
 gmsh from which the data of a field is imported. `pathName` is the name of a
@@ -3605,7 +3610,7 @@ Types:
 - `tag`: Integer
 - `xy`: Tuples{Vector{Float64},Vector{Float64}}
 """
-function plotOnPath(problem, pathName, field, points; step=1im, plot=false, name="path", visible=false)
+function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false)
     gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
     if points < 2
