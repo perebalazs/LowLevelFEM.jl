@@ -2695,6 +2695,136 @@ function solveHeatFlux(problem, T)
 end
 
 """
+    FEM.resultant(problem, phName, field, component)
+
+Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
+`name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
+It can solve traction or body force depending on the problem.
+In case of 2D problems and Point physical group means concentrated force.
+In case of 2D problems and Line physical group means surface force.
+In case of 2D problems and Surface physical group means body force.
+In case of 3D problems and Point physical group means concentrated force.
+In case of 3D problems and Line physical group means edge force.
+In case of 3D problems and Surface physical group means surface force.
+In case of 3D problems and Volume physical group means body force.
+
+Return: `loadVec`
+
+Types:
+- `problem`: Problem
+- `loads`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `loadVec`: Vector
+"""
+function resultant(problem, field, phName)
+    gmsh.model.setCurrent(problem.name)
+    pdim = problem.pdim
+    DIM = problem.dim
+    b = problem.thickness
+    non = problem.non
+    dof = pdim * non
+    fp = zeros(dof)
+    ncoord2 = zeros(3 * problem.non)
+    sum0 = 0
+    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
+    if numComponents != 1
+        error("resultant: number of component of the field must be one.")
+    end
+    for n in 1:1#length(loads)
+        #name, fx, fy, fz = loads[n]
+        #if pdim == 3
+        #    f = [.0, .0, .0]
+        #elseif pdim == 2
+        #    f = [.0, .0]
+        #elseif pdim == 1
+        #    f = [.0]
+        #else
+        #    error("resultant: DOF per nodes is $(pdim).")
+        #end
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for i ∈ 1:length(dimTags)
+            dimTag = dimTags[i]
+            dim = dimTag[1]
+            tag = dimTag[2]
+            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for ii in 1:length(elementTypes)
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+                #nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order+1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elementTags[ii]), numNodes)
+                #H = zeros(pdim * numIntPoints, pdim * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdim
+                            #H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                        end
+                    end
+                end
+                #f1 = zeros(pdim * numNodes)
+                #nn2 = zeros(Int, pdim * numNodes)
+                for l in 1:length(elementTags[ii])
+                    elem = elementTags[ii][l]
+                    for k in 1:numNodes
+                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    s1 = 0
+                    for j in 1:numIntPoints
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        f, d = gmsh.view.probe(field, x, y, z)
+                        r = x
+                        #H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                        ############### NANSON ######## 3D ###################################
+                        if DIM == 3 && dim == 3
+                            Ja = jacDet[j]
+                        elseif DIM == 3 && dim == 2
+                            xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                            yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                            zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                            Ja = √(xy^2 + yz^2 + zx^2)
+                        elseif DIM == 3 && dim == 1
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                        elseif DIM == 3 && dim == 0
+                            Ja = 1
+                        ############ 2D #######################################################
+                        elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                            Ja = jacDet[j] * b
+                        elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                            Ja = 2π * jacDet[j] * r
+                        elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                        elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                            Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                        elseif DIM == 2 && dim == 0
+                            Ja = 1
+                        ############ 1D #######################################################
+                        else
+                            error("applyBoundaryConditions: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                        end
+                        #f1 += H1' * f * Ja * intWeights[j]
+                        s1 += f[1] * Ja * intWeights[j]
+                    end
+                    for k in 1:pdim
+                        #nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                    end
+                    sum0 += s1
+                end
+            end
+        end
+    end
+    return sum0
+end
+
+"""
     FEM.initialDisplacement!(problem, name, u0; ux=..., uy=..., uz=...)
 
 Changes the displacement values `ux`, `uy` and `uz` (depending on the dimension of
@@ -3374,6 +3504,8 @@ function showElementResults(problem, F, comp; t=[0.0], name=comp, visible=false,
         return showStrainResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
     elseif F.type == "s"
         return showStressResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    elseif F.type == "q"
+        return showHeatFluxResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
     else
         error("showElementResults: type is '$type'")
     end
@@ -3484,10 +3616,10 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
 end
 
 """
-    FEM.showStressResults(problem, S, comp; t=..., name=..., visible=..., smooth=...)
+    FEM.showHeatFluxResults(problem, Q, comp; t=..., name=..., visible=..., smooth=...)
 
-Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
-the component of the field ("s", "sx", "sy", "sz", "sxy", "syz", "szx", "seqv"),
+Loads heat flux results into a View in gmsh. `Q` is a heat flux field to show, `comp` is
+the component of the field ("qvec", "qx", "qy", "qz", "q"),
 `t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
@@ -3553,11 +3685,11 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
             σcomp = []
             sizehint!(σcomp, length(numElem))
             for i in 1:length(S.numElem)
-                sx = zeros(div(size(σ[i], 1), 3))
+                ss = zeros(div(size(σ[i], 1), 3))
                 for j in 1:(div(size(σ[i], 1), 3))
-                    sx[j] = σ[i][3j-k, jj]
+                    ss[j] = σ[i][3j-k, jj]
                 end
-                push!(σcomp, sx)
+                push!(σcomp, ss)
             end
         end
         gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
