@@ -5,7 +5,7 @@ Rectangle(1) = {100, 0, 0, 100, 100, 0};
 Periodic Curve{4}={-2};
 MeshSize{2,3}=20;
 MeshSize{1,4}=30;
-Mesh.ElementOrder=4;
+Mesh.ElementOrder=1;
 //+
 Mesh 2;
 //+

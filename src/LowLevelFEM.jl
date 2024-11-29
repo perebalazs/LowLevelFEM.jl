@@ -2563,16 +2563,19 @@ Types:
 - `T`: Vector{Float64}
 - `q`: VectorField
 """
-function solveHeatFlux(problem, T)
+function solveHeatFlux(problem, T; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
     type = "q"
     nsteps = size(T, 2)
     σ = []
     numElem = Int[]
-    ncoord2 = zeros(3 * problem.non)
     dim = problem.dim
     pdim = problem.pdim
+    non = problem.non
+    ncoord2 = zeros(3 * non)
+    q1 = zeros(non * dim, nsteps)
+    pcs = zeros(Int64, non * dim)
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
@@ -2668,32 +2671,48 @@ function solveHeatFlux(problem, T)
                     s = zeros(3numNodes, nsteps) # vectors have three elements
                     for k in 1:numNodes
                         if rowsOfB == 3 && pdim == 1
-                            #H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = B1 * T[nn2, kk] * kT
                                 s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], s0[3]]
+                                q1[dim*nnet[j, k]-2, kk] += s0[1]
+                                q1[dim*nnet[j, k]-1, kk] += s0[2]
+                                q1[dim*nnet[j, k]-0, kk] += s0[3]
                             end
                         elseif rowsOfB == 2 && pdim == 1
-                            #H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-1:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = B1 * T[nn2, kk] * kT
                                 s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], 0]
+                                q1[dim*nnet[j, k]-1, kk] += s0[1]
+                                q1[dim*nnet[j, k]-0, kk] += s0[2]
                             end
                         else
                             error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
                         end
                     end
-                    push!(σ, s)
+                    pcs[nnet[j,1:numNodes]] .+= 1
+                    if DoFResults == false
+                        push!(σ, s)
+                    end
                 end
             end
         end
     end
+    for k in 1:dim
+        for l in 1:non
+            q1[k + dim * l - dim, :] ./= pcs[l]
+        end
+    end
     sigma = VectorField(σ, numElem, nsteps, type)
-    return sigma
+    if DoFResults == true
+        return q1
+    else
+        return sigma
+    end
 end
 
+#=
 """
     FEM.resultant(problem, phName, field, component)
 
@@ -2715,6 +2734,7 @@ Types:
 - `loads`: Vector{Tuple{String, Float64, Float64, Float64}}
 - `loadVec`: Vector
 """
+=#
 function resultant(problem, field, phName)
     gmsh.model.setCurrent(problem.name)
     pdim = problem.pdim
@@ -2823,6 +2843,47 @@ function resultant(problem, field, phName)
     end
     return sum0
 end
+
+function resultant(field, phName; dim=2, axiSymmetric=false)
+    if !isa(field, Vector) && !isa(field, Matrix)
+        error("resultant: field must be a Vector or Matrix")
+    end
+    ph1 = getTagForPhysicalName(phName)
+    nodes0, coords = gmsh.model.mesh.getNodesForPhysicalGroup(-1,ph1)
+    nodes = Vector{Int64}(nodes0)
+    s = [0.0, 0.0, 0.0]
+    for i in 1:dim
+        for j in 1:length(nodes)
+            b = axiSymmetric == true ? 2π * coords[3j-2] : 1
+            s[i] += field[dim * nodes[j] - (dim - i)] * b
+        end
+    end
+    if dim == 1
+        return s[1]
+    elseif dim == 2
+        return s[1], s[2]
+    elseif dim == 3
+        return s[1], s[2], s[3]
+    end
+end
+
+#=
+function elementToNode(problem, field)
+    if field.type == "q"
+        comp = 3
+    elseif field.type == "s" || field.type == "e"
+        comp = 9
+    end
+    dof = problem.non * comp
+    vec = zeros(dof, field.nsteps)
+    for i in 1:length(field.numElem)
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+
+    for i in 1:nsteps
+        for j in 1:length(field.numElem)
+            for k in 1:comp
+end
+=#
 
 """
     FEM.initialDisplacement!(problem, name, u0; ux=..., uy=..., uz=...)
@@ -3333,6 +3394,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
     pdim = problem.pdim
+    pdim = div(length(q), problem.non) 
     nodeTags = []
     ##############################################################################
     if problem.type == "Reynolds"
