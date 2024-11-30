@@ -2175,20 +2175,21 @@ function solveTemperature(K, q)
 end
 
 """
-    FEM.solveStrain(problem, q)
+    FEM.solveStrain(problem, q; DoFResults=false)
 
 Solves the strain field `E` from displacement vector `q`. Strain field is given
 per elements, so it usually contains jumps at the boundary of elements. Details
-of mesh is available in `problem`.
+of mesh is available in `problem`. If `DoFResults` is true, `E` is a matrix with
+nodal results. In this case `showDoFResults` can be used to show the results.
 
 Return: `E`
 
 Types:
 - `problem`: Problem
 - `q`: Vector{Float64}
-- `E`: TensorField
+- `E`: TensorField or Matrix{Float64}
 """
-function solveStrain(problem, q)
+function solveStrain(problem, q; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
     type = "e"
@@ -2196,6 +2197,13 @@ function solveStrain(problem, q)
     ε = []
     numElem = Int[]
     ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    if DoFResults == true
+        E1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
@@ -2234,7 +2242,7 @@ function solveStrain(problem, q)
             for i in 1:length(elemTypes)
                 et = elemTypes[i]
                 elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                s0 = zeros(rowsOfB * numNodes)
+                #e0 = zeros(rowsOfB * numNodes)
                 nodeCoord = zeros(numNodes * 3)
                 for k in 1:dim, j = 1:numNodes
                     nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
@@ -2295,62 +2303,99 @@ function solveStrain(problem, q)
                             B1 = B[k*6-5:k*6, 1:3*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
-                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], e0[6],
-                                    e0[4], e0[2], e0[5],
-                                    e0[6], e0[5], e0[3]]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], e0[6],
+                                        e0[4], e0[2], e0[5],
+                                        e0[6], e0[5], e0[3]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], e0[6], e0[4], e0[2], e0[5], e0[6], e0[5], e0[3]]
+                                end
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStress"
                             B1 = B[k*3-2:k*3, 1:2*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
-                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
-                                    e0[3], e0[2], 0,
-                                    0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
+                                        e0[3], e0[2], 0,
+                                        0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
+                                end
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStrain"
                             B1 = B[k*3-2:k*3, 1:2*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
-                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
-                                    e0[3], e0[2], 0,
-                                    0, 0, 0]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
+                                        e0[3], e0[2], 0,
+                                        0, 0, 0]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν*(e0[1]+e0[2])]
+                                end
                             end
                         elseif rowsOfB == 4 && dim == 2 && problem.type == "AxiSymmetric"
                             B1 = B[k*4-3:k*4, 1:2*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
-                                e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], 0,
-                                    e0[4], e0[3], 0,
-                                    0, 0, e0[2]]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], 0,
+                                        e0[4], e0[3], 0,
+                                        0, 0, e0[2]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], 0, e0[4], e0[3], 0, 0, 0, e0[2]]
+                                end
                             end
                         else
                             error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
                         end
                     end
-                    push!(ε, e)
+                    if DoFResults == true
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    end
+                    if DoFResults == false
+                        push!(ε, e)
+                    end
                 end
             end
         end
     end
-    epsilon = TensorField(ε, numElem, nsteps, type)
-    return epsilon
+    if DoFResults == true
+        for k in 1:9
+            for l in 1:non
+                E1[k + 9 * l - 9, :] ./= pcs[l]
+            end
+        end
+    end
+    if DoFResults == true
+        return E1
+    else
+        epsilon = TensorField(ε, numElem, nsteps, type)
+        return epsilon
+    end
 end
 
 """
-    FEM.solveStress(problem, q)
+    FEM.solveStress(problem, q; DoFResults=false)
 
 Solves the stress field `S` from displacement vector `q`. Stress field is given
 per elements, so it usually contains jumps at the boundary of elements. Details
-of mesh is available in `problem`.
+of mesh is available in `problem`. If `DoFResults` is true, `S` is a matrix with
+nodal results. In this case `showDoFResults` can be used to show the results.
 
 Return: `S`
 
 Types:
 - `problem`: Problem
 - `q`: Vector{Float64}
-- `S`: TensorField
+- `S`: TensorField or Matrix{Float64}
 """
-function solveStress(problem, q; T=1im, T₀=1im)
+function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
     type = "s"
@@ -2360,8 +2405,13 @@ function solveStress(problem, q; T=1im, T₀=1im)
     ncoord2 = zeros(3 * problem.non)
     dim = problem.dim
     pdim = problem.pdim
+    non = problem.non
     if T₀ == 1im
         T₀ = zeros(problem.non)
+    end
+    if DoFResults == true
+        S1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
     end
 
     for ipg in 1:length(problem.material)
@@ -2424,7 +2474,7 @@ function solveStress(problem, q; T=1im, T₀=1im)
             for i in 1:length(elemTypes)
                 et = elemTypes[i]
                 elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                s0 = zeros(rowsOfB * numNodes)
+                #s0 = zeros(rowsOfB * numNodes)
                 nodeCoord = zeros(numNodes * 3)
                 for k in 1:dim, j = 1:numNodes
                     nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
@@ -2502,9 +2552,14 @@ function solveStress(problem, q; T=1im, T₀=1im)
                                 if T != 1im
                                     s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
                                 end
-                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
-                                    s0[4], s0[2], s0[5],
-                                    s0[6], s0[5], s0[3]]
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
+                                        s0[4], s0[2], s0[5],
+                                        s0[6], s0[5], s0[3]]
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
+                                end
                             end
                         elseif rowsOfB == 3 && pdim == 2 && problem.type == "PlaneStress"
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
@@ -2514,9 +2569,14 @@ function solveStress(problem, q; T=1im, T₀=1im)
                                 if T != 1im
                                     s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
                                 end
-                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
-                                    s0[3], s0[2], 0,
-                                    0, 0, 0]
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                        s0[3], s0[2], 0,
+                                        0, 0, 0]
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, 0]
+                                end
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStrain"
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
@@ -2526,45 +2586,72 @@ function solveStress(problem, q; T=1im, T₀=1im)
                                 if T != 1im
                                     s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
                                 end
-                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
-                                    s0[3], s0[2], 0,
-                                    0, 0, ν*(s0[1]+s0[2])]
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                        s0[3], s0[2], 0,
+                                        0, 0, ν*(s0[1]+s0[2])]
                                     # PlaneStain: σz ≠ 0
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, ν*(s0[1]+s0[2])]
+                                end
                             end
                         elseif rowsOfB == 4 && dim == 2 && problem.type == "AxiSymmetric"
                             B1 = B[k*4-3:k*4, 1:2*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q[nn2, kk]
-                                s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
-                                    s0[4], s0[3], 0,
-                                    0, 0, s0[2]]
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
+                                        s0[4], s0[3], 0,
+                                        0, 0, s0[2]]
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[4], 0, s0[4], s0[3], 0, 0, 0, s0[2]]
+                                end
                             end
                         else
                             error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
                         end
                     end
-                    push!(σ, s)
+                    if DoFResults == true
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    end
+                    if DoFResults == false
+                        push!(σ, s)
+                    end
                 end
             end
         end
     end
-    sigma = TensorField(σ, numElem, nsteps, type)
-    return sigma
+    if DoFResults == true
+        for k in 1:9
+            for l in 1:non
+                S1[k + 9 * l - 9, :] ./= pcs[l]
+            end
+        end
+    end
+    if DoFResults == true
+        return S1
+    else
+        sigma = TensorField(σ, numElem, nsteps, type)
+        return sigma
+    end
 end
 
 """
-    FEM.solveHeatFlux(problem, T)
+    FEM.solveHeatFlux(problem, T; DoFResults=false)
 
 Solves the heat flux field `q` from temperature vector `T`. heat flux is given
 per elements, so it usually contains jumps at the boundary of elements. Details
-of mesh is available in `problem`.
+of mesh is available in `problem`. If `DoFResults` is true, `q` is a matrix with
+nodal results. In this case `showDoFResults` can be used to show the results.
 
 Return: `q`
 
 Types:
 - `problem`: Problem
 - `T`: Vector{Float64}
-- `q`: VectorField
+- `q`: VectorField or Matrix{Float}
 """
 function solveHeatFlux(problem, T; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
@@ -2577,8 +2664,10 @@ function solveHeatFlux(problem, T; DoFResults=false)
     pdim = problem.pdim
     non = problem.non
     ncoord2 = zeros(3 * non)
-    q1 = zeros(non * dim, nsteps)
-    pcs = zeros(Int64, non * dim)
+    if DoFResults == true
+        q1 = zeros(non * dim, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
@@ -2678,23 +2767,31 @@ function solveHeatFlux(problem, T; DoFResults=false)
                             for kk in 1:nsteps
                                 s0 = B1 * T[nn2, kk] * kT
                                 s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], s0[3]]
-                                q1[dim*nnet[j, k]-2, kk] += s0[1]
-                                q1[dim*nnet[j, k]-1, kk] += s0[2]
-                                q1[dim*nnet[j, k]-0, kk] += s0[3]
+                                if DoFResults == true
+                                    #q1[dim*nnet[j, k]-2, kk] += s0[1]
+                                    #q1[dim*nnet[j, k]-1, kk] += s0[2]
+                                    #q1[dim*nnet[j, k]-0, kk] += s0[3]
+                                    q1[dim*nnet[j, k]-2:dim*nnet[j,k], kk] .+= s0
+                                end
                             end
                         elseif rowsOfB == 2 && pdim == 1
                             B1 = B[k*rowsOfB-1:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = B1 * T[nn2, kk] * kT
                                 s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], 0]
-                                q1[dim*nnet[j, k]-1, kk] += s0[1]
-                                q1[dim*nnet[j, k]-0, kk] += s0[2]
+                                if DoFResults == true
+                                    #q1[dim*nnet[j, k]-1, kk] += s0[1]
+                                    #q1[dim*nnet[j, k]-0, kk] += s0[2]
+                                    q1[dim*nnet[j, k]-1:dim*nnet[j,k], kk] .+= s0
+                                end
                             end
                         else
                             error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
                         end
                     end
-                    pcs[nnet[j,1:numNodes]] .+= 1
+                    if DoFResults == true
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    end
                     if DoFResults == false
                         push!(σ, s)
                     end
@@ -2702,15 +2799,17 @@ function solveHeatFlux(problem, T; DoFResults=false)
             end
         end
     end
-    for k in 1:dim
-        for l in 1:non
-            q1[k + dim * l - dim, :] ./= pcs[l]
+    if DoFResults == true
+        for k in 1:dim
+            for l in 1:non
+                q1[k + dim * l - dim, :] ./= pcs[l]
+            end
         end
     end
-    sigma = VectorField(σ, numElem, nsteps, type)
     if DoFResults == true
         return q1
     else
+        sigma = VectorField(σ, numElem, nsteps, type)
         return sigma
     end
 end
@@ -2847,6 +2946,32 @@ function resultant(problem, field, phName)
     return sum0
 end
 
+"""
+    FEM.resultant(field, phName; dim=2)
+
+Solves the resultant of `field`` (load vector or heat flux vector) on `phName` physical group.
+Dimension of the problem (DoF per node) van be given with `dim`. Return the resultant(s) in `tuple`.
+Number of the members in `tuple` depends on `dim`.
+
+Return: `res``
+
+or
+
+Return: `resx`, `resy`
+
+or
+
+Return: `resx`, `resy`, `resz`
+
+Types:
+- `field`: Vector{Float64}
+- `phName`: String 
+- `dim`: Int64
+- `res`: Float64 
+- `resx`: Float64 
+- `resy`: Float64 
+- `resz`: Float64 
+"""
 function resultant(field, phName; dim=2, axiSymmetric=false)
     if !isa(field, Vector) && !isa(field, Matrix)
         error("resultant: field must be a Vector or Matrix")
@@ -3375,7 +3500,9 @@ end
     FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)
 
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
-the component of the field ("uvec", "ux", "uy", "uz", "vvec", "vx", "vy", "vz"),
+the component of the field ("uvec", "ux", "uy", "uz", "vvec", "vx", "vy", "vz",
+"qvec", "qx", "qy", "qz", "T", "p", "qn", "s", "sx", "sy", "sz", "sxy", "syx", "syz",
+"szy", "szx", "sxz", "e", "ex", "ey", "ez", "exy", "eyx", "eyz", "ezy", "ezx", "exz", "seqv"),
 `t` is a vector of time steps (same number of columns as `q`), `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. If `q` has more columns, then a sequence of results
@@ -3397,7 +3524,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
     pdim = problem.pdim
-    pdim = div(length(q), problem.non) 
+    pdim = div(size(q,1), problem.non) 
     nodeTags = []
     ##############################################################################
     if problem.type == "Reynolds"
@@ -3421,9 +3548,12 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
     if size(q, 2) != length(t)
         error("showDoFResults: number of time steps missmatch ($(size(q,2)) <==> $(length(t))).")
     end
+    if comp[1] == 's' || comp[1] == 'e'
+        pdim = 9
+    end
     for j in 1:length(t)
         k = 1im
-        if comp == "uvec" || comp == "vvec"
+        if comp == "uvec" || comp == "vvec" || comp == "qvec"
             nc = 3
             u = zeros(3 * non)
             for i in 1:length(nodeTags)
@@ -3431,20 +3561,49 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
                 u[3i-1] = pdim > 1 ? q[pdim*nodeTags[i]-(pdim-2), j] : 0
                 u[3i-0] = pdim == 3 ? q[pdim*nodeTags[i]-(pdim-3), j] : 0
             end
+        elseif comp == "s" || comp == "e"
+            nc = 9
+            u = zeros(9 * non)
+            for i in 1:length(nodeTags)
+                u[9i-8] = q[pdim*nodeTags[i]-(pdim-1), j]
+                u[9i-7] = q[pdim*nodeTags[i]-(pdim-2), j]
+                u[9i-6] = q[pdim*nodeTags[i]-(pdim-3), j]
+                u[9i-5] = q[pdim*nodeTags[i]-(pdim-4), j]
+                u[9i-4] = q[pdim*nodeTags[i]-(pdim-5), j]
+                u[9i-3] = q[pdim*nodeTags[i]-(pdim-6), j]
+                u[9i-2] = q[pdim*nodeTags[i]-(pdim-7), j]
+                u[9i-1] = q[pdim*nodeTags[i]-(pdim-8), j]
+                u[9i-0] = q[pdim*nodeTags[i]-(pdim-9), j]
+            end
         else
             nc = 1
-            if comp == "ux" || comp == "vx" || comp == "p" || comp == "T" || comp == "qn"
+            if comp == "ux" || comp == "vx" || comp == "p" || comp == "T" || comp == "qx"  || comp == "qn" || comp == "sx" || comp == "ex"
                 k = 1
-            elseif comp == "uy" || comp == "vy"
+            elseif comp == "uy" || comp == "vy" || comp == "qy" || comp == "syx" || comp == "eyx"
                 k = 2
-            elseif comp == "uz" || comp == "vz"
+            elseif comp == "uz" || comp == "vz" || comp == "qz" || comp == "szx" || comp == "ezx"
                 k = 3
+            elseif comp == "sxy" || comp == "exy"
+                k = 4
+            elseif comp == "sy" || comp == "ey"
+                k = 5
+            elseif comp == "szy" || comp == "ezy"
+                k = 6
+            elseif comp == "sxz" || comp == "exz"
+                k = 7
+            elseif comp == "syz" || comp == "eyz"
+                k = 8
+            elseif comp == "sz" || comp == "ez"
+                k = 9
+            elseif comp == "seqv"
+                k = 10
             else
                 error("ShowDisplacementResults: component is $comp ????")
             end
             u = zeros(non)
             for i in 1:length(nodeTags)
-                u[i] = k > pdim ? 0 : q[pdim*nodeTags[i]-(pdim-k), j]
+                null = k <= 9 ? 0 : √(0.5 * ((q[pdim*nodeTags[i]-(pdim-1), j]-q[pdim*nodeTags[i]-(pdim-5), j])^2+(q[pdim*nodeTags[i]-(pdim-5), j]-q[pdim*nodeTags[i]-(pdim-9), j])^2+(q[pdim*nodeTags[i]-(pdim-9), j]-q[pdim*nodeTags[i]-(pdim-1), j])^2 + 6*(q[pdim*nodeTags[i]-(pdim-2), j]^2+q[pdim*nodeTags[i]-(pdim-3), j]^2+q[pdim*nodeTags[i]-(pdim-6), j]^2)))
+                u[i] = k > pdim ? null : q[pdim*nodeTags[i]-(pdim-k), j]
             end
         end
         gmsh.view.addHomogeneousModelData(uvec, j-1, problem.name, "NodeData", nodeTags, u, t[j], nc)
@@ -3566,11 +3725,11 @@ Types:
 """
 function showElementResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
     if F.type == "e"
-        return showStrainResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+        return showStrainResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
     elseif F.type == "s"
-        return showStressResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+        return showStressResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
     elseif F.type == "q"
-        return showHeatFluxResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+        return showHeatFluxResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
     else
         error("showElementResults: type is '$type'")
     end

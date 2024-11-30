@@ -1,7 +1,7 @@
 //+
 SetFactory("OpenCASCADE");
 //+
-w=10;
+w=150;
 c=250;
 f=50;
 //+
@@ -31,6 +31,8 @@ MeshSize {:} = 50;
 //+
 MeshSize {7, 12, 11, 2, 3, 4} = 17;
 
+Mesh.Algorithm=0;
+Mesh.RecombinationAlgorithm=3;
 
 //+
 Recombine Surface {:};

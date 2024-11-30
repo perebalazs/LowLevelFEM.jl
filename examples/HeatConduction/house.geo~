@@ -1,7 +1,7 @@
 //+
 SetFactory("OpenCASCADE");
 //+
-w=150;
+w=10;
 c=250;
 f=50;
 //+
@@ -34,6 +34,7 @@ MeshSize {7, 12, 11, 2, 3, 4} = 17;
 
 //+
 Recombine Surface {:};
+Mesh.ElementOrder=2;
 
 Mesh 2;
 //+
@@ -45,14 +46,15 @@ Physical Surface("hungarocell", 36) = {9, 8, 5};
 //+
 Physical Surface("kgyapot", 37) = {4};
 //+
-Physical Curve("belsofal", 38) = {10, 4};
+Physical Curve("belsofalb", 38) = {4};
+//+
+Physical Curve("belsofalj", 43) = {10};
 //+
 Physical Curve("padlo", 39) = {22};
 //+
 Physical Curve("plafon", 40) = {13};
 //+
-Physical Curve("levego", 41) = {32, 31, 18, 30, 33};
+Physical Curve("levego", 41) = {32, 31, 18, 30, 33, 25, 28};
 //+
 Physical Curve("talaj", 42) = {24, 23, 29};
-//+
-Physical Curve("levego2", 43) = {25, 28};
+
