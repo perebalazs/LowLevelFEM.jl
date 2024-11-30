@@ -1444,7 +1444,10 @@ function loadVector(problem, loads)
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
                         end
                         if fz == 2im
-                            f[1] = isa(fx, Function) ? fx(x, y, z) * fy : fx * fy
+                            if isa(fx, Function)
+                                error("heatConvectionVector: h cannot be a function.")
+                            end
+                            f[1] = isa(fy, Function) ? fx * fy(x, y, z) : fx * fy
                         else
                             f[1] = isa(fx, Function) ? fx(x, y, z) : fx
                         end
@@ -3430,7 +3433,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
             end
         else
             nc = 1
-            if comp == "ux" || comp == "vx" || comp == "p" || comp == "T"
+            if comp == "ux" || comp == "vx" || comp == "p" || comp == "T" || comp == "qn"
                 k = 1
             elseif comp == "uy" || comp == "vy"
                 k = 2

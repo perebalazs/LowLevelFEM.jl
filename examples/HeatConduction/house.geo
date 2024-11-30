@@ -1,7 +1,7 @@
 //+
 SetFactory("OpenCASCADE");
 //+
-w=150;
+w=10;
 c=250;
 f=50;
 //+
