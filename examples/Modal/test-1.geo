@@ -1,8 +1,8 @@
 //+
 SetFactory("OpenCASCADE");
-Rectangle(1) = {100, 0, 0, 100, 100, 0};
+Rectangle(1) = {100, 0, 0, 100, 1000, 0};
 //+
-Mesh.ElementOrder=4;
+Mesh.ElementOrder=1;
 //+
 Mesh 2;
 //+

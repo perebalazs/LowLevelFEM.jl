@@ -32,13 +32,14 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - Giving loads as functions
 - Giving displacement constraints as functions
 - Different materials on each physical group
+- Solves stress, stain and heat flux field as element result (possibly jumps at the element boundaries) or as nodal results.
+- Resultant of "load vector" type quantities on arbitrary physical group (in GMSH).
 - Applying initial conditions (displacement and velocity) on arbitrary points, edges, surfaces, volumes and on combinations of them.
 - Solution of static and dynamic (transient with central difference method, Newmark and HHT-α) problems,
 - Displaying the results (scalar or vector displacements, scalar or tensor stresses and strains) with [GMSH](https://gmsh.info).
   - When dynamic problems are solved animations are also possible (click on $\triangleright$).
 - Plotting arbitrary results on paths.
 - Solves the damping matrix of structures in case of proportional damping
-
   - using Rayleigh-damping (**C**=α**M**+β**K**) or
   - using Caughey-damping (**C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅).
 - Solves the stability analysis transient problems (spectral radius, period error, physical damping ratio, algorithmic damping ratio)
@@ -51,6 +52,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
         * Heat convection
     - Heat expansion
     - Thermal loading in stress analysis (thermal stresses)
+- Modal analysis (eigenfrequencies, modal shapes).
 
 ## Planned features
 
@@ -73,6 +75,5 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] Transient problems in heat conduction.
 - [ ] Finite deformations.
 - [ ] Linear buckling.
-- [ ] Modal analysis (eigenfrequencies, modal shapes).
 
 Any suggestions are welcome.
