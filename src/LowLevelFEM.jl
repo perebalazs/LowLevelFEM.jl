@@ -189,6 +189,22 @@ struct TensorField
 end
 
 """
+    Modal(f, ϕ)
+
+A structure containing the eigenfrequencies and eigen modes.
+- f: eigenfrequencies
+- ϕ: eigen modes
+
+Types:
+- `f`: Matrix{Float64}
+- `ϕ`: Vector{Float64}
+"""
+struct Modal
+    f::Vector{Float64}
+    ϕ::Matrix{Float64}
+end
+
+"""
     FEM.material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5)
 
 Returns a structure in which `name` is the name of a physical group, 
@@ -2814,6 +2830,38 @@ function solveHeatFlux(problem, T; DoFResults=false)
     end
 end
 
+"""
+    FEM.solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
+
+Solves the eigen frequencies and mode shapes of a problem given by stiffness
+matrix `K` and the mass matrix `M`. `n` is the number of eigenfrequencies to solve,
+and solves the eigenfrequencies greater than `fₘᵢₙ`. Returns the struct of eigenfrequencies
+and eigen modes.
+
+Return: `modes`
+
+Types:
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `n`: Int64
+- `fₘᵢₙ`: Float64
+- `modes`: Modal 
+"""
+function solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
+    ωₘᵢₙ² = (2π * fₘᵢₙ)^2
+    ω², ϕ = Arpack.eigs(K, M, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
+    #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
+    #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+    #end
+    #err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
+    #if err > 1e-3 # || true
+    #    error("The error in the calculation of the smallest eigenvalue is too large: $err")
+    #end
+    f = sqrt.(abs.(real(ω²))) / 2π
+    ϕ1 = real(ϕ)
+    return Modal(f, ϕ1)
+end
+
 #=
 """
     FEM.resultant(problem, phName, field, component)
@@ -3519,7 +3567,7 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
+function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -3616,7 +3664,33 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false)
     if visible == false
         gmsh.view.option.setNumber(uvec, "Visible", 0)
     end
+    if ff == 0 && length(t) > 1
+        gmsh.view.option.setNumber(uvec, "ShowTime", 1)
+    elseif ff == 1
+        gmsh.view.option.setNumber(uvec, "ShowTime", 6)
+    end
     return uvec
+end
+
+"""
+    FEM.showModalResults(problem, Φ, name=..., visible=...)
+
+Loads modal results into a View in gmsh. `Φ` is a struct of Modal. `name` is a
+title to display and `visible` is a true or false value to toggle on or off the 
+initial visibility in gmsh. Click on ▷| to change the results. This function 
+returns the tag of View.
+
+Return: `tag`
+
+Types:
+- `problem`: Problem
+- `Φ`: Modal
+- `name`: String
+- `visible`: Boolean
+- `tag`: Integer
+"""
+function showModalResults(problem, Φ::Modal; name="modal", visible=false, ff=1)
+    return showDoFResults(problem, Φ.ϕ, "p", t=Φ.f, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -3701,6 +3775,9 @@ function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, 
     gmsh.view.option.setNumber(EE, "MaxRecursionLevel", 1)
     if visible == false
         gmsh.view.option.setNumber(EE, "Visible", 0)
+    end
+    if length(t) > 1
+        gmsh.view.option.setNumber(EE, "ShowTime", 1)
     end
     #display("$comp..ok")
     return EE
@@ -3835,6 +3912,9 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
     if visible == false
         gmsh.view.option.setNumber(SS, "Visible", 0)
     end
+    if length(t) > 1
+        gmsh.view.option.setNumber(SS, "ShowTime", 1)
+    end
     #display("$comp..ok")
     return SS
 end
@@ -3929,6 +4009,9 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
     gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
     if visible == false
         gmsh.view.option.setNumber(SS, "Visible", 0)
+    end
+    if length(t) > 1
+        gmsh.view.option.setNumber(SS, "ShowTime", 1)
     end
     #display("$comp..ok")
     return SS
