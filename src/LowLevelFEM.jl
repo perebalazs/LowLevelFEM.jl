@@ -1168,7 +1168,7 @@ Types:
 - `β`: Float64 of Vector{Float64}
 - `dampingMatrix`: SparseMatrix
 """
-function dampingMatrix(M, K, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
+function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
     dof, dof = size(M)
     dof2, dof2 = size(K)
     if dof != nnz(M)
