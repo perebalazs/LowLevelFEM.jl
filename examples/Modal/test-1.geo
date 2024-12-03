@@ -4,6 +4,8 @@ Rectangle(1) = {100, 0, 0, 100, 1000, 0};
 //+
 Mesh.ElementOrder=1;
 //+
+MeshSize {3, 4, 1, 2} = 1;
+//+
 Mesh 2;
 //+
 Physical Surface("body", 5) = {1};

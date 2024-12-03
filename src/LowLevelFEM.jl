@@ -3668,6 +3668,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
         gmsh.view.option.setNumber(uvec, "ShowTime", 1)
     elseif ff == 1
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
+        gmsh.view.option.setNumber(uvec, "VectorType", 5)
     end
     return uvec
 end
@@ -3690,7 +3691,7 @@ Types:
 - `tag`: Integer
 """
 function showModalResults(problem, Φ::Modal; name="modal", visible=false, ff=1)
-    return showDoFResults(problem, Φ.ϕ, "p", t=Φ.f, name=name, visible=visible, ff=ff)
+    return showDoFResults(problem, Φ.ϕ, "uvec", t=Φ.f, name=name, visible=visible, ff=ff)
 end
 
 """
