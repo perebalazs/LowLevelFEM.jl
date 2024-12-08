@@ -187,6 +187,25 @@ struct TensorField
     nsteps::Int
     type::String
 end
+"""
+    CoordinateSystem(vec1, vec2)
+
+A structure containing the data of a coordinate system.
+- `vec1`: direction of the new x axis.
+- `vec2`: together with `vec1` determine the xy plane
+
+Types:
+- `vec1`: Vector{Float64}
+- `vec2`: Vector{Float64}
+- `vec1f`: Vector{Function}
+- `vec2f`: Vector{Function}
+"""
+struct CoordinateSystem
+    vec1::Vector{Float64}
+    vec2::Vector{Float64}
+    vec1f::Vector{Function}
+    vec2f::Vector{Function}
+end
 
 """
     Modal(f, ϕ)
@@ -3543,6 +3562,50 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
     return x, y
 end
 
+"""
+    FEM.rotateNodes(phName, CoordSys)
+
+x.
+
+Return: `tag`
+
+Types:
+- `problem`: Problem
+- `q`: Vector{Matrix}
+- `comp`: String
+- `t`: Vector{Float64}
+- `name`: String
+- `visible`: Boolean
+- `tag`: Integer
+"""
+function rotateNodes(phName, CoordSys)
+    dim = problem.dim
+    phg = getTagForPhysicalName(name)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+    
+    e1 = CoordSys.vec1
+    e1 ./= √(dot(e1, e1))
+    I = [1 0 0; 0 1 0; 0 0 1]
+    e2 = (I - e * e') * CoordSys.vec2
+    e2 ./= √(dot(e2, e2))
+    e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
+
+    if ux != 1im
+        for i in 1:length(nodeTags)
+            u0[nodeTags[i]*dim-(dim-1)] = ux
+        end
+    end
+    if uy != 1im
+        for i in 1:length(nodeTags)
+            u0[nodeTags[i]*dim-(dim-2)] = uy
+        end
+    end
+    if dim == 3 && uz != 1im
+        for i in 1:length(nodeTags)
+            u0[nodeTags[i]*dim] = uz
+        end
+    end
+end
 
 """
     FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)
