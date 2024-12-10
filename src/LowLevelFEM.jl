@@ -2,7 +2,7 @@ module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
 using Arpack
-using Base.Threads
+#using Base.Threads
 import gmsh_jll
 include(gmsh_jll.gmsh_api)
 import .gmsh
@@ -202,8 +202,6 @@ otherwise (in 2D case) the number of arguments is two (x and y coordinates).
 Types:
 - `vec1`: Vector{Float64}
 - `vec2`: Vector{Float64}
-- `vec1f`: Vector{Function}
-- `vec2f`: Vector{Function}
 """
 struct CoordinateSystem
     vec1::Vector{Float64}
@@ -535,6 +533,7 @@ function stiffnessMatrixSolid(problem; elements=[])
                 B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
                 K1 = zeros(pdim * numNodes, pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
+                #appendlock = ReentrantLock()
                 #Threads.@threads for j in 1:length(elemTags[i])
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
@@ -573,11 +572,11 @@ function stiffnessMatrixSolid(problem; elements=[])
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
-                    #Threads.lock!(gloval_lock)
+                    #Threads.lock(appendlock)
                     append!(I, nn2[Iidx[:]])
                     append!(J, nn2[Jidx[:]])
                     append!(V, K1[:])
-                    #Threads.unlock!(global_lock)
+                    #Threads.unlock(appendlock)
                 end
                 push!(nn, nnet)
             end

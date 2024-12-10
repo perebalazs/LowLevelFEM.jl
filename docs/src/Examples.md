@@ -37,9 +37,9 @@ sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=t
 sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
 sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
 
-FEM.plotOnPath(problem, "path", sx, 100, name="σx", visible=false);
-FEM.plotOnPath(problem, "path", sxy, 100, name="τxy", visible=false);
-FEM.plotOnPath(problem, "path", ux, 100, name="ux", visible=false);
+FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
+FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
+FEM.plotOnPath(problem, "path", ux, name="ux", visible=false);
 
 gmsh.fltk.run()
 gmsh.finalize()
@@ -112,9 +112,9 @@ sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smoot
 syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
 szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
 
-FEM.plotOnPath(problem, "path", sx, 100, name="σx", visible=false);
-FEM.plotOnPath(problem, "path", sxy, 100, name="τxy", visible=false);
-FEM.plotOnPath(problem, "path", ux, 100, name="ux", visible=false);
+FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
+FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
+FEM.plotOnPath(problem, "path", ux, name="ux", visible=false);
 
 gmsh.fltk.run()
 gmsh.finalize()
@@ -195,7 +195,7 @@ sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smoot
 syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
 szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
 
-FEM.plotOnPath(problem, "path", s, 100, name="σred", visible=false);
+FEM.plotOnPath(problem, "path", s, name="σred", visible=false);
 
 gmsh.fltk.run()
 gmsh.finalize()
