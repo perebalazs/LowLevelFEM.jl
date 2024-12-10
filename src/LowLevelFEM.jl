@@ -2,6 +2,7 @@ module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
 using Arpack
+using Base.Threads
 import gmsh_jll
 include(gmsh_jll.gmsh_api)
 import .gmsh
@@ -534,6 +535,7 @@ function stiffnessMatrixSolid(problem; elements=[])
                 B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
                 K1 = zeros(pdim * numNodes, pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
+                #Threads.@threads for j in 1:length(elemTags[i])
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
                     for k in 1:numNodes
@@ -571,9 +573,11 @@ function stiffnessMatrixSolid(problem; elements=[])
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
+                    #Threads.lock!(gloval_lock)
                     append!(I, nn2[Iidx[:]])
                     append!(J, nn2[Jidx[:]])
                     append!(V, K1[:])
+                    #Threads.unlock!(global_lock)
                 end
                 push!(nn, nnet)
             end
@@ -3591,20 +3595,19 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
 end
 
 """
-    FEM.rotateNodes(phName, CoordSys)
+    FEM.rotateNodes(problem, phName, CoordSys)
 
-x.
+Cteates the `T` transformation matrix, which rotates the nodal coordinate system
+of the nodes in `phName` physical group to the coordinate systen defined by `CoordSys`.
+The mesh belongs to `problem`.
 
-Return: `tag`
+Return: `T`
 
 Types:
 - `problem`: Problem
-- `q`: Vector{Matrix}
-- `comp`: String
-- `t`: Vector{Float64}
-- `name`: String
-- `visible`: Boolean
-- `tag`: Integer
+- `phName`: String
+- `CoordSys`: CoordinateSystem
+- `T`: SparseMatrix
 """
 function rotateNodes(problem, phName, CoordSys)
     dim = problem.dim
@@ -3613,18 +3616,29 @@ function rotateNodes(problem, phName, CoordSys)
     phg = getTagForPhysicalName(phName)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
     nonz = length(nodeTags) * dim * dim + (non - length(nodeTags)) * dim
-    T = spzeros(dof, dof)
-    sizehint!(T, nonz)
-    for i in 1:dof
-        T[i, i] = 1.0
-    end
+    lengthOfIJV = length(nodeTags) * dim * dim + non * dim
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
     vec2 = [0.0, 0.0, 0.0]
+    fn(x,y) = y
+    IJ = 1:dof
+    VV = ones(dof)
+    append!(I, IJ)
+    append!(J, IJ)
+    append!(V, VV)
     
     if dim == 3
+        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
+        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
         e1 = CoordSys.vec1
         e1 ./= √(dot(e1, e1))
-        I = [1 0 0; 0 1 0; 0 0 1]
-        e2 = (I - e1 * e1') * CoordSys.vec2
+        I3 = [1 0 0; 0 1 0; 0 0 1]
+        e2 = (I3 - e1 * e1') * CoordSys.vec2
         e2 ./= √(dot(e2, e2))
         e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
         T1 = [e1 e2 e3]
@@ -3641,18 +3655,28 @@ function rotateNodes(problem, phName, CoordSys)
                 vec2[2] = CoordSys.i2[2] == 1 ? CoordSys.vec2f[2](x, y, z) : CoordSys.vec2[2]
                 vec2[3] = CoordSys.i2[3] == 1 ? CoordSys.vec2f[3](x, y, z) : CoordSys.vec2[3]
                 e1 ./= √(dot(e1, e1))
-                e2 = (I - e1 * e1') * vec2
+                e2 = (I3 - e1 * e1') * vec2
                 e2 ./= √(dot(e2, e2))
                 e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
                 T1 = [e1 e2 e3]
-                T[nodeTags[i] * 3 - 2: nodeTags[i] * 3, nodeTags[i] * 3 - 2: nodeTags[i] * 3] = T1
+                Iidx = (nodeTags[i] * 3 - 3) .+ I0
+                Jidx = (nodeTags[i] * 3 - 3) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
             end
         else
             for i in 1:length(nodeTags)
-                T[nodeTags[i] * 3 - 2: nodeTags[i] * 3, nodeTags[i] * 3 - 2: nodeTags[i] * 3] = T1
+                Iidx = (nodeTags[i] * 3 - 3) .+ I0
+                Jidx = (nodeTags[i] * 3 - 3) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
             end
         end
     elseif dim == 2
+        I0 = [1, 2, 1, 2]
+        J0 = [1, 1, 2, 2]
         e1 = CoordSys.vec1[1:2]
         e1 ./= √(dot(e1, e1))
         e2 = [-e1[2], e1[1]]
@@ -3667,16 +3691,25 @@ function rotateNodes(problem, phName, CoordSys)
                 e1 ./= √(dot(e1, e1))
                 e2 = [-e1[2], e1[1]]
                 T1 = [e1 e2]
-                T[nodeTags[i] * 2 - 1: nodeTags[i] * 2, nodeTags[i] * 2 - 1: nodeTags[i] * 2] = T1
+                Iidx = (nodeTags[i] * 2 - 2) .+ I0
+                Jidx = (nodeTags[i] * 2 - 2) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
             end
         else
             for i in 1:length(nodeTags)
-                T[nodeTags[i] * 2 - 1: nodeTags[i] * 2, nodeTags[i] * 2 - 1: nodeTags[i] * 2] = T1
+                Iidx = (nodeTags[i] * 2 - 2) .+ I0
+                Jidx = (nodeTags[i] * 2 - 2) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
             end
         end
     else
         error("rotateNodes: dimension of the problem is 2 o 3, now it is $dim.")
     end
+    T = sparse(I, J, V, dof, dof, fn)
     dropzeros!(T)
     return T
 end
