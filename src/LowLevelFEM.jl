@@ -2,6 +2,7 @@ module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
 using Arpack
+#using Base.Threads
 import gmsh_jll
 include(gmsh_jll.gmsh_api)
 import .gmsh
@@ -186,6 +187,51 @@ struct TensorField
     numElem::Vector{Int}
     nsteps::Int
     type::String
+end
+"""
+    CoordinateSystem(vec1, vec2)
+
+A structure containing the data of a coordinate system.
+- `vec1`: direction of the new x axis.
+- `vec2`: together with `vec1` determine the xy plane
+If the problem is two dimensional, it is enough to give the first two
+elements of `vec1`. Elements of `vec1` and `vec2` can be functions. In
+3D case the functions have three arguments (x, y, and z coordinates),
+otherwise (in 2D case) the number of arguments is two (x and y coordinates).
+
+Types:
+- `vec1`: Vector{Float64}
+- `vec2`: Vector{Float64}
+"""
+struct CoordinateSystem
+    vec1::Vector{Float64}
+    vec2::Vector{Float64}
+    vec1f::Vector{Function}
+    vec2f::Vector{Function}
+    i1::Vector{Int64}
+    i2::Vector{Int64}
+    function CoordinateSystem(vect1, vect2)
+        f(x) = 0
+        i1x = isa(vect1[1], Function) ? 1 : 0
+        i1y = isa(vect1[2], Function) ? 1 : 0
+        i1z = isa(vect1[3], Function) ? 1 : 0
+        i2x = isa(vect2[1], Function) ? 1 : 0
+        i2y = isa(vect2[2], Function) ? 1 : 0
+        i2z = isa(vect2[3], Function) ? 1 : 0
+        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
+        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
+        v1z = isa(vect1[3], Function) ? 1 : vect1[3]
+        v2x = isa(vect2[1], Function) ? 1 : vect2[1]
+        v2y = isa(vect2[2], Function) ? 1 : vect2[2]
+        v2z = isa(vect2[3], Function) ? 1 : vect2[3]
+        v1fx = isa(vect1[1], Function) ? vect1[1] : f
+        v1fy = isa(vect1[2], Function) ? vect1[2] : f
+        v1fz = isa(vect1[3], Function) ? vect1[3] : f
+        v2fx = isa(vect2[1], Function) ? vect2[1] : f
+        v2fy = isa(vect2[2], Function) ? vect2[2] : f
+        v2fz = isa(vect2[3], Function) ? vect2[3] : f
+        return new([v1x, v1y, v1z], [v2x, v2y, v2z], [v1fx, v1fy, v1fz], [v2fx, v2fy, v2fz], [i1x, i1y, i1z], [i2x, i2y, i2z])
+    end
 end
 
 """
@@ -487,6 +533,8 @@ function stiffnessMatrixSolid(problem; elements=[])
                 B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
                 K1 = zeros(pdim * numNodes, pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
+                #appendlock = ReentrantLock()
+                #Threads.@threads for j in 1:length(elemTags[i])
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
                     for k in 1:numNodes
@@ -524,9 +572,11 @@ function stiffnessMatrixSolid(problem; elements=[])
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
+                    #Threads.lock(appendlock)
                     append!(I, nn2[Iidx[:]])
                     append!(J, nn2[Jidx[:]])
                     append!(V, K1[:])
+                    #Threads.unlock(appendlock)
                 end
                 push!(nn, nnet)
             end
@@ -3543,6 +3593,125 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
     return x, y
 end
 
+"""
+    FEM.rotateNodes(problem, phName, CoordSys)
+
+Cteates the `T` transformation matrix, which rotates the nodal coordinate system
+of the nodes in `phName` physical group to the coordinate systen defined by `CoordSys`.
+The mesh belongs to `problem`.
+
+Return: `T`
+
+Types:
+- `problem`: Problem
+- `phName`: String
+- `CoordSys`: CoordinateSystem
+- `T`: SparseMatrix
+"""
+function rotateNodes(problem, phName, CoordSys)
+    dim = problem.dim
+    non = problem.non
+    dof = non * dim
+    phg = getTagForPhysicalName(phName)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+    nonz = length(nodeTags) * dim * dim + (non - length(nodeTags)) * dim
+    lengthOfIJV = length(nodeTags) * dim * dim + non * dim
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    vec2 = [0.0, 0.0, 0.0]
+    fn(x,y) = y
+    IJ = 1:dof
+    VV = ones(dof)
+    append!(I, IJ)
+    append!(J, IJ)
+    append!(V, VV)
+    
+    if dim == 3
+        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
+        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
+        e1 = CoordSys.vec1
+        e1 ./= √(dot(e1, e1))
+        I3 = [1 0 0; 0 1 0; 0 0 1]
+        e2 = (I3 - e1 * e1') * CoordSys.vec2
+        e2 ./= √(dot(e2, e2))
+        e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
+        T1 = [e1 e2 e3]
+
+        if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1 || CoordSys.i1[3] == 1 || CoordSys.i2[1] == 1 || CoordSys.i2[2] == 1 || CoordSys.i2[3] == 1
+            for i in 1:length(nodeTags)
+                x = coord[i * 3 - 2]
+                y = coord[i * 3 - 1]
+                z = coord[i * 3]
+                e1[1] = CoordSys.i1[1] == 1 ? CoordSys.vec1f[1](x, y, z) : CoordSys.vec1[1]
+                e1[2] = CoordSys.i1[2] == 1 ? CoordSys.vec1f[2](x, y, z) : CoordSys.vec1[2]
+                e1[3] = CoordSys.i1[3] == 1 ? CoordSys.vec1f[3](x, y, z) : CoordSys.vec1[3]
+                vec2[1] = CoordSys.i2[1] == 1 ? CoordSys.vec2f[1](x, y, z) : CoordSys.vec2[1]
+                vec2[2] = CoordSys.i2[2] == 1 ? CoordSys.vec2f[2](x, y, z) : CoordSys.vec2[2]
+                vec2[3] = CoordSys.i2[3] == 1 ? CoordSys.vec2f[3](x, y, z) : CoordSys.vec2[3]
+                e1 ./= √(dot(e1, e1))
+                e2 = (I3 - e1 * e1') * vec2
+                e2 ./= √(dot(e2, e2))
+                e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
+                T1 = [e1 e2 e3]
+                Iidx = (nodeTags[i] * 3 - 3) .+ I0
+                Jidx = (nodeTags[i] * 3 - 3) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
+            end
+        else
+            for i in 1:length(nodeTags)
+                Iidx = (nodeTags[i] * 3 - 3) .+ I0
+                Jidx = (nodeTags[i] * 3 - 3) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
+            end
+        end
+    elseif dim == 2
+        I0 = [1, 2, 1, 2]
+        J0 = [1, 1, 2, 2]
+        e1 = CoordSys.vec1[1:2]
+        e1 ./= √(dot(e1, e1))
+        e2 = [-e1[2], e1[1]]
+        T1 = [e1 e2]
+
+        if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1
+            for i in 1:length(nodeTags)
+                x = coord[i * 3 - 2]
+                y = coord[i * 3 - 1]
+                e1[1] = CoordSys.i1[1] == 1 ? CoordSys.vec1f[1](x, y) : CoordSys.vec1[1]
+                e1[2] = CoordSys.i1[2] == 1 ? CoordSys.vec1f[2](x, y) : CoordSys.vec1[2]
+                e1 ./= √(dot(e1, e1))
+                e2 = [-e1[2], e1[1]]
+                T1 = [e1 e2]
+                Iidx = (nodeTags[i] * 2 - 2) .+ I0
+                Jidx = (nodeTags[i] * 2 - 2) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
+            end
+        else
+            for i in 1:length(nodeTags)
+                Iidx = (nodeTags[i] * 2 - 2) .+ I0
+                Jidx = (nodeTags[i] * 2 - 2) .+ J0
+                append!(I, Iidx)
+                append!(J, Jidx)
+                append!(V, T1[:])
+            end
+        end
+    else
+        error("rotateNodes: dimension of the problem is 2 o 3, now it is $dim.")
+    end
+    T = sparse(I, J, V, dof, dof, fn)
+    dropzeros!(T)
+    return T
+end
 
 """
     FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)

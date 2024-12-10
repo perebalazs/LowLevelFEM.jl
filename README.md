@@ -36,11 +36,14 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - Giving displacement constraints as functions
 - Different materials on each physical group
 - Solves stress, stain and heat flux field as element result (possibly jumps at the element boundaries) or as nodal results.
-- Resultant of "load vector" type quantities on arbitrary physical group (in GMSH).
+- Resultant of "load vector" type quantities on arbitrary physical group (in [GMSH](https://gmsh.info)).
 - Applying initial conditions (displacement and velocity) on arbitrary points, edges, surfaces, volumes and on combinations of them.
 - Solution of static and dynamic (transient with central difference method, Newmark and HHT-α) problems,
 - Displaying the results (scalar or vector displacements, scalar or tensor stresses and strains) with [GMSH](https://gmsh.info).
-  - When dynamic problems are solved animations are also possible (click on $\triangleright$).
+	
+	- When dynamic problems are solved animations are also possible (click on $\triangleright$).
+- Rotation of nodal coordinate systems using transformation matrix. Transformation matrix can be given with constant direction vectors or with functions. (With this arbitrary coordinate systems can be defined.)
+ 
 - Plotting arbitrary results on paths.
 - Solves the damping matrix of structures in case of proportional damping
 
@@ -70,14 +73,11 @@ The above described steps can be easily performed using the LowLevelFEM package.
   - [ ] in 3D,
   - [ ] with penalty method
   - [ ] with Lagrange multiplier method.
-- [ ] Defining and using coordinate systems,
-
-  - [ ] cartesian at arbitrary position and arbitrary orientation,
-  - [ ] cylindrical.
 - [ ] Defining displacement initial condition as a function of x, y and z.
 - [ ] Defining velocity initial condition as a function of x, y and z.
 - [ ] Transient problems in heat conduction.
-- [ ] Finite deformations.
+- [ ] Finite rotations.
+- [ ] Plastic deformation (within small strain theory).
 - [ ] Linear buckling.
 
 Any suggestions are welcome.
@@ -118,9 +118,9 @@ sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=t
 sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
 sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
 
-FEM.plotOnPath(problem, "path", sx, 100, name="σx", visible=false);
-FEM.plotOnPath(problem, "path", sxy, 100, name="τxy", visible=false);
-FEM.plotOnPath(problem, "path", ux, 100, name="ux", visible=false);
+FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
+FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
+FEM.plotOnPath(problem, "path", ux, name="ux", visible=false);
 
 gmsh.fltk.run()
 gmsh.finalize()
@@ -193,9 +193,9 @@ sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smoot
 syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
 szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
 
-FEM.plotOnPath(problem, "path", sx, 100, name="σx", visible=false);
-FEM.plotOnPath(problem, "path", sxy, 100, name="τxy", visible=false);
-FEM.plotOnPath(problem, "path", ux, 100, name="ux", visible=false);
+FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
+FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
+FEM.plotOnPath(problem, "path", ux, name="ux", visible=false);
 
 gmsh.fltk.run()
 gmsh.finalize()
