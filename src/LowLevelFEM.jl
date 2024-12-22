@@ -152,7 +152,7 @@ A structure containing the data of a heat flux field.
 - sigma: vector of ElementNodeData type heat flux data (see gmsh.jl)
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in sigma (for animations).
-- type: type of data (eg. stress "s", strain "s", heat flux "q")
+- type: type of data (eg. heat flux "q")
 
 Types:
 - `sigma`: Vector{Matrix{Float64}}
@@ -174,7 +174,7 @@ A structure containing the data of a stress or strain field.
 - sigma: vector of ElementNodeData type stress data (see gmsh.jl)
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in sigma (for animations).
-- type: type of data (eg. stress "s", strain "s", heat flux "q")
+- type: type of data (eg. stress "s" and strain "e")
 
 Types:
 - `sigma`: Vector{Matrix{Float64}}
@@ -402,14 +402,15 @@ end
 
 Gives the heat convection of the surface given with `name` physical group.
 `h` is the heat transfer coefficient of the surrounding media,
-`Tₐ` is the ambient temperature.
+`Tₐ` is the ambient temperature. The ambient temperature can be either
+a constant or a function of x, y and z.
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
 - `h`: Float64
-- `Tₐ`: Float64
+- `Tₐ`: Float64 or Function
 """
 function heatConvection(name; h=10., Tₐ=20.)
     p = 2im
@@ -1245,8 +1246,7 @@ end
     FEM.elasticSupportMatrix(problem, elSupp)
 
 Solves the elastic support matrix of the `problem`. `elSupp` is a vector of elastic
-supports defined in function `FEM.elasticSupport`. This matrix must be added
-to the stiffness matrix.
+supports defined in function `FEM.elasticSupport`.
 
 Return: `elSuppMat`
 
@@ -1404,8 +1404,7 @@ end
 
 Solves the heat convection matrix of the `problem`. `heatConvection` 
 is a vector of heat convection boundary condicions defined in function
-`FEM.heatConduction`. This matrix must be substracted from the heat
-conduction matrix.
+`FEM.heatConduction`.
 
 Return: `heatConvMat`
 
@@ -2183,9 +2182,10 @@ end
     FEM.applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
 
 Applies heat convectiom boundary conditions `heatConv` on a heat conduction matrix
-`heatCondMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `heatCond`
+`heatCondMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `heatConv`
 is a tuple of `name` of physical group and prescribed heat transfer coefficient `h`
-and ambient temperature `Tₐ`.
+and ambient temperature `Tₐ`. The ambient temperature can be either a constant or a 
+function of x, y and z coordinates.
 
 Return: none
 
