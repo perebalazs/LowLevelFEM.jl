@@ -3343,7 +3343,7 @@ Solves a transient dynamic problem using HHT-α method[^1] (implicit).
 upper bound ot the time intervall (lower bound is zero) and `Δt` is the time 
 step size. Returns the displacement vectors and velocity vectors in each time 
 step arranged in the columns of the two matrices `u` and `v` and a vector `t` 
-of the time instants used. For the meaning of `α`, `β` and `γ` see [1]. If
+of the time instants used. For the meaning of `α`, `β` and `γ` see [^1]. If
 `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
 
 [^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
@@ -3606,7 +3606,7 @@ end
 """
     FEM.rotateNodes(problem, phName, CoordSys)
 
-Cteates the `T` transformation matrix, which rotates the nodal coordinate system
+Creates the `T` transformation matrix, which rotates the nodal coordinate system
 of the nodes in `phName` physical group to the coordinate systen defined by `CoordSys`.
 The mesh belongs to `problem`.
 
@@ -3754,7 +3754,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     pdim = div(size(q,1), problem.non) 
     nodeTags = []
     ##############################################################################
-    if problem.type == "Reynolds"
+    if problem.type == "Reynolds" || problem.type == "Reynolds1D" || problem.type == "NavierStokes"
         phName = problem.geometry.phName
         tag = getTagForPhysicalName(phName)
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
