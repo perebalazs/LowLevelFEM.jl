@@ -79,6 +79,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] Finite rotations.
 - [ ] Plastic deformation (within small strain theory).
 - [ ] Linear buckling.
+- [ ] Solver for arbitrary weak forms.
 
 Any suggestions are welcome.
 

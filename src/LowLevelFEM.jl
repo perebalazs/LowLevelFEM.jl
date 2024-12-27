@@ -1246,7 +1246,9 @@ end
     FEM.elasticSupportMatrix(problem, elSupp)
 
 Solves the elastic support matrix of the `problem`. `elSupp` is a vector of elastic
-supports defined in function `FEM.elasticSupport`.
+supports defined in function `FEM.elasticSupport`. With the displacementent vector `q` in hand the
+reaction force vector `fR` arising from the elastic support can be solved.
+(`fR = heatConvMat * q`)
 
 Return: `elSuppMat`
 
@@ -1404,7 +1406,9 @@ end
 
 Solves the heat convection matrix of the `problem`. `heatConvection` 
 is a vector of heat convection boundary condicions defined in function
-`FEM.heatConduction`.
+`FEM.heatConduction`. With the heat convection vector (see the `heatConvectionVector` function)
+`heatConvVec`, temperature field vector `T` in hand the heat flux vector `qCV` arising from the
+heat convection boundary condition can be solved. `qCV = heatConvMat * T - heatConvVec`
 
 Return: `heatConvMat`
 
@@ -1426,13 +1430,13 @@ end
 Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
 `name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
 It can solve traction or body force depending on the problem.
-In case of 2D problems and Point physical group means concentrated force.
-In case of 2D problems and Line physical group means surface force.
-In case of 2D problems and Surface physical group means body force.
-In case of 3D problems and Point physical group means concentrated force.
-In case of 3D problems and Line physical group means edge force.
-In case of 3D problems and Surface physical group means surface force.
-In case of 3D problems and Volume physical group means body force.
+- In case of 2D problems and Point physical group means concentrated force.
+- In case of 2D problems and Line physical group means surface force.
+- In case of 2D problems and Surface physical group means body force.
+- In case of 3D problems and Point physical group means concentrated force.
+- In case of 3D problems and Line physical group means edge force.
+- In case of 3D problems and Surface physical group means surface force.
+- In case of 3D problems and Volume physical group means body force.
 
 Return: `loadVec`
 
@@ -1569,14 +1573,14 @@ end
 
 Solves a heat flux or heat source vector of `problem`. `heatFlux` is a tuple of name of physical group 
 `name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
-It can solve heat flux depending on the problem.
-In case of 2D problems and Point physical group means concentrated heat flux.
-In case of 2D problems and Line physical group means surface heat flux.
-In case of 2D problems and Surface physical group means body heat source.
-In case of 3D problems and Point physical group means concentrated heat flux.
-In case of 3D problems and Line physical group means edge heat source.
-In case of 3D problems and Surface physical group means surface heat flux.
-In case of 3D problems and Volume physical group means body heat source.
+It can solve heat flux (or heat source) depending on the problem.
+- In case of 2D problems and Point physical group means concentrated heat flux.
+- In case of 2D problems and Line physical group means surface heat flux.
+- In case of 2D problems and Surface physical group means body heat source.
+- In case of 3D problems and Point physical group means concentrated heat flux.
+- In case of 3D problems and Line physical group means edge heat source.
+- In case of 3D problems and Surface physical group means surface heat flux.
+- In case of 3D problems and Volume physical group means body heat source.
 
 Return: `heatFluxVec`
 
@@ -1597,14 +1601,14 @@ end
 
 Solves a heat flux or heat source vector of `problem`. `heatSource` is a tuple of name of physical group 
 `name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
-It can solve heat flux depending on the problem.
-In case of 2D problems and Point physical group means concentrated heat flux.
-In case of 2D problems and Line physical group means surface heat flux.
-In case of 2D problems and Surface physical group means body heat source.
-In case of 3D problems and Point physical group means concentrated heat flux.
-In case of 3D problems and Line physical group means edge heat source.
-In case of 3D problems and Surface physical group means surface heat flux.
-In case of 3D problems and Volume physical group means body heat source.
+It can solve heat flux (or heat source) depending on the problem.
+- In case of 2D problems and Point physical group means concentrated heat flux.
+- In case of 2D problems and Line physical group means surface heat flux.
+- In case of 2D problems and Surface physical group means body heat source.
+- In case of 3D problems and Point physical group means concentrated heat flux.
+- In case of 3D problems and Line physical group means edge heat source.
+- In case of 3D problems and Surface physical group means surface heat flux.
+- In case of 3D problems and Volume physical group means body heat source.
 Same as the `heatFluxVector` function.
 
 Return: `heatSourceVec`
@@ -1624,8 +1628,11 @@ end
 """
     FEM.heatConvectionVector(problem, heatConvection)
 
-Solves a heat convection vector of `problem`. `heatConvection` is a tuple of name of physical group 
-`name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
+Solves a heat convection vector of `problem`. `heatConvection` 
+is a vector of heat convection boundary condicions defined in function
+`FEM.heatConduction`. With the heat convection matrix (see the `heatConvectionMatrix` function)
+`heatConvMat`, temperature field vector `T` in hand the heat flux vector `qCV` arising from the
+heat convection boundary condition can be solved. `qCV = heatConvMat * T - heatConvVec`
 
 Return: `heatConvVec`
 
@@ -1644,7 +1651,7 @@ end
 """
     FEM.thermalLoadVector(problem, T; T₀=...)
 
-Solves the thermal load vector from a temperature field `To` for problem `problem`.
+Solves the thermal load vector from a temperature field `T` for problem `problem`.
 `T₀` is the initial temperature field.
 
 Return: `thermLoadVec`
@@ -2244,9 +2251,10 @@ end
     FEM.solveStrain(problem, q; DoFResults=false)
 
 Solves the strain field `E` from displacement vector `q`. Strain field is given
-per elements, so it usually contains jumps at the boundary of elements. Details
+per elements, so it usually contains jumps at the boundaries of elements. Details
 of mesh is available in `problem`. If `DoFResults` is true, `E` is a matrix with
-nodal results. In this case `showDoFResults` can be used to show the results.
+nodal results. In this case `showDoFResults` can be used to show the results 
+(otherwise `showStainResults` or `showElementResults`).
 
 Return: `E`
 
@@ -2452,7 +2460,8 @@ end
 Solves the stress field `S` from displacement vector `q`. Stress field is given
 per elements, so it usually contains jumps at the boundary of elements. Details
 of mesh is available in `problem`. If `DoFResults` is true, `S` is a matrix with
-nodal results. In this case `showDoFResults` can be used to show the results.
+nodal results. In this case `showDoFResults` can be used to show the results 
+(otherwise `showStressResults` or `showElementResults`).
 
 Return: `S`
 
@@ -2710,7 +2719,8 @@ end
 Solves the heat flux field `q` from temperature vector `T`. heat flux is given
 per elements, so it usually contains jumps at the boundary of elements. Details
 of mesh is available in `problem`. If `DoFResults` is true, `q` is a matrix with
-nodal results. In this case `showDoFResults` can be used to show the results.
+nodal results. In this case `showDoFResults` can be used to show the results
+(otherwise `showHeatFluxResults` or `showElementResults`).
 
 Return: `q`
 
@@ -2886,7 +2896,7 @@ end
 Solves the eigen frequencies and mode shapes of a problem given by stiffness
 matrix `K` and the mass matrix `M`. `n` is the number of eigenfrequencies to solve,
 and solves the eigenfrequencies greater than `fₘᵢₙ`. Returns the struct of eigenfrequencies
-and eigen modes.
+and eigen modes. Results can be presented by `showModalResults` function.
 
 Return: `modes`
 
