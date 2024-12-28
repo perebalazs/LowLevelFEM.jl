@@ -3539,7 +3539,6 @@ Types:
 - `T`: Matrix{Float64}
 - `t`: Vector{Float64}
 """
-
 function TMTHC(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
     T = zeros(dof, nsteps)
     t = zeros(nsteps)
