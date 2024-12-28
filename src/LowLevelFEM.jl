@@ -3278,10 +3278,14 @@ end
 Solves a transient dynamic problem using central difference method (CDM) (explicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `C` is the damping matrix,
 `f` is the load vector, `u0` is the initial displacement, `v0` is the initial
-velocity, `T` is the upper bound ot the time intervall (lower bound is zero)
+velocity, `T` is the upper bound of the time intervall (lower bound is zero)
 and `Δt` is the time step size. Returns the displacement vectors and velocity
 vectors in each time step arranged in the columns of the two matrices `u` and `v`
 and a vector `t` of the time instants used.
+
+The critical (largest allowed) time step: `Δtₘₐₓ = Tₘᵢₙ / π * (√(1 + ξₘₐₓ^2) - ξₘₐₓ)`
+where `Tₘᵢₙ` is the time period of the largest eigenfrequency and `ξₘₐₓ` is the largest
+modal damping.
 
 Return: `u`, `v`, `t`
 
@@ -3340,7 +3344,7 @@ end
 Solves a transient dynamic problem using HHT-α method[^1] (implicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
 `u0` is the initial displacement, `v0` is the initial velocity, `T` is the 
-upper bound ot the time intervall (lower bound is zero) and `Δt` is the time 
+upper bound of the time intervall (lower bound is zero) and `Δt` is the time 
 step size. Returns the displacement vectors and velocity vectors in each time 
 step arranged in the columns of the two matrices `u` and `v` and a vector `t` 
 of the time instants used. For the meaning of `α`, `β` and `γ` see [^1]. If
@@ -3502,6 +3506,73 @@ function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
         end
     end
     return x, y
+end
+
+"""
+    FEM.TMTHC(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)
+
+Solves a transient heat conductio problem using the ϑ-method[^5] (Theta Method for 
+Transient Heat Conduction problems - TMTHC) (explicit).
+`K` is the heat conduction matrix, `C` is the heat capacity matrix,
+`q` is the heat flux vector, `T0` is the initial temperature, `tₘₐₓ` is the upper 
+bound of the time intervall (lower bound is zero)
+and `Δt` is the time step size. Returns the nodal temperature vectors in each time 
+step arranged in the columns of the matrix `T`
+and a vector `t` of the time instants used.
+
+The critical (largest allowed) time step: `Δtₘₐₓ = 2 / ((1-2ϑ)*λₘₐₓ)`
+where `λₘₐₓ` is the largest eigenvalue of (**K**+λ**C**)**θ**=**0** 
+eigenvalue problem and ϑ is the parameter of the ϑ-method. Default value of ϑ
+is 1/2.
+
+[^5]: Bathe, K. J.: Finite element procedures, Wiley, 1983, <https://doi.org/10.1002/nag.1610070412>
+
+Return: `T`, `t`
+
+Types:
+- `K`: SparseMatrix
+- `C`: SparseMatrix
+- `q`: Vector{Float64}
+- `T0`: Vector{Float64}
+- `tₘₐₓ`: Float64
+- `Δt`: Float64 
+- `T`: Matrix{Float64}
+- `t`: Vector{Float64}
+"""
+
+function TMTHC(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
+    T = zeros(dof, nsteps)
+    t = zeros(nsteps)
+    T[:, 1] = T0
+    t[1] = 0
+    nsteps = ceil(Int64, tₘₐₓ / Δt)
+    if ϑ == 0
+        nnz = nonzeros(C)
+        dof, dof = size(C)
+        if nnz != dof
+            error("TMTHC: use lumped heat capacity matrix!")
+        end
+        invC = spdiagm(1 ./ diag(C))
+        for i in 2:nsteps
+            T1 = T0 - (1 - ϑ) * Δt * invC * K * T0 + Δt * q
+            T[:, i] = T1
+            t[i] = t[i-1] + Δt
+            T0 = T1
+        end
+    else
+        A = C + ϑ * Δt * K
+        b = C - (1 - ϑ) * Δt * K
+        AA = lu(A)
+        for i in 2:nsteps
+            bb = b * T0 + Δt * q
+            T1 = AA \ bb
+            T[:, i] = T1
+            t[i] = t[i-1] + Δt
+            T0 = T1
+        end
+    end
+
+    return T, t
 end
 
 """
