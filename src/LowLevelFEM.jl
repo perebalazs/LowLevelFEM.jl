@@ -1093,16 +1093,13 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
         pdim = problem.pdim
         c = problem.material[ipg].c
         ρ = problem.material[ipg].ρ
-        if problem.dim == 3 && problem.type == "Solid"
+        if problem.dim == 3 && problem.type == "HeatConduction"
             rowsOfH = 3
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneStress"
-            rowsOfH = 2
-            b = problem.thickness
-        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+        elseif problem.dim == 2 && problem.type == "PlaneHeatConduction"
             rowsOfH = 2
             b = 1
-        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+        elseif problem.dim == 2 && problem.type == "AxiSymmetricHeatConduction"
             rowsOfH = 2
             b = 1
         else
@@ -1141,7 +1138,7 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
                     end
                 end
                 M1 = zeros(pdim * numNodes, pdim * numNodes)
-                if problem.type != "AxiSymmetric"
+                if problem.type != "AxiSymmetricHeatConduction"
                     for j in 1:length(elemTags[i])
                         elem = elemTags[i][j]
                         for k in 1:numNodes
@@ -1161,7 +1158,7 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
                         append!(J, nn2[Jidx[:]])
                         append!(V, M1[:])
                     end
-                elseif problem.type == "AxiSymmetric"
+                elseif problem.type == "AxiSymmetricHeatConduction"
                     for j in 1:length(elemTags[i])
                         elem = elemTags[i][j]
                         for k in 1:numNodes
@@ -1970,6 +1967,32 @@ function applyBoundaryConditions(problem, stiffMat0, loadVec0, supports)
     massMat = []
     dampMat = []
     return stiffMat, loadVec
+end
+
+"""
+    FEM.applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec, supports)
+
+Applies boundary conditions `supports` on a heat conduction matrix
+`heatCondMat`, heat capacity matrix `heatCapMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `supports`
+is a tuple of `name` of physical group and prescribed temperature `T`.
+
+Return: `stiffMat`, `loadVec`
+
+Types:
+- `problem`: Problem
+- `stiffMat`: SparseMatrix 
+- `loadVec`: Vector 
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+"""
+function applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec, supports)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
+    end
+    dof, dof = size(heatCondMat)
+    dampMat = spzeros(dof, dof)
+    applyBoundaryConditions!(problem, heatCondMat, heatCapMat, dampMat, heatFluxVec, supports)
+    dampMat = []
+    return
 end
 
 """
@@ -3226,7 +3249,7 @@ end
     FEM.largestPeriodTime(K, M)
 
 Solves the largest period of time for a dynamic problem given by stiffness
-matrix `K` and the mass matrix `M`.`
+matrix `K` and the mass matrix `M`.
 
 Return: `Δt`
 
@@ -3252,7 +3275,7 @@ end
     FEM.smallestPeriodTime(K, M)
 
 Solves the smallest period of time for a dynamic problem given by stiffness
-matrix `K` and the mass matrix `M`.`
+matrix `K` and the mass matrix `M`.
 
 Return: `Δt`
 
@@ -3273,6 +3296,56 @@ function smallestPeriodTime(K, M)
 end
 
 """
+    FEM.smallestEigenValue(K, M)
+
+Solves the largest eigenvalue for a transient problem given by stiffness (heat conduction)
+matrix `K` and the mass (heat capacity) matrix `M` (`C`).
+
+Return: `λₘₐₓ`
+
+Types:
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `λₘₐₓ`: Float64 
+"""
+function smallestEigenValue(K, C)
+    λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LR, sigma=0.01, maxiter=10000)
+    if real(λ[1]) > 0.999 && real(λ[1]) < 1.001
+        λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+    end
+    err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
+    if err > 1e-3 # || true
+        error("The error in the calculation of the largest eigenvalue is too large: $err")
+    end
+    λₘₐₓ = real(abs(λ[1]))
+    return λₘₐₓ
+end
+
+"""
+    FEM.largestEigenValue(K, M)
+
+Solves the smallest eigenvalue for a transient problem given by stiffness (heat conduction)
+matrix `K` and the mass (heat capacity) matrix `M` (`C`).
+
+Return: `λₘᵢₙ`
+
+Types:
+- `K`: SparseMatrix
+- `M`: SparseMatrix
+- `λₘᵢₙ`: Float64 
+"""
+function largestEigenValue(K, C)
+    λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LM)
+
+    err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
+    if err > 1e-3 # || true
+        error("The error in the calculation of the smallest eigenvalue is too large: $err")
+    end
+    λₘᵢₙ = real(abs(λ[1]))
+    return λₘᵢₙ
+end
+
+"""
     FEM.CDM(K, M, C, f, u0, v0, T, Δt)
 
 Solves a transient dynamic problem using central difference method (CDM) (explicit).
@@ -3283,7 +3356,7 @@ and `Δt` is the time step size. Returns the displacement vectors and velocity
 vectors in each time step arranged in the columns of the two matrices `u` and `v`
 and a vector `t` of the time instants used.
 
-The critical (largest allowed) time step: `Δtₘₐₓ = Tₘᵢₙ / π * (√(1 + ξₘₐₓ^2) - ξₘₐₓ)`
+The critical (largest allowed) time step is `Δtₘₐₓ = Tₘᵢₙ / π * (√(1 + ξₘₐₓ^2) - ξₘₐₓ)`
 where `Tₘᵢₙ` is the time period of the largest eigenfrequency and `ξₘₐₓ` is the largest
 modal damping.
 
@@ -3425,94 +3498,12 @@ function HHT(K, M, f, u0, v0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.
 end
 
 """
-    FEM.HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    FEM.FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)
 
-Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1]. 
-`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
-**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
-following values:
-- "SR": spectral radius
-- "ADR": algorithmic damping ratio
-- "PE": period error
-For details see [^2] and [^3]. 
-`n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
-see [1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
-Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
-
-[^2]: Belytschko, Ted, and Thomas JR, Hughes: "Computational methods for 
-    transient analysis", North-Holland, (1983).
-
-[^3]: Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
-    damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
-    <https://doi.org/10.1007/s00419-023-02454-9>
-
-Return: `xy`
-
-Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
-- `ωₘᵢₙ`: Float64
-- `ωₘₐₓ`: Float64
-- `Δt`: Float64 
-- `n`: Int64
-- `α`: Float64
-- `β`: Float64
-- `γ`: Float64
-- `δ`: Float64
-- `xy`: Tuple{Vector{Float64},Vector{Float64}}
-"""
-function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
-    x = zeros(n)
-    y = similar(x)
-    invT = range(ωₘᵢₙ/2π, length=n, stop=ωₘₐₓ/2π)
-    for i ∈ 1:n
-        ω = 2π * invT[i]
-        A1 = [1 0 -Δt^2*β
-            0 1 -Δt*γ
-            (1+α)*ω^2 0 1]
-        A2 = [1 Δt Δt^2*(0.5-β)
-            0 1 Δt*(1-γ)
-            α*ω^2 0 0]
-
-        A = A1 \ A2
-
-        eig = eigen(A)
-        ρ, idx = findmax(abs, eig.values)
-        λ = eig.values[idx]
-        σ = real(λ)
-        ε = imag(λ)
-        if type == "SR"
-            x[i] = log(invT[i] * Δt)
-            y[i] = ρ
-        elseif type == "ADR"
-            x[i] = invT[i] * Δt
-            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
-            y[i] = -log(ρ) / 2Ω
-            #y[i] = -log(ρ) / atan(ε, σ)
-        elseif type == "PE"
-            x[i] = invT[i] * Δt
-            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
-            y[i] = 1 - Ω/(2π*Δt*invT[i])
-        else
-            str1 = "HHTaccuracyAnalysis: wrong analysis type: $type\n"
-            str2 = "Possibilities:\n"
-            str3 = "\nSR: spectral radius\n"
-            str5 = "ADR: algorithmic damping ratio\n"
-            str6 = "PE: period error\n"
-            str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
-            str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
-            str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
-            error(str1*str2*str3*str5*str6*str7*str8*str9)
-        end
-    end
-    return x, y
-end
-
-"""
-    FEM.TMTHC(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)
-
-Solves a transient heat conductio problem using the ϑ-method[^5] (Theta Method for 
-Transient Heat Conduction problems - TMTHC) (explicit).
+Solves a transient heat conduction problem using Finite Difference Method (FDM).
+Introducing a `ϑ` parameter, special cases can be used as the Forward Euler (ϑ=0),
+Backward Euler (ϑ=0), Crank-Nicolson (ϑ=0.5) and intermediate cases (0<ϑ<1).
+(This method is known as ϑ-method. See [^5].)
 `K` is the heat conduction matrix, `C` is the heat capacity matrix,
 `q` is the heat flux vector, `T0` is the initial temperature, `tₘₐₓ` is the upper 
 bound of the time intervall (lower bound is zero)
@@ -3520,9 +3511,9 @@ and `Δt` is the time step size. Returns the nodal temperature vectors in each t
 step arranged in the columns of the matrix `T`
 and a vector `t` of the time instants used.
 
-The critical (largest allowed) time step: `Δtₘₐₓ = 2 / ((1-2ϑ)*λₘₐₓ)`
+The critical (largest allowed) time step is `Δtₘₐₓ = 2 / ((1-2ϑ)*λₘₐₓ)`
 where `λₘₐₓ` is the largest eigenvalue of (**K**+λ**C**)**θ**=**0** 
-eigenvalue problem and ϑ is the parameter of the ϑ-method. Default value of ϑ
+eigenvalue problem and `ϑ` is the parameter of the ϑ-method. Default value of `ϑ`
 is 1/2.
 
 [^5]: Bathe, K. J.: Finite element procedures, Wiley, 1983, <https://doi.org/10.1002/nag.1610070412>
@@ -3539,18 +3530,15 @@ Types:
 - `T`: Matrix{Float64}
 - `t`: Vector{Float64}
 """
-function TMTHC(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
+function FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
+    nnz = nonzeros(C)
+    dof, dof = size(C)
+    nsteps = ceil(Int64, tₘₐₓ / Δt)
     T = zeros(dof, nsteps)
     t = zeros(nsteps)
     T[:, 1] = T0
     t[1] = 0
-    nsteps = ceil(Int64, tₘₐₓ / Δt)
-    if ϑ == 0
-        nnz = nonzeros(C)
-        dof, dof = size(C)
-        if nnz != dof
-            error("TMTHC: use lumped heat capacity matrix!")
-        end
+    if ϑ == 0 && nnz == dof
         invC = spdiagm(1 ./ diag(C))
         for i in 2:nsteps
             T1 = T0 - (1 - ϑ) * Δt * invC * K * T0 + Δt * q
@@ -3668,6 +3656,132 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
             str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
             str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
             error(str1*str2*str3*str4*str5*str6*str7*str8*str9)
+        end
+    end
+    return x, y
+end
+
+"""
+    FEM.HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+
+Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1]. 
+`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
+**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
+following values:
+- "SR": spectral radius
+- "ADR": algorithmic damping ratio
+- "PE": period error
+For details see [^2] and [^3]. 
+`n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
+see [^1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+
+[^2]: Belytschko, Ted, and Thomas JR, Hughes: "Computational methods for 
+    transient analysis", North-Holland, (1983).
+
+[^3]: Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
+    damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
+    <https://doi.org/10.1007/s00419-023-02454-9>
+
+Return: `xy`
+
+Types:
+- `ωₘᵢₙ`: Float64
+- `ωₘₐₓ`: Float64
+- `Δt`: Float64 
+- `n`: Int64
+- `α`: Float64
+- `β`: Float64
+- `γ`: Float64
+- `δ`: Float64
+- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+"""
+function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    x = zeros(n)
+    y = similar(x)
+    invT = range(ωₘᵢₙ/2π, length=n, stop=ωₘₐₓ/2π)
+    for i ∈ 1:n
+        ω = 2π * invT[i]
+        A1 = [1 0 -Δt^2*β
+            0 1 -Δt*γ
+            (1+α)*ω^2 0 1]
+        A2 = [1 Δt Δt^2*(0.5-β)
+            0 1 Δt*(1-γ)
+            α*ω^2 0 0]
+
+        A = A1 \ A2
+
+        eig = eigen(A)
+        ρ, idx = findmax(abs, eig.values)
+        λ = eig.values[idx]
+        σ = real(λ)
+        ε = imag(λ)
+        if type == "SR"
+            x[i] = log(invT[i] * Δt)
+            y[i] = ρ
+        elseif type == "ADR"
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = -log(ρ) / 2Ω
+            #y[i] = -log(ρ) / atan(ε, σ)
+        elseif type == "PE"
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = 1 - Ω/(2π*Δt*invT[i])
+        else
+            str1 = "HHTaccuracyAnalysis: wrong analysis type: $type\n"
+            str2 = "Possibilities:\n"
+            str3 = "\nSR: spectral radius\n"
+            str5 = "ADR: algorithmic damping ratio\n"
+            str6 = "PE: period error\n"
+            str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
+            str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
+            str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
+            error(str1*str2*str3*str5*str6*str7*str8*str9)
+        end
+    end
+    return x, y
+end
+
+"""
+    FEM.FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type, n=100, ϑ=...)
+
+Gives a functions (graphs) for accuracy analysis of the ϑ-method[^5]. 
+`λₘᵢₙ` and `λₘₐₓ` are the smallest and largest eigenvalues of the
+**Kθ**=λ**Cθ** eigenvalue problem, `Δt` is the time step size. `type` is the
+"SR" spectral radius.
+`n` is the number of points in the graph. For the meaning of `ϑ` see [^5].
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+
+Return: `xy`
+
+Types:
+- `λₘᵢₙ`: Float64
+- `λₘₐₓ`: Float64
+- `Δt`: Float64 
+- `n`: Int64
+- `ϑ`: Float64
+- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+"""
+function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type="SR", n=100, ϑ=0.5)
+    x = zeros(n)
+    y = similar(x)
+    Λ = range(λₘᵢₙ, length=n, stop=λₘₐₓ)
+    for i ∈ 1:n
+        A1 = 1 - (1 - ϑ) * Δt * Λ[i]
+        A2 = 1 + ϑ * Δt * Λ[i]
+
+        A = A1 \ A2
+
+        ρ = abs(A)
+        if type == "SR"
+            x[i] = Λ[i] * Δt
+            y[i] = ρ
+        else
+            str1 = "FDMaccuracyAnalysis: wrong analysis type: $type\n"
+            str2 = "Possibilities:\n"
+            str3 = "\nSR: spectral radius\n"
+            error(str1*str2*str3)
         end
     end
     return x, y
