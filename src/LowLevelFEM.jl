@@ -3145,13 +3145,13 @@ end
 =#
 
 """
-    FEM.initialDisplacement!(problem, name, u0; ux=..., uy=..., uz=...)
+    FEM.initialDisplacement(problem, name; ux=..., uy=..., uz=...)
 
-Changes the displacement values `ux`, `uy` and `uz` (depending on the dimension of
-the `problem`) at nodes belonging to physical group `name`. Original values are in
+Sets the displacement values `ux`, `uy` and `uz` (depending on the dimension of
+the `problem`) at nodes belonging to physical group `name`. Returns the initial
 displacement vector `u0`.
 
-Return: none
+Return: u0
 
 Types:
 - `problem`: Problem
@@ -3160,6 +3160,46 @@ Types:
 - `ux`: Float64 
 - `uy`: Float64 
 - `uz`: Float64 
+"""
+function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im)
+    dim = problem.dim
+    u0 = zeros(problem.non * problem.dim)
+    phg = getTagForPhysicalName(name)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+    if ux != 1im
+        for i in 1:length(nodeTags)
+            u0[nodeTags[i]*dim-(dim-1)] = ux
+        end
+    end
+    if uy != 1im
+        for i in 1:length(nodeTags)
+            u0[nodeTags[i]*dim-(dim-2)] = uy
+        end
+    end
+    if dim == 3 && uz != 1im
+        for i in 1:length(nodeTags)
+            u0[nodeTags[i]*dim] = uz
+        end
+    end
+    return u0
+end
+
+"""
+    FEM.initialDisplacement!(problem, name, u0; ux=..., uy=..., uz=...)
+
+Changes the displacement values to `ux`, `uy` and `uz` (depending on the dimension of
+the `problem`) at nodes belonging to physical group `name`. Original values are in
+displacement vector `u0`.
+
+Return: u0
+
+Types:
+- `problem`: Problem
+- `name`: String 
+- `ux`: Float64 
+- `uy`: Float64 
+- `uz`: Float64 
+- `u0`: Vector{Float64}
 """
 function initialDisplacement!(problem, name, u0; ux=1im, uy=1im, uz=1im)
     dim = problem.dim
@@ -3183,6 +3223,27 @@ function initialDisplacement!(problem, name, u0; ux=1im, uy=1im, uz=1im)
 end
 
 """
+    FEM.initialVelocity(problem, name; vx=..., vy=..., vz=...)
+
+Sets the velocity values `vx`, `vy` and `vz` (depending on the dimension of
+the `problem`) at nodes belonging to physical group `name`. Returns the initial
+velocity vector `v0`.
+
+Return: v0
+
+Types:
+- `problem`: Problem
+- `name`: String 
+- `vx`: Float64 
+- `vy`: Float64 
+- `vz`: Float64 
+- `v0`: Vector{Float64}
+"""
+function initialVelocity(problem, name; vx=1im, vy=1im, vz=1im)
+    return initialDisplacement(problem, name, ux=vx, uy=vy, uz=vz)
+end
+
+"""
     FEM.initialVelocity!(problem, name, v0; vx=..., vy=..., vz=...)
 
 Changes the velocity values `vx`, `vy` and `vz` (depending on the dimension of
@@ -3201,6 +3262,58 @@ Types:
 """
 function initialVelocity!(problem, name, v0; vx=1im, vy=1im, vz=1im)
     initialDisplacement!(problem, name, v0, ux=vx, uy=vy, uz=vz)
+end
+
+"""
+    FEM.initialTemperature(problem, name; T=...)
+
+Sets the temperature value `T` at nodes belonging to physical group `name`.
+Returns the `T0` initial nodal temperature vector.
+
+Return: T0
+
+Types:
+- `problem`: Problem
+- `name`: String 
+- `T`: Float64 
+- `T0`: Vector{Float64}
+"""
+function initialTemperature(problem, name; T=1im)
+    dim = problem.pdim
+    T0 = zeros(problem.non * problem.pdim)
+    phg = getTagForPhysicalName(name)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+    if T != 1im
+        for i in 1:length(nodeTags)
+            T0[nodeTags[i]*dim-(dim-1)] = T
+        end
+    end
+    return T0
+end
+
+"""
+    FEM.initialTemperature!(problem, name, T0; T=...)
+
+Changes the tempetature value to `T` at nodes belonging to physical group `name`.
+Original values are in temperature vector `T0`.
+
+Return: none
+
+Types:
+- `problem`: Problem
+- `name`: String 
+- `T0`: Vector{Float64}
+- `T`: Float64 
+"""
+function initialTemperature!(problem, name, T0; T=1im)
+    dim = problem.pdim
+    phg = getTagForPhysicalName(name)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+    if T != 1im
+        for i in 1:length(nodeTags)
+            T0[nodeTags[i]*dim-(dim-1)] = T
+        end
+    end
 end
 
 """
@@ -4481,7 +4594,7 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
     end
 
     if plot == true
-        step = step == 1im ? 0 : step
+        step = 0
         x = zeros(points * length(dimTags))
         y = zeros(points * length(dimTags))
         y[1] = CoordValue[4+step]
