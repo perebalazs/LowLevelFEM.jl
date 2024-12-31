@@ -3422,7 +3422,7 @@ Types:
 - `λₘₐₓ`: Float64 
 """
 function smallestEigenValue(K, C)
-    λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LR, sigma=0.01, maxiter=10000)
+    λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
     if real(λ[1]) > 0.999 && real(λ[1]) < 1.001
         λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     end
@@ -3866,6 +3866,8 @@ Gives a functions (graphs) for accuracy analysis of the ϑ-method[^5].
 `n` is the number of points in the graph. For the meaning of `ϑ` see [^5].
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
+- "SR": spectral radius as a function of λ⋅Δt
+
 Return: `xy`
 
 Types:
@@ -3876,6 +3878,7 @@ Types:
 - `ϑ`: Float64
 - `xy`: Tuple{Vector{Float64},Vector{Float64}}
 """
+
 function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type="SR", n=100, ϑ=0.5)
     x = zeros(n)
     y = similar(x)

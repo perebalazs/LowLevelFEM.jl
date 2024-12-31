@@ -57,6 +57,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
         * Heat flux on boundaries (also with functions)
         * Heat source inside the bodies (also with functions)
         * Heat convection
+    - Stady state and transient problems in heat conduction.
     - Heat expansion
     - Thermal loading in stress analysis (thermal stresses)
 - Modal analysis (eigenfrequencies, modal shapes).
@@ -75,7 +76,6 @@ The above described steps can be easily performed using the LowLevelFEM package.
   - [ ] with Lagrange multiplier method.
 - [ ] Defining displacement initial condition as a function of x, y and z.
 - [ ] Defining velocity initial condition as a function of x, y and z.
-- [ ] Transient problems in heat conduction.
 - [ ] Finite rotations.
 - [ ] Plastic deformation (within small strain theory).
 - [ ] Linear buckling.
