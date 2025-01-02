@@ -1265,6 +1265,7 @@ function latentHeatMatrix(problem, u, v, T0; elements=[])
                 ∂h = zeros(dim, numNodes * numIntPoints)
                 B = zeros(rowsOfB * numIntPoints, dim * numNodes)
                 K1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn1 = zeros(Int, pdim * numNodes)
                 nn2 = zeros(Int, dim * numNodes)
                 for k in 1:numIntPoints, l in 1:numNodes
                     for kk in 1:pdim
@@ -1313,6 +1314,7 @@ function latentHeatMatrix(problem, u, v, T0; elements=[])
                             ∇H[k*1-0, l*dim-0] = ∂h[3, (k-1)*numNodes+l]
                         end
                     end
+                    nn1 = nnet[j, 1:numNodes]
                     for k in 1:dim
                         nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
                     end
@@ -1321,19 +1323,18 @@ function latentHeatMatrix(problem, u, v, T0; elements=[])
                     for k in 1:numIntPoints
                         q1 = u[nn2]
                         dq1 = v[nn2]
-                        T01 = T0[nnet[j,:]]
+                        T01 = T0[nn1]
                         H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
-                        ∇H1 = ∇H[k, 1:dim*numNodes]
-                        display("∇H1: $(size(∇H1))")
-                        display("dq1: $(size(dq1))")
+                        ∇H1 = ∇H[k, 1:dim*numNodes]'
                         M1 += H1' * H1 * (∇H1 * dq1) * jacDet[k] * intWeights[k]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes]
-                        K1 += H1' * H1 * (q1' * B1' * D * B1 * dq1) / (H1 * T01) * b * jacDet[k] * intWeights[k]
+                        (q1' * B1' * D * B1 * dq1) / (H1 * T01)
+                        K1 += H1' * H1 * (q1' * B1' * D * B1 * dq1) / (H1 * T01)[1] * b * jacDet[k] * intWeights[k]
                     end
                     M1 *= κ * α * b
                     KM1 = K1 + M1
-                    append!(I, nn2[Iidx[:]])
-                    append!(J, nn2[Jidx[:]])
+                    append!(I, nn1[Iidx[:]])
+                    append!(J, nn1[Jidx[:]])
                     append!(V, KM1[:])
                 end
                 #push!(nn, nnet)
