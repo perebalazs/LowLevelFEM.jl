@@ -1193,6 +1193,159 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
     return M
 end
 
+function latentHeatMatrix(problem, u, v, T0; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    #nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        α = problem.material[ipg].α
+        κ = E / 3 / (1 - 2ν)
+        dim = problem.dim
+        pdim = problem.pdim
+        if problem.dim == 3 && problem.type == "HeatConduction"
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+                ν 1-ν ν 0 0 0;
+                ν ν 1-ν 0 0 0;
+                0 0 0 (1-2ν)/2 0 0;
+                0 0 0 0 (1-2ν)/2 0;
+                0 0 0 0 0 (1-2ν)/2]
+
+            rowsOfB = 6
+            #rowsOfH = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == "PlaneHeatConduction"
+            D = E / (1 - ν^2) * [1 ν 0;
+                ν 1 0;
+                0 0 (1-ν)/2]
+            rowsOfB = 3
+            #rowsOfH = 2
+            b = problem.thickness
+        else
+            error("latentHeatMatrix: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                H = zeros(pdim * numIntPoints, pdim * numNodes)
+                M1 = zeros(pdim * numNodes, pdim * numNodes)
+                ∇H = zeros(1 * numIntPoints, dim * numNodes)
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B = zeros(rowsOfB * numIntPoints, dim * numNodes)
+                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, dim * numNodes)
+                for k in 1:numIntPoints, l in 1:numNodes
+                    for kk in 1:pdim
+                        H[k*pdim-(pdim-kk), l*pdim-(pdim-kk)] = h[(k-1)*numNodes+l]
+                    end
+                end
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-0, l*dim-0] = B[k*rowsOfB-2, l*dim-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*dim-1] = B[k*rowsOfB-1, l*dim-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-5, l*dim-2] = B[k*rowsOfB-2, l*dim-1] = B[k*rowsOfB-0, l*dim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*dim-1] = B[k*rowsOfB-2, l*dim-2] = B[k*rowsOfB-1, l*dim-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*dim-0] = B[k*rowsOfB-1, l*dim-1] = B[k*rowsOfB-0, l*dim-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    ∇H .*= 0
+                    if dim == 2
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            ∇H[k*1-0, l*dim-1] = ∂h[1, (k-1)*numNodes+l]
+                            ∇H[k*1-0, l*dim-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            ∇H[k*1-0, l*dim-2] = ∂h[1, (k-1)*numNodes+l]
+                            ∇H[k*1-0, l*dim-1] = ∂h[2, (k-1)*numNodes+l]
+                            ∇H[k*1-0, l*dim-0] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    end
+                    for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    M1 .*= 0
+                    K1 .*= 0
+                    for k in 1:numIntPoints
+                        q1 = u[nn2]
+                        dq1 = v[nn2]
+                        T01 = T0[nnet[j,:]]
+                        H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
+                        ∇H1 = ∇H[k, 1:dim*numNodes]
+                        display("∇H1: $(size(∇H1))")
+                        display("dq1: $(size(dq1))")
+                        M1 += H1' * H1 * (∇H1 * dq1) * jacDet[k] * intWeights[k]
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes]
+                        K1 += H1' * H1 * (q1' * B1' * D * B1 * dq1) / (H1 * T01) * b * jacDet[k] * intWeights[k]
+                    end
+                    M1 *= κ * α * b
+                    KM1 = K1 + M1
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, KM1[:])
+                end
+                #push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return K
+end
+
 """
     FEM.dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=..., β=...)
 
@@ -3522,6 +3675,12 @@ function CDM(K, M, C, f, u0, v0, T, Δt)
         u0 = u1
     end
     return u, v, t
+end
+
+function CDM(K, M, f, u0, v0, T, Δt)
+    dof, dof = size(K)
+    C = zeros(dof, dof)
+    return CDM(K, M, C, f, u0, v0, T, Δt)
 end
 
 """
