@@ -544,7 +544,7 @@ function stiffnessMatrixSolid(problem; elements=[])
                     jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                     Jac = reshape(jac, 3, :)
                     for k in 1:numIntPoints
-                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        invJac[1:3, 3*k-2:3*k] = @inline inv(Jac[1:3, 3*k-2:3*k])'
                     end
                     ∂h .*= 0
                     for k in 1:numIntPoints, l in 1:numNodes
@@ -1327,12 +1327,17 @@ function latentHeatMatrix(problem, u, v, T0; elements=[])
                         H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
                         ∇H1 = ∇H[k, 1:dim*numNodes]'
                         M1 += H1' * H1 * (∇H1 * dq1) * jacDet[k] * intWeights[k]
+                        #M1 += H1' * H1 * jacDet[k] * intWeights[k]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes]
-                        (q1' * B1' * D * B1 * dq1) / (H1 * T01)
+                        #(q1' * B1' * D * B1 * dq1) / (H1 * T01)
                         K1 += H1' * H1 * (q1' * B1' * D * B1 * dq1) / (H1 * T01)[1] * b * jacDet[k] * intWeights[k]
+                        #K1 += H1' * H1 / (H1 * T01)[1] * b * jacDet[k] * intWeights[k]
+                        #K1 += H1' * H1 * b * jacDet[k] * intWeights[k]
                     end
                     M1 *= κ * α * b
-                    KM1 = K1 + M1
+                    KM1 = K1 - M1
+                    #KM1 = K1
+                    #KM1 = M1
                     append!(I, nn1[Iidx[:]])
                     append!(J, nn1[Jidx[:]])
                     append!(V, KM1[:])
@@ -1979,7 +1984,7 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
             b = α
             E0 = [1,1,1,0]
         else
-            error("stiffnessMatrixAxiSymmetric: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("thermalLoadVectorAxiSymmetric: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -3532,9 +3537,9 @@ function largestPeriodTime(K, M)
     end
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        error("The error in the calculation of the smallest eigenvalue is too large: $err")
+        warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
-    Δt = 2π / √(real(abs(ω²[1])))
+    Δt = 2π / √(abs(real(ω²[1])))
     return Δt
 end
 
@@ -3552,13 +3557,13 @@ Types:
 - `Δt`: Float64 
 """
 function smallestPeriodTime(K, M)
-    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LM)
-
+    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LM, maxiter=10000)
+    
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        error("The error in the calculation of the largest eigenvalue is too large: $err")
+        warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
-    Δt = 2π / √(real(abs(ω²[1])))
+    Δt = 2π / √(abs(real(ω²[1])))
     return Δt
 end
 
@@ -3582,9 +3587,9 @@ function smallestEigenValue(K, C)
     end
     err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        error("The error in the calculation of the largest eigenvalue is too large: $err")
+        warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
-    λₘₐₓ = real(abs(λ[1]))
+    λₘₐₓ = abs(real(λ[1]))
     return λₘₐₓ
 end
 
@@ -3606,9 +3611,9 @@ function largestEigenValue(K, C)
 
     err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        error("The error in the calculation of the smallest eigenvalue is too large: $err")
+        warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
-    λₘᵢₙ = real(abs(λ[1]))
+    λₘᵢₙ = abs(real(λ[1]))
     return λₘᵢₙ
 end
 

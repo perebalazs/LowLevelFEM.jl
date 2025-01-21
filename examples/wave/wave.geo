@@ -2,7 +2,12 @@
 SetFactory("OpenCASCADE");
 Rectangle(1) = {0, 0, 0, 100, 10, 0};
 //+
-MeshSize {:} = 1;
+Transfinite Surface {1};
+//+
+Recombine Surface {1};
+//+
+MeshSize {:} = 2.5;
+Mesh.ElementOrder = 2;
 Mesh 2;
 //+
 Point(5) = {0, 5, 0, 1.0};
