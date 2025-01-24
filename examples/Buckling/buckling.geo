@@ -1,6 +1,8 @@
 //+
+a=10;
+l=100;
 SetFactory("OpenCASCADE");
-Box(1) = {0, 0, 0, 10000, 10, 10};
+Box(1) = {0, 0, 0, l, a, a};
 //+
 Physical Surface("supp", 13) = {1};
 //+
@@ -10,7 +12,7 @@ Physical Volume("body", 15) = {1};
 
 Recombine Surface {1:6};
 Transfinite Line {1:8} = 4;
-Transfinite Line {9:12} = 3001;
+Transfinite Line {9:12} = 31;
 Transfinite Surface {1:6};
 Transfinite Volume {1};
 Mesh.ElementOrder = 1;

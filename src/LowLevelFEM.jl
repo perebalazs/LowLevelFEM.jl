@@ -733,7 +733,7 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
     sizehint!(I, lengthOfIJV)
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
-    S1 = zeros(9, 9)
+    S1 = zeros(problem.dim, problem.dim)
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
@@ -791,17 +791,16 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
                     Jidx[k, l] = k
                 end
                 ∂h = zeros(dim, numNodes * numIntPoints)
-                ∂H = zeros(pdim * dim * numIntPoints, pdim * dim * numNodes)
+                ∂H = zeros(dim * numIntPoints, numNodes)
                 B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
                 K1 = zeros(pdim * numNodes, pdim * numNodes)
+                K0 = zeros(pdim * numNodes, pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
                 #for k in 1:numIntPoints, l in 1:numNodes
                 #    for kk in 1:pdim
                 #        H[k*pdim-(pdim-kk), l*pdim-(pdim-kk)] = h[(k-1)*numNodes+l]
                 #    end
                 #end
-                #appendlock = ReentrantLock()
-                #Threads.@threads for j in 1:length(elemTags[i])
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
                     for k in 1:numNodes
@@ -833,9 +832,9 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
                             B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
                             B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
                             B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
-                            ∂H[k*pdim*dim-8, l*pdim-2] = ∂H[k*pdim*dim-5, l*pdim-1] = ∂H[k*pdim*dim-2, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
-                            ∂H[k*pdim*dim-7, l*pdim-2] = ∂H[k*pdim*dim-4, l*pdim-1] = ∂H[k*pdim*dim-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
-                            ∂H[k*pdim*dim-6, l*pdim-2] = ∂H[k*pdim*dim-3, l*pdim-1] = ∂H[k*pdim*dim-0, l*pdim-0] = ∂h[3, (k-1)*numNodes+l]
+                            ∂H[k*dim-2, l] = ∂h[1, (k-1)*numNodes+l]
+                            ∂H[k*dim-1, l] = ∂h[2, (k-1)*numNodes+l]
+                            ∂H[k*dim-0, l] = ∂h[3, (k-1)*numNodes+l]
                         end
                     else
                         error("nonLinearStiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
@@ -844,29 +843,26 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
                     q1 = q[nn2]
                     for k in 1:numIntPoints
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
-                        ∂H1 = ∂H[k*pdim*dim-(pdim*dim-1):k*pdim*dim, 1:pdim*numNodes]
+                        ∂H1 = ∂H[k*dim-(dim-1):k*dim, 1:numNodes]
                         σ1 = D * B1 * q1
                         if problem.type == "Solid"
-                            S1[1,1] = S1[4,4] = S1[7,7] = σ1[1]
-                            S1[2,2] = S1[5,5] = S1[8,8] = σ1[2]
-                            S1[3,3] = S1[6,6] = S1[9,9] = σ1[3]
-                            S1[1,2] = S1[4,5] = S1[7,8] = σ1[4]
-                            S1[2,1] = S1[5,4] = S1[8,7] = σ1[4]
-                            S1[2,3] = S1[5,6] = S1[8,9] = σ1[5]
-                            S1[3,2] = S1[6,5] = S1[9,8] = σ1[5]
-                            S1[3,1] = S1[6,4] = S1[9,7] = σ1[6]
-                            S1[1,3] = S1[4,6] = S1[7,9] = σ1[6]
-                            #display(S1)
+                            S1[1,1] = σ1[1]
+                            S1[2,2] = σ1[2]
+                            S1[3,3] = σ1[3]
+                            S1[1,2] = S1[2,1] = σ1[4]
+                            S1[2,3] = S1[3,2] = σ1[5]
+                            S1[3,1] = S1[1,3] = σ1[6]
                         else
                             error("nonLinearStiffnessMatrix: only 'Solid' is implemented")
                         end
-                        K1 += ∂H1' * S1 * ∂H1 * b * jacDet[k] * intWeights[k]
+                        K0 = ∂H1' * S1 * ∂H1 * b * jacDet[k] * intWeights[k]
+                        for kk in 1:3
+                            K1[kk:dim:dim*numNodes, kk:dim:dim*numNodes] += K0
+                        end
                     end
-                    #Threads.lock(appendlock)
                     append!(I, nn2[Iidx[:]])
                     append!(J, nn2[Jidx[:]])
                     append!(V, K1[:])
-                    #Threads.unlock(appendlock)
                 end
                 push!(nn, nnet)
             end
