@@ -3389,6 +3389,38 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
     return Modal(f, ϕ1)
 end
 
+"""
+    FEM.solveBuckling(problem, load, bc; n=6)
+
+Solves the multipliers for the first `n` critical forces and the corresponding 
+buckling shapes for the instability of the `problem`, when `loads` loads and 
+`bc` boundary conditions are applied. Result can be presented by `showBucklingResults`
+function. `loads` and `bc` can be defined by `load` and `displacementConstraint` functions,
+respectively.
+
+Return: `buckling`
+
+Types:
+- `problem`: Problem
+- `load`: Vector{tuples}
+- `bc`: Vector{tuples}
+- `n`: Int64
+- `buckling`: Modal 
+"""
+function solveBuckling(problem, loads, bc; n=6)
+    f = loadVector(problem, loads)
+    K = stiffnessMatrix(problem)
+    applyBoundaryConditions!(problem, K, f, bc)
+    q = solveDisplacement(K, f)
+    Knl = nonLinearStiffnessMatrix(problem, q)
+    applyBoundaryConditions!(problem, Knl, f, bc)
+    
+    λ, ϕ = Arpack.eigs(K, -Knl, nev=n, which=:LR, sigma=0.0, maxiter=1000)
+    f = abs.(real(λ))
+    ϕ1 = real(ϕ)
+    return Modal(f, ϕ1)
+end
+
 #=
 """
     FEM.resultant(problem, phName, field, component)
@@ -4620,6 +4652,27 @@ Types:
 - `tag`: Integer
 """
 function showModalResults(problem, Φ::Modal; name="modal", visible=false, ff=1)
+    return showDoFResults(problem, Φ.ϕ, "uvec", t=Φ.f, name=name, visible=visible, ff=ff)
+end
+
+"""
+    FEM.showBucklingResults(problem, Φ, name=..., visible=...)
+
+Loads buckling results into a View in gmsh. `Φ` is a struct of Modal. `name` is a
+title to display and `visible` is a true or false value to toggle on or off the 
+initial visibility in gmsh. Click on ▷| to change the results. This function 
+returns the tag of View.
+
+Return: `tag`
+
+Types:
+- `problem`: Problem
+- `Φ`: Modal
+- `name`: String
+- `visible`: Boolean
+- `tag`: Integer
+"""
+function showBucklingResults(problem, Φ::Modal; name="buckling", visible=false, ff=1)
     return showDoFResults(problem, Φ.ϕ, "uvec", t=Φ.f, name=name, visible=visible, ff=ff)
 end
 
