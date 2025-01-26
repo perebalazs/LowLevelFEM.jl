@@ -235,7 +235,7 @@ struct CoordinateSystem
 end
 
 """
-    Modal(f, ϕ)
+    Eigen(f, ϕ)
 
 A structure containing the eigenfrequencies and eigen modes.
 - f: eigenfrequencies
@@ -245,7 +245,7 @@ Types:
 - `f`: Matrix{Float64}
 - `ϕ`: Vector{Float64}
 """
-struct Modal
+struct Eigen
     f::Vector{Float64}
     ϕ::Matrix{Float64}
 end
@@ -3372,7 +3372,7 @@ Types:
 - `M`: SparseMatrix
 - `n`: Int64
 - `fₘᵢₙ`: Float64
-- `modes`: Modal 
+- `modes`: Eigen 
 """
 function solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
     ωₘᵢₙ² = (2π * fₘᵢₙ)^2
@@ -3382,11 +3382,85 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
     #end
     #err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     #if err > 1e-3 # || true
-    #    error("The error in the calculation of the smallest eigenvalue is too large: $err")
+    #    warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     #end
     f = sqrt.(abs.(real(ω²))) / 2π
     ϕ1 = real(ϕ)
-    return Modal(f, ϕ1)
+    return Eigen(f, ϕ1)
+end
+
+"""
+    FEM.solveBucklingModes(K, Knl; n=6)
+
+Solves the critical force multipliers and buckling mode shapes of a problem given by stiffness
+matrix `K` and the nonlinear stiffness matrix `Knl`. `n` is the number of buckling modes to solve.
+Returns the struct of critical forces and buckling modes. Results can be presented by `showBucklingResults` function.
+
+Return: `modes`
+
+Types:
+- `K`: SparseMatrix
+- `Knl`: SparseMatrix
+- `n`: Int64
+- `modes`: Eigen 
+"""
+function solveBucklingModes(K, Knl; n=6)
+    λ, ϕ = Arpack.eigs(K, -Knl, nev=n, which=:LR, sigma=0, maxiter=1000)
+    #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
+    #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+    #end
+    #err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
+    #if err > 1e-3 # || true
+    #    error("The error in the calculation of the smallest eigenvalue is too large: $err")
+    #end
+    f = abs.(real(λ))
+    ϕ1 = real(ϕ)
+    return Eigen(f, ϕ1)
+end
+
+"""
+    FEM.solveModalAnalysis(problem; bc=[]; load=[], n=6)
+
+Solves the first `n` eigenfrequencies and the corresponding 
+mode shapes for the `problem`, when `loads` loads and 
+`bc` boundary conditions are applied. `load` and `bc` are optional. 
+Result can be presented by `showModalResults` function. 
+`loads` and `bc` can be defined by `load` and `displacementConstraint` functions,
+respectively.
+
+Return: `modes`
+
+Types:
+- `problem`: Problem
+- `load`: Vector{tuples}
+- `bc`: Vector{tuples}
+- `n`: Int64
+- `modes`: Eigen 
+"""
+function solveModalAnalysis(problem; bc=[], load=[], n=6, fₘᵢₙ=1.01)
+    if !isa(load, Vector)
+        error("solveModalAnalysis: loads are not arranged in a vector. Put them in [...]")
+    end
+    if !isa(bc, Vector)
+        error("solveModalAnalysis: boundary conditions are not arranged in a vector. Put them in [...]")
+    end
+    dof = problem.pdim * problem.non
+    K = stiffnessMatrix(problem)
+    M = massMatrix(problem)
+    if length(bc) == 0
+        return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+    elseif length(load) == 0
+        f = zeros(dof)
+        applyBoundaryConditions!(problem, K, M, f, bc)
+        return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+    else
+        f = loadVector(problem, load)
+        applyBoundaryConditions!(problem, K, f, bc)
+        q = solveDisplacement(K, f)
+        Knl = nonLinearStiffnessMatrix(problem, q) # iretáció?
+        applyBoundaryConditions!(problem, Knl, M, f, bc)
+        return solveEigenModes(K + Knl, M, n=n, fₘᵢₙ=fₘᵢₙ)
+    end
 end
 
 """
@@ -3405,7 +3479,7 @@ Types:
 - `load`: Vector{tuples}
 - `bc`: Vector{tuples}
 - `n`: Int64
-- `buckling`: Modal 
+- `buckling`: Eigen 
 """
 function solveBuckling(problem, loads, bc; n=6)
     f = loadVector(problem, loads)
@@ -3414,11 +3488,7 @@ function solveBuckling(problem, loads, bc; n=6)
     q = solveDisplacement(K, f)
     Knl = nonLinearStiffnessMatrix(problem, q)
     applyBoundaryConditions!(problem, Knl, f, bc)
-    
-    λ, ϕ = Arpack.eigs(K, -Knl, nev=n, which=:LR, sigma=0.0, maxiter=1000)
-    f = abs.(real(λ))
-    ϕ1 = real(ϕ)
-    return Modal(f, ϕ1)
+    return solveBucklingModes(K, Knl, n=n)
 end
 
 #=
@@ -4619,7 +4689,11 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     end
 
     gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
-    gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 0)
+    if ff == 1 || ff == 2
+        gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 1)
+    else
+        gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 0)
+    end
     gmsh.view.option.setNumber(uvec, "TargetError", -1e-4)
     gmsh.view.option.setNumber(uvec, "MaxRecursionLevel", 1)
     if visible == false
@@ -4627,7 +4701,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     end
     if ff == 0 && length(t) > 1
         gmsh.view.option.setNumber(uvec, "ShowTime", 1)
-    elseif ff == 1
+    elseif ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
     end
@@ -4637,7 +4711,7 @@ end
 """
     FEM.showModalResults(problem, Φ, name=..., visible=...)
 
-Loads modal results into a View in gmsh. `Φ` is a struct of Modal. `name` is a
+Loads modal results into a View in gmsh. `Φ` is a struct of Eigen. `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. Click on ▷| to change the results. This function 
 returns the tag of View.
@@ -4646,19 +4720,19 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `Φ`: Modal
+- `Φ`: Eigen
 - `name`: String
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showModalResults(problem, Φ::Modal; name="modal", visible=false, ff=1)
+function showModalResults(problem, Φ::Eigen; name="modal", visible=false, ff=1)
     return showDoFResults(problem, Φ.ϕ, "uvec", t=Φ.f, name=name, visible=visible, ff=ff)
 end
 
 """
     FEM.showBucklingResults(problem, Φ, name=..., visible=...)
 
-Loads buckling results into a View in gmsh. `Φ` is a struct of Modal. `name` is a
+Loads buckling results into a View in gmsh. `Φ` is a struct of Eigen. `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. Click on ▷| to change the results. This function 
 returns the tag of View.
@@ -4667,12 +4741,12 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `Φ`: Modal
+- `Φ`: Eigen
 - `name`: String
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showBucklingResults(problem, Φ::Modal; name="buckling", visible=false, ff=1)
+function showBucklingResults(problem, Φ::Eigen; name="buckling", visible=false, ff=2)
     return showDoFResults(problem, Φ.ϕ, "uvec", t=Φ.f, name=name, visible=visible, ff=ff)
 end
 
