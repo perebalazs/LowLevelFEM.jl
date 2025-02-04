@@ -2698,6 +2698,27 @@ function solveDisplacement(K, f)
 end
 
 """
+    FEM.solveDisplacement(problem, load, supp)
+
+Solves the displacement vector `q` of `problem` with loads `load` and
+supports `supp`.
+
+Return: `q`
+
+Types:
+- `problem`: Problem 
+- `load`: Vector{Tuple} 
+- `supp`: Vector{Tuple}
+- `q`: Vector{Float64}
+"""
+function solveDisplacement(problem, load, supp)
+    K = stiffnessMatrix(problem)
+    f = loadVector(problem, load)
+    applyBoundaryConditions!(problem, K, f, supp)
+    return K \ f
+end
+
+"""
     FEM.solveTemperature(K, q)
 
 Solves the equation K*T=q for the temperature vector `T`. `K` is the heat conduction matrix,
@@ -3457,7 +3478,19 @@ function solveModalAnalysis(problem; bc=[], load=[], n=6, fₘᵢₙ=1.01)
         f = loadVector(problem, load)
         applyBoundaryConditions!(problem, K, f, bc)
         q = solveDisplacement(K, f)
-        Knl = nonLinearStiffnessMatrix(problem, q) # iretáció?
+
+        err = 1
+        count = 0
+        while err > 1e-3 && count < 10
+            count += 1
+            q0 = copy(q)
+            Knl = nonLinearStiffnessMatrix(problem, q)
+            applyBoundaryConditions!(problem, Knl, f, bc)
+            q = solveDisplacement(K + Knl, f)
+            err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
+        end
+        Knl = nonLinearStiffnessMatrix(problem, q)
+
         applyBoundaryConditions!(problem, Knl, M, f, bc)
         return solveEigenModes(K + Knl, M, n=n, fₘᵢₙ=fₘᵢₙ)
     end
@@ -3486,7 +3519,19 @@ function solveBuckling(problem, loads, bc; n=6)
     K = stiffnessMatrix(problem)
     applyBoundaryConditions!(problem, K, f, bc)
     q = solveDisplacement(K, f)
+
+    err = 1
+    count = 0
+    while err > 1e-3 && count < 10
+        count += 1
+        q0 = copy(q)
+        Knl = nonLinearStiffnessMatrix(problem, q)
+        applyBoundaryConditions!(problem, Knl, f, bc)
+        q = solveDisplacement(K + Knl, f)
+        err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
+    end
     Knl = nonLinearStiffnessMatrix(problem, q)
+
     applyBoundaryConditions!(problem, Knl, f, bc)
     return solveBucklingModes(K, Knl, n=n)
 end
