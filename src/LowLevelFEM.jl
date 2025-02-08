@@ -1822,7 +1822,7 @@ function elasticSupportMatrix(problem, elSupports)
                             Ja = 1
                         ############ 1D #######################################################
                         else
-                            error("applyBoundaryConditions: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                            error("elasticSupportMatrix: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
                         C1 += H1' * kk * H1 * Ja * intWeights[j]
                     end
@@ -1994,7 +1994,7 @@ function loadVector(problem, loads)
                             Ja = 1
                         ############ 1D #######################################################
                         else
-                            error("applyBoundaryConditions: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                            error("loadVector: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
                         f1 += H1' * f * Ja * intWeights[j]
                     end
@@ -2428,13 +2428,13 @@ Types:
 - `loadVec`: Vector 
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec, supports)
+function applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec, supports; fix=1)
     if !isa(supports, Vector)
         error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
     end
     dof, dof = size(heatCondMat)
     dampMat = spzeros(dof, dof)
-    applyBoundaryConditions!(problem, heatCondMat, heatCapMat, dampMat, heatFluxVec, supports)
+    applyBoundaryConditions!(problem, heatCondMat, heatCapMat, dampMat, heatFluxVec, supports, fix=fix)
     dampMat = []
     return
 end
@@ -2480,7 +2480,7 @@ Types:
 - `loadVec`: Vector{Float64}
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
+function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports; fix=1)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -2558,13 +2558,13 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 jj += 1
                 stiffMat[j, :] .= 0
                 stiffMat[:, j] .= 0
-                stiffMat[j, j] = 1
+                stiffMat[j, j] = fix
                 massMat[j, :] .= 0
                 massMat[:, j] .= 0
                 massMat[j, j] = 1
                 dampMat[j, :] .= 0
                 dampMat[:, j] .= 0
-                dampMat[j, j] = 1
+                dampMat[j, j] = fix
                 if isa(ux, Function)
                     loadVec[j] = uux[jj]
                 else
@@ -2584,13 +2584,13 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 jj += 1
                 stiffMat[j, :] .= 0
                 stiffMat[:, j] .= 0
-                stiffMat[j, j] = 1
+                stiffMat[j, j] = fix
                 massMat[j, :] .= 0
                 massMat[:, j] .= 0
                 massMat[j, j] = 1
                 dampMat[j, :] .= 0
                 dampMat[:, j] .= 0
-                dampMat[j, j] = 1
+                dampMat[j, j] = fix
                 if isa(uy, Function)
                     loadVec[j] = uuy[jj]
                 else
@@ -2609,13 +2609,13 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 jj += 1
                 stiffMat[j, :] .= 0
                 stiffMat[:, j] .= 0
-                stiffMat[j, j] = 1
+                stiffMat[j, j] = fix
                 massMat[j, :] .= 0
                 massMat[:, j] .= 0
                 massMat[j, j] = 1
                 dampMat[j, :] .= 0
                 dampMat[:, j] .= 0
-                dampMat[j, j] = 1
+                dampMat[j, j] = fix
                 if isa(uz, Function)
                     loadVec[j] = uuz[jj]
                 else
@@ -2732,6 +2732,51 @@ Types:
 - `T`: Vector{Float64}
 """
 function solveTemperature(K, q)
+    return K \ q
+end
+
+"""
+    FEM.solveTemperature(problem, flux, temp)
+
+Solves the temperature vector `T` of `problem` with given heat flux `flux` and
+temperature `temp`.
+
+Return: `T`
+
+Types:
+- `problem`: Problem 
+- `flux`: Vector{Tuple} 
+- `temp`: Vector{Tuple}
+- `T`: Vector{Float64}
+"""
+function solveTemperature(problem, flux, temp)
+    K = heatConductionMatrix(problem)
+    q = heatFluxVector(problem, flux)
+    #applyHeatConvection!(problem, K, q, temp)
+    applyBoundaryConditions(problem, K, q, temp)
+    return K \ q
+end
+
+"""
+    FEM.solveTemperature(problem, flux, temp, heatconv)
+
+Solves the temperature vector `T` of `problem` with given heat flux `flux`,
+temperature `temp` and heat convection `heatconv`.
+
+Return: `T`
+
+Types:
+- `problem`: Problem 
+- `flux`: Vector{Tuple} 
+- `temp`: Vector{Tuple}
+- `heatconv`: Vector{Tuple}
+- `T`: Vector{Float64}
+"""
+function solveTemperature(problem, flux, temp, heatconv)
+    K = heatConductionMatrix(problem)
+    q = heatFluxVector(problem, flux)
+    applyHeatConvection!(problem, K, q, heatconv)
+    applyBoundaryConditions(problem, K, q, temp)
     return K \ q
 end
 
@@ -3440,43 +3485,43 @@ function solveBucklingModes(K, Knl; n=6)
 end
 
 """
-    FEM.solveModalAnalysis(problem; bc=[]; load=[], n=6)
+    FEM.solveModalAnalysis(problem; constraint=[]; loads=[], n=6)
 
 Solves the first `n` eigenfrequencies and the corresponding 
-mode shapes for the `problem`, when `loads` loads and 
-`bc` boundary conditions are applied. `load` and `bc` are optional. 
+mode shapes for the `problem`, when `loads` and 
+`constraints` are applied. `loads` and `contraints` are optional. 
 Result can be presented by `showModalResults` function. 
-`loads` and `bc` can be defined by `load` and `displacementConstraint` functions,
+`loads` and `constraints` can be defined by `load` and `displacementConstraint` functions,
 respectively.
 
 Return: `modes`
 
 Types:
 - `problem`: Problem
-- `load`: Vector{tuples}
-- `bc`: Vector{tuples}
+- `loads`: Vector{tuples}
+- `constraints`: Vector{tuples}
 - `n`: Int64
 - `modes`: Eigen 
 """
-function solveModalAnalysis(problem; bc=[], load=[], n=6, fₘᵢₙ=1.01)
-    if !isa(load, Vector)
+function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0.1)
+    if !isa(loads, Vector)
         error("solveModalAnalysis: loads are not arranged in a vector. Put them in [...]")
     end
-    if !isa(bc, Vector)
-        error("solveModalAnalysis: boundary conditions are not arranged in a vector. Put them in [...]")
+    if !isa(constraints, Vector)
+        error("solveModalAnalysis: constraints are not arranged in a vector. Put them in [...]")
     end
     dof = problem.pdim * problem.non
     K = stiffnessMatrix(problem)
     M = massMatrix(problem)
-    if length(bc) == 0
+    if length(constraints) == 0
         return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
-    elseif length(load) == 0
+    elseif length(loads) == 0
         f = zeros(dof)
-        applyBoundaryConditions!(problem, K, M, f, bc)
+        applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
         return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
     else
-        f = loadVector(problem, load)
-        applyBoundaryConditions!(problem, K, f, bc)
+        f = loadVector(problem, loads)
+        applyBoundaryConditions!(problem, K, f, constraints)
         q = solveDisplacement(K, f)
 
         err = 1
@@ -3485,39 +3530,42 @@ function solveModalAnalysis(problem; bc=[], load=[], n=6, fₘᵢₙ=1.01)
             count += 1
             q0 = copy(q)
             Knl = nonLinearStiffnessMatrix(problem, q)
-            applyBoundaryConditions!(problem, Knl, f, bc)
+            applyBoundaryConditions!(problem, Knl, f, constraints)
             q = solveDisplacement(K + Knl, f)
             err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
         end
+        if count == 10
+            warn("solveModalAnalysis: number of iterations is $count.")
+        end
         Knl = nonLinearStiffnessMatrix(problem, q)
 
-        applyBoundaryConditions!(problem, Knl, M, f, bc)
+        applyBoundaryConditions!(problem, K, M, Knl, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
         return solveEigenModes(K + Knl, M, n=n, fₘᵢₙ=fₘᵢₙ)
     end
 end
 
 """
-    FEM.solveBuckling(problem, load, bc; n=6)
+    FEM.solveBuckling(problem, loads, constraints; n=6)
 
 Solves the multipliers for the first `n` critical forces and the corresponding 
-buckling shapes for the instability of the `problem`, when `loads` loads and 
-`bc` boundary conditions are applied. Result can be presented by `showBucklingResults`
-function. `loads` and `bc` can be defined by `load` and `displacementConstraint` functions,
+buckling shapes for the instability of the `problem`, when `loads` and 
+`constraints` are applied. Result can be presented by `showBucklingResults`
+function. `loads` and `constraints` can be defined by `load` and `displacementConstraint` functions,
 respectively.
 
 Return: `buckling`
 
 Types:
 - `problem`: Problem
-- `load`: Vector{tuples}
-- `bc`: Vector{tuples}
+- `loads`: Vector{tuples}
+- `constraints`: Vector{tuples}
 - `n`: Int64
 - `buckling`: Eigen 
 """
-function solveBuckling(problem, loads, bc; n=6)
+function solveBuckling(problem, loads, constraints; n=6)
     f = loadVector(problem, loads)
     K = stiffnessMatrix(problem)
-    applyBoundaryConditions!(problem, K, f, bc)
+    applyBoundaryConditions!(problem, K, f, constraints)
     q = solveDisplacement(K, f)
 
     err = 1
@@ -3526,13 +3574,16 @@ function solveBuckling(problem, loads, bc; n=6)
         count += 1
         q0 = copy(q)
         Knl = nonLinearStiffnessMatrix(problem, q)
-        applyBoundaryConditions!(problem, Knl, f, bc)
+        applyBoundaryConditions!(problem, Knl, f, constraints)
         q = solveDisplacement(K + Knl, f)
         err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
     end
+    if count == 10
+        warn("solveBuckling: number of iterations is $count.")
+    end
     Knl = nonLinearStiffnessMatrix(problem, q)
 
-    applyBoundaryConditions!(problem, Knl, f, bc)
+    applyBoundaryConditions!(problem, Knl, f, constraints)
     return solveBucklingModes(K, Knl, n=n)
 end
 
@@ -3652,7 +3703,7 @@ function resultant(problem, field, phName)
                             Ja = 1
                         ############ 1D #######################################################
                         else
-                            error("applyBoundaryConditions: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                            error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
                         #f1 += H1' * f * Ja * intWeights[j]
                         s1 += f[1] * Ja * intWeights[j]
