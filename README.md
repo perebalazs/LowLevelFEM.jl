@@ -36,7 +36,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - Giving displacement constraints as functions
 - Different materials on each physical group
 - Solves stress, stain and heat flux field as element result (possibly jumps at the element boundaries) or as nodal results.
-- Resultant of "load vector" type quantities on arbitrary physical group (in [GMSH](https://gmsh.info)).
+- Resultant of scalar or vector type quantities on arbitrary physical group (in [GMSH](https://gmsh.info)). The resultant can be the sum of elements in a load vector, or an integral of a distributed quantity.
 - Applying initial conditions (displacement and velocity) on arbitrary points, edges, surfaces, volumes and on combinations of them.
 - Solution of static and dynamic (transient with central difference method, Newmark and HHT-α) problems,
 - Displaying the results (scalar or vector displacements, scalar or tensor stresses and strains) with [GMSH](https://gmsh.info).
@@ -50,6 +50,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
   - using Rayleigh-damping (**C**=α**M**+β**K**) or
   - using Caughey-damping (**C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅).
 - Solves the stability analysis transient problems (spectral radius, period error, physical damping ratio, algorithmic damping ratio)
+- Buckling of structures in 3D.
 - Heat conduction problems
     - Conductivity and heat capacity matrices,
     - Temperature boundary conditions (also with functions)
@@ -60,7 +61,8 @@ The above described steps can be easily performed using the LowLevelFEM package.
     - Stady state and transient problems in heat conduction.
     - Heat expansion
     - Thermal loading in stress analysis (thermal stresses)
-- Modal analysis (eigenfrequencies, modal shapes).
+    - Generated heat (and temperature change) due to elastic deformations.
+- Modal analysis (eigenfrequencies, modal shapes), even if the structure is prestressed.
 
 ## Planned features
 
@@ -78,7 +80,6 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] Defining velocity initial condition as a function of x, y and z.
 - [ ] Finite rotations.
 - [ ] Plastic deformation (within small strain theory).
-- [ ] Linear buckling.
 - [ ] Solver for arbitrary weak forms.
 
 Any suggestions are welcome.

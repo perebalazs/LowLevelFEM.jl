@@ -1478,11 +1478,26 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
     return M
 end
 
-function latentHeatMatrix(problem, u, v, T0; elements=[])
+"""
+    FEM.latentHeatMatrix(problem, u, v, T0)
+
+Solves the latent heat matrix of the `problem`. With this matrix the generated heat due to deformations
+(given with displacement field `u` and velocity field `v`) can be solved. `T0` is the current temperature
+field which is given in absolute temperature scale (Kelvin).
+
+Return: `latHeatMat`
+
+Types:
+- `problem`: Problem
+- `u`: Vector{Float64}
+- `v`: Vector{Float64}
+- `T0`: Vector{Float64}
+- `latHeatMat`: SparseMatrix
+"""
+function latentHeatMatrix(problem, u, v, T0)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
-    #nn = []
     I = []
     J = []
     V = []
@@ -1508,14 +1523,12 @@ function latentHeatMatrix(problem, u, v, T0; elements=[])
                 0 0 0 0 0 (1-2ν)/2]
 
             rowsOfB = 6
-            #rowsOfH = 3
             b = 1
         elseif problem.dim == 2 && problem.type == "PlaneHeatConduction"
             D = E / (1 - ν^2) * [1 ν 0;
                 ν 1 0;
                 0 0 (1-ν)/2]
             rowsOfB = 3
-            #rowsOfH = 2
             b = problem.thickness
         else
             error("latentHeatMatrix: dimension is $(problem.dim), problem type is $(problem.type).")
@@ -1612,22 +1625,15 @@ function latentHeatMatrix(problem, u, v, T0; elements=[])
                         H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
                         ∇H1 = ∇H[k, 1:dim*numNodes]'
                         M1 += H1' * H1 * (∇H1 * dq1) * jacDet[k] * intWeights[k]
-                        #M1 += H1' * H1 * jacDet[k] * intWeights[k]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dim*numNodes]
-                        #(q1' * B1' * D * B1 * dq1) / (H1 * T01)
                         K1 += H1' * H1 * (q1' * B1' * D * B1 * dq1) / (H1 * T01)[1] * b * jacDet[k] * intWeights[k]
-                        #K1 += H1' * H1 / (H1 * T01)[1] * b * jacDet[k] * intWeights[k]
-                        #K1 += H1' * H1 * b * jacDet[k] * intWeights[k]
                     end
                     M1 *= κ * α * b
                     KM1 = K1 - M1
-                    #KM1 = K1
-                    #KM1 = M1
                     append!(I, nn1[Iidx[:]])
                     append!(J, nn1[Jidx[:]])
                     append!(V, KM1[:])
                 end
-                #push!(nn, nnet)
             end
         end
     end
@@ -2988,19 +2994,23 @@ function solveStrain(problem, q; DoFResults=false)
 end
 
 """
-    FEM.solveStress(problem, q; DoFResults=false)
+    FEM.solveStress(problem, q; T=..., T₀=..., DoFResults=false)
 
 Solves the stress field `S` from displacement vector `q`. Stress field is given
 per elements, so it usually contains jumps at the boundary of elements. Details
 of mesh is available in `problem`. If `DoFResults` is true, `S` is a matrix with
 nodal results. In this case `showDoFResults` can be used to show the results 
 (otherwise `showStressResults` or `showElementResults`).
+If the `T` temperature field (and `T₀` initial temperature field if it differs from zero) is given, the
+function solves also the thermal stresses.
 
 Return: `S`
 
 Types:
 - `problem`: Problem
 - `q`: Vector{Float64}
+- `T`: Vector{Float64}
+- `T₀`: Vector{Float64}
 - `S`: TensorField or Matrix{Float64}
 """
 function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
@@ -3492,7 +3502,7 @@ mode shapes for the `problem`, when `loads` and
 `constraints` are applied. `loads` and `contraints` are optional. 
 Result can be presented by `showModalResults` function. 
 `loads` and `constraints` can be defined by `load` and `displacementConstraint` functions,
-respectively.
+respectively. If `loads` are given, it solves the eigenfrequencies of a prestressed structure.
 
 Return: `modes`
 
@@ -3587,144 +3597,15 @@ function solveBuckling(problem, loads, constraints; n=6)
     return solveBucklingModes(K, Knl, n=n)
 end
 
-#=
 """
-    FEM.resultant(problem, phName, field, component)
+    FEM.resultant(problem, field, phName)
 
-Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
-`name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
-It can solve traction or body force depending on the problem.
-In case of 2D problems and Point physical group means concentrated force.
-In case of 2D problems and Line physical group means surface force.
-In case of 2D problems and Surface physical group means body force.
-In case of 3D problems and Point physical group means concentrated force.
-In case of 3D problems and Line physical group means edge force.
-In case of 3D problems and Surface physical group means surface force.
-In case of 3D problems and Volume physical group means body force.
-
-Return: `loadVec`
-
-Types:
-- `problem`: Problem
-- `loads`: Vector{Tuple{String, Float64, Float64, Float64}}
-- `loadVec`: Vector
-"""
-=#
-function resultant(problem, field, phName)
-    gmsh.model.setCurrent(problem.name)
-    pdim = problem.pdim
-    DIM = problem.dim
-    b = problem.thickness
-    non = problem.non
-    dof = pdim * non
-    fp = zeros(dof)
-    ncoord2 = zeros(3 * problem.non)
-    sum0 = 0
-    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
-    if numComponents != 1
-        error("resultant: number of component of the field must be one.")
-    end
-    for n in 1:1#length(loads)
-        #name, fx, fy, fz = loads[n]
-        #if pdim == 3
-        #    f = [.0, .0, .0]
-        #elseif pdim == 2
-        #    f = [.0, .0]
-        #elseif pdim == 1
-        #    f = [.0]
-        #else
-        #    error("resultant: DOF per nodes is $(pdim).")
-        #end
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-        for i ∈ 1:length(dimTags)
-            dimTag = dimTags[i]
-            dim = dimTag[1]
-            tag = dimTag[2]
-            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
-            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
-            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
-            for ii in 1:length(elementTypes)
-                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
-                #nnoe = reshape(elemNodeTags[ii], numNodes, :)'
-                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order+1))
-                numIntPoints = length(intWeights)
-                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
-                h = reshape(fun, :, numIntPoints)
-                nnet = zeros(Int, length(elementTags[ii]), numNodes)
-                #H = zeros(pdim * numIntPoints, pdim * numNodes)
-                for j in 1:numIntPoints
-                    for k in 1:numNodes
-                        for l in 1:pdim
-                            #H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
-                        end
-                    end
-                end
-                #f1 = zeros(pdim * numNodes)
-                #nn2 = zeros(Int, pdim * numNodes)
-                for l in 1:length(elementTags[ii])
-                    elem = elementTags[ii][l]
-                    for k in 1:numNodes
-                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
-                    end
-                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
-                    Jac = reshape(jac, 3, :)
-                    s1 = 0
-                    for j in 1:numIntPoints
-                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
-                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
-                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                        f, d = gmsh.view.probe(field, x, y, z)
-                        r = x
-                        #H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
-                        ############### NANSON ######## 3D ###################################
-                        if DIM == 3 && dim == 3
-                            Ja = jacDet[j]
-                        elseif DIM == 3 && dim == 2
-                            xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
-                            yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
-                            zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
-                            Ja = √(xy^2 + yz^2 + zx^2)
-                        elseif DIM == 3 && dim == 1
-                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
-                        elseif DIM == 3 && dim == 0
-                            Ja = 1
-                        ############ 2D #######################################################
-                        elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
-                            Ja = jacDet[j] * b
-                        elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
-                            Ja = 2π * jacDet[j] * r
-                        elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
-                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
-                        elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
-                            Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
-                        elseif DIM == 2 && dim == 0
-                            Ja = 1
-                        ############ 1D #######################################################
-                        else
-                            error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
-                        end
-                        #f1 += H1' * f * Ja * intWeights[j]
-                        s1 += f[1] * Ja * intWeights[j]
-                    end
-                    for k in 1:pdim
-                        #nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
-                    end
-                    sum0 += s1
-                end
-            end
-        end
-    end
-    return sum0
-end
-
-"""
-    FEM.resultant(field, phName; dim=2)
-
-Solves the resultant of `field`` (load vector or heat flux vector) on `phName` physical group.
-Dimension of the problem (DoF per node) van be given with `dim`. Return the resultant(s) in `tuple`.
-Number of the members in `tuple` depends on `dim`.
+Solves the resultant of `field` on `phName` physical group.
+Return the resultant(s) in `tuple`.
+Number of the members in `tuple` depends on the dimension of `problem`.
+It can solve the resultant of a load vector (sum of the elements of the vector),
+if `field` is a vector of floats. If `field` is a view (tag of a view in gmsh), then
+the integral of the field is solved. `field` must have only one component.
 
 Return: `res``
 
@@ -3745,9 +3626,13 @@ Types:
 - `resy`: Float64 
 - `resz`: Float64 
 """
-function resultant(field, phName; dim=2, axiSymmetric=false)
+function resultant(problem, field, phName)
     if !isa(field, Vector) && !isa(field, Matrix)
-        error("resultant: field must be a Vector or Matrix")
+        return resultant2(problem, field, phName)
+    end
+    dim = problem.pdim
+    if problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction"
+        axiSymmetric = true
     end
     ph1 = getTagForPhysicalName(phName)
     nodes0, coords = gmsh.model.mesh.getNodesForPhysicalGroup(-1,ph1)
@@ -3766,6 +3651,103 @@ function resultant(field, phName; dim=2, axiSymmetric=false)
     elseif dim == 3
         return s[1], s[2], s[3]
     end
+end
+
+function resultant2(problem, field, phName)
+    gmsh.model.setCurrent(problem.name)
+    pdim = problem.pdim
+    DIM = problem.dim
+    b = problem.thickness
+    non = problem.non
+    dof = pdim * non
+    fp = zeros(dof)
+    ncoord2 = zeros(3 * problem.non)
+    sum0 = 0
+    dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
+    if numComponents != 1
+        error("resultant: number of component of the field must be one.")
+    end
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+    for i ∈ 1:length(dimTags)
+        dimTag = dimTags[i]
+        dim = dimTag[1]
+        tag = dimTag[2]
+        elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+        nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+        for ii in 1:length(elementTypes)
+            elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+            #nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order+1))
+            numIntPoints = length(intWeights)
+            comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+            h = reshape(fun, :, numIntPoints)
+            nnet = zeros(Int, length(elementTags[ii]), numNodes)
+            #H = zeros(pdim * numIntPoints, pdim * numNodes)
+            for j in 1:numIntPoints
+                for k in 1:numNodes
+                    for l in 1:pdim
+                        #H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                    end
+                end
+            end
+            #f1 = zeros(pdim * numNodes)
+            #nn2 = zeros(Int, pdim * numNodes)
+            for l in 1:length(elementTags[ii])
+                elem = elementTags[ii][l]
+                for k in 1:numNodes
+                    nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                end
+                jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                Jac = reshape(jac, 3, :)
+                s1 = 0
+                for j in 1:numIntPoints
+                    x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                    y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                    z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                    f, d = gmsh.view.probe(field, x, y, z)
+                    r = x
+                    #H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                    ############### NANSON ######## 3D ###################################
+                    if DIM == 3 && dim == 3
+                        Ja = jacDet[j]
+                    elseif DIM == 3 && dim == 2
+                        xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                        yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                        zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                        Ja = √(xy^2 + yz^2 + zx^2)
+                    elseif DIM == 3 && dim == 1
+                        Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                    elseif DIM == 3 && dim == 0
+                        Ja = 1
+                    ############ 2D #######################################################
+                    elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        Ja = jacDet[j] * b
+                    elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                        Ja = 2π * jacDet[j] * r
+                    elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                    elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                        Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                    elseif DIM == 2 && dim == 0
+                        Ja = 1
+                    ############ 1D #######################################################
+                    else
+                        error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                    end
+                    #f1 += H1' * f * Ja * intWeights[j]
+                    s1 += f[1] * Ja * intWeights[j]
+                end
+                for k in 1:pdim
+                    #nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                end
+                sum0 += s1
+            end
+        end
+    end
+    return sum0
 end
 
 #=
@@ -4262,8 +4244,8 @@ end
     FEM.FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)
 
 Solves a transient heat conduction problem using Finite Difference Method (FDM).
-Introducing a `ϑ` parameter, special cases can be used as the Forward Euler (ϑ=0),
-Backward Euler (ϑ=0), Crank-Nicolson (ϑ=0.5) and intermediate cases (0<ϑ<1).
+Introducing a `ϑ` parameter, special cases can be used as the Forward Euler (explicit, ϑ=0),
+Backward Euler (implicit, ϑ=1), Crank-Nicolson (ϑ=0.5) and intermediate cases (0<ϑ<1).
 (This method is known as ϑ-method. See [^5].)
 `K` is the heat conduction matrix, `C` is the heat capacity matrix,
 `q` is the heat flux vector, `T0` is the initial temperature, `tₘₐₓ` is the upper 
