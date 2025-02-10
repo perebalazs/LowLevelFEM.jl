@@ -3598,7 +3598,7 @@ function solveBuckling(problem, loads, constraints; n=6)
 end
 
 """
-    FEM.resultant(problem, field, phName)
+    FEM.resultant(problem, field, phName; grad=false, component=:x)
 
 Solves the resultant of `field` on `phName` physical group.
 Return the resultant(s) in `tuple`.
@@ -3606,6 +3606,8 @@ Number of the members in `tuple` depends on the dimension of `problem`.
 It can solve the resultant of a load vector (sum of the elements of the vector),
 if `field` is a vector of floats. If `field` is a view (tag of a view in gmsh), then
 the integral of the field is solved. `field` must have only one component.
+If `grad` is `true`, then the gradient of the `field` will be evaluated and `component` of the gradient
+(`:x`, `:y` or `:z`) will be used to solve the resultant.
 
 Return: `res``
 
@@ -3626,11 +3628,12 @@ Types:
 - `resy`: Float64 
 - `resz`: Float64 
 """
-function resultant(problem, field, phName)
+function resultant(problem, field, phName; grad=false, component=:x)
     if !isa(field, Vector) && !isa(field, Matrix)
-        return resultant2(problem, field, phName)
+        return resultant2(problem, field, phName, grad, component)
     end
     dim = problem.pdim
+    axiSymmetric = false
     if problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction"
         axiSymmetric = true
     end
@@ -3653,7 +3656,7 @@ function resultant(problem, field, phName)
     end
 end
 
-function resultant2(problem, field, phName)
+function resultant2(problem, field, phName, grad, component)
     gmsh.model.setCurrent(problem.name)
     pdim = problem.pdim
     DIM = problem.dim
@@ -3663,6 +3666,15 @@ function resultant2(problem, field, phName)
     fp = zeros(dof)
     ncoord2 = zeros(3 * problem.non)
     sum0 = 0
+    if component == :x
+        comp0 = 1
+    elseif component == :y
+        comp0 = 2
+    elseif component == :z
+        comp0 = 3
+    else
+        error("resultant: invalid component '$component'")
+    end
     dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
     if numComponents != 1
         error("resultant: number of component of the field must be one.")
@@ -3707,7 +3719,7 @@ function resultant2(problem, field, phName)
                     x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
                     y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                     z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                    f, d = gmsh.view.probe(field, x, y, z)
+                    f, d = gmsh.view.probe(field, x, y, z, -1, -1, grad)
                     r = x
                     #H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
                     ############### NANSON ######## 3D ###################################
@@ -3738,7 +3750,7 @@ function resultant2(problem, field, phName)
                         error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                     end
                     #f1 += H1' * f * Ja * intWeights[j]
-                    s1 += f[1] * Ja * intWeights[j]
+                    s1 += f[comp0] * Ja * intWeights[j]
                 end
                 for k in 1:pdim
                     #nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)

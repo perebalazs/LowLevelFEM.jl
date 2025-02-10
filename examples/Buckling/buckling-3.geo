@@ -21,7 +21,7 @@ Transfinite Volume{2};
 //+
 Recombine Surface {7, 1, 11, 6, 9, 4, 3, 8, 10, 2, 5};
 
-//Mesh.ElementOrder = 1;
+Mesh.ElementOrder = 2;
 //Mesh.SecondOrderIncomplete = 1;
 //+
 Mesh 3;
