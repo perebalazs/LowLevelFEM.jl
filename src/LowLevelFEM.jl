@@ -45,12 +45,12 @@ end
 
 A structure containing the most important data of the problem. 
 - Parts of the model with their material constants. More materials can be given. (see `material` function)
-- type of the problem: 3D "Solid", "PlaneStrain", "PlaneStress", "AxiSymmetric",
-  "PlaneHeatConduction", "HeatConduction", "AxiSymmetricHeatConduction".
-  In the case of "AxiSymmetric", the axis of symmetry is the "y" axis, 
+- type of the problem: 3D `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`,
+  `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`.
+  In the case of `:AxiSymmetric`, the axis of symmetry is the "y" axis, 
   while the geometry must be drawn in the positive "x" half-plane.
 - bandwidth optimization using built-in `gmsh` function.
-  Possibilities: "RCMK", "Hilbert", "Metis" or "none" (default)
+  Possibilities: `:RCMK`, `:Hilbert`, `:Metis` or `:none` (default)
 - dimension of the problem, determined from `type`
 - material constants: Young's modulus, Poisson's ratio,
   mass density, heat conduction corfficient, specific heat, heat 
@@ -60,7 +60,7 @@ A structure containing the most important data of the problem.
 
 Types:
 - `materials`: Material
-- `type`: String
+- `type`: Symbol
 - `bandwidth`: String
 - `dim`: Integer
 - `thickness`: Float64
@@ -68,36 +68,36 @@ Types:
 """
 struct Problem
     name::String
-    type::String
+    type::Symbol
     dim::Int64
     pdim::Int64
     material::Vector{Material}
     thickness::Float64
     non::Int64
-    function Problem(mat; thickness=1, type="Solid", bandwidth="none")
-        if type == "Solid"
+    function Problem(mat; thickness=1, type=:Solid, bandwidth=:none)
+        if type == :Solid
             dim = 3
             pdim = 3
-        elseif type == "PlaneStress"
+        elseif type == :PlaneStress
             dim = 2
             pdim = 2
-        elseif type == "PlaneStrain"
+        elseif type == :PlaneStrain
             dim = 2
             pdim = 2
-        elseif type == "AxiSymmetric"
+        elseif type == :AxiSymmetric
             dim = 2
             pdim = 2
-        elseif type == "PlaneHeatConduction"
+        elseif type == :PlaneHeatConduction
             dim = 2
             pdim = 1
-        elseif type == "HeatConduction"
+        elseif type == :HeatConduction
             dim = 3
             pdim = 1
-        elseif type == "AxiSymmetricHeatConduction"
+        elseif type == :AxiSymmetricHeatConduction
             dim = 2
             pdim = 1
         else
-            error("Problem type can be: 'Solid', PlaneStress', 'PlaneStrain', 'AxiSymmetric', 'PlaneHeatConduction', 'HeatConduction' or 'AxiSymmetricHeatConduction'. Now problem type = $type ????")
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction` or `:AxiSymmetricHeatConduction`. Now problem type = $type ????")
         end
         if !isa(mat, Vector)
             error("Problem: materials are not arranged in a vector. Put them in [...]")
@@ -127,13 +127,13 @@ struct Problem
             end
         end
 
-        if bandwidth != "RCMK" && bandwidth != "Hilbert" && bandwidth != "Metis" && bandwidth != "none"
-            error("Problem: bandwidth can be 'Hilbert', 'Metis', 'RCMK' or 'none'. Now it is '$(bandwidth)'")
+        if bandwidth != :RCMK && bandwidth != :Hilbert && bandwidth != :Metis && bandwidth != :none
+            error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
         end
 
-        method = bandwidth == "none" ? "RCMK" : bandwidth
+        method = bandwidth == :none ? :RCMK : bandwidth
         oldTags, newTags = gmsh.model.mesh.computeRenumbering(method, elemTags)
-        if bandwidth == "none"
+        if bandwidth == :none
             permOldTags = sortperm(oldTags)
             sortNewTags = 1:length(oldTags)
             newTags[permOldTags] = sortNewTags
@@ -152,19 +152,19 @@ A structure containing the data of a heat flux field.
 - sigma: vector of ElementNodeData type heat flux data (see gmsh.jl)
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in sigma (for animations).
-- type: type of data (eg. heat flux "q")
+- type: type of data (eg. heat flux `:q`)
 
 Types:
 - `sigma`: Vector{Matrix{Float64}}
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
-- `type`: String
+- `type`: Symbol
 """
 struct VectorField
     sigma::Vector{Matrix{Float64}}
     numElem::Vector{Int}
     nsteps::Int
-    type::String
+    type::Symbol
 end
 
 """
@@ -174,19 +174,19 @@ A structure containing the data of a stress or strain field.
 - sigma: vector of ElementNodeData type stress data (see gmsh.jl)
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in sigma (for animations).
-- type: type of data (eg. stress "s" and strain "e")
+- type: type of data (eg. stress `:s` and strain `:e`)
 
 Types:
 - `sigma`: Vector{Matrix{Float64}}
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
-- `type`: String
+- `type`: Symbol
 """
 struct TensorField
     sigma::Vector{Matrix{Float64}}
     numElem::Vector{Int}
     nsteps::Int
-    type::String
+    type::Symbol
 end
 """
     CoordinateSystem(vec1, vec2)
@@ -457,7 +457,7 @@ Types:
 - `stiffMat`: SparseMatrix
 """
 function stiffnessMatrix(problem; elements=[])
-    if problem.type == "AxiSymmetric"
+    if problem.type == :AxiSymmetric
         return stiffnessMatrixAXI(problem, elements=elements)
     else
         return stiffnessMatrixSolid(problem, elements=elements)
@@ -483,7 +483,7 @@ function stiffnessMatrixSolid(problem; elements=[])
         ν = problem.material[ipg].ν
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 3 && problem.type == "Solid"
+        if problem.dim == 3 && problem.type == :Solid
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
                 ν 1-ν ν 0 0 0;
                 ν ν 1-ν 0 0 0;
@@ -493,13 +493,13 @@ function stiffnessMatrixSolid(problem; elements=[])
 
             rowsOfB = 6
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneStress"
+        elseif problem.dim == 2 && problem.type == :PlaneStress
             D = E / (1 - ν^2) * [1 ν 0;
                 ν 1 0;
                 0 0 (1-ν)/2]
             rowsOfB = 3
             b = problem.thickness
-        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
                 ν 1-ν 0;
                 0 0 (1-2ν)/2]
@@ -609,7 +609,7 @@ function stiffnessMatrixAXI(problem; elements=[])
         ν = problem.material[ipg].ν
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 2 && problem.type == "AxiSymmetric"
+        if problem.dim == 2 && problem.type == :AxiSymmetric
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
                 ν 1-ν ν 0;
                 ν ν 1-ν 0;
@@ -714,7 +714,7 @@ Types:
 - `stiffMat`: SparseMatrix
 """
 function nonLinearStiffnessMatrix(problem, q; elements=[])
-    if problem.type == "AxiSymmetric"
+    if problem.type == :AxiSymmetric
         return nonLinearStiffnessMatrixAXI(problem, elements=elements)
     else
         return nonLinearStiffnessMatrixSolid(problem, q, elements=elements)
@@ -741,7 +741,7 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
         ν = problem.material[ipg].ν
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 3 && problem.type == "Solid"
+        if problem.dim == 3 && problem.type == :Solid
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
                 ν 1-ν ν 0 0 0;
                 ν ν 1-ν 0 0 0;
@@ -751,13 +751,13 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
 
             rowsOfB = 6
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneStress"
+        elseif problem.dim == 2 && problem.type == :PlaneStress
             D = E / (1 - ν^2) * [1 ν 0;
                 ν 1 0;
                 0 0 (1-ν)/2]
             rowsOfB = 3
             b = problem.thickness
-        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
                 ν 1-ν 0;
                 0 0 (1-2ν)/2]
@@ -845,7 +845,7 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
                         ∂H1 = ∂H[k*dim-(dim-1):k*dim, 1:numNodes]
                         σ1 = D * B1 * q1
-                        if problem.type == "Solid"
+                        if problem.type == :Solid
                             S1[1,1] = σ1[1]
                             S1[2,2] = σ1[2]
                             S1[3,3] = σ1[3]
@@ -894,7 +894,7 @@ function nonLinearStiffnessMatrixAXI(problem; elements=[])
         ν = problem.material[ipg].ν
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 2 && problem.type == "AxiSymmetric"
+        if problem.dim == 2 && problem.type == :AxiSymmetric
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
                 ν 1-ν ν 0;
                 ν ν 1-ν 0;
@@ -997,7 +997,7 @@ Types:
 - `heatCondMat`: SparseMatrix
 """
 function heatConductionMatrix(problem; elements=[])
-    if problem.type == "AxiSymmetricHeatConduction"
+    if problem.type == :AxiSymmetricHeatConduction
         return heatCondMatrixAXI(problem, elements=elements)
     else
         return heatCondMatrixSolid(problem, elements=elements)
@@ -1023,9 +1023,9 @@ function heatCondMatrixSolid(problem; elements=[])
         dim = problem.dim
         pdim = problem.pdim
         b = problem.thickness
-        if problem.type == "HeatConduction"
+        if problem.type == :HeatConduction
             rowsOfB = 3
-        elseif problem.type == "PlaneHeatConduction"
+        elseif problem.type == :PlaneHeatConduction
             rowsOfB = 2
         else
             error("heatCondMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
@@ -1126,7 +1126,7 @@ function heatCondMatrixAXI(problem; elements=[])
         kk = problem.material[ipg].k
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 2 && problem.type == "AxiSymmetricHeatConduction"
+        if problem.dim == 2 && problem.type == :AxiSymmetricHeatConduction
             rowsOfB = 2
         else
             error("heatCondMatrixAXI: dimension is $(problem.dim), problem type is $(problem.type).")
@@ -1243,16 +1243,16 @@ function massMatrix(problem; elements=[], lumped=true)
         dim = problem.dim
         pdim = problem.pdim
         ρ = problem.material[ipg].ρ
-        if problem.dim == 3 && problem.type == "Solid"
+        if problem.dim == 3 && problem.type == :Solid
             rowsOfH = 3
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneStress"
+        elseif problem.dim == 2 && problem.type == :PlaneStress
             rowsOfH = 2
             b = problem.thickness
-        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
             rowsOfH = 2
             b = 1
-        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
             rowsOfH = 2
             b = 1
         else
@@ -1291,7 +1291,7 @@ function massMatrix(problem; elements=[], lumped=true)
                     end
                 end
                 M1 = zeros(pdim * numNodes, pdim * numNodes)
-                if problem.type != "AxiSymmetric"
+                if problem.type != :AxiSymmetric
                     for j in 1:length(elemTags[i])
                         elem = elemTags[i][j]
                         for k in 1:numNodes
@@ -1311,7 +1311,7 @@ function massMatrix(problem; elements=[], lumped=true)
                         append!(J, nn2[Jidx[:]])
                         append!(V, M1[:])
                     end
-                elseif problem.type == "AxiSymmetric"
+                elseif problem.type == :AxiSymmetric
                     for j in 1:length(elemTags[i])
                         elem = elemTags[i][j]
                         for k in 1:numNodes
@@ -1378,13 +1378,13 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
         pdim = problem.pdim
         c = problem.material[ipg].c
         ρ = problem.material[ipg].ρ
-        if problem.dim == 3 && problem.type == "HeatConduction"
+        if problem.dim == 3 && problem.type == :HeatConduction
             rowsOfH = 3
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneHeatConduction"
+        elseif problem.dim == 2 && problem.type == :PlaneHeatConduction
             rowsOfH = 2
             b = 1
-        elseif problem.dim == 2 && problem.type == "AxiSymmetricHeatConduction"
+        elseif problem.dim == 2 && problem.type == :AxiSymmetricHeatConduction
             rowsOfH = 2
             b = 1
         else
@@ -1423,7 +1423,7 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
                     end
                 end
                 M1 = zeros(pdim * numNodes, pdim * numNodes)
-                if problem.type != "AxiSymmetricHeatConduction"
+                if problem.type != :AxiSymmetricHeatConduction
                     for j in 1:length(elemTags[i])
                         elem = elemTags[i][j]
                         for k in 1:numNodes
@@ -1443,7 +1443,7 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
                         append!(J, nn2[Jidx[:]])
                         append!(V, M1[:])
                     end
-                elseif problem.type == "AxiSymmetricHeatConduction"
+                elseif problem.type == :AxiSymmetricHeatConduction
                     for j in 1:length(elemTags[i])
                         elem = elemTags[i][j]
                         for k in 1:numNodes
@@ -1514,7 +1514,7 @@ function latentHeatMatrix(problem, u, v, T0)
         κ = E / 3 / (1 - 2ν)
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 3 && problem.type == "HeatConduction"
+        if problem.dim == 3 && problem.type == :HeatConduction
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
                 ν 1-ν ν 0 0 0;
                 ν ν 1-ν 0 0 0;
@@ -1524,7 +1524,7 @@ function latentHeatMatrix(problem, u, v, T0)
 
             rowsOfB = 6
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneHeatConduction"
+        elseif problem.dim == 2 && problem.type == :PlaneHeatConduction
             D = E / (1 - ν^2) * [1 ν 0;
                 ν 1 0;
                 0 0 (1-ν)/2]
@@ -1816,13 +1816,13 @@ function elasticSupportMatrix(problem, elSupports)
                         elseif DIM == 3 && dim == 0
                             Ja = 1
                         ############ 2D #######################################################
-                        elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
                             Ja = jacDet[j] * b
-                        elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                        elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
                             Ja = 2π * jacDet[j] * r
-                        elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
                             Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
-                        elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                        elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
                             Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
                         elseif DIM == 2 && dim == 0
                             Ja = 1
@@ -1988,13 +1988,13 @@ function loadVector(problem, loads)
                         elseif DIM == 3 && dim == 0
                             Ja = 1
                         ############ 2D #######################################################
-                        elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
                             Ja = jacDet[j] * b
-                        elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                        elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
                             Ja = 2π * jacDet[j] * r
-                        elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                        elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
                             Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
-                        elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                        elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
                             Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
                         elseif DIM == 2 && dim == 0
                             Ja = 1
@@ -2110,7 +2110,7 @@ Types:
 - `thermLoadVec`: Vector{Float64}
 """
 function thermalLoadVector(problem, T; T₀=1im)
-    if problem.type == "AxiSymmetric"
+    if problem.type == :AxiSymmetric
         return thermalLoadVectorAXI(problem, T, T₀=T₀)
     else
         return thermalLoadVectorSolid(problem, T, T₀=T₀)
@@ -2136,7 +2136,7 @@ function thermalLoadVectorSolid(problem, T; T₀=1im)
         E = problem.material[ipg].E
         ν = problem.material[ipg].ν
         α = problem.material[ipg].α
-        if problem.dim == 3 && problem.type == "Solid"
+        if problem.dim == 3 && problem.type == :Solid
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
                 ν 1-ν ν 0 0 0;
                 ν ν 1-ν 0 0 0;
@@ -2147,14 +2147,14 @@ function thermalLoadVectorSolid(problem, T; T₀=1im)
             rowsOfB = 6
             b = α
             E0 = [1,1,1,0,0,0]
-        elseif problem.dim == 2 && problem.type == "PlaneStress"
+        elseif problem.dim == 2 && problem.type == :PlaneStress
             D = E / (1 - ν^2) * [1 ν 0;
                 ν 1 0;
                 0 0 (1-ν)/2]
             rowsOfB = 3
             b = problem.thickness * α
             E0 = [1,1,0]
-        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
                 ν 1-ν 0;
                 0 0 (1-2ν)/2]
@@ -2265,7 +2265,7 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
         E = problem.material[ipg].E
         ν = problem.material[ipg].ν
         α = problem.material[ipg].α
-        if problem.dim == 2 && problem.type == "AxiSymmetric"
+        if problem.dim == 2 && problem.type == :AxiSymmetric
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
                 ν 1-ν ν 0;
                 ν ν 1-ν 0;
@@ -2805,7 +2805,7 @@ Types:
 function solveStrain(problem, q; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
-    type = "e"
+    type = :e
     nsteps = size(q, 2)
     ε = []
     numElem = Int[]
@@ -2822,19 +2822,19 @@ function solveStrain(problem, q; DoFResults=false)
         phName = problem.material[ipg].phName
         ν = problem.material[ipg].ν
         dim = 0
-        if problem.dim == 3 && problem.type == "Solid"
+        if problem.dim == 3 && problem.type == :Solid
             dim = 3
             rowsOfB = 6
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneStress"
+        elseif problem.dim == 2 && problem.type == :PlaneStress
             dim = 2
             rowsOfB = 3
             b = problem.thickness
-        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
             dim = 2
             rowsOfB = 3
             b = 1
-        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
             dim = 2
             rowsOfB = 4
             b = 1
@@ -2912,7 +2912,7 @@ function solveStrain(problem, q; DoFResults=false)
                     end
                     e = zeros(9numNodes, nsteps) # tensors have nine elements
                     for k in 1:numNodes
-                        if rowsOfB == 6 && dim == 3 && problem.type == "Solid"
+                        if rowsOfB == 6 && dim == 3 && problem.type == :Solid
                             B1 = B[k*6-5:k*6, 1:3*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
@@ -2925,7 +2925,7 @@ function solveStrain(problem, q; DoFResults=false)
                                     E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], e0[6], e0[4], e0[2], e0[5], e0[6], e0[5], e0[3]]
                                 end
                             end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStress"
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
                             B1 = B[k*3-2:k*3, 1:2*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
@@ -2938,7 +2938,7 @@ function solveStrain(problem, q; DoFResults=false)
                                     E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
                                 end
                             end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStrain"
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
                             B1 = B[k*3-2:k*3, 1:2*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
@@ -2951,7 +2951,7 @@ function solveStrain(problem, q; DoFResults=false)
                                     E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν*(e0[1]+e0[2])]
                                 end
                             end
-                        elseif rowsOfB == 4 && dim == 2 && problem.type == "AxiSymmetric"
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
                             B1 = B[k*4-3:k*4, 1:2*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * q[nn2, kk]
@@ -3016,7 +3016,7 @@ Types:
 function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
-    type = "s"
+    type = :s
     nsteps = size(q, 2)
     σ = []
     numElem = Int[]
@@ -3039,7 +3039,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
         α = problem.material[ipg].α
         ακ = α * E / ν / (1 - 2ν)
         dim = 0
-        if problem.dim == 3 && problem.type == "Solid"
+        if problem.dim == 3 && problem.type == :Solid
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
                 ν 1-ν ν 0 0 0;
                 ν ν 1-ν 0 0 0;
@@ -3051,7 +3051,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
             rowsOfB = 6
             b = 1
             E0 = [1,1,1,0,0,0]
-        elseif problem.dim == 2 && problem.type == "PlaneStress"
+        elseif problem.dim == 2 && problem.type == :PlaneStress
             D = E / (1 - ν^2) * [1 ν 0;
                 ν 1 0;
                 0 0 (1-ν)/2]
@@ -3059,7 +3059,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
             rowsOfB = 3
             b = problem.thickness
             E0 = [1,1,0]
-        elseif problem.dim == 2 && problem.type == "PlaneStrain"
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
                 ν 1-ν 0;
                 0 0 (1-2ν)/2]
@@ -3067,7 +3067,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
             rowsOfB = 3
             b = 1
             E0 = [1,1,0]
-        elseif problem.dim == 2 && problem.type == "AxiSymmetric"
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
             D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
                 ν 1-ν ν 0;
                 ν ν 1-ν 0;
@@ -3162,7 +3162,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                     end
                     s = zeros(9numNodes, nsteps) # tensors have nine elements
                     for k in 1:numNodes
-                        if rowsOfB == 6 && pdim == 3 && problem.type == "Solid"
+                        if rowsOfB == 6 && pdim == 3 && problem.type == :Solid
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
@@ -3179,7 +3179,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                                     S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
                                 end
                             end
-                        elseif rowsOfB == 3 && pdim == 2 && problem.type == "PlaneStress"
+                        elseif rowsOfB == 3 && pdim == 2 && problem.type == :PlaneStress
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
@@ -3196,7 +3196,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                                     S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, 0]
                                 end
                             end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == "PlaneStrain"
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
@@ -3214,7 +3214,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                                     S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, ν*(s0[1]+s0[2])]
                                 end
                             end
-                        elseif rowsOfB == 4 && dim == 2 && problem.type == "AxiSymmetric"
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
                             B1 = B[k*4-3:k*4, 1:2*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q[nn2, kk]
@@ -3275,7 +3275,7 @@ Types:
 function solveHeatFlux(problem, T; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
-    type = "q"
+    type = :q
     nsteps = size(T, 2)
     σ = []
     numElem = Int[]
@@ -3292,15 +3292,15 @@ function solveHeatFlux(problem, T; DoFResults=false)
         phName = problem.material[ipg].phName
         kT = -problem.material[ipg].k
         dim = 0
-        if problem.dim == 3 && problem.type == "HeatConduction"
+        if problem.dim == 3 && problem.type == :HeatConduction
             dim = 3
             rowsOfB = 3
             b = 1
-        elseif problem.dim == 2 && problem.type == "PlaneHeatConduction"
+        elseif problem.dim == 2 && problem.type == :PlaneHeatConduction
             dim = 2
             rowsOfB = 2
             b = 1
-        elseif problem.dim == 2 && problem.type == "AxiSymmetricHeatConduction"
+        elseif problem.dim == 2 && problem.type == :AxiSymmetricHeatConduction
             dim = 2
             rowsOfB = 2
             b = 1
@@ -3634,7 +3634,7 @@ function resultant(problem, field, phName; grad=false, component=:x)
     end
     dim = problem.pdim
     axiSymmetric = false
-    if problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction"
+    if problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction
         axiSymmetric = true
     end
     ph1 = getTagForPhysicalName(phName)
@@ -3735,13 +3735,13 @@ function resultant2(problem, field, phName, grad, component)
                     elseif DIM == 3 && dim == 0
                         Ja = 1
                     ############ 2D #######################################################
-                    elseif DIM == 2 && dim == 2 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                    elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
                         Ja = jacDet[j] * b
-                    elseif DIM == 2 && dim == 2 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                    elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
                         Ja = 2π * jacDet[j] * r
-                    elseif DIM == 2 && dim == 1 && problem.type != "AxiSymmetric" && problem.type != "AxiSymmetricHeatConduction"
+                    elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
                         Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
-                    elseif DIM == 2 && dim == 1 && (problem.type == "AxiSymmetric" || problem.type == "AxiSymmetricHeatConduction")
+                    elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
                         Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
                     elseif DIM == 2 && dim == 0
                         Ja = 1
@@ -3766,7 +3766,7 @@ end
 function elementToNode(problem, field)
     if field.type == "q"
         comp = 3
-    elseif field.type == "s" || field.type == "e"
+    elseif field.type == :s || field.type == :e
         comp = 9
     end
     dof = problem.non * comp
@@ -4324,10 +4324,10 @@ Gives some functions (graphs) for accuracy analysis of the CDM method.
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
 **Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
-- "SR": spectral radius
-- "PDR": physical damping ratio
-- "ADR": algorithmic damping ratio
-- "PE": period error
+- `:SR`: spectral radius
+- `:PDR`: physical damping ratio
+- `:ADR`: algorithmic damping ratio
+- `:PE`: period error
 For details see [^3]. 
 `n` is the number of points in the graph. The damping matrix is assembled in the 
 following ways: **C**=α**M**+β**K** or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅. 
@@ -4384,29 +4384,29 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
         λ = eig.values[idx]
         σ = real(λ)
         ε = imag(λ)
-        if type == "SR"
+        if type == :SR
             x[i] = log((ω[i] / 2π) * Δt)
             y[i] = ρ
-        elseif type == "ADR"
+        elseif type == :ADR
             x[i] = (ω[i] / 2π) * Δt
             Ω0 = √((log(ρ))^2 + (atan(ε,σ))^2 / 4)
             y[i] = -log(ρ) / 2Ω0
-        elseif type == "PDR"
+        elseif type == :PDR
             x[i] = (ω[i] / 2π) * Δt
             for j in 1:length(β)
                 y[i] += β[j] / 2 * (2π * x[i] / Δt) ^ (2j-1)
             end
-        elseif type == "PE"
+        elseif type == :PE
             x[i] = (ω[i] / 2π) * Δt
             Ω0 = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
             y[i] = 1 - Ω0/(Δt*ω[i])
         else
             str1 = "CDMaccuracyAnalysis: wrong analysis type: $type\n"
             str2 = "Possibilities:\n"
-            str3 = "\nSR: spectral radius\n"
-            str4 = "PDR: physical damping ratio\n"
-            str5 = "ADR: algorithmic damping ratio\n"
-            str6 = "PE: period error\n"
+            str3 = "\n:SR - spectral radius\n"
+            str4 = ":PDR - physical damping ratio\n"
+            str5 = ":ADR - algorithmic damping ratio\n"
+            str6 = ":PE - period error\n"
             str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
             str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
             str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
@@ -4423,9 +4423,9 @@ Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1].
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
 **Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
-- "SR": spectral radius
-- "ADR": algorithmic damping ratio
-- "PE": period error
+- `:SR`: spectral radius
+- `:ADR`: algorithmic damping ratio
+- `:PE`: period error
 For details see [^2] and [^3]. 
 `n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
 see [^1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
@@ -4471,24 +4471,24 @@ function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
         λ = eig.values[idx]
         σ = real(λ)
         ε = imag(λ)
-        if type == "SR"
+        if type == :SR
             x[i] = log(invT[i] * Δt)
             y[i] = ρ
-        elseif type == "ADR"
+        elseif type == :ADR
             x[i] = invT[i] * Δt
             Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
             y[i] = -log(ρ) / 2Ω
             #y[i] = -log(ρ) / atan(ε, σ)
-        elseif type == "PE"
+        elseif type == :PE
             x[i] = invT[i] * Δt
             Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
             y[i] = 1 - Ω/(2π*Δt*invT[i])
         else
             str1 = "HHTaccuracyAnalysis: wrong analysis type: $type\n"
             str2 = "Possibilities:\n"
-            str3 = "\nSR: spectral radius\n"
-            str5 = "ADR: algorithmic damping ratio\n"
-            str6 = "PE: period error\n"
+            str3 = "\n:SR - spectral radius\n"
+            str5 = ":ADR - algorithmic damping ratio\n"
+            str6 = ":PE - period error\n"
             str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
             str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
             str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
@@ -4521,7 +4521,7 @@ Types:
 - `xy`: Tuple{Vector{Float64},Vector{Float64}}
 """
 
-function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type="SR", n=100, ϑ=0.5)
+function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type=:SR, n=100, ϑ=0.5)
     x = zeros(n)
     y = similar(x)
     Λ = range(λₘᵢₙ, length=n, stop=λₘₐₓ)
@@ -4532,7 +4532,7 @@ function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type="SR", n=100, ϑ
         A = A1 \ A2
 
         ρ = abs(A)
-        if type == "SR"
+        if type == :SR
             x[i] = Λ[i] * Δt
             y[i] = ρ
         else
@@ -4669,9 +4669,9 @@ end
     FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)
 
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
-the component of the field ("uvec", "ux", "uy", "uz", "vvec", "vx", "vy", "vz",
-"qvec", "qx", "qy", "qz", "T", "p", "qn", "s", "sx", "sy", "sz", "sxy", "syx", "syz",
-"szy", "szx", "sxz", "e", "ex", "ey", "ez", "exy", "eyx", "eyz", "ezy", "ezx", "exz", "seqv"),
+the component of the field (:uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
+:qvec, :qx, :qy, :qz, :T, :p, "qn", :s, :sx, :sy, :sz, :sxy, :syx, :syz,
+:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv),
 `t` is a vector of time steps (same number of columns as `q`), `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. If `q` has more columns, then a sequence of results
@@ -4696,7 +4696,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     pdim = div(size(q,1), problem.non) 
     nodeTags = []
     ##############################################################################
-    if problem.type == "Reynolds" || problem.type == "Reynolds1D" || problem.type == "NavierStokes"
+    if problem.type == :Reynolds || problem.type == :Reynolds1D || problem.type == :NavierStokes
         phName = problem.geometry.phName
         tag = getTagForPhysicalName(phName)
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
@@ -4717,12 +4717,12 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     if size(q, 2) != length(t)
         error("showDoFResults: number of time steps missmatch ($(size(q,2)) <==> $(length(t))).")
     end
-    if comp[1] == 's' || comp[1] == 'e'
+    if comp == :s || comp == :e
         pdim = 9
     end
     for j in 1:length(t)
         k = 1im
-        if comp == "uvec" || comp == "vvec" || comp == "qvec"
+        if comp == :uvec || comp == :vvec || comp == :qvec
             nc = 3
             u = zeros(3 * non)
             for i in 1:length(nodeTags)
@@ -4730,7 +4730,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
                 u[3i-1] = pdim > 1 ? q[pdim*nodeTags[i]-(pdim-2), j] : 0
                 u[3i-0] = pdim == 3 ? q[pdim*nodeTags[i]-(pdim-3), j] : 0
             end
-        elseif comp == "s" || comp == "e"
+        elseif comp == :s || comp == :e
             nc = 9
             u = zeros(9 * non)
             for i in 1:length(nodeTags)
@@ -4746,25 +4746,25 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
             end
         else
             nc = 1
-            if comp == "ux" || comp == "vx" || comp == "p" || comp == "T" || comp == "qx"  || comp == "qn" || comp == "sx" || comp == "ex"
+            if comp == :ux || comp == :vx || comp == :p || comp == :T || comp == :qx  || comp == :qn || comp == :sx || comp == :ex
                 k = 1
-            elseif comp == "uy" || comp == "vy" || comp == "qy" || comp == "syx" || comp == "eyx"
+            elseif comp == :uy || comp == :vy || comp == :qy || comp == :syx || comp == :eyx
                 k = 2
-            elseif comp == "uz" || comp == "vz" || comp == "qz" || comp == "szx" || comp == "ezx"
+            elseif comp == :uz || comp == :vz || comp == :qz || comp == :szx || comp == :ezx
                 k = 3
-            elseif comp == "sxy" || comp == "exy"
+            elseif comp == :sxy || comp == :exy
                 k = 4
-            elseif comp == "sy" || comp == "ey"
+            elseif comp == :sy || comp == :ey
                 k = 5
-            elseif comp == "szy" || comp == "ezy"
+            elseif comp == :szy || comp == :ezy
                 k = 6
-            elseif comp == "sxz" || comp == "exz"
+            elseif comp == :sxz || comp == :exz
                 k = 7
-            elseif comp == "syz" || comp == "eyz"
+            elseif comp == :syz || comp == :eyz
                 k = 8
-            elseif comp == "sz" || comp == "ez"
+            elseif comp == :sz || comp == :ez
                 k = 9
-            elseif comp == "seqv"
+            elseif comp == :seqv
                 k = 10
             else
                 error("ShowDisplacementResults: component is $comp ????")
@@ -4815,8 +4815,8 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showModalResults(problem, Φ::Eigen; name="modal", visible=false, ff=1)
-    return showDoFResults(problem, Φ.ϕ, "uvec", t=Φ.f, name=name, visible=visible, ff=ff)
+function showModalResults(problem, Φ::Eigen; name=:modal, visible=false, ff=1)
+    return showDoFResults(problem, Φ.ϕ, :uvec, t=Φ.f, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -4837,14 +4837,14 @@ Types:
 - `tag`: Integer
 """
 function showBucklingResults(problem, Φ::Eigen; name="buckling", visible=false, ff=2)
-    return showDoFResults(problem, Φ.ϕ, "uvec", t=Φ.f, name=name, visible=visible, ff=ff)
+    return showDoFResults(problem, Φ.ϕ, :uvec, t=Φ.f, name=name, visible=visible, ff=ff)
 end
 
 """
     FEM.showStrainResults(problem, E, comp; t=..., name=..., visible=..., smooth=...)
 
 Loads strain results into a View in gmsh. `E` is a strain field to show, `comp` is
-the component of the field ("e", "ex", "ey", "ez", "exy", "eyz", "ezx"),
+the component of the field (:e, :ex, :ey, :ez, :exy, :eyz, :ezx),
 `t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
@@ -4879,22 +4879,22 @@ function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, 
     for jj in 1:length(t)
 
         k = 1im
-        if comp == "e"
+        if comp == :e
             εcomp = [ε[i][:,jj] for i in 1:length(E.numElem)]
             nc = 9
         else
             nc = 1
-            if comp == "ex"
+            if comp == :ex
                 k = 8
-            elseif comp == "ey"
+            elseif comp == :ey
                 k = 4
-            elseif comp == "ez"
+            elseif comp == :ez
                 k = 0
-            elseif comp == "exy" || comp == "eyx"
+            elseif comp == :exy || comp == :eyx
                 k = 7
-            elseif comp == "eyz" || comp == "ezy"
+            elseif comp == :eyz || comp == :ezy
                 k = 3
-            elseif comp == "ezx" || comp == "exz"
+            elseif comp == :ezx || comp == :exz
                 k = 6
             else
                 error("ShowStressResults: component is $comp ????")
@@ -4948,11 +4948,11 @@ Types:
 - `tag`: Integer
 """
 function showElementResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
-    if F.type == "e"
+    if F.type == :e
         return showStrainResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
-    elseif F.type == "s"
+    elseif F.type == :s
         return showStressResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
-    elseif F.type == "q"
+    elseif F.type == :q
         return showHeatFluxResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
     else
         error("showElementResults: type is '$type'")
@@ -4963,7 +4963,7 @@ end
     FEM.showStressResults(problem, S, comp; t=..., name=..., visible=..., smooth=...)
 
 Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
-the component of the field ("s", "sx", "sy", "sz", "sxy", "syz", "szx", "seqv"),
+the component of the field (:s, :sx, :sy, :sz, :sxy, :syz, :szx, :seqv),
 `t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
@@ -4998,10 +4998,10 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
     for jj in 1:length(t)
 
         k = 1im
-        if comp == "s"
+        if comp == :s
             σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
             nc = 9
-        elseif comp == "seqv"
+        elseif comp == :seqv
             nc = 1
             σcomp = []
             sizehint!(σcomp, length(numElem))
@@ -5020,17 +5020,17 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
             end
         else
             nc = 1
-            if comp == "sx"
+            if comp == :sx
                 k = 8
-            elseif comp == "sy"
+            elseif comp == :sy
                 k = 4
-            elseif comp == "sz"
+            elseif comp == :sz
                 k = 0
-            elseif comp == "sxy" || comp == "syx"
+            elseif comp == :sxy || comp == :syx
                 k = 7
-            elseif comp == "syz" || comp == "szy"
+            elseif comp == :syz || comp == :szy
                 k = 3
-            elseif comp == "szx" || comp == "sxz"
+            elseif comp == :szx || comp == :sxz
                 k = 6
             else
                 error("ShowStressResults: component is $comp ????")
@@ -5070,7 +5070,7 @@ end
     FEM.showHeatFluxResults(problem, Q, comp; t=..., name=..., visible=..., smooth=...)
 
 Loads heat flux results into a View in gmsh. `Q` is a heat flux field to show, `comp` is
-the component of the field ("qvec", "qx", "qy", "qz", "q"),
+the component of the field (:qvec, :qx, :qy, :qz, "q"),
 `t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
@@ -5105,10 +5105,10 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
     for jj in 1:length(t)
 
         k = 1im
-        if comp == "qvec"
+        if comp == :qvec
             σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
             nc = 3
-        elseif comp == "q"
+        elseif comp == :q
             nc = 1
             σcomp = []
             sizehint!(σcomp, length(numElem))
@@ -5124,11 +5124,11 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
             end
         else
             nc = 1
-            if comp == "qx"
+            if comp == :qx
                 k = 2
-            elseif comp == "qy"
+            elseif comp == :qy
                 k = 1
-            elseif comp == "qz"
+            elseif comp == :qz
                 k = 0
             else
                 error("ShowHeatFluxResults: component is $comp ????")
