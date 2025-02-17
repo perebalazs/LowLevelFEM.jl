@@ -5070,7 +5070,7 @@ end
     FEM.showHeatFluxResults(problem, Q, comp; t=..., name=..., visible=..., smooth=...)
 
 Loads heat flux results into a View in gmsh. `Q` is a heat flux field to show, `comp` is
-the component of the field (:qvec, :qx, :qy, :qz, "q"),
+the component of the field (:qvec, :qx, :qy, :qz, :q),
 `t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
