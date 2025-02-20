@@ -4670,7 +4670,7 @@ end
 
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
 the component of the field (:uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
-:qvec, :qx, :qy, :qz, :T, :p, "qn", :s, :sx, :sy, :sz, :sxy, :syx, :syz,
+:qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
 :szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv),
 `t` is a vector of time steps (same number of columns as `q`), `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
@@ -4682,7 +4682,7 @@ Return: `tag`
 Types:
 - `problem`: Problem
 - `q`: Vector{Matrix}
-- `comp`: String
+- `comp`: Symbol
 - `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
@@ -4857,7 +4857,7 @@ Return: `tag`
 Types:
 - `problem`: Problem
 - `E`: TensorField
-- `comp`: String
+- `comp`: Symbol
 - `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
@@ -4940,7 +4940,7 @@ Return: `tag`
 Types:
 - `problem`: Problem
 - `F`: TensorField
-- `comp`: String
+- `comp`: Symbol
 - `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
@@ -4976,7 +4976,7 @@ Return: `tag`
 Types:
 - `problem`: Problem
 - `S`: TensorField
-- `comp`: String
+- `comp`: Symbol
 - `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
@@ -5083,7 +5083,7 @@ Return: `tag`
 Types:
 - `problem`: Problem
 - `S`: TensorField
-- `comp`: String
+- `comp`: Symbol
 - `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean

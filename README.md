@@ -94,35 +94,30 @@ cantilever2D.jl
 import LowLevelFEM as FEM
 using LowLevelFEM
 
-gmsh.initialize()
+gmsh.initialize();
 
 gmsh.open("cantilever2D.geo")
 mat = FEM.material("body", E=2.e5, ν=0.3)
-problem = FEM.Problem([mat], type="PlaneStress")
+problem = FEM.Problem([mat], type=:PlaneStress)
 
 supp = FEM.displacementConstraint("supp", ux=0, uy=0)
 load = FEM.load("load", fy=-1)
 
-K = FEM.stiffnessMatrix(problem)
-f = FEM.loadVector(problem, [load])
-
-FEM.applyBoundaryConditions!(problem, K, f, [supp])
-
-q = FEM.solveDisplacement(K, f)
+q = FEM.solveDisplacement(problem, [load], [supp])
 S = FEM.solveStress(problem, q)
 
-u = FEM.showDoFResults(problem, q, "uvec", name="uvec", visible=false)
-ux = FEM.showDoFResults(problem, q, "ux", name="ux", visible=false)
-uy = FEM.showDoFResults(problem, q, "uy", name="uy", visible=false)
+u = FEM.showDoFResults(problem, q, :uvec)
+ux = FEM.showDoFResults(problem, q, :ux)
+uy = FEM.showDoFResults(problem, q, :uy)
 
-s = FEM.showStressResults(problem, S, "s", name="σ", visible=true, smooth=true)
-sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=true)
-sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
-sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
+s = FEM.showStressResults(problem, S, :s, visible=true, smooth=true)
+sx = FEM.showStressResults(problem, S, :sx, smooth=true)
+sy = FEM.showStressResults(problem, S, :sy, smooth=true)
+sxy = FEM.showStressResults(problem, S, :sxy, smooth=true)
 
-FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
-FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
-FEM.plotOnPath(problem, "path", ux, name="ux", visible=false);
+FEM.plotOnPath(problem, "path", sx)
+FEM.plotOnPath(problem, "path", sxy)
+FEM.plotOnPath(problem, "path", ux)
 
 gmsh.fltk.run()
 gmsh.finalize()
@@ -174,30 +169,25 @@ problem = FEM.Problem([mat])
 supp = FEM.displacementConstraint("supp", ux=0, uy=0, uz=0)
 load = FEM.load("load", fy=-1)
 
-K = FEM.stiffnessMatrix(problem)
-f = FEM.loadVector(problem, [load])
-
-FEM.applyBoundaryConditions!(problem, K, f, [supp])
-
-q = FEM.solveDisplacement(K, f)
+q = FEM.solveDisplacement(problem, [load], [supp])
 S = FEM.solveStress(problem, q)
 
-u = FEM.showDoFResults(problem, q, "uvec", name="uvec", visible=false)
-ux = FEM.showDoFResults(problem, q, "ux", name="ux", visible=false)
-uy = FEM.showDoFResults(problem, q, "uy", name="uy", visible=false)
-uz = FEM.showDoFResults(problem, q, "uz", name="uz", visible=false)
+u = FEM.showDoFResults(problem, q, :uvec)
+ux = FEM.showDoFResults(problem, q, :ux)
+uy = FEM.showDoFResults(problem, q, :uy)
+uz = FEM.showDoFResults(problem, q, :uz)
 
-s = FEM.showStressResults(problem, S, "s", name="σ", visible=true, smooth=true)
-sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=true)
-sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
-sz = FEM.showStressResults(problem, S, "sz", name="σz", visible=false, smooth=true)
-sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
-syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
-szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
+s = FEM.showStressResults(problem, S, :s, visible=true)
+sx = FEM.showStressResults(problem, S, :sx, smooth=true)
+sy = FEM.showStressResults(problem, S, :sy, smooth=true)
+sz = FEM.showStressResults(problem, S, :sz, smooth=true)
+sxy = FEM.showStressResults(problem, S, :sxy, smooth=true)
+syz = FEM.showStressResults(problem, S, :syz, smooth=true)
+szx = FEM.showStressResults(problem, S, :szx, smooth=true)
 
-FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
-FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
-FEM.plotOnPath(problem, "path", ux, name="ux", visible=false);
+FEM.plotOnPath(problem, "path", sx)
+FEM.plotOnPath(problem, "path", sxy)
+FEM.plotOnPath(problem, "path", ux)
 
 gmsh.fltk.run()
 gmsh.finalize()

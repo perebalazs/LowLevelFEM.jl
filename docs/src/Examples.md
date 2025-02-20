@@ -15,27 +15,22 @@ gmsh.initialize()
 
 gmsh.open("cantilever2D.geo")
 mat = FEM.material("body", E=2.e5, ν=0.3)
-problem = FEM.Problem([mat], type="PlaneStress")
+problem = FEM.Problem([mat], type=:PlaneStress)
 
 supp = FEM.displacementConstraint("supp", ux=0, uy=0)
 load = FEM.load("load", fy=-1)
 
-K = FEM.stiffnessMatrix(problem)
-f = FEM.loadVector(problem, [load])
-
-FEM.applyBoundaryConditions!(problem, K, f, [supp])
-
-q = FEM.solveDisplacement(K, f)
+q = FEM.solveDisplacement(problem, [load], [supp)
 S = FEM.solveStress(problem, q)
 
-u = FEM.showDoFResults(problem, q, "uvec", name="uvec", visible=false)
-ux = FEM.showDoFResults(problem, q, "ux", name="ux", visible=false)
-uy = FEM.showDoFResults(problem, q, "uy", name="uy", visible=false)
+u = FEM.showDoFResults(problem, q, :uvec)
+ux = FEM.showDoFResults(problem, q, :ux)
+uy = FEM.showDoFResults(problem, q, :uy)
 
-s = FEM.showStressResults(problem, S, "s", name="σ", visible=true, smooth=true)
-sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=true)
-sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
-sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
+s = FEM.showStressResults(problem, S, :s, visible=true, smooth=true)
+sx = FEM.showStressResults(problem, S, :sx, name="σx", visible=false, smooth=true)
+sy = FEM.showStressResults(problem, S, :sy, name="σy", visible=false, smooth=true)
+sxy = FEM.showStressResults(problem, S, :sxy, name="τxy", visible=false, smooth=true)
 
 FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
 FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
@@ -99,18 +94,18 @@ FEM.applyBoundaryConditions!(problem, K, f, [supp])
 q = FEM.solveDisplacement(K, f)
 S = FEM.solveStress(problem, q)
 
-u = FEM.showDoFResults(problem, q, "uvec", name="uvec", visible=false)
-ux = FEM.showDoFResults(problem, q, "ux", name="ux", visible=false)
-uy = FEM.showDoFResults(problem, q, "uy", name="uy", visible=false)
-uz = FEM.showDoFResults(problem, q, "uz", name="uz", visible=false)
+u = FEM.showDoFResults(problem, q, :uvec, name="uvec", visible=false)
+ux = FEM.showDoFResults(problem, q, :ux, name="ux", visible=false)
+uy = FEM.showDoFResults(problem, q, :uy, name="uy", visible=false)
+uz = FEM.showDoFResults(problem, q, :uz, name="uz", visible=false)
 
-s = FEM.showStressResults(problem, S, "s", name="σ", visible=true, smooth=true)
-sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=true)
-sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
-sz = FEM.showStressResults(problem, S, "sz", name="σz", visible=false, smooth=true)
-sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
-syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
-szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
+s = FEM.showStressResults(problem, S, :s, name="σ", visible=true, smooth=true)
+sx = FEM.showStressResults(problem, S, :sx, name="σx", visible=false, smooth=true)
+sy = FEM.showStressResults(problem, S, :sy, name="σy", visible=false, smooth=true)
+sz = FEM.showStressResults(problem, S, :sz, name="σz", visible=false, smooth=true)
+sxy = FEM.showStressResults(problem, S, :sxy, name="τxy", visible=false, smooth=true)
+syz = FEM.showStressResults(problem, S, :syz, name="τyz", visible=false, smooth=true)
+szx = FEM.showStressResults(problem, S, :szx, name="τzx", visible=false, smooth=true)
 
 FEM.plotOnPath(problem, "path", sx, name="σx", visible=false);
 FEM.plotOnPath(problem, "path", sxy, name="τxy", visible=false);
@@ -170,7 +165,7 @@ gmsh.initialize()
 gmsh.open("LshapedPlate2.geo")
 
 mat = FEM.material("body", E=2.e5, ν=0.3)
-problem = FEM.Problem([mat], type="PlaneStress", thickness=1)
+problem = FEM.Problem([mat], type=:PlaneStress, thickness=1)
 
 bc1 = FEM.displacementConstraint("fix", ux=0, uy=0)
 ld1 = FEM.load("load", fy=-1)
@@ -182,18 +177,18 @@ FEM.applyBoundaryConditions!(problem, K, f, [bc1])
 q = FEM.solveDisplacement(K, f)
 S = FEM.solveStress(problem, q)
 
-u = FEM.showDoFResults(problem, q, "uvec", name="uvec", visible=false)
-ux = FEM.showDoFResults(problem, q, "ux", name="ux", visible=false)
-uy = FEM.showDoFResults(problem, q, "uy", name="uy", visible=false)
-uz = FEM.showDoFResults(problem, q, "uz", name="uz", visible=false)
-s = FEM.showStressResults(problem, S, "s", name="σ red", visible=false, smooth=false)
-ss = FEM.showStressResults(problem, S, "s", name="σ red smooth", visible=true, smooth=true)
-sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=true)
-sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
-sz = FEM.showStressResults(problem, S, "sz", name="σz", visible=false, smooth=true)
-sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
-syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
-szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
+u = FEM.showDoFResults(problem, q, :uvec, name="uvec", visible=false)
+ux = FEM.showDoFResults(problem, q, :ux, name="ux", visible=false)
+uy = FEM.showDoFResults(problem, q, :uy, name="uy", visible=false)
+uz = FEM.showDoFResults(problem, q, :uz, name="uz", visible=false)
+s = FEM.showStressResults(problem, S, :s, name="σ red", visible=false, smooth=false)
+ss = FEM.showStressResults(problem, S, :s, name="σ red smooth", visible=true, smooth=true)
+sx = FEM.showStressResults(problem, S, :sx, name="σx", visible=false, smooth=true)
+sy = FEM.showStressResults(problem, S, :sy, name="σy", visible=false, smooth=true)
+sz = FEM.showStressResults(problem, S, :sz, name="σz", visible=false, smooth=true)
+sxy = FEM.showStressResults(problem, S, :sxy, name="τxy", visible=false, smooth=true)
+syz = FEM.showStressResults(problem, S, :syz, name="τyz", visible=false, smooth=true)
+szx = FEM.showStressResults(problem, S, :szx, name="τzx", visible=false, smooth=true)
 
 FEM.plotOnPath(problem, "path", s, name="σred", visible=false);
 
@@ -327,7 +322,7 @@ gmsh.model.setPhysicalName(2, phg, "body")
 FEM.generateMesh(sf1, elemSize, approxOrder=approxOrder, algorithm=6, quadrangle=quadElements, internalNodes=internalNodes)
 
 mat = FEM.material("body", E=E, ν=ν)
-problem = FEM.Problem([mat], type="PlaneStress", thickness=thick)
+problem = FEM.Problem([mat], type=:PlaneStress, thickness=thick)
 
 supp = FEM.displacementConstraint("supp", ux=0, uy=0)
 load = FEM.load("load", fx=1, fy=0)
@@ -362,27 +357,27 @@ u, v, t = FEM.CDM(K, M, C, f, u0, v0, base / c * 2, Tₘᵢₙ / π * (√(1 + �
 
 S = FEM.solveStress(problem, q)
 
-uvec = FEM.showDoFResults(problem, q, "uvec", name="uvec", visible=false)
-ux = FEM.showDoFResults(problem, q, "ux", name="ux", visible=false)
-uy = FEM.showDoFResults(problem, q, "uy", name="uy", visible=false)
-uz = FEM.showDoFResults(problem, q, "uz", name="uz", visible=false)
-s = FEM.showStressResults(problem, S, "s", name="σ", visible=false, smooth=true)
-sx = FEM.showStressResults(problem, S, "sx", name="σx", visible=false, smooth=true)
-sy = FEM.showStressResults(problem, S, "sy", name="σy", visible=false, smooth=true)
-sz = FEM.showStressResults(problem, S, "sz", name="σz", visible=false, smooth=true)
-sxy = FEM.showStressResults(problem, S, "sxy", name="τxy", visible=false, smooth=true)
-syz = FEM.showStressResults(problem, S, "syz", name="τyz", visible=false, smooth=true)
-szx = FEM.showStressResults(problem, S, "szx", name="τzx", visible=false, smooth=true)
-vvec = FEM.showDoFResults(problem, v, t=t, "uvec", name="v(t)", visible=true)
+uvec = FEM.showDoFResults(problem, q, :uvec, name="uvec", visible=false)
+ux = FEM.showDoFResults(problem, q, :ux, name="ux", visible=false)
+uy = FEM.showDoFResults(problem, q, :uy, name="uy", visible=false)
+uz = FEM.showDoFResults(problem, q, :uz, name="uz", visible=false)
+s = FEM.showStressResults(problem, S, :s, name="σ", visible=false, smooth=true)
+sx = FEM.showStressResults(problem, S, :sx, name="σx", visible=false, smooth=true)
+sy = FEM.showStressResults(problem, S, :sy, name="σy", visible=false, smooth=true)
+sz = FEM.showStressResults(problem, S, :sz, name="σz", visible=false, smooth=true)
+sxy = FEM.showStressResults(problem, S, :sxy, name="τxy", visible=false, smooth=true)
+syz = FEM.showStressResults(problem, S, :syz, name="τyz", visible=false, smooth=true)
+szx = FEM.showStressResults(problem, S, :szx, name="τzx", visible=false, smooth=true)
+vvec = FEM.showDoFResults(problem, v, t=t, :uvec, name="v(t)", visible=true)
 gmsh.view.option.setNumber(vvec, "NormalRaise", 0.03)
 
 sts = ceil(Int64, (base / c * 2) / 6 / (Tₘᵢₙ / π * (√(1 + ξₘₐₓ^2) - ξₘₐₓ)))
 display(sts)
 Sp = FEM.solveStress(problem, u[:, sts])
-sp = FEM.showStressResults(problem, Sp, "s", name="σ at t", visible=false, smooth=false);
+sp = FEM.showStressResults(problem, Sp, :s, name="σ at t", visible=false, smooth=false);
 
 Sanim = FEM.solveStress(problem, u[:, 1:sts])
-sanim = FEM.showStressResults(problem, Sanim, "s", t=t[1:sts], name="σ anim", visible=false, smooth=false);
+sanim = FEM.showStressResults(problem, Sanim, :s, t=t[1:sts], name="σ anim", visible=false, smooth=false);
 
 gmsh.fltk.run()
 gmsh.finalize()
