@@ -3305,7 +3305,7 @@ function solveHeatFlux(problem, T; DoFResults=false)
             rowsOfB = 2
             b = 1
         else
-            error("solveStress: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("solveHeatFlux: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -3373,7 +3373,7 @@ function solveHeatFlux(problem, T; DoFResults=false)
                             B[k*rowsOfB-0, l*pdim-0] = ∂h[3, (k-1)*numNodes+l]
                         end
                     else
-                        error("solveStress: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                        error("solveHeatFlux: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     push!(numElem, elem)
                     for k in 1:pdim
@@ -3405,7 +3405,7 @@ function solveHeatFlux(problem, T; DoFResults=false)
                                 end
                             end
                         else
-                            error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                            error("solveHeatFlux: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
                         end
                     end
                     if DoFResults == true
@@ -3431,6 +3431,46 @@ function solveHeatFlux(problem, T; DoFResults=false)
         sigma = VectorField(σ, numElem, nsteps, type)
         return sigma
     end
+end
+
+"""
+    FEM.elementsToNodes(problem, T)
+
+Solves 
+
+Return: `F`
+
+Types:
+- `problem`: Problem
+- `T`: TensorField or VectorField
+- `F`: Matrix{Float64}
+"""
+function elementsToNodes(problem, S)
+    gmsh.model.setCurrent(problem.name)
+
+    type = S.type
+    nsteps = S.nsteps
+    numElem = S.numElem
+    σ = S.sigma
+    non = problem.non
+    if type == :s || type == :e
+        epn = 9
+    elseif type == :q
+        epn = 3
+    else
+        error("elementsToNodes: type is $type .")
+    end
+    s = zeros(non * epn, nsteps)
+    pcs = zeros(Int64, non)
+
+    for e in 1:length(numElem)
+        elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
+        for i in 1:length(nodeTags)
+            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][i*9-8:i*9, :]
+            pcs[nodeTags[i]] += 1
+        end
+    end
+    return s
 end
 
 """
@@ -3495,7 +3535,7 @@ function solveBucklingModes(K, Knl; n=6)
 end
 
 """
-    FEM.solveModalAnalysis(problem; constraint=[]; loads=[], n=6)
+    FEM.solveModalAnalysis(problem; constraints=[]; loads=[], n=6)
 
 Solves the first `n` eigenfrequencies and the corresponding 
 mode shapes for the `problem`, when `loads` and 
