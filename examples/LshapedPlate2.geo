@@ -42,7 +42,7 @@ Physical Curve("load", 9) = {2};
 Physical Surface("body", 11) = {1};
 //+
 SetName "Lshape";
-Mesh.ElementOrder = 4;
+Mesh.ElementOrder = 1;
 Mesh.HighOrderOptimize = 1;
 Mesh 2;
 //+

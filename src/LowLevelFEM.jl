@@ -3436,7 +3436,8 @@ end
 """
     FEM.elementsToNodes(problem, T)
 
-Solves 
+Solves the nodal results `F` from the elemental results `T`.
+`T` can be tensor field or vector field.
 
 Return: `F`
 
@@ -3474,6 +3475,62 @@ function elementsToNodes(problem, S)
         s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
     end
     return s
+end
+
+"""
+    FEM.fieldError(problem, T)
+
+Solves the nodal results `F` from the elemental results `T`.
+`T` can be tensor field or vector field.
+
+Return: `F`
+
+Types:
+- `problem`: Problem
+- `T`: TensorField or VectorField
+- `F`: Matrix{Float64}
+"""
+function fieldError(problem, S)
+    gmsh.model.setCurrent(problem.name)
+
+    type = S.type
+    nsteps = S.nsteps
+    numElem = S.numElem
+    σ = S.sigma
+    non = problem.non
+    if type == :s || type == :e
+        epn = 9
+    elseif type == :q
+        epn = 3
+    else
+        error("fieldError: type is $type .")
+    end
+    avg = zeros(non * epn, nsteps)
+    res = zeros(non * epn, nsteps)
+    pcs = zeros(Int64, non)
+
+    for e in 1:length(numElem)
+        elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
+        for i in 1:length(nodeTags)
+            avg[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][(i-1)*epn+1:i*epn, :]
+            pcs[nodeTags[i]] += 1
+        end
+    end
+    for l in 1:non
+        avg[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
+    end
+    for e in 1:length(numElem)
+        elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
+        for i in 1:length(nodeTags)
+            res[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= (avg[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .- σ[e][(i-1)*epn+1:i*epn, :]).^2
+        end
+    end
+    for l in 1:non
+        res[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
+        #res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(res[epn * (l - 1) + 1: epn * l, :]) ./ abs.(avg[epn * (l - 1) + 1: epn * l, :])
+        res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(abs.(res[epn * (l - 1) + 1: epn * l, :]))
+    end
+    return res
 end
 
 """
