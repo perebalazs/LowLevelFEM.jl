@@ -3466,9 +3466,12 @@ function elementsToNodes(problem, S)
     for e in 1:length(numElem)
         elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
         for i in 1:length(nodeTags)
-            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][i*9-8:i*9, :]
+            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][(i-1)*epn+1:i*epn, :]
             pcs[nodeTags[i]] += 1
         end
+    end
+    for l in 1:non
+        s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
     end
     return s
 end
@@ -3801,24 +3804,6 @@ function resultant2(problem, field, phName, grad, component)
     end
     return sum0
 end
-
-#=
-function elementToNode(problem, field)
-    if field.type == "q"
-        comp = 3
-    elseif field.type == :s || field.type == :e
-        comp = 9
-    end
-    dof = problem.non * comp
-    vec = zeros(dof, field.nsteps)
-    for i in 1:length(field.numElem)
-        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-
-    for i in 1:nsteps
-        for j in 1:length(field.numElem)
-            for k in 1:comp
-end
-=#
 
 """
     FEM.initialDisplacement(problem, name; ux=..., uy=..., uz=...)
