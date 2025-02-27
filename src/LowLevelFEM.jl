@@ -2637,6 +2637,55 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
 end
 
 """
+    FEM.constrainedDoFs(problem, supports)
+
+Applies 
+
+Return: none
+
+Types:
+- `problem`: Problem
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `DoFs`: Vector{Int64}
+"""
+function constrainedDoFs(problem, supports)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+    end
+    gmsh.model.setCurrent(problem.name)
+    #non = problem.non
+    pdim = problem.pdim
+    #dof = non * pdim
+    cdofs = []
+
+    for i in 1:length(supports)
+        name, ux, uy, uz = supports[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags::Vector{Int64}, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        nodeTagsX = []
+        nodeTagsY = []
+        nodeTagsZ = []
+        if ux != 1im
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim-1)
+        end
+        if uy != 1im
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim-2)
+        end
+        if pdim == 3 && uz != 1im
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= 3
+        end
+        cdofs = cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ
+    end
+
+    return cdofs
+end
+
+"""
     FEM.applyElasticSupport!(problem, stiffMat, elastSupp)
 
 Applies elastic support boundary conditions `elastSupp` on a stiffness matrix
@@ -3507,6 +3556,7 @@ function fieldError(problem, S)
     end
     avg = zeros(non * epn, nsteps)
     res = zeros(non * epn, nsteps)
+    #m = zeros(nsteps)
     pcs = zeros(Int64, non)
 
     for e in 1:length(numElem)
@@ -3514,6 +3564,7 @@ function fieldError(problem, S)
         for i in 1:length(nodeTags)
             avg[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][(i-1)*epn+1:i*epn, :]
             pcs[nodeTags[i]] += 1
+            #m = [max(avg[j], m[j]) for j in 1:nsteps]
         end
     end
     for l in 1:non
@@ -3526,9 +3577,8 @@ function fieldError(problem, S)
         end
     end
     for l in 1:non
-        res[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
-        #res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(res[epn * (l - 1) + 1: epn * l, :]) ./ abs.(avg[epn * (l - 1) + 1: epn * l, :])
-        res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(abs.(res[epn * (l - 1) + 1: epn * l, :]))
+        res[epn * (l - 1) + 1: epn * l, :] /= pcs[l]
+        res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(res[epn * (l - 1) + 1: epn * l, :]) # ./ m
     end
     return res
 end
