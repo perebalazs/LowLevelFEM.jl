@@ -15,6 +15,8 @@ Transfinite Surface {1};
 //+
 Recombine Surface {1};
 //+
+Mesh.ElementOrder = 1;
+//+
 Mesh 2;
 //+
 Physical Curve("bottom", 5) = {1};

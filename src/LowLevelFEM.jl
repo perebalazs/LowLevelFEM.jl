@@ -2637,11 +2637,76 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
 end
 
 """
-    FEM.constrainedDoFs(problem, supports)
+    FEM.applyBoundaryConditions!(problem, dispVec, supports)
 
-Applies 
+Applies displacement boundary conditions `supports` on a displacement vector
+`dispVec`. Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
+prescribed displacements `ux`, `uy` and `uz`.
 
 Return: none
+
+Types:
+- `problem`: Problem
+- `dispVec`: Vector{Float64}
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+"""
+function applyBoundaryConditions!(problem, dispVec, supports)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+    end
+    gmsh.model.setCurrent(problem.name)
+    pdim = problem.pdim
+
+    for i in 1:length(supports)
+        name, ux, uy, uz = supports[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
+        if ux != 1im
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim - 1)
+            if isa(ux, Function)
+                uux = ux.(xx, yy, zz)
+                dispVec[nodeTagsX,:] .= uux
+            else
+                dispVec[nodeTagsX,:] .= ux
+            end
+        end
+        if uy != 1im
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim - 2)
+            if isa(uy, Function)
+                uuy = uy.(xx, yy, zz)
+                dispVec[nodeTagsY,:] .= uuy
+            else
+                dispVec[nodeTagsY,:] .= uy
+            end
+        end
+        if pdim == 3 && uz != 1im
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= 3
+            if isa(uz, Function)
+                uuz = uz.(xx, yy, zz)
+                dispVec[nodeTagsZ,:] .= uuz
+            else
+                dispVec[nodeTagsZ,:] .= uz
+            end
+        end
+    end
+end
+
+"""
+    FEM.constrainedDoFs(problem, supports)
+
+Returns the serial numbers of constrained degrees of freedom. Support is a vector of boundari conditions given with the function `displacementConstraint`.
+
+Return: `DoFs`
 
 Types:
 - `problem`: Problem
@@ -2683,6 +2748,25 @@ function constrainedDoFs(problem, supports)
     end
 
     return cdofs
+end
+
+"""
+    FEM.freeDoFs(problem, supports)
+
+Returns the serial numbers of unconstrained degrees of freedom. Support is a vector of boundari conditions given with the function `displacementConstraint`.
+
+Return: `DoFs`
+
+Types:
+- `problem`: Problem
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `DoFs`: Vector{Int64}
+"""
+function freeDoFs(problem, supports)
+    cdofs = constrainedDoFs(problem, supports)
+    dof = problem.non * problem.pdim
+    fdofs = setdiff(1:dof, cdofs)
+    return fdofs
 end
 
 """
@@ -3527,17 +3611,17 @@ function elementsToNodes(problem, S)
 end
 
 """
-    FEM.fieldError(problem, T)
+    FEM.fieldError(problem, F)
 
-Solves the nodal results `F` from the elemental results `T`.
-`T` can be tensor field or vector field.
+Solves the deviation of field results `F` (stresses, strains, heat flux components) at nodes, where the field has jumps.
+The result can be displayed with the `showDoFResults` function.
 
-Return: `F`
+Return: `e`
 
 Types:
 - `problem`: Problem
-- `T`: TensorField or VectorField
-- `F`: Matrix{Float64}
+- `F`: TensorField or VectorField
+- `e`: Matrix{Float64}
 """
 function fieldError(problem, S)
     gmsh.model.setCurrent(problem.name)
@@ -3600,7 +3684,7 @@ Types:
 - `fₘᵢₙ`: Float64
 - `modes`: Eigen 
 """
-function solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
+function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
     ωₘᵢₙ² = (2π * fₘᵢₙ)^2
     ω², ϕ = Arpack.eigs(K, M, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
     #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
@@ -3676,10 +3760,24 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
     if length(constraints) == 0
         return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
     elseif length(loads) == 0
-        f = zeros(dof)
-        applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        fdof = freeDoFs(problem, constraints)
+        cdof = constrainedDoFs(problem, constraints)
+        K = K[fdof, fdof]
+        M = M[fdof, fdof]
+        #f = zeros(dof)
+        #applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
+        mod = solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        nn = length(mod.f)
+        ϕ1 = zeros(dof, nn)
+        #display("ϕ1[fdof,:]: $(size(ϕ1[fdof,:]))")
+        #display("mod.ϕ: $(size(mod.ϕ))")
+        ϕ1[fdof,:] .= mod.ϕ
+        applyBoundaryConditions!(problem, ϕ1, constraints)
+        return Eigen(mod.f, ϕ1)
     else
+        fdof = freeDoFs(problem, constraints)
+        cdof = constrainedDoFs(problem, constraints)
+        ϕ1 = zeros(dof, n)
         f = loadVector(problem, loads)
         applyBoundaryConditions!(problem, K, f, constraints)
         q = solveDisplacement(K, f)
@@ -3699,8 +3797,11 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         end
         Knl = nonLinearStiffnessMatrix(problem, q)
 
-        applyBoundaryConditions!(problem, K, M, Knl, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        return solveEigenModes(K + Knl, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        #applyBoundaryConditions!(problem, K, M, Knl, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
+        mod = solveEigenModes((K + Knl)[fdof,fdof], M[fdof,fdof], n=n, fₘᵢₙ=fₘᵢₙ)
+        ϕ1[fdof,:] .= mod.ϕ
+        applyBoundaryConditions!(problem, ϕ1, constraints)
+        return Eigen(mod.f, ϕ1)
     end
 end
 
@@ -4821,6 +4922,7 @@ Types:
 - `tag`: Integer
 """
 function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
+    gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -4997,6 +5099,7 @@ Types:
 - `tag`: Integer
 """
 function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -5116,6 +5219,7 @@ Types:
 - `tag`: Integer
 """
 function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -5223,6 +5327,7 @@ Types:
 - `tag`: Integer
 """
 function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
+    gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
