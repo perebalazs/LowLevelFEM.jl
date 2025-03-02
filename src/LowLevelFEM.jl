@@ -2704,7 +2704,7 @@ end
 """
     FEM.constrainedDoFs(problem, supports)
 
-Returns the serial numbers of constrained degrees of freedom. Support is a vector of boundari conditions given with the function `displacementConstraint`.
+Returns the serial numbers of constrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
 
 Return: `DoFs`
 
@@ -2753,7 +2753,7 @@ end
 """
     FEM.freeDoFs(problem, supports)
 
-Returns the serial numbers of unconstrained degrees of freedom. Support is a vector of boundari conditions given with the function `displacementConstraint`.
+Returns the serial numbers of unconstrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
 
 Return: `DoFs`
 
@@ -3745,7 +3745,7 @@ Types:
 - `loads`: Vector{tuples}
 - `constraints`: Vector{tuples}
 - `n`: Int64
-- `modes`: Eigen 
+- `modes`: Eigen
 """
 function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0.1)
     if !isa(loads, Vector)

@@ -41,7 +41,7 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - Solution of static and dynamic (transient with central difference method, Newmark and HHT-α) problems,
 - Displaying the results (scalar or vector displacements, scalar or tensor stresses and strains) with [GMSH](https://gmsh.info).
 	
-	- When dynamic problems are solved animations are also possible (click on $\triangleright$).
+    - When dynamic problems are solved animations are also possible (click on $\triangleright$).
 - Rotation of nodal coordinate systems using transformation matrix. Transformation matrix can be given with constant direction vectors or with functions. (With this arbitrary coordinate systems can be defined.)
  
 - Plotting arbitrary results on paths.
