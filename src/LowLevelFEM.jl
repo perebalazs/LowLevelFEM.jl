@@ -2702,6 +2702,145 @@ function applyBoundaryConditions!(problem, dispVec, supports)
 end
 
 """
+    FEM.field(name; f=..., fx=..., fy=..., fz=..., fxy=..., fyz=..., fzx=...)
+
+Gives the value of scalar, vector or tensor field on `name` physical group. At least one `fx`, 
+`fy` or `fz` etc. value have to be given (depending on the dimension of the problem). `fx`, 
+`fy` or `fz` etc. can be a constant value, or a function of `x`, `y` and `z`.
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("load1", fx=fn)`)
+
+Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function,...x7}
+
+Types:
+- `name`: String
+- `f`: Float64 or Function
+- `fx`: Float64 or Function
+- `fy`: Float64 or Function
+- `fz`: Float64 or Function
+- `fxy`: Float64 or Function
+- `fyz`: Float64 or Function
+- `fzx`: Float64 or Function
+"""
+function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, fzy=:no, fzx=:no, fxz=:no)
+    fxy = fyx != :no ? fyx : fxy
+    fyz = fzy != :no ? fzy : fyz
+    fzx = fxz != :no ? fxz : fzx
+    ld0 = name, f, fx, fy, fz, fxy, fyz, fzx
+    return ld0
+end
+
+"""
+    FEM.scalarField(problem, entity)
+
+Defines a scalar field from `entity`, which is a tuple of `name` of physical group and
+prescribed values or functions. Mesh details are in `problem`.
+
+Return: Vector{Float64}
+
+Types:
+- `problem`: Problem
+- `entity`: Vector{Tuple{String, Float64,...}}
+"""
+function scalarField(problem, entity)
+    if !isa(entity, Vector)
+        error("applyBoundaryConditions!: entity are not arranged in a vector. Put them in [...]")
+    end
+    gmsh.model.setCurrent(problem.name)
+    pdim = 1
+    non = problem.non
+    field = zeros(non)
+
+    for i in 1:length(entity)
+        name, f, fx, fy, fz, fxy, fyz, fzx = entity[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(f, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
+        if f != :no
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim - 1)
+            if isa(f, Function)
+                ff = f.(xx, yy, zz)
+                field[nodeTagsX,:] .= ff
+            else
+                field[nodeTagsX,:] .= f
+            end
+        end
+    end
+    return field
+end
+
+"""
+    FEM.vectorField(problem, entity)
+
+Defines a vector field from `entity`, which is a tuple of `name` of physical group and
+prescribed values or functions. Mesh details are in `problem`.
+
+Return: Vector{Float64}
+
+Types:
+- `problem`: Problem
+- `entity`: Vector{Tuple{String, Float64,...}}
+"""
+function vectorField(problem, entity)
+    if !isa(entity, Vector)
+        error("applyBoundaryConditions!: entity are not arranged in a vector. Put them in [...]")
+    end
+    gmsh.model.setCurrent(problem.name)
+    pdim = problem.pdim
+    non = problem.non
+    field = zeros(non * pdim)
+
+    for i in 1:length(entity)
+        name, f, fx, fy, fz, fxy, fyz, fzx = entity[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
+        if fx != :no
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim - 1)
+            if isa(fx, Function)
+                ffx = fx.(xx, yy, zz)
+                field[nodeTagsX,:] .= ffx
+            else
+                field[nodeTagsX,:] .= fx
+            end
+        end
+        if fy != :no
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim - 2)
+            if isa(fy, Function)
+                ffy = fy.(xx, yy, zz)
+                field[nodeTagsY,:] .= ffy
+            else
+                field[nodeTagsY,:] .= fy
+            end
+        end
+        if fz != :no && pdim == 3
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= pdim
+            if isa(fz, Function)
+                ffz = fz.(xx, yy, zz)
+                field[nodeTagsZ,:] .= ffz
+            else
+                field[nodeTagsZ,:] .= fz
+            end
+        end
+    end
+    return field
+end
+
+"""
     FEM.constrainedDoFs(problem, supports)
 
 Returns the serial numbers of constrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
@@ -2926,7 +3065,7 @@ Solves the strain field `E` from displacement vector `q`. Strain field is given
 per elements, so it usually contains jumps at the boundaries of elements. Details
 of mesh is available in `problem`. If `DoFResults` is true, `E` is a matrix with
 nodal results. In this case `showDoFResults` can be used to show the results 
-(otherwise `showStainResults` or `showElementResults`).
+(otherwise `showStrainResults` or `showElementResults`).
 
 Return: `E`
 
@@ -3341,7 +3480,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
                                         s0[3], s0[2], 0,
                                         0, 0, ν*(s0[1]+s0[2])]
-                                    # PlaneStain: σz ≠ 0
+                                    # PlaneStrain: σz ≠ 0
                                 end
                                 if DoFResults == true
                                     S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, ν*(s0[1]+s0[2])]
@@ -4904,7 +5043,7 @@ end
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
 the component of the field (:uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
-:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv),
+:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv: scalar),
 `t` is a vector of time steps (same number of columns as `q`), `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. If `q` has more columns, then a sequence of results
@@ -4980,7 +5119,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
             end
         else
             nc = 1
-            if comp == :ux || comp == :vx || comp == :p || comp == :T || comp == :qx  || comp == :qn || comp == :sx || comp == :ex
+            if comp == :ux || comp == :vx || comp == :p || comp == :T || comp == :qx  || comp == :qn || comp == :sx || comp == :ex || comp == :scalar
                 k = 1
             elseif comp == :uy || comp == :vy || comp == :qy || comp == :syx || comp == :eyx
                 k = 2

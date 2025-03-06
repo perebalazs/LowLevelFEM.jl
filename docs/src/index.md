@@ -72,8 +72,8 @@ The above described steps can be easily performed using the LowLevelFEM package.
   - [ ] in 3D,
   - [ ] with penalty method
   - [ ] with Lagrange multiplier method.
-- [ ] Defining displacement initial condition as a function of x, y and z.
-- [ ] Defining velocity initial condition as a function of x, y and z.
+- [x] Defining displacement initial condition as a function of x, y and z.
+- [x] Defining velocity initial condition as a function of x, y and z.
 - [ ] Finite rotations.
 - [ ] Plastic deformation (within small strain theory).
 - [ ] Solver for arbitrary weak forms.
