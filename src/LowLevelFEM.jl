@@ -5061,7 +5061,7 @@ Types:
 - `tag`: Integer
 """
 function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
-    gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -5069,8 +5069,8 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     pdim = div(size(q,1), problem.non) 
     nodeTags = []
     ##############################################################################
-    if problem.type == :Reynolds || problem.type == :Reynolds1D || problem.type == :NavierStokes
-        phName = problem.geometry.phName
+    if problem.type == :Reynolds || problem.type == :NavierStokes
+        phName = problem.material.phName
         tag = getTagForPhysicalName(phName)
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
         append!(nodeTags, nT)
@@ -5238,7 +5238,7 @@ Types:
 - `tag`: Integer
 """
 function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, smooth=true)
-    gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -5358,7 +5358,7 @@ Types:
 - `tag`: Integer
 """
 function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
-    gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -5466,7 +5466,7 @@ Types:
 - `tag`: Integer
 """
 function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
-    gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
