@@ -2707,7 +2707,7 @@ end
 Gives the value of scalar, vector or tensor field on `name` physical group. At least one `fx`, 
 `fy` or `fz` etc. value have to be given (depending on the dimension of the problem). `fx`, 
 `fy` or `fz` etc. can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("load1", fx=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); FEM.field("surf1", fx=fn)`)
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function,...x7}
 
@@ -5043,7 +5043,7 @@ end
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
 the component of the field (:uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
-:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv: scalar),
+:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar),
 `t` is a vector of time steps (same number of columns as `q`), `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. If `q` has more columns, then a sequence of results
