@@ -3831,7 +3831,7 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
     #end
     #err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     #if err > 1e-3 # || true
-    #    warn("The error in the calculation of the smallest eigenvalue is too large: $err")
+    #    @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     #end
     f = sqrt.(abs.(real(ω²))) / 2π
     ϕ1 = real(ϕ)
@@ -3932,7 +3932,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
             err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
         end
         if count == 10
-            warn("solveModalAnalysis: number of iterations is $count.")
+            @warn("solveModalAnalysis: number of iterations is $count.")
         end
         Knl = nonLinearStiffnessMatrix(problem, q)
 
@@ -3979,7 +3979,7 @@ function solveBuckling(problem, loads, constraints; n=6)
         err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
     end
     if count == 10
-        warn("solveBuckling: number of iterations is $count.")
+        @warn("solveBuckling: number of iterations is $count.")
     end
     Knl = nonLinearStiffnessMatrix(problem, q)
 
@@ -4018,11 +4018,15 @@ Types:
 - `resy`: Float64 
 - `resz`: Float64 
 """
-function resultant(problem, field, phName; grad=false, component=:x)
+function resultant(problem, field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0)
     if !isa(field, Vector) && !isa(field, Matrix)
-        return resultant2(problem, field, phName, grad, component)
+        return resultant2(problem, field, phName, grad, component, offsetX, offsetY, offsetZ)
     end
-    dim = problem.pdim
+    if problem.type == :NavierStokes
+        dim = problem.pdim + 1
+    else
+	dim = problem.pdim
+    end
     axiSymmetric = false
     if problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction
         axiSymmetric = true
@@ -4046,7 +4050,7 @@ function resultant(problem, field, phName; grad=false, component=:x)
     end
 end
 
-function resultant2(problem, field, phName, grad, component)
+function resultant2(problem, field, phName, grad, component, offsetX, offsetY, offsetZ)
     gmsh.model.setCurrent(problem.name)
     pdim = problem.pdim
     DIM = problem.dim
@@ -4109,7 +4113,7 @@ function resultant2(problem, field, phName, grad, component)
                     x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
                     y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                     z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                    f, d = gmsh.view.probe(field, x, y, z, -1, -1, grad)
+                    f, d = gmsh.view.probe(field, x+offsetX, y+offsetY, z+offsetZ, -1, -1, grad, -1)
                     r = x
                     #H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
                     ############### NANSON ######## 3D ###################################
@@ -4136,6 +4140,8 @@ function resultant2(problem, field, phName, grad, component)
                     elseif DIM == 2 && dim == 0
                         Ja = 1
                     ############ 1D #######################################################
+                    elseif DIM == 1 && dim == 1
+                        Ja = (Jac[1, 3*j-2]) * b
                     else
                         error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                     end
@@ -4386,7 +4392,7 @@ function largestPeriodTime(K, M)
     end
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        warn("The error in the calculation of the smallest eigenvalue is too large: $err")
+        @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
     Δt = 2π / √(abs(real(ω²[1])))
     return Δt
@@ -4410,7 +4416,7 @@ function smallestPeriodTime(K, M)
     
     err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        warn("The error in the calculation of the largest eigenvalue is too large: $err")
+        @warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
     Δt = 2π / √(abs(real(ω²[1])))
     return Δt
@@ -4436,7 +4442,7 @@ function smallestEigenValue(K, C)
     end
     err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        warn("The error in the calculation of the largest eigenvalue is too large: $err")
+        @warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
     λₘₐₓ = abs(real(λ[1]))
     return λₘₐₓ
@@ -4460,7 +4466,7 @@ function largestEigenValue(K, C)
 
     err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
     if err > 1e-3 # || true
-        warn("The error in the calculation of the smallest eigenvalue is too large: $err")
+        @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
     λₘᵢₙ = abs(real(λ[1]))
     return λₘᵢₙ
@@ -5041,7 +5047,7 @@ end
     FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)
 
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
-the component of the field (:uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
+the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
 :szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar),
 `t` is a vector of time steps (same number of columns as `q`), `name` is a
@@ -5095,7 +5101,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     end
     for j in 1:length(t)
         k = 1im
-        if comp == :uvec || comp == :vvec || comp == :qvec
+        if comp == :uvec || comp == :vvec || comp == :qvec || comp == :vector
             nc = 3
             u = zeros(3 * non)
             for i in 1:length(nodeTags)
@@ -5610,7 +5616,7 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
             cv[1:3] = pt1 - pt0
             for j in 1:length(stepRange)
                 v = 0
-                val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], stepRange[j] - 1)
+                val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], stepRange[j] - 1, -1, false, -1)
                 if dis < 1e-5
                     if numComponents == 1
                         v = val[1]
