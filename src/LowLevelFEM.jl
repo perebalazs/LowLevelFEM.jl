@@ -5670,4 +5670,38 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
     end
 end
 
+"""
+    FEM.openPreProcessor(; openGL=...)
+
+Launches the GMSH preprocessor window with openGL disabled by default.
+
+Return: none
+
+Types:
+- `openGL`: Boolean
+"""
+function openPreProcessor(; openGL=false)
+    if openGL == false
+        ENV["LIBGL_ALWAYS_SOFTWARE"] = "true"
+    else
+        ENV["LIBGL_ALWAYS_SOFTWARE"] = "false"
+    end
+    gmsh.fltk.run()
+end
+
+"""
+    FEM.openPostProcessor(; model=...)
+
+Launches the GMSH postprocessor window with open postprocessor tree (of `model`).
+
+Return: none
+
+Types:
+- `model`: Int64
+"""
+function openPostProcessor(; model=0)
+    gmsh.fltk.openTreeItem(LazyString(model)*"Modules/Post-processing")
+    gmsh.fltk.run()
+end
+
 end #module
