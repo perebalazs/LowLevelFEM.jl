@@ -120,6 +120,9 @@ struct Problem
                 end
                 elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
                 for i in 1:length(elementTags)
+		    if length(elementTags[i]) == 0
+		        error("Problem: No mesh in model '$name'.")
+		    end
                     for j in 1:length(elementTags[i])
                         push!(elemTags, elementTags[i][j])
                     end
@@ -5547,7 +5550,7 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
 end
 
 """
-    FEM.plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=...)
+    FEM.plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
 
 Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
 gmsh from which the data of a field is imported. `pathName` is the name of a
@@ -5578,7 +5581,7 @@ Types:
 - `tag`: Integer
 - `xy`: Tuples{Vector{Float64},Vector{Float64}}
 """
-function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false)
+function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
     gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
     if points < 2
@@ -5616,7 +5619,7 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
             cv[1:3] = pt1 - pt0
             for j in 1:length(stepRange)
                 v = 0
-                val, dis = gmsh.view.probe(field, pt1[1], pt1[2], pt1[3], stepRange[j] - 1, -1, false, -1)
+                val, dis = gmsh.view.probe(field, pt1[1]+offsetX, pt1[2]+offsetY, pt1[3]+offsetZ, stepRange[j] - 1, -1, false, -1)
                 if dis < 1e-5
                     if numComponents == 1
                         v = val[1]
@@ -5702,6 +5705,21 @@ Types:
 function openPostProcessor(; model=0)
     gmsh.fltk.openTreeItem(LazyString(model)*"Modules/Post-processing")
     gmsh.fltk.run()
+end
+
+"""
+    FEM.setParameter(name, value)
+
+Defines a parameter `name` and sets its value to `value`. 
+
+Return: none
+
+Types:
+- `name`: String
+- `value`: Float64
+"""
+function setParameter(name, value)
+    gmsh.parser.setNumber(name, [value])
 end
 
 end #module
