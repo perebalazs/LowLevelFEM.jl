@@ -5674,6 +5674,115 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
 end
 
 """
+    FEM.showOnSurface(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
+
+Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
+gmsh from which the data of a field is imported. `pathName` is the name of a
+physical group which contains a curve. The curve is devided into equal length
+intervals with number of `points` points. The field is shown at this points.
+`step` is the sequence number of displayed step. If no step is given, shows all 
+the aviable steps as an animation. If `plot` is true, additional return parameter, a tuple of
+vectors is given back, in which `x` is a vector of values in horizontal axis, `y` is a vector
+of values in vertical axis of a plot (see `Plots` package). `name` is the title of graph and
+`visible` is a true or false value to toggle on or off the initial visibility 
+in gmsh. This function returns the tag of View.
+
+Return: `tag`
+
+or
+
+Return: `tag`, `xy`
+
+Types:
+- `problem`: Problem
+- `pathName`: String
+- `field`: Integer
+- `points`: Integer
+- `step`: Integer
+- `plot`: Boolean
+- `name`: String
+- `visible`: Boolean
+- `tag`: Integer
+- `xy`: Tuples{Vector{Float64},Vector{Float64}}
+"""
+function showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
+    SS = gmsh.view.add(name)
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+    nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(-1, -1, true, false)
+    ncoord2 = similar(ncoord)
+    ncoord2[nodeTags*3 .- 2] .= ncoord[1:3:length(ncoord)]
+    ncoord2[nodeTags*3 .- 1] .= ncoord[2:3:length(ncoord)]
+    ncoord2[nodeTags*3 .- 0] .= ncoord[3:3:length(ncoord)]
+    if component == :x
+        comp0 = 1
+    elseif component == :y
+        comp0 = 2
+    elseif component == :z
+        comp0 = 3
+    else
+        error("resultant: invalid component '$component'")
+    end
+    ret2 = []
+    ret3 = []
+    ret4 = []
+    el2 = 0
+    el3 = 0
+    el4 = 0
+    x = [0.0, 0.0, 0.0]
+    for idm in 1:length(dimTags)
+        dimTag = dimTags[idm]
+        edim = dimTag[1]
+        etag = dimTag[2]
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+        for i in 1:length(elemTypes)
+            et = elemTypes[i]
+            elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+            nn = zeros(numPrimaryNodes * 4)
+            for j in 1:length(elemTags[i])
+                elem = elemTags[i][j]
+                for l in 1:numPrimaryNodes
+                    for k in 1:3
+                        x[k] = ncoord2[elemNodeTags[i][j*numNodes-(numNodes-l)]*3-(3-k)]
+                        nn[k*numPrimaryNodes-numPrimaryNodes + l] = x[k]
+                    end
+                    k = 4
+		    f, d = gmsh.view.probe(field, x[1]+offsetX, x[2]+offsetY, x[3]+offsetZ, -1, -1, grad, -1)
+                    nn[4*numPrimaryNodes-numPrimaryNodes + l] = f[comp0]
+                end
+                if numPrimaryNodes == 3
+                append!(ret3,nn)
+                elseif numPrimaryNodes == 4
+                    append!(ret4,nn)
+                elseif numPrimaryNodes == 2
+                    append!(ret2,nn)
+                end
+            end
+            if numPrimaryNodes == 3
+                el3 += length(elemTags[i])
+            elseif numPrimaryNodes == 4
+                el4 += length(elemTags[i])
+            elseif numPrimaryNodes == 2
+                el2 += length(elemTags[i])
+            end
+        end
+    end
+    if el3 > 0
+        gmsh.view.addListData(SS, "ST", el3, ret3)
+    end
+    if el4 > 0
+        gmsh.view.addListData(SS, "SQ", el4, ret4)
+    end
+    if el2 > 0
+        gmsh.view.addListData(SS, "SL", el2, ret2)
+    end
+    if visible == false
+        gmsh.view.option.setNumber(SS, "Visible", 0)
+    end
+    return SS
+end
+
+
+"""
     FEM.openPreProcessor(; openGL=...)
 
 Launches the GMSH preprocessor window with openGL disabled by default.
