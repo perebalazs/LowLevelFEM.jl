@@ -148,6 +148,142 @@ struct Problem
     end
 end
 
+using SparseArrays
+struct Transformation
+    T::SparseMatrixCSC{Float64}
+    non::Int64
+    dim::Int64
+end
+
+import Base.transpose
+function transpose(A::Transformation)
+    return Transformation(transpose(A.T), A.non, A.dim)
+end
+
+import Base.adjoint
+function adjoint(A::Transformation)
+    return Transformation(adjoint(A.T), A.non, A.dim)
+end
+
+import Base.*
+function *(A::Transformation, B)
+    n = size(B, 1)
+    m = size(B, 2)
+    non = A.non
+    dim = A.dim
+    if dim * non == n
+        if issparse(B)
+            return dropzeros!(A.T * B)
+        else
+            return A.T * B
+        end
+    elseif 9non == n
+        C = zeros(3non, 3)
+        D = zeros(3non, 3)
+        E = zeros(n, m)
+        T = []
+        I = []
+        J = []
+        V = Float64[]
+        T1 = zeros(9)
+        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
+        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
+        if dim == 2
+            for i in 1:non
+                T1 = [A.T[2i-1, 2i-1], A.T[2i, 2i-1], 0, A.T[2i-1, 2i], A.T[2i, 2i], 0, 0, 0, 1]
+                Idx = I0 .+ (3i - 3)
+                Jdx = J0 .+ (3i - 3)
+                append!(I, Idx)
+                append!(J, Jdx)
+                append!(V, T1)
+            end
+            fn(x, y) = y
+            T = sparse(I, J, V, 3non, 3non, fn)
+            dropzeros!(T)
+        else
+            T = A.T
+        end
+        for k in 1:m
+            for i in 1:non
+                for j = 1:3
+                    C[3i-2:3i, j] = B[9i-9+3j-2:9i-9+3j, k]
+                end
+            end
+            D = T * C
+            for i in 1:non
+                for j = 1:3
+                    E[9i-9+3j-2:9i-9+3j, k] = D[3i-2:3i, j]
+                end
+            end
+        end
+        return E
+    else
+        error("*(A::Transformation, B): size missmatch dim * non = $dim * $non ≠ $n.")
+    end
+end
+
+function *(B, A::Transformation)
+    n = size(B, 1)
+    m = size(B, 2)
+    non = A.non
+    dim = A.dim
+    if dim * non == n
+        if issparse(B)
+            return dropzeros!(A.T * B)
+        else
+            return A.T * B
+        end
+    elseif 9non == n
+        C = zeros(3, 3non)
+        D = zeros(3, 3non)
+        E = zeros(n, m)
+        T = []
+        I = []
+        J = []
+        V = Float64[]
+        T1 = zeros(9)
+        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
+        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
+        if dim == 2
+            for i in 1:non
+                T1 = [A.T[2i-1, 2i-1], A.T[2i, 2i-1], 0, A.T[2i-1, 2i], A.T[2i, 2i], 0, 0, 0, 1]
+                Idx = I0 .+ (3i - 3)
+                Jdx = J0 .+ (3i - 3)
+                append!(I, Idx)
+                append!(J, Jdx)
+                append!(V, T1)
+            end
+            fn(x, y) = y
+            T = sparse(I, J, V, 3non, 3non, fn)
+        else
+            T = A.T
+        end
+        for k in 1:m
+            for i in 1:non
+                for j = 1:3
+                    C[1:3, 3i-3+j] = B[9i-9+3j-2:9i-9+3j, k]
+                end
+            end
+            D = C * T
+            for i in 1:non
+                for j = 1:3
+                    E[9i-9+3j-2:9i-9+3j, k] = D[1:3, 3i-3+j]
+                end
+            end
+        end
+        return E
+    else
+        error("*(B, A::Transformation): size missmatch dim * non = $dim * $non ≠ $n.")
+    end
+end
+
+function *(A::Transformation, B::Transformation)
+    if A.non != B.non || A.dim != B.dim
+        error("*(A::Transformation, B::Transformation): size missmatch non = $(A.non) ≠ $(B.non), dim = $(A.dim) ≠ $(B.dim).")
+    end
+    return Transformation(A.T * B.T, A.non, A.dim)
+end
+
 """
     VectorField(sigma, numElem, nsteps)
 
@@ -5043,7 +5179,7 @@ function rotateNodes(problem, phName, CoordSys)
     end
     T = sparse(I, J, V, dof, dof, fn)
     dropzeros!(T)
-    return T
+    return Transformation(T, non, dim)
 end
 
 """
