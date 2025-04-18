@@ -2982,7 +2982,7 @@ f1(x, y, z) = sin(x)
 f2(x, y, z) = 5y
 ff1 = FEM.field("face1", fx=f1, fy=f2, fz=0)
 ff2 = FEM.field("face2", fx=f2, fy=f1, fz=1)
-qq = FEM.scalarField(problem, [ff1, ff2])
+qq = FEM.vectorField(problem, [ff1, ff2])
 qq0 = FEM.showDoFResults(problem, qq, :vector)
 ```
 """
