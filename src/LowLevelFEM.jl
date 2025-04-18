@@ -173,7 +173,7 @@ function *(A::Transformation, B)
     dim = A.dim
     if dim * non == n
         if issparse(B)
-            return dropzeros!(A.T * B)
+            return dropzeros(A.T * B)
         else
             return A.T * B
         end
@@ -229,7 +229,7 @@ function *(B, A::Transformation)
     dim = A.dim
     if dim * non == n
         if issparse(B)
-            return dropzeros!(A.T * B)
+            return dropzeros(A.T * B)
         else
             return A.T * B
         end
@@ -255,6 +255,7 @@ function *(B, A::Transformation)
             end
             fn(x, y) = y
             T = sparse(I, J, V, 3non, 3non, fn)
+            dropzeros!(T)
         else
             T = A.T
         end
@@ -281,7 +282,7 @@ function *(A::Transformation, B::Transformation)
     if A.non != B.non || A.dim != B.dim
         error("*(A::Transformation, B::Transformation): size missmatch non = $(A.non) ≠ $(B.non), dim = $(A.dim) ≠ $(B.dim).")
     end
-    return Transformation(A.T * B.T, A.non, A.dim)
+    return Transformation(dropzeros(A.T * B.T), A.non, A.dim)
 end
 
 """
@@ -341,6 +342,28 @@ otherwise (in 2D case) the number of arguments is two (x and y coordinates).
 Types:
 - `vec1`: Vector{Float64}
 - `vec2`: Vector{Float64}
+
+# Examples
+
+```julia
+# 2D case
+nx(x, y) = x
+ny(x, y) = y
+cs = FEM.CoordinateSystem([nx, ny])
+Q = FEM.rotateNodes(problem, "body", cs)
+q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
+             # `q1` is a nodal displacement vector.
+S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
+                 # `S2` is in Axisymmetric coordinate system.
+
+# 3D case
+n1x(x, y, z) = x
+n1y(x, y, z) = y
+n2x(x, y, z) = -y
+n2y = n1x
+cs = FEM.CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
+Q = FEM.rotateNodes(problem, "body", cs)
+```
 """
 struct CoordinateSystem
     vec1::Vector{Float64}
@@ -349,6 +372,16 @@ struct CoordinateSystem
     vec2f::Vector{Function}
     i1::Vector{Int64}
     i2::Vector{Int64}
+    function CoordinateSystem(vect1)
+        f(x) = 0
+        i1x = isa(vect1[1], Function) ? 1 : 0
+        i1y = isa(vect1[2], Function) ? 1 : 0
+        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
+        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
+        v1fx = isa(vect1[1], Function) ? vect1[1] : f
+        v1fy = isa(vect1[2], Function) ? vect1[2] : f
+        return new([v1x, v1y, 0], [0, 0, 0], [v1fx, v1fy, f], [f, f, f], [i1x, i1y, 0], [0, 0, 0])
+    end
     function CoordinateSystem(vect1, vect2)
         f(x) = 0
         i1x = isa(vect1[1], Function) ? 1 : 0
@@ -2859,6 +2892,15 @@ Types:
 - `fxy`: Float64 or Function
 - `fyz`: Float64 or Function
 - `fzx`: Float64 or Function
+
+# Examples
+
+```julia
+f1(x, y, z) = y
+f2 = FEM.field("face1", f=f1)
+qq = FEM.scalarField(problem, [f2])
+qqq = FEM.showDoFResults(problem, qq, :scalar)
+```
 """
 function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, fzy=:no, fzx=:no, fxz=:no)
     fxy = fyx != :no ? fyx : fxy
@@ -2869,28 +2911,36 @@ function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, f
 end
 
 """
-    FEM.scalarField(problem, entity)
+    FEM.scalarField(problem, dataField)
 
-Defines a scalar field from `entity`, which is a tuple of `name` of physical group and
+Defines a scalar field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`.
 
 Return: Vector{Float64}
 
 Types:
 - `problem`: Problem
-- `entity`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{Tuple{String, Float64,...}}
+
+# Examples
+
+```julia
+f2 = FEM.field("face1", f=1)
+qq = FEM.scalarField(problem, [f2])
+qqq = FEM.showDoFResults(problem, qq, :scalar)
+```
 """
-function scalarField(problem, entity)
-    if !isa(entity, Vector)
-        error("applyBoundaryConditions!: entity are not arranged in a vector. Put them in [...]")
+function scalarField(problem, dataField)
+    if !isa(dataField, Vector)
+        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = 1
     non = problem.non
     field = zeros(non)
 
-    for i in 1:length(entity)
-        name, f, fx, fy, fz, fxy, fyz, fzx = entity[i]
+    for i in 1:length(dataField)
+        name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(f, Function)
@@ -2914,28 +2964,39 @@ function scalarField(problem, entity)
 end
 
 """
-    FEM.vectorField(problem, entity)
+    FEM.vectorField(problem, dataField)
 
-Defines a vector field from `entity`, which is a tuple of `name` of physical group and
+Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`.
 
 Return: Vector{Float64}
 
 Types:
 - `problem`: Problem
-- `entity`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{Tuple{String, Float64,...}}
+
+# Examples
+
+```julia
+f1(x, y, z) = sin(x)
+f2(x, y, z) = 5y
+ff1 = FEM.field("face1", fx=f1, fy=f2, fz=0)
+ff2 = FEM.field("face2", fx=f2, fy=f1, fz=1)
+qq = FEM.scalarField(problem, [ff1, ff2])
+qq0 = FEM.showDoFResults(problem, qq, :vector)
+```
 """
-function vectorField(problem, entity)
-    if !isa(entity, Vector)
-        error("applyBoundaryConditions!: entity are not arranged in a vector. Put them in [...]")
+function vectorField(problem, dataField)
+    if !isa(dataField, Vector)
+        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = problem.pdim
     non = problem.non
     field = zeros(non * pdim)
 
-    for i in 1:length(entity)
-        name, f, fx, fy, fz, fxy, fyz, fzx = entity[i]
+    for i in 1:length(dataField)
+        name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
@@ -5810,36 +5871,29 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
 end
 
 """
-    FEM.showOnSurface(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
+    FEM.showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
 
-Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
-gmsh from which the data of a field is imported. `pathName` is the name of a
-physical group which contains a curve. The curve is devided into equal length
-intervals with number of `points` points. The field is shown at this points.
-`step` is the sequence number of displayed step. If no step is given, shows all 
-the aviable steps as an animation. If `plot` is true, additional return parameter, a tuple of
-vectors is given back, in which `x` is a vector of values in horizontal axis, `y` is a vector
-of values in vertical axis of a plot (see `Plots` package). `name` is the title of graph and
-`visible` is a true or false value to toggle on or off the initial visibility 
-in gmsh. This function returns the tag of View.
+Shows the values of a scalar field at a surface which has a physical name `phName`.
+`field` is the tag of a view in GMSH. The values of the field are calculated at the
+intersection with the surface. `grad` has a true or false value to toggle on or off
+the gradient of the field. `component` is the component of the gradient of `field`
+(:x, :y, :z) to be shown. `offsetX`, `offsetY`, `offsetZ` are the offsets in the
+x, y and z directions where the values are picked from. `name` is a title to display
+and `visible` is a true or false value to toggle on or off the initial visibility in gmsh.
 
 Return: `tag`
 
-or
-
-Return: `tag`, `xy`
-
 Types:
-- `problem`: Problem
-- `pathName`: String
 - `field`: Integer
-- `points`: Integer
-- `step`: Integer
-- `plot`: Boolean
+- `phName`: String
+- `grad`: Boolean
+- `component`: Symbol
+- `offsetX`: Float64
+- `offsetY`: Float64
+- `offsetZ`: Float64
 - `name`: String
 - `visible`: Boolean
 - `tag`: Integer
-- `xy`: Tuples{Vector{Float64},Vector{Float64}}
 """
 function showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
     SS = gmsh.view.add(name)
