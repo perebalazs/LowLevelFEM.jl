@@ -2991,7 +2991,7 @@ function vectorField(problem, dataField)
         error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
-    pdim = problem.pdim
+    pdim = problem.dim
     non = problem.non
     field = zeros(non * pdim)
 
@@ -3034,6 +3034,105 @@ function vectorField(problem, dataField)
                 field[nodeTagsZ,:] .= ffz
             else
                 field[nodeTagsZ,:] .= fz
+            end
+        end
+    end
+    return field
+end
+
+"""
+    FEM.tensorField(problem, dataField)
+
+Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
+prescribed values or functions. Mesh details are in `problem`.
+
+Return: Vector{Float64}
+
+Types:
+- `problem`: Problem
+- `dataField`: Vector{Tuple{String, Float64,...}}
+
+# Examples
+
+```julia
+f1(x, y, z) = sin(x)
+f2(x, y, z) = 5y
+ff1 = FEM.field("face1", fx=f1, fy=f2, fz=0)
+ff2 = FEM.field("face2", fx=f2, fy=f1, fz=1)
+qq = FEM.tensorField(problem, [ff1, ff2])
+qq0 = FEM.showDoFResults(problem, qq, :vector)
+```
+"""
+function tensorField(problem, dataField)
+    if !isa(dataField, Vector)
+        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
+    end
+    gmsh.model.setCurrent(problem.name)
+    pdim = 9
+    non = problem.non
+    field = zeros(non * pdim)
+
+    for i in 1:length(dataField)
+        name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(fx, Function) || isa(fy, Function) || isa(fz, Function) || isa(fxy, Function) || isa(fyz, Function) || isa(fzx, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
+        if fx != :no
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim - 1)
+            if isa(fx, Function)
+                ffx = fx.(xx, yy, zz)
+                field[nodeTagsX,:] .= ffx
+            else
+                field[nodeTagsX,:] .= fx
+            end
+        end
+        if fy != :no
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim - 5)
+            if isa(fy, Function)
+                ffy = fy.(xx, yy, zz)
+                field[nodeTagsY,:] .= ffy
+            else
+                field[nodeTagsY,:] .= fy
+            end
+        end
+        if fz != :no
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= pdim
+            if isa(fz, Function)
+                ffz = fz.(xx, yy, zz)
+                field[nodeTagsZ,:] .= ffz
+            else
+                field[nodeTagsZ,:] .= fz
+            end
+        end
+        if fxy != :no
+            nodeTagsXY = copy(nodeTags)
+            nodeTagsXY *= pdim
+            nodeTagsXY .-= (pdim - 4)
+            if isa(fxy, Function)
+                ffxy = fxy.(xx, yy, zz)
+                field[nodeTagsXY,:] .= ffxy
+            else
+                field[nodeTagsXY,:] .= fxy
+            end
+        end
+        if fxy != :no
+            nodeTagsYX = copy(nodeTags)
+            nodeTagsYX *= pdim
+            nodeTagsYX .-= (pdim - 4)
+            if isa(fxy, Function)
+                ffxy = fxy.(xx, yy, zz)
+                field[nodeTagsYX,:] .= ffxy
+            else
+                field[nodeTagsYX,:] .= fxy
             end
         end
     end
@@ -4874,7 +4973,7 @@ function FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
     if ϑ == 0 && nnz == dof
         invC = spdiagm(1 ./ diag(C))
         for i in 2:nsteps
-            T1 = T0 - (1 - ϑ) * Δt * invC * K * T0 + Δt * q
+            T1 = T0 - (1 - ϑ) * Δt * invC * K * T0 + Δt * invC * q
             T[:, i] = T1
             t[i] = t[i-1] + Δt
             T0 = T1
