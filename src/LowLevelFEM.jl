@@ -3057,10 +3057,10 @@ Types:
 ```julia
 f1(x, y, z) = sin(x)
 f2(x, y, z) = 5y
-ff1 = FEM.field("face1", fx=f1, fy=f2, fz=0)
-ff2 = FEM.field("face2", fx=f2, fy=f1, fz=1)
+ff1 = FEM.field("face1", fx=f1, fy=f2, fz=0, fxy=1, fyz=1, fzx=f2)
+ff2 = FEM.field("face2", fx=f2, fy=f1, fz=1, fxy=1, fyz=f1, fzx=1)
 qq = FEM.tensorField(problem, [ff1, ff2])
-qq0 = FEM.showDoFResults(problem, qq, :vector)
+qq0 = FEM.showDoFResults(problem, qq, :tensor)
 ```
 """
 function tensorField(problem, dataField)
@@ -3127,12 +3127,56 @@ function tensorField(problem, dataField)
         if fxy != :no
             nodeTagsYX = copy(nodeTags)
             nodeTagsYX *= pdim
-            nodeTagsYX .-= (pdim - 4)
+            nodeTagsYX .-= (pdim - 2)
             if isa(fxy, Function)
                 ffxy = fxy.(xx, yy, zz)
                 field[nodeTagsYX,:] .= ffxy
             else
                 field[nodeTagsYX,:] .= fxy
+            end
+        end
+        if fyz != :no
+            nodeTagsYZ = copy(nodeTags)
+            nodeTagsYZ *= pdim
+            nodeTagsYZ .-= (pdim - 8)
+            if isa(fyz, Function)
+                ffyz = fyz.(xx, yy, zz)
+                field[nodeTagsYZ,:] .= ffyz
+            else
+                field[nodeTagsYZ,:] .= fyz
+            end
+        end
+        if fyz != :no
+            nodeTagsZY = copy(nodeTags)
+            nodeTagsZY *= pdim
+            nodeTagsZY .-= (pdim - 6)
+            if isa(fyz, Function)
+                ffyz = fyz.(xx, yy, zz)
+                field[nodeTagsZY,:] .= ffyz
+            else
+                field[nodeTagsZY,:] .= fyz
+            end
+        end
+        if fzx != :no
+            nodeTagsZX = copy(nodeTags)
+            nodeTagsZX *= pdim
+            nodeTagsZX .-= (pdim - 3)
+            if isa(fyz, Function)
+                ffyz = fyz.(xx, yy, zz)
+                field[nodeTagsZX,:] .= ffyz
+            else
+                field[nodeTagsZX,:] .= fyz
+            end
+        end
+        if fzx != :no
+            nodeTagsXZ = copy(nodeTags)
+            nodeTagsXZ *= pdim
+            nodeTagsXZ .-= (pdim - 7)
+            if isa(fyz, Function)
+                ffyz = fyz.(xx, yy, zz)
+                field[nodeTagsXZ,:] .= ffyz
+            else
+                field[nodeTagsXZ,:] .= fyz
             end
         end
     end
@@ -5408,7 +5452,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
                 u[3i-1] = pdim > 1 ? q[pdim*nodeTags[i]-(pdim-2), j] : 0
                 u[3i-0] = pdim == 3 ? q[pdim*nodeTags[i]-(pdim-3), j] : 0
             end
-        elseif comp == :s || comp == :e
+        elseif comp == :s || comp == :e || comp == :tensor
             nc = 9
             u = zeros(9 * non)
             for i in 1:length(nodeTags)
