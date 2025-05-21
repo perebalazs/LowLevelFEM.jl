@@ -286,48 +286,49 @@ function *(A::Transformation, B::Transformation)
 end
 
 """
-    VectorField(sigma, numElem, nsteps)
+    VectorField(A, numElem, nsteps)
 
 A structure containing the data of a heat flux field. 
-- sigma: vector of ElementNodeData type heat flux data (see gmsh.jl)
+- A: vector of ElementNodeData type heat flux data (see gmsh.jl)
 - numElem: vector of tags of elements
-- nsteps: number of stress fields stored in sigma (for animations).
+- nsteps: number of stress fields stored in `A` (for animations).
 - type: type of data (eg. heat flux `:q`)
 
 Types:
-- `sigma`: Vector{Matrix{Float64}}
+- `A`: Vector{Matrix{Float64}}
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
 - `type`: Symbol
 """
 struct VectorField
-    sigma::Vector{Matrix{Float64}}
+    A::Vector{Matrix{Float64}}
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
 end
 
 """
-    TensorField(sigma, numElem, nsteps)
+    TensorField(A, numElem, nsteps)
 
 A structure containing the data of a stress or strain field. 
-- sigma: vector of ElementNodeData type stress data (see gmsh.jl)
+- A: vector of ElementNodeData type stress data (see gmsh.jl)
 - numElem: vector of tags of elements
-- nsteps: number of stress fields stored in sigma (for animations).
+- nsteps: number of stress fields stored in `A` (for animations).
 - type: type of data (eg. stress `:s` and strain `:e`)
 
 Types:
-- `sigma`: Vector{Matrix{Float64}}
+- `A`: Vector{Matrix{Float64}}
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
 - `type`: Symbol
 """
 struct TensorField
-    sigma::Vector{Matrix{Float64}}
+    A::Vector{Matrix{Float64}}
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
 end
+
 """
     CoordinateSystem(vec1, vec2)
 
@@ -4067,7 +4068,7 @@ function elementsToNodes(problem, S)
     type = S.type
     nsteps = S.nsteps
     numElem = S.numElem
-    σ = S.sigma
+    σ = S.A
     non = problem.non
     if type == :s || type == :e
         epn = 9
@@ -4111,7 +4112,7 @@ function fieldError(problem, S)
     type = S.type
     nsteps = S.nsteps
     numElem = S.numElem
-    σ = S.sigma
+    σ = S.A
     non = problem.non
     if type == :s || type == :e
         epn = 9
@@ -5597,7 +5598,7 @@ function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, 
         error("showStrainResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     EE = gmsh.view.add(name)
-    ε = E.sigma
+    ε = E.A
     numElem = E.numElem
     for jj in 1:length(t)
 
@@ -5717,7 +5718,7 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
         error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     SS = gmsh.view.add(name)
-    σ = S.sigma
+    σ = S.A
     numElem = S.numElem
     for jj in 1:length(t)
 
@@ -5825,7 +5826,7 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
         error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     SS = gmsh.view.add(name)
-    σ = S.sigma
+    σ = S.A
     numElem = S.numElem
     for jj in 1:length(t)
 
