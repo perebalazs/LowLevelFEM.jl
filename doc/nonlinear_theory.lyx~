@@ -1,0 +1,870 @@
+#LyX 2.4 created this file. For more info see https://www.lyx.org/
+\lyxformat 620
+\begin_document
+\begin_header
+\save_transient_properties true
+\origin unavailable
+\textclass article
+\use_default_options true
+\begin_modules
+az
+\end_modules
+\maintain_unincluded_children no
+\begin_local_layout
+Format 66
+InsetLayout Flex:nev
+	LyXType               custom
+	Decoration            classic
+	LabelString           név
+	LatexType             command
+	LatexName             nev
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:szak
+	LyXType               custom
+	Decoration            classic
+	LabelString           szak
+	LatexType             command
+	LatexName             szak
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:szint
+	LyXType               custom
+	Decoration            classic
+	LabelString           szint
+	LatexType             command
+	LatexName             szint
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:cim
+	LyXType               custom
+	Decoration            classic
+	LabelString           cím
+	LatexType             command
+	LatexName             cim
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:speci
+	LyXType               custom
+	Decoration            classic
+	LabelString           specializáció
+	LatexType             command
+	LatexName             speci
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:nyelv
+	LyXType               custom
+	Decoration            classic
+	LabelString           nyelv
+	LatexType             command
+	LatexName             nyelv
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:neptun
+	LyXType               custom
+	Decoration            classic
+	LabelString           neptun_kód
+	LatexType             command
+	LatexName             neptun
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:nappali
+	LyXType               custom
+	Decoration            classic
+	LabelString           nappali
+	LatexType             command
+	LatexName             nappali
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:levelezo
+	LyXType               custom
+	Decoration            classic
+	LabelString           levelező
+	LatexType             command
+	LatexName             levelezo
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:kezdoev
+	LyXType               custom
+	Decoration            classic
+	LabelString           kezdőév
+	LatexType             command
+	LatexName             kezdoev
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:titkos
+	LyXType               custom
+	Decoration            classic
+	LabelString           titkos
+	LatexType             command
+	LatexName             titkos
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:evszam
+	LyXType               custom
+	Decoration            classic
+	LabelString           beadáséve
+	LatexType             command
+	LatexName             evszam
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:belkonz
+	LyXType               custom
+	Decoration            classic
+	LabelString           belső_konzulens
+	LatexType             command
+	LatexName             belkonz
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:tanszek
+	LyXType               custom
+	Decoration            classic
+	LabelString           konzulens_tanszéke
+	LatexType             command
+	LatexName             tanszek
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:beosztbel
+	LyXType               custom
+	Decoration            classic
+	LabelString           belső_konzulens_beosztása
+	LatexType             command
+	LatexName             beosztbel
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:kulkonz
+	LyXType               custom
+	Decoration            classic
+	LabelString           külső_konzulens
+	LatexType             command
+	LatexName             kulkonz
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:munkah
+	LyXType               custom
+	Decoration            classic
+	LabelString           külső_konzulens_munkahelye
+	LatexType             command
+	LatexName             munkah
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:beosztkul
+	LyXType               custom
+	Decoration            classic
+	LabelString           külső_konzulens_beosztása
+	LatexType             command
+	LatexName             beosztkul
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:osz
+	LyXType               custom
+	Decoration            classic
+	LabelString           ősz
+	LatexType             command
+	LatexName             osz
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:tavasz
+	LyXType               custom
+	Decoration            classic
+	LabelString           tavasz
+	LatexType             command
+	LatexName             tavasz
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:firstpage
+	LyXType               custom
+	Decoration            classic
+	LabelString           címlap
+	LatexType             command
+	LatexName             firstpage
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:secondpage
+	LyXType               custom
+	Decoration            classic
+	LabelString           belső_címlap
+	LatexType             command
+	LatexName             secondpage
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:feladat
+	LyXType               custom
+	Decoration            classic
+	LabelString           feladat_kiíró_lap
+	LatexType             command
+	LatexName             feladat
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:feladatb
+	LyXType               custom
+	Decoration            classic
+	LabelString           2_feladat
+	LatexType             command
+	LatexName             feladatb
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:feladatc
+	LyXType               custom
+	Decoration            classic
+	LabelString           3_feladat
+	LatexType             command
+	LatexName             feladatc
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:feladatd
+	LyXType               custom
+	Decoration            classic
+	LabelString           4_feladat
+	LatexType             command
+	LatexName             feladatd
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:feladata
+	LyXType               custom
+	Decoration            classic
+	LabelString           1_feladat
+	LatexType             command
+	LatexName             feladata
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:nyilatkozat
+	LyXType               custom
+	Decoration            classic
+	LabelString           nyilatkozat
+	LatexType             command
+	LatexName             nyilatkozat
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:kivonat
+	LyXType               custom
+	Decoration            classic
+	LabelString           kivonat
+	LatexType             command
+	LatexName             kivonat
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:abstrct
+	LyXType               custom
+	Decoration            classic
+	LabelString           abstract
+	LatexType             command
+	LatexName             abstrct
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:az
+	LyXType               custom
+	Decoration            classic
+	LabelString           az
+	LatexType             command
+	LatexName             az
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+InsetLayout Flex:Az
+	LyXType               custom
+	Decoration            classic
+	LabelString           Az
+	LatexType             command
+	LatexName             Az
+	LabelFont
+	  Family              Roman
+	  Color               blue
+	EndFont
+	ResetsFont            0
+	Requires              babel
+	MultiPar              0
+End
+\end_local_layout
+\language magyar
+\language_package default
+\inputencoding auto-legacy
+\fontencoding auto
+\font_roman "default" "default"
+\font_sans "default" "default"
+\font_typewriter "default" "default"
+\font_math "auto" "auto"
+\font_default_family default
+\use_non_tex_fonts false
+\font_sc false
+\font_roman_osf false
+\font_sans_osf false
+\font_typewriter_osf false
+\font_sf_scale 100 100
+\font_tt_scale 100 100
+\use_microtype false
+\use_dash_ligatures true
+\graphics default
+\default_output_format default
+\output_sync 0
+\bibtex_command default
+\index_command default
+\paperfontsize 12
+\spacing single
+\use_hyperref false
+\papersize a4
+\use_geometry true
+\use_package amsmath 1
+\use_package amssymb 1
+\use_package cancel 1
+\use_package esint 1
+\use_package mathdots 1
+\use_package mathtools 1
+\use_package mhchem 1
+\use_package stackrel 1
+\use_package stmaryrd 1
+\use_package undertilde 1
+\cite_engine basic
+\cite_engine_type default
+\biblio_style plain
+\use_bibtopic false
+\use_indices false
+\paperorientation portrait
+\suppress_date false
+\justification true
+\use_refstyle 1
+\use_formatted_ref 0
+\use_minted 0
+\use_lineno 0
+\index Index
+\shortcut idx
+\color #008000
+\end_index
+\leftmargin 3cm
+\topmargin 2.5cm
+\rightmargin 2.5cm
+\bottommargin 2.5cm
+\secnumdepth 3
+\tocdepth 3
+\paragraph_separation indent
+\paragraph_indentation default
+\is_math_indent 0
+\math_numbering_side default
+\quotes_style polish
+\dynamic_quotes 0
+\papercolumns 1
+\papersides 1
+\paperpagestyle default
+\tablestyle default
+\tracking_changes false
+\output_changes false
+\change_bars false
+\postpone_fragile_content false
+\html_math_output 0
+\html_css_as_file 0
+\html_be_strict false
+\docbook_table_output 0
+\docbook_mathml_prefix 1
+\end_header
+
+\begin_body
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\ex}{\vec{e}_{x}}
+\end_inset
+
+
+\begin_inset FormulaMacro
+\newcommand{\ey}{\vec{e}_{y}}
+\end_inset
+
+
+\begin_inset FormulaMacro
+\newcommand{\ez}{\vec{e}_{z}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\veccccccc}[1]{\boldsymbol{#1}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\ten}[1]{\underline{\underline{#1}}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\mat}[1]{\underline{\underline{#1}}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\diff}[2]{\frac{d#1}{d#2}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\difff}[2]{\frac{d^{2}#1}{d#2^{2}}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\diffff}[2]{\frac{d^{3}#1}{d#2^{3}}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\difffff}[2]{\frac{d^{4}#1}{d#2^{4}}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\parc}[2]{\frac{\partial#1}{\partial#2}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\pparc}[2]{\frac{\partial^{2}#1}{\partial#2^{2}}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\ppparc}[3]{\frac{\partial^{2}#1}{\partial#2\partial#3}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset FormulaMacro
+\newcommand{\ccdot}{\cdot\cdot\hspace{2pt}}
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\[
+\ten{\sigma}\cdot\nabla+\vec{f}=\vec{0}\qquad/\cdot\vec{v}\qquad/\intop_{\left(v\right)}\dots dv
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+-W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\vec{v}\cdot\overset{\downarrow}{\ten{\sigma}}\cdot\nabla dv+\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+-W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\overset{\downarrow}{\overline{\vec{v}\cdot\ten{\sigma}}}\cdot\nabla dv-\intop_{\left(v\right)}\overset{\downarrow}{\vec{v}}\cdot\ten{\sigma}\cdot\nabla dv+\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+-W\left(\vec{r},\vec{v}\right)=\intop_{\left(a\right)}\vec{v}\cdot\ten{\sigma}\cdot\vec{n}da-\intop_{\left(v\right)}\overset{\downarrow}{\vec{v}}\cdot\ten{\sigma}\cdot\nabla dv+\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\ten{\sigma}\cdot\vec{n}=\vec{t}\qquad\vec{r}\in a_{t}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+-W\left(\vec{r},\vec{v}\right)=\intop_{\left(a_{t}\right)}\vec{v}\cdot\vec{t}da-\intop_{\left(v\right)}\overset{\downarrow}{\vec{v}}\cdot\ten{\sigma}\cdot\nabla dv+\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\overset{\downarrow}{\vec{v}}\cdot\ten{\sigma}\cdot\nabla dv-\intop_{\left(a_{t}\right)}\vec{v}\cdot\vec{t}da-\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\vec{t}\to\mat t=\begin{bmatrix}t_{x}\\
+t_{y}\\
+t_{z}
+\end{bmatrix}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\vec{f}\to\mat f=\begin{bmatrix}f_{x}\\
+f_{y}\\
+f_{z}
+\end{bmatrix}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\vec{v}\to\mat v=\begin{bmatrix}v_{x}\\
+v_{y}\\
+v_{z}
+\end{bmatrix}=\begin{bmatrix}\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{xi}\\
+\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{yi}\\
+\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{zi}
+\end{bmatrix}=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\underbrace{\begin{bmatrix}h_{1} & 0 & 0 & h_{2} & 0 & 0 & \cdots & h_{N} & 0 & 0\\
+0 & h_{1} & 0 & 0 & h_{2} & 0 & \cdots & 0 & h_{N} & 0\\
+0 & 0 & h_{1} & 0 & 0 & h_{2} & \cdots & 0 & 0 & h_{N}
+\end{bmatrix}}_{\mat H\left(\xi,\eta,\zeta\right)}\underbrace{\begin{bmatrix}\phi_{x1}\\
+\phi_{y1}\\
+\phi_{z1}\\
+\phi_{x2}\\
+\phi_{y2}\\
+\phi_{z2}\\
+\vdots\\
+\phi_{xN}\\
+\phi_{yN}\\
+\phi_{zN}
+\end{bmatrix}}_{\mat{\phi}}=\mat H\left(\xi,\eta,\zeta\right)\mat{\phi}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\ten{\sigma}\to\mat s=\begin{bmatrix}\sigma_{x} & \tau_{xy} & \tau_{xz}\\
+\tau_{yx} & \sigma_{y} & \tau_{yz}\\
+\tau_{zx} & \tau_{zy} & \sigma_{z}
+\end{bmatrix}
+\]
+
+\end_inset
+
+Ha 
+\begin_inset Formula $\ten{\sigma}=\ten{\sigma}^{T}$
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\ten{\sigma}\to\mat s=\begin{bmatrix}\sigma_{x} & \tau_{xy} & \tau_{zx}\\
+\tau_{xy} & \sigma_{y} & \tau_{yz}\\
+\tau_{zx} & \tau_{yz} & \sigma_{z}
+\end{bmatrix}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\ten{\nabla}\to\mat{\partial}=\begin{bmatrix}\parc{}x\\
+\parc{}y\\
+\parc{}z
+\end{bmatrix}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\mat{\phi}^{T}\overset{\downarrow}{\mat H^{T}}\ten s\mat{\partial}dv-\intop_{\left(a_{t}\right)}\mat{\phi}^{T}\mat H^{T}\mat tda-\intop_{\left(v\right)}\mat{\phi}^{T}\mat H^{T}\mat fdv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\overset{\downarrow}{\mat H^{T}}\ten s\mat{\partial}=\underbrace{\begin{bmatrix}h_{1} & 0 & 0\\
+0 & h_{1} & 0\\
+0 & 0 & h_{1}\\
+h_{2} & 0 & 0\\
+0 & h_{2} & 0\\
+0 & 0 & h_{2}\\
+\vdots & \vdots & \vdots\\
+h_{N} & 0 & 0\\
+0 & h_{N} & 0\\
+0 & 0 & h_{N}
+\end{bmatrix}}_{N\times3}\underbrace{\begin{bmatrix}\sigma_{x} & \tau_{xy} & \tau_{zx}\\
+\tau_{xy} & \sigma_{y} & \tau_{yz}\\
+\tau_{zx} & \tau_{yz} & \sigma_{z}
+\end{bmatrix}}_{3\times3}\underbrace{\begin{bmatrix}\parc{}x\\
+\parc{}y\\
+\parc{}z
+\end{bmatrix}}_{3\times1}=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\underbrace{\begin{bmatrix}h_{1} & 0 & 0\\
+0 & h_{1} & 0\\
+0 & 0 & h_{1}\\
+h_{2} & 0 & 0\\
+0 & h_{2} & 0\\
+0 & 0 & h_{2}\\
+\vdots & \vdots & \vdots\\
+h_{N} & 0 & 0\\
+0 & h_{N} & 0\\
+0 & 0 & h_{N}
+\end{bmatrix}}_{N\times3}\underbrace{\begin{bmatrix}\sigma_{x}\parc{}x+\tau_{xy}\parc{}y+\tau_{zx}\parc{}z\\
+\tau_{xy}\parc{}x+\sigma_{y}\parc{}y+\tau_{yz}\parc{}z\\
+\tau_{zx}\parc{}x+\tau_{yz}\parc{}y+\sigma_{z}\parc{}z
+\end{bmatrix}}_{3\times1}=\begin{bmatrix}\sigma_{x}\parc{h_{1}}x+\tau_{xy}\parc{h_{1}}y+\tau_{zx}\parc{h_{1}}z\\
+\tau_{xy}\parc{h_{1}}x+\sigma_{y}\parc{h_{1}}y+\tau_{yz}\parc{h_{1}}z\\
+\tau_{zx}\parc{h_{1}}x+\tau_{yz}\parc{h_{1}}y+\sigma_{z}\parc{h_{1}}z\\
+\sigma_{x}\parc{h_{2}}x+\tau_{xy}\parc{h_{1}}y+\tau_{zx}\parc{h_{1}}z\\
+\tau_{xy}\parc{h_{1}}x+\sigma_{y}\parc{h_{1}}y+\tau_{yz}\parc{h_{1}}z\\
+\tau_{zx}\parc{h_{1}}x+\tau_{yz}\parc{h_{1}}y+\sigma_{z}\parc{h_{1}}z\\
+\vdots\\
+\sigma_{x}\parc{h_{1}}x+\tau_{xy}\parc{h_{1}}y+\tau_{zx}\parc{h_{1}}z\\
+\tau_{xy}\parc{h_{1}}x+\sigma_{y}\parc{h_{1}}y+\tau_{yz}\parc{h_{1}}z\\
+\tau_{zx}\parc{h_{1}}x+\tau_{yz}\parc{h_{1}}y+\sigma_{z}\parc{h_{1}}z
+\end{bmatrix}
+\]
+
+\end_inset
+
+
+\end_layout
+
+\end_body
+\end_document
