@@ -6,7 +6,7 @@ Coherence;
 //+
 //MeshSize {:} = 1;
 //+
-Transfinite Curve {:} = 20 Using Progression 1;
+Transfinite Curve {:} = 3 Using Progression 1;
 //+
 Transfinite Surface {:};
 //+

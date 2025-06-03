@@ -484,6 +484,8 @@ End
 \output_sync 0
 \bibtex_command default
 \index_command default
+\float_placement class
+\float_alignment class
 \paperfontsize 12
 \spacing single
 \use_hyperref false
@@ -515,10 +517,10 @@ End
 \shortcut idx
 \color #008000
 \end_index
-\leftmargin 3cm
-\topmargin 2.5cm
-\rightmargin 2.5cm
-\bottommargin 2.5cm
+\leftmargin 1cm
+\topmargin 1cm
+\rightmargin 1cm
+\bottommargin 2cm
 \secnumdepth 3
 \tocdepth 3
 \paragraph_separation indent
@@ -650,6 +652,10 @@ End
 
 \end_layout
 
+\begin_layout Section
+Gyenge alak
+\end_layout
+
 \begin_layout Standard
 \begin_inset Formula 
 \[
@@ -709,7 +715,86 @@ W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\overset{\downarrow}{\vec{v
 
 \begin_inset Formula 
 \[
-\vec{t}\to\mat t=\begin{bmatrix}t_{x}\\
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\ten{\sigma}\ccdot\vec{v}\circ\nabla dv-\intop_{\left(a_{t}\right)}\vec{v}\cdot\vec{t}da-\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\ten{\sigma}\ccdot\ten F^{-T}\cdot\ten F^{T}\cdot\vec{v}\circ\nabla\cdot\ten F\cdot\ten F^{-1}dv-\intop_{\left(a_{t}\right)}\vec{v}\cdot\ten{\sigma}\cdot\vec{n}da-\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\ten F^{-1}\cdot\ten{\sigma}\cdot\ten F^{-T}\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla\cdot\ten Fdv-\intop_{\left(a_{t}\right)}\vec{v}\cdot\ten{\sigma}\cdot\vec{n}da-\intop_{\left(v\right)}\vec{v}\cdot\vec{f}dv=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(V\right)}\underbrace{J\ten F^{-1}\cdot\ten{\sigma}\cdot\ten F^{-T}}_{\ten S}\ccdot\ten F^{T}\cdot\vec{v}\circ\underbrace{\nabla\cdot\ten F}_{\nabla_{0}}dV-\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten{\sigma}\cdot\ten F^{-T}\cdot\vec{N}JdA-\intop_{\left(V\right)}\vec{v}\cdot\underbrace{\vec{f}J}_{\vec{f}_{0}}dV=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(V\right)}\ten S\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}dV-\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten F\cdot\underbrace{\ten F^{-1}\cdot J\ten{\sigma}\cdot\ten F^{-T}}_{\ten S}\cdot\vec{N}dA-\intop_{\left(V\right)}\vec{v}\cdot\vec{f}_{0}dV=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(V\right)}\ten S\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}dV-\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten F\cdot\underbrace{\ten S\cdot\vec{N}}_{\vec{t}_{0}}dA-\intop_{\left(V\right)}\vec{v}\cdot\vec{f}_{0}dV=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(V\right)}\ten S\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}dV-\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten F\cdot\vec{t}_{0}dA-\intop_{\left(V\right)}\vec{v}\cdot\vec{f}_{0}dV=0
+\]
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Section
+Nemlineáris rész
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(V\right)}\ten S\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}dV-\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten F\cdot\vec{t}_{0}dA-\intop_{\left(V\right)}\vec{v}\cdot\vec{f}_{0}dV=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+W\left(\vec{r},\vec{v}\right)=\intop_{\left(V\right)}\ten S\ccdot\frac{1}{2}\left(\ten F^{T}\cdot\vec{v}\circ\nabla_{0}+\nabla_{0}\circ\vec{v}\cdot\ten F\right)dV-\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten F\cdot\vec{t}_{0}dA-\intop_{\left(V\right)}\vec{v}\cdot\vec{f}_{0}dV=0
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\vec{t}_{0}\to\mat t=\begin{bmatrix}t_{x}\\
 t_{y}\\
 t_{z}
 \end{bmatrix}
@@ -720,7 +805,7 @@ t_{z}
 
 \begin_inset Formula 
 \[
-\vec{f}\to\mat f=\begin{bmatrix}f_{x}\\
+\vec{f}_{0}\to\mat f=\begin{bmatrix}f_{x}\\
 f_{y}\\
 f_{z}
 \end{bmatrix}
@@ -734,9 +819,9 @@ f_{z}
 \vec{v}\to\mat v=\begin{bmatrix}v_{x}\\
 v_{y}\\
 v_{z}
-\end{bmatrix}=\begin{bmatrix}\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{xi}\\
-\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{yi}\\
-\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{zi}
+\end{bmatrix}=\begin{bmatrix}\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{xi}^{e}\\
+\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{yi}^{e}\\
+\sum_{i=1}^{N}h_{i}\left(\xi,\eta,\zeta\right)\phi_{zi}^{e}
 \end{bmatrix}=
 \]
 
@@ -748,17 +833,17 @@ v_{z}
 =\underbrace{\begin{bmatrix}h_{1} & 0 & 0 & h_{2} & 0 & 0 & \cdots & h_{N} & 0 & 0\\
 0 & h_{1} & 0 & 0 & h_{2} & 0 & \cdots & 0 & h_{N} & 0\\
 0 & 0 & h_{1} & 0 & 0 & h_{2} & \cdots & 0 & 0 & h_{N}
-\end{bmatrix}}_{\mat H\left(\xi,\eta,\zeta\right)}\underbrace{\begin{bmatrix}\phi_{x1}\\
-\phi_{y1}\\
-\phi_{z1}\\
-\phi_{x2}\\
-\phi_{y2}\\
-\phi_{z2}\\
+\end{bmatrix}}_{\underset{\left(3\times3N\right)}{\mat H\left(\xi,\eta,\zeta\right)}}\underbrace{\begin{bmatrix}\phi_{x1}^{e}\\
+\phi_{y1}^{e}\\
+\phi_{z1}^{e}\\
+\phi_{x2}^{e}\\
+\phi_{y2}^{e}\\
+\phi_{z2}^{e}\\
 \vdots\\
-\phi_{xN}\\
-\phi_{yN}\\
-\phi_{zN}
-\end{bmatrix}}_{\mat{\phi}}=\mat H\left(\xi,\eta,\zeta\right)\mat{\phi}
+\phi_{xN}^{e}\\
+\phi_{yN}^{e}\\
+\phi_{zN}^{e}
+\end{bmatrix}}_{\underset{\left(3N\times1\right)}{\mat{\phi}}}=\mat H\left(\xi,\eta,\zeta\right)\mat{\phi}
 \]
 
 \end_inset
@@ -766,24 +851,41 @@ v_{z}
 
 \begin_inset Formula 
 \[
-\ten{\sigma}\to\mat s=\begin{bmatrix}\sigma_{x} & \tau_{xy} & \tau_{xz}\\
-\tau_{yx} & \sigma_{y} & \tau_{yz}\\
-\tau_{zx} & \tau_{zy} & \sigma_{z}
+\mat H\left(\xi,\eta,\zeta\right)=\underbrace{\begin{bmatrix}h_{1} & 0 & 0 & h_{2} & 0 & 0 & \cdots & h_{N} & 0 & 0\\
+0 & h_{1} & 0 & 0 & h_{2} & 0 & \cdots & 0 & h_{N} & 0\\
+0 & 0 & h_{1} & 0 & 0 & h_{2} & \cdots & 0 & 0 & h_{N}
+\end{bmatrix}}_{\left(3\times3N\right)}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\ten S\to\mat S=\begin{bmatrix}S_{x} & S_{xy} & S_{xz}\\
+S_{yx} & S_{y} & S_{yz}\\
+S_{zx} & S_{zy} & S_{z}
 \end{bmatrix}
 \]
 
 \end_inset
 
 Ha 
-\begin_inset Formula $\ten{\sigma}=\ten{\sigma}^{T}$
+\begin_inset Formula $\ten S=\ten S^{T}$
 \end_inset
 
 
 \begin_inset Formula 
 \[
-\ten{\sigma}\to\mat s=\begin{bmatrix}\sigma_{x} & \tau_{xy} & \tau_{zx}\\
-\tau_{xy} & \sigma_{y} & \tau_{yz}\\
-\tau_{zx} & \tau_{yz} & \sigma_{z}
+\ten S\to\mat S=\begin{bmatrix}S_{x} & S_{xy} & S_{zx}\\
+S_{xy} & S_{y} & S_{yz}\\
+S_{zx} & S_{yz} & S_{z}
+\end{bmatrix}\to\begin{bmatrix}S_{x}\\
+S_{y}\\
+S_{z}\\
+S_{xy}\\
+S_{yz}\\
+S_{zx}
 \end{bmatrix}
 \]
 
@@ -792,10 +894,7 @@ Ha
 
 \begin_inset Formula 
 \[
-\ten{\nabla}\to\mat{\partial}=\begin{bmatrix}\parc{}x\\
-\parc{}y\\
-\parc{}z
-\end{bmatrix}
+W^{e}\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\left(\mat{\phi}^{e}\right)^{T}\left(\mat B_{L}^{e}\right)^{T}\mat Sdv-\intop_{\left(a_{t}\right)}\left(\mat{\phi}^{e}\right)^{T}\mat H^{T}\mat F\mat tda-\intop_{\left(v\right)}\left(\mat{\phi}^{e}\right)^{T}\mat H^{T}\mat fdv=0
 \]
 
 \end_inset
@@ -803,7 +902,22 @@ Ha
 
 \begin_inset Formula 
 \[
-W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\mat{\phi}^{T}\overset{\downarrow}{\mat H^{T}}\ten s\mat{\partial}dv-\intop_{\left(a_{t}\right)}\mat{\phi}^{T}\mat H^{T}\mat tda-\intop_{\left(v\right)}\mat{\phi}^{T}\mat H^{T}\mat fdv=0
+W^{e}\left(\vec{r},\vec{v}\right)=\left(\mat{\phi}^{e}\right)^{T}\left[\intop_{\left(v\right)}\left(\mat B_{L}^{e}\right)^{T}\mat Sdv-\intop_{\left(a_{t}\right)}\mat H^{T}\mat F\mat tda-\intop_{\left(v\right)}\mat H^{T}\mat fdv\right]=0
+\]
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Section
+Linearizált rész
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\[
+DW\left(\vec{r},\vec{v}\right)\left[\vec{u}\right]=D\left(\intop_{\left(V\right)}\ten S\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}dV-\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten F\cdot\vec{t}_{0}dA-\intop_{\left(V\right)}\vec{v}\cdot\vec{f}_{0}dV\right)\left[\vec{u}\right]=
 \]
 
 \end_inset
@@ -811,23 +925,7 @@ W\left(\vec{r},\vec{v}\right)=\intop_{\left(v\right)}\mat{\phi}^{T}\overset{\dow
 
 \begin_inset Formula 
 \[
-\overset{\downarrow}{\mat H^{T}}\ten s\mat{\partial}=\underbrace{\begin{bmatrix}h_{1} & 0 & 0\\
-0 & h_{1} & 0\\
-0 & 0 & h_{1}\\
-h_{2} & 0 & 0\\
-0 & h_{2} & 0\\
-0 & 0 & h_{2}\\
-\vdots & \vdots & \vdots\\
-h_{N} & 0 & 0\\
-0 & h_{N} & 0\\
-0 & 0 & h_{N}
-\end{bmatrix}}_{N\times3}\underbrace{\begin{bmatrix}\sigma_{x} & \tau_{xy} & \tau_{zx}\\
-\tau_{xy} & \sigma_{y} & \tau_{yz}\\
-\tau_{zx} & \tau_{yz} & \sigma_{z}
-\end{bmatrix}}_{3\times3}\underbrace{\begin{bmatrix}\parc{}x\\
-\parc{}y\\
-\parc{}z
-\end{bmatrix}}_{3\times1}=
+=D\intop_{\left(V\right)}\ten S\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}dV\left[\vec{u}\right]-D\intop_{\left(A_{t}\right)}\vec{v}\cdot\ten F\cdot\vec{t}_{0}dA\left[\vec{u}\right]-\underbrace{D\intop_{\left(V\right)}\vec{v}\cdot\vec{f}_{0}dV\left[\vec{u}\right]}_{0}=
 \]
 
 \end_inset
@@ -835,30 +933,250 @@ h_{N} & 0 & 0\\
 
 \begin_inset Formula 
 \[
-=\underbrace{\begin{bmatrix}h_{1} & 0 & 0\\
-0 & h_{1} & 0\\
-0 & 0 & h_{1}\\
-h_{2} & 0 & 0\\
-0 & h_{2} & 0\\
-0 & 0 & h_{2}\\
-\vdots & \vdots & \vdots\\
-h_{N} & 0 & 0\\
-0 & h_{N} & 0\\
-0 & 0 & h_{N}
-\end{bmatrix}}_{N\times3}\underbrace{\begin{bmatrix}\sigma_{x}\parc{}x+\tau_{xy}\parc{}y+\tau_{zx}\parc{}z\\
-\tau_{xy}\parc{}x+\sigma_{y}\parc{}y+\tau_{yz}\parc{}z\\
-\tau_{zx}\parc{}x+\tau_{yz}\parc{}y+\sigma_{z}\parc{}z
-\end{bmatrix}}_{3\times1}=\begin{bmatrix}\sigma_{x}\parc{h_{1}}x+\tau_{xy}\parc{h_{1}}y+\tau_{zx}\parc{h_{1}}z\\
-\tau_{xy}\parc{h_{1}}x+\sigma_{y}\parc{h_{1}}y+\tau_{yz}\parc{h_{1}}z\\
-\tau_{zx}\parc{h_{1}}x+\tau_{yz}\parc{h_{1}}y+\sigma_{z}\parc{h_{1}}z\\
-\sigma_{x}\parc{h_{2}}x+\tau_{xy}\parc{h_{1}}y+\tau_{zx}\parc{h_{1}}z\\
-\tau_{xy}\parc{h_{1}}x+\sigma_{y}\parc{h_{1}}y+\tau_{yz}\parc{h_{1}}z\\
-\tau_{zx}\parc{h_{1}}x+\tau_{yz}\parc{h_{1}}y+\sigma_{z}\parc{h_{1}}z\\
+=\intop_{\left(V\right)}D\ten S\left[\vec{u}\right]\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}dV+\intop_{\left(V\right)}\ten S\ccdot D\ten F^{T}\left[\vec{u}\right]\cdot\vec{v}\circ\nabla_{0}dV+\intop_{\left(A_{t}\right)}\vec{v}\cdot D\ten F\left[\vec{u}\right]\cdot\vec{t}_{0}dA
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+D\ten S\left[\vec{u}\right]=\parc{\ten S}{\ten E}\ccdot D\ten E\left[\vec{u}\right]
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+D\ten E\left[\vec{u}\right]=D\left(\frac{1}{2}\left(\ten F^{T}\cdot\ten F-\ten I\right)\right)\left[\vec{u}\right]=\frac{1}{2}\left(D\ten F^{T}\left[\vec{u}\right]\cdot\ten F+\ten F^{T}\cdot D\ten F\left[\vec{u}\right]\right)
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+D\ten F\left[\vec{u}\right]=\lim_{\varepsilon\to0}\diff{\left(\left(\vec{r}+\varepsilon\vec{u}\right)\circ\nabla_{0}\right)}{\varepsilon}=\lim_{\varepsilon\to0}\diff{\left(\vec{r}+\varepsilon\vec{u}\right)}{\varepsilon}\circ\nabla_{0}=\vec{u}\circ\nabla_{0}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+D\ten F^{T}\left[\vec{u}\right]=\lim_{\varepsilon\to0}\diff{\left(\nabla_{0}\circ\left(\vec{r}+\varepsilon\vec{u}\right)\right)}{\varepsilon}=\nabla_{0}\circ\lim_{\varepsilon\to0}\diff{\left(\vec{r}+\varepsilon\vec{u}\right)}{\varepsilon}=\nabla_{0}\circ\vec{u}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+D\ten E\left[\vec{u}\right]=D\left(\frac{1}{2}\left(\ten F^{T}\cdot\ten F-\ten I\right)\right)\left[\vec{u}\right]=\frac{1}{2}\left(\nabla_{0}\circ\vec{u}\cdot\ten F+\ten F^{T}\cdot\vec{u}\circ\nabla_{0}\right)
+\]
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\[
+D\ten S\left[\vec{u}\right]=\parc{\ten S}{\ten E}\ccdot\frac{1}{2}\left(\nabla_{0}\circ\vec{u}\cdot\ten F+\ten F^{T}\cdot\vec{u}\circ\nabla_{0}\right)=2\parc{\ten S}{\ten C}\ccdot\frac{1}{2}\left(\nabla_{0}\circ\vec{u}\cdot\ten F+\ten F^{T}\cdot\vec{u}\circ\nabla_{0}\right)=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\underbrace{\parc{\ten S}{\ten C}}_{2\ten{\mathbb{C}}^{\left(4\right)}}\ccdot\left(\nabla_{0}\circ\vec{u}\cdot\ten F+\ten F^{T}\cdot\vec{u}\circ\nabla_{0}\right)
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+D\ten S\left[\vec{u}\right]\ccdot\ten F^{T}\cdot\vec{v}\circ\nabla_{0}=\ten F^{T}\cdot\vec{v}\circ\nabla_{0}\ccdot2\ten{\mathbb{C}}^{\left(4\right)}\ccdot\left(\nabla_{0}\circ\vec{u}\cdot\ten F+\ten F^{T}\cdot\vec{u}\circ\nabla_{0}\right)=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\frac{1}{2}\left(\nabla_{0}\circ\vec{v}\cdot\ten F+\ten F^{T}\cdot\vec{v}\circ\nabla_{0}\right)\ccdot2\ten{\mathbb{C}}^{\left(4\right)}\ccdot\left(\nabla_{0}\circ\vec{u}\cdot\ten F+\ten F^{T}\cdot\vec{u}\circ\nabla_{0}\right)=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\left(\nabla_{0}\circ\vec{v}\cdot\ten F+\ten F^{T}\cdot\vec{v}\circ\nabla_{0}\right)\ccdot\ten{\mathbb{C}}^{\left(4\right)}\ccdot\left(\nabla_{0}\circ\vec{u}\cdot\ten F+\ten F^{T}\cdot\vec{u}\circ\nabla_{0}\right)
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\nabla_{0}\circ\vec{v}\cdot\ten F+\ten F^{T}\cdot\vec{v}\circ\nabla_{0}=v_{i,j}F_{ik}+F_{ji}v_{i,k}=H_{il,j}\phi_{l}F_{ik}+F_{ji}H_{il,k}\phi_{l}=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\left(H_{il,j}F_{ik}+F_{ji}H_{il,k}\right)\phi_{l}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+v_{i,j}F_{ik}+F_{ji}v_{i,k}\to i=x,y,z\qquad\begin{array}{c}
+j=x\\
+k=x
+\end{array},\quad\begin{array}{c}
+j=y\\
+k=y
+\end{array},\quad\begin{array}{c}
+j=z\\
+k=z
+\end{array},\quad\begin{array}{c}
+j=x\\
+k=y
+\end{array},\quad\begin{array}{c}
+j=y\\
+k=z
+\end{array},\quad\begin{array}{c}
+j=z\\
+k=x
+\end{array}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\vec{v}\circ\nabla\cdot\ten F=\underbrace{\begin{bmatrix}H_{11,1}F_{11} & H_{22,1}F_{21} & H_{33,1}F_{31} & H_{14,1}F_{11} & H_{25,1}F_{21} & H_{36,1}F_{31} & \cdots\\
+H_{11,2}F_{12} & H_{22,2}F_{22} & H_{33,2}F_{32} & H_{14,2}F_{12} & H_{25,2}F_{22} & H_{36,2}F_{32} & \cdots\\
+H_{11,3}F_{13} & H_{22,3}F_{23} & H_{33,3}F_{33} & H_{14,3}F_{13} & H_{25,3}F_{23} & H_{36,3}F_{33} & \cdots\\
+H_{11,1}F_{12} & H_{22,1}F_{22} & H_{33,1}F_{32} & H_{14,1}F_{12} & H_{25,1}F_{22} & H_{36,1}F_{32} & \cdots\\
+H_{11,2}F_{13} & H_{22,2}F_{23} & H_{33,2}F_{33} & H_{14,2}F_{13} & H_{25,2}F_{23} & H_{36,2}F_{33} & \cdots\\
+H_{11,3}F_{11} & H_{22,3}F_{21} & H_{33,3}F_{31} & H_{14,3}F_{11} & H_{25,3}F_{21} & H_{36,3}F_{31} & \cdots
+\end{bmatrix}}_{\underset{\left(6\times3N\right)}{\mat B_{L1}^{e}\left(\xi,\eta,\zeta\right)}}\underbrace{\begin{bmatrix}\phi_{x1}^{e}\\
+\phi_{y1}^{e}\\
+\phi_{z1}^{e}\\
+\phi_{x2}^{e}\\
+\phi_{y2}^{e}\\
+\phi_{z2}^{e}\\
 \vdots\\
-\sigma_{x}\parc{h_{1}}x+\tau_{xy}\parc{h_{1}}y+\tau_{zx}\parc{h_{1}}z\\
-\tau_{xy}\parc{h_{1}}x+\sigma_{y}\parc{h_{1}}y+\tau_{yz}\parc{h_{1}}z\\
-\tau_{zx}\parc{h_{1}}x+\tau_{yz}\parc{h_{1}}y+\sigma_{z}\parc{h_{1}}z
-\end{bmatrix}
+\phi_{xN}^{e}\\
+\phi_{yN}^{e}\\
+\phi_{zN}^{e}
+\end{bmatrix}}_{\underset{\left(3N\times1\right)}{\mat{\phi}}}=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\underbrace{\begin{bmatrix}\parc{h_{1}}XF_{x} & \parc{h_{1}}XF_{yx} & \parc{h_{1}}XF_{zx} & \parc{h_{2}}XF_{x} & \parc{h_{2}}XF_{yx} & \parc{h_{2}}XF_{zx} & \cdots & \parc{h_{N}}XF_{x} & \parc{h_{N}}XF_{yx} & \parc{h_{N}}XF_{zx}\\
+\parc{h_{1}}YF_{xy} & \parc{h_{1}}YF_{y} & \parc{h_{1}}YF_{zy} & \parc{h_{2}}YF_{xy} & \parc{h_{2}}YF_{y} & \parc{h_{2}}YF_{zy} & \cdots & \parc{h_{N}}YF_{xy} & \parc{h_{N}}YF_{y} & \parc{h_{N}}YF_{zy}\\
+\parc{h_{1}}ZF_{xz} & \parc{h_{1}}ZF_{yz} & \parc{h_{1}}ZF_{z} & \parc{h_{2}}ZF_{xz} & \parc{h_{2}}ZF_{yz} & \parc{h_{2}}ZF_{z} & \cdots & \parc{h_{N}}ZF_{xz} & \parc{h_{N}}ZF_{yz} & \parc{h_{N}}ZF_{z}\\
+\parc{h_{1}}XF_{xy} & \parc{h_{1}}XF_{y} & \parc{h_{1}}XF_{zy} & \parc{h_{2}}XF_{xy} & \parc{h_{2}}XF_{y} & \parc{h_{2}}XF_{zy} & \cdots & \parc{h_{N}}XF_{xy} & \parc{h_{N}}XF_{y} & \parc{h_{N}}XF_{zy}\\
+\parc{h_{1}}YF_{xz} & \parc{h_{1}}YF_{yz} & \parc{h_{1}}YF_{z} & \parc{h_{2}}YF_{xz} & \parc{h_{2}}YF_{yz} & \parc{h_{2}}YF_{z} & \cdots & \parc{h_{N}}YF_{xz} & \parc{h_{N}}YF_{yz} & \parc{h_{N}}YF_{z}\\
+\parc{h_{1}}ZF_{x} & \parc{h_{1}}ZF_{yx} & \parc{h_{1}}ZF_{zx} & \parc{h_{2}}ZF_{x} & \parc{h_{2}}ZF_{yx} & \parc{h_{2}}ZF_{zx} & \cdots & \parc{h_{N}}ZF_{x} & \parc{h_{N}}ZF_{yx} & \parc{h_{N}}ZF_{zx}
+\end{bmatrix}}_{\underset{\left(6\times3N\right)}{\mat B_{L1}^{e}\left(\xi,\eta,\zeta\right)}}\underbrace{\begin{bmatrix}\phi_{x1}^{e}\\
+\phi_{y1}^{e}\\
+\phi_{z1}^{e}\\
+\phi_{x2}^{e}\\
+\phi_{y2}^{e}\\
+\phi_{z2}^{e}\\
+\vdots\\
+\phi_{xN}^{e}\\
+\phi_{yN}^{e}\\
+\phi_{zN}^{e}
+\end{bmatrix}}_{\underset{\left(3N\times1\right)}{\mat{\phi}}}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\vec{v}\circ\nabla\cdot\ten F=\underbrace{\begin{bmatrix}H_{11,1}F_{11} & H_{22,1}F_{21} & H_{33,1}F_{31} & H_{14,1}F_{11} & H_{25,1}F_{21} & H_{36,1}F_{31} & \cdots\\
+H_{11,2}F_{12} & H_{22,2}F_{22} & H_{33,2}F_{32} & H_{14,2}F_{12} & H_{25,2}F_{22} & H_{36,2}F_{32} & \cdots\\
+H_{11,3}F_{13} & H_{22,3}F_{23} & H_{33,3}F_{33} & H_{14,3}F_{13} & H_{25,3}F_{23} & H_{36,3}F_{33} & \cdots\\
+H_{11,2}F_{11} & H_{22,2}F_{21} & H_{33,2}F_{31} & H_{14,2}F_{11} & H_{25,2}F_{21} & H_{36,2}F_{31} & \cdots\\
+H_{11,3}F_{12} & H_{22,3}F_{22} & H_{33,3}F_{32} & H_{14,3}F_{12} & H_{25,3}F_{22} & H_{36,3}F_{32} & \cdots\\
+H_{11,1}F_{13} & H_{22,1}F_{23} & H_{33,1}F_{33} & H_{14,1}F_{13} & H_{25,1}F_{23} & H_{36,1}F_{33} & \cdots
+\end{bmatrix}}_{\underset{\left(6\times3N\right)}{\mat B_{L2}^{e}\left(\xi,\eta,\zeta\right)}}\underbrace{\begin{bmatrix}\phi_{x1}^{e}\\
+\phi_{y1}^{e}\\
+\phi_{z1}^{e}\\
+\phi_{x2}^{e}\\
+\phi_{y2}^{e}\\
+\phi_{z2}^{e}\\
+\vdots\\
+\phi_{xN}^{e}\\
+\phi_{yN}^{e}\\
+\phi_{zN}^{e}
+\end{bmatrix}}_{\underset{\left(3N\times1\right)}{\mat{\phi}}}=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\underbrace{\begin{bmatrix}\parc{h_{1}}XF_{x} & \parc{h_{1}}XF_{yx} & \parc{h_{1}}XF_{zx} & \parc{h_{2}}XF_{x} & \parc{h_{2}}XF_{yx} & \parc{h_{2}}XF_{zx} & \cdots & \parc{h_{N}}XF_{x} & \parc{h_{N}}XF_{yx} & \parc{h_{N}}XF_{zx}\\
+\parc{h_{1}}YF_{xy} & \parc{h_{1}}YF_{y} & \parc{h_{1}}YF_{zy} & \parc{h_{2}}YF_{xy} & \parc{h_{2}}YF_{y} & \parc{h_{2}}YF_{zy} & \cdots & \parc{h_{N}}YF_{xy} & \parc{h_{N}}YF_{y} & \parc{h_{N}}YF_{zy}\\
+\parc{h_{1}}ZF_{xz} & \parc{h_{1}}ZF_{yz} & \parc{h_{1}}ZF_{z} & \parc{h_{2}}ZF_{xz} & \parc{h_{2}}ZF_{yz} & \parc{h_{2}}ZF_{z} & \cdots & \parc{h_{N}}ZF_{xz} & \parc{h_{N}}ZF_{yz} & \parc{h_{N}}ZF_{z}\\
+\parc{h_{1}}YF_{x} & \parc{h_{1}}YF_{yx} & \parc{h_{1}}YF_{zx} & \parc{h_{2}}YF_{x} & \parc{h_{2}}YF_{yx} & \parc{h_{2}}YF_{zx} & \cdots & \parc{h_{N}}YF_{x} & \parc{h_{N}}YF_{yx} & \parc{h_{N}}YF_{zx}\\
+\parc{h_{1}}ZF_{xy} & \parc{h_{1}}ZF_{y} & \parc{h_{1}}ZF_{zy} & \parc{h_{2}}ZF_{xy} & \parc{h_{2}}ZF_{y} & \parc{h_{2}}ZF_{zy} & \cdots & \parc{h_{N}}ZF_{xy} & \parc{h_{N}}ZF_{y} & \parc{h_{N}}ZF_{zy}\\
+\parc{h_{1}}XF_{xz} & \parc{h_{1}}XF_{yz} & \parc{h_{1}}XF_{z} & \parc{h_{2}}XF_{xz} & \parc{h_{2}}XF_{yz} & \parc{h_{2}}XF_{z} & \cdots & \parc{h_{N}}XF_{xz} & \parc{h_{N}}XF_{yz} & \parc{h_{N}}XF_{z}
+\end{bmatrix}}_{\underset{\left(6\times3N\right)}{\mat B_{L2}^{e}\left(\xi,\eta,\zeta\right)}}\underbrace{\begin{bmatrix}\phi_{x1}^{e}\\
+\phi_{y1}^{e}\\
+\phi_{z1}^{e}\\
+\phi_{x2}^{e}\\
+\phi_{y2}^{e}\\
+\phi_{z2}^{e}\\
+\vdots\\
+\phi_{xN}^{e}\\
+\phi_{yN}^{e}\\
+\phi_{zN}^{e}
+\end{bmatrix}}_{\underset{\left(3N\times1\right)}{\mat{\phi}}}
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\nabla_{0}\circ\vec{v}\cdot\ten F+\ten F^{T}\cdot\vec{v}\circ\nabla_{0}=
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+=\underbrace{\begin{bmatrix}\parc{h_{1}}XF_{x} & \parc{h_{1}}XF_{yx} & \parc{h_{1}}XF_{zx} & \cdots\\
+\parc{h_{1}}YF_{xy} & \parc{h_{1}}YF_{y} & \parc{h_{1}}YF_{zy} & \cdots\\
+\parc{h_{1}}ZF_{xz} & \parc{h_{1}}ZF_{yz} & \parc{h_{1}}ZF_{z} & \cdots\\
+\parc{h_{1}}XF_{xy}+\parc{h_{1}}YF_{x} & \parc{h_{1}}XF_{y}+\parc{h_{1}}YF_{yx} & \parc{h_{1}}XF_{zy}+\parc{h_{1}}YF_{zx} & \cdots\\
+\parc{h_{1}}YF_{xz}+\parc{h_{1}}ZF_{xy} & \parc{h_{1}}YF_{yz}+\parc{h_{1}}ZF_{y} & \parc{h_{1}}YF_{z}+\parc{h_{1}}ZF_{zy} & \cdots\\
+\parc{h_{1}}ZF_{x}+\parc{h_{1}}XF_{xz} & \parc{h_{1}}ZF_{yx}+\parc{h_{1}}XF_{yz} & \parc{h_{1}}ZF_{zx}+\parc{h_{1}}XF_{z} & \cdots
+\end{bmatrix}}_{\underset{\left(6\times3N\right)}{\mat B_{L}^{e}\left(\xi,\eta,\zeta\right)}}
 \]
 
 \end_inset
