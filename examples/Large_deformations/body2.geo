@@ -6,13 +6,15 @@ Coherence;
 //+
 //MeshSize {:} = 1;
 //+
-Transfinite Curve {:} = 3 Using Progression 1;
+Transfinite Curve {:} = 5 Using Progression 1;
 //+
 Transfinite Surface {:};
 //+
 Transfinite Volume{:};
 //+
 Recombine Surface {:};
+//+
+Mesh.ElementOrder=2;
 //+
 Mesh 3;
 //+
