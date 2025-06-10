@@ -1,6 +1,6 @@
 //+
 SetFactory("OpenCASCADE");
-Box(1) = {0, 0, 0, 1, 1, 1};
+Box(1) = {0, 0, 0, 10, 1, 1};
 //+
 Coherence;
 //+

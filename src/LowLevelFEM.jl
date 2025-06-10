@@ -286,7 +286,29 @@ function *(A::Transformation, B::Transformation)
 end
 
 """
-    VectorField(A, numElem, nsteps)
+    ScalarField(A, numElem, nsteps, type)
+
+A structure containing the data of a heat flux field. 
+- A: vector of ElementNodeData type heat flux data (see gmsh.jl)
+- numElem: vector of tags of elements
+- nsteps: number of stress fields stored in `A` (for animations).
+- type: type of data (eg. heat flux `:q`)
+
+Types:
+- `A`: Vector{Vector{Float64}}
+- `numElem`: Vector{Integer}
+- `nsteps`: Integer
+- `type`: Symbol
+"""
+struct ScalarField
+    A::Vector{Vector{Float64}}
+    numElem::Vector{Int}
+    nsteps::Int
+    type::Symbol
+end
+
+"""
+    VectorField(A, numElem, nsteps, type)
 
 A structure containing the data of a heat flux field. 
 - A: vector of ElementNodeData type heat flux data (see gmsh.jl)
@@ -308,7 +330,7 @@ struct VectorField
 end
 
 """
-    TensorField(A, numElem, nsteps)
+    TensorField(A, numElem, nsteps, type)
 
 A structure containing the data of a stress or strain field. 
 - A: vector of ElementNodeData type stress data (see gmsh.jl)
@@ -2933,7 +2955,7 @@ qqq = FEM.showDoFResults(problem, qq, :scalar)
 """
 function scalarField(problem, dataField)
     if !isa(dataField, Vector)
-        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
+        error("scalarField: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = 1
@@ -4070,7 +4092,7 @@ function elementsToNodes(problem, S)
     numElem = S.numElem
     σ = S.A
     non = problem.non
-    if type == :s || type == :e
+    if type == :s || type == :e || type == :F
         epn = 9
     elseif type == :q
         epn = 3
