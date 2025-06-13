@@ -111,7 +111,8 @@ function deformationGradient(problem, r)
             end
         end
     end
-    sigma = TensorField(F, numElem, nsteps, type)
+    a = [;;]
+    sigma = TensorField(F, a, numElem, nsteps, type)
     return sigma
 end
 

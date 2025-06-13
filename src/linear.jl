@@ -1625,7 +1625,8 @@ function solveStrain(problem, q; DoFResults=false)
     if DoFResults == true
         return E1
     else
-        epsilon = TensorField(ε, numElem, nsteps, type)
+        a = [;;]
+        epsilon = TensorField(ε, a, numElem, nsteps, type)
         return epsilon
     end
 end
@@ -1888,7 +1889,8 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
     if DoFResults == true
         return S1
     else
-        sigma = TensorField(σ, numElem, nsteps, type)
+        a = [;;]
+        sigma = TensorField(σ, a, numElem, nsteps, type)
         return sigma
     end
 end

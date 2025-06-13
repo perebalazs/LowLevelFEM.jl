@@ -302,11 +302,12 @@ Types:
 """
 struct ScalarField
     A::Vector{Matrix{Float64}}
+    a::Matrix{Float64}
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
-    function ScalarField(A0, numElem0, nsteps0, type0)
-        return new(A0, numElem0, nsteps0, type0)
+    function ScalarField(A0, a0, numElem0, nsteps0, type0)
+        return new(A0, a0, numElem0, nsteps0, type0)
     end
     function ScalarField(problem, dataField)
         if !isa(dataField, Vector)
@@ -354,7 +355,8 @@ struct ScalarField
                 end
             end
         end
-        return new(A, numElem, nsteps, type)
+        a = [;;]
+        return new(A, a, numElem, nsteps, type)
     end
 end
 
@@ -375,6 +377,7 @@ Types:
 """
 struct VectorField
     A::Vector{Matrix{Float64}}
+    a::Matrix{Float64}
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
@@ -397,6 +400,7 @@ Types:
 """
 struct TensorField
     A::Vector{Matrix{Float64}}
+    a::Matrix{Float64}
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
@@ -553,576 +557,673 @@ function *(A::TensorField, B::TensorField)
             end
             push!(C, D)
         end
-        return TensorField(C, A.numElem, A.nsteps, :e)
+        a = [;;]
+        return TensorField(C, a, A.numElem, A.nsteps, :e)
     else
         error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
     end
 end
 
 function *(A::ScalarField, B::TensorField)
-    sz = 0
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 9
-        if n != sz
-            D = zeros(9n, nsteps)
-            sz = n
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
         end
-        for j in 1:n
-            for k in 1:nsteps
-                D[9j-8:9j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][9j-8:9j, k]
+        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
+        D = []
+        for i in eachindex(sec)
+            n = length(B.A[i]) ÷ 9
+            if n != sz
+                D = zeros(9n, nsteps)
+                sz = n
             end
+            for j in 1:n
+                for k in 1:nsteps
+                    D[9j-8:9j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][9j-8:9j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
         end
-        append!(num, sec[i])
-        push!(C, D)
+        a = [;;]
+        return TensorField(C, a, num, B.nsteps, :e)
+    else
+        error("*(ScalarField, TensorField): data at nodes is not yet implemented.")
     end
-    return TensorField(C, num, B.nsteps, :e)
 end
 
 function *(B::TensorField, A::ScalarField)
-    sz = 0
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 9
-        if n != sz
-            D = zeros(9n, nsteps)
-            sz = n
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
         end
-        for j in 1:n
-            for k in 1:nsteps
-                D[9j-8:9j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][9j-8:9j, k]
+        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
+        D = []
+        for i in eachindex(sec)
+            n = length(B.A[i]) ÷ 9
+            if n != sz
+                D = zeros(9n, nsteps)
+                sz = n
             end
+            for j in 1:n
+                for k in 1:nsteps
+                    D[9j-8:9j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][9j-8:9j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
         end
-        append!(num, sec[i])
-        push!(C, D)
+        a = [;;]
+        return TensorField(C, a, num, B.nsteps, :e)
+    else
+        error("*(TensorField, ScalarField): data at nodes is not yet implemented.")
     end
-    return TensorField(C, num, B.nsteps, :e)
 end
 
 import Base./
 function /(B::TensorField, A::ScalarField)
-    sz = 0
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 9
-        if n != sz
-            D = zeros(9n, nsteps)
-            sz = n
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
         end
-        for j in 1:n
-            for k in 1:nsteps
-                D[9j-8:9j, k] = B.A[indT[i]][9j-8:9j, k] / A.A[indS[i]][j, k]
+        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
+        D = []
+        for i in eachindex(sec)
+            n = length(B.A[i]) ÷ 9
+            if n != sz
+                D = zeros(9n, nsteps)
+                sz = n
             end
+            for j in 1:n
+                for k in 1:nsteps
+                    D[9j-8:9j, k] = B.A[indT[i]][9j-8:9j, k] / A.A[indS[i]][j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
         end
-        append!(num, sec[i])
-        push!(C, D)
+        a = [;;]
+        return TensorField(C, a, num, B.nsteps, :e)
+    else
+        error("/(TensorField, ScalarField): data at nodes is not yet implemented.")
     end
-    return TensorField(C, num, B.nsteps, :e)
 end
 
 function *(A::ScalarField, B::ScalarField)
-    sz = 0
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i])
-        if n != sz
-            D = zeros(n, nsteps)
-            sz = n
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
         end
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][j, k]
-            end
-        end
-        append!(num, sec[i])
-        push!(C, D)
-    end
-    return ScalarField(C, num, B.nsteps, :e)
-end
-
-function /(A::ScalarField, B::ScalarField)
-    sz = 0
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i])
-        if n != sz
-            D = zeros(n, nsteps)
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = A.A[indS[i]][j, k] / B.A[indT[i]][j, k]
-            end
-        end
-        append!(num, sec[i])
-        push!(C, D)
-    end
-    return ScalarField(C, num, B.nsteps, :e)
-end
-
-import Base.transpose
-function transpose(A::TensorField)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
         C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(transpose(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
-            end
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("transpose(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
-    end
-end
-
-import Base.adjoint
-function adjoint(A::TensorField)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(adjoint(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
-            end
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("adjoint(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
-    end
-end
-
-function unitTensor(A::TensorField)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape([1 0 0; 0 1 0; 0 0 1], 9, 1)
-                end
-            end
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("unit(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
-    end
-end
-
-function trace(A::TensorField)
-    sz = 0
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
         D = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            if sz != n
+        for i in eachindex(sec)
+            n = length(B.A[i])
+            if n != sz
                 D = zeros(n, nsteps)
                 sz = n
             end
             for j in 1:n
                 for k in 1:nsteps
-                    trace = A.A[i][9j-8, k] + A.A[i][9j-4, k] + A.A[i][9j, k]
-                    D[j, k] = trace
+                    D[j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
+        end
+        a = [;;]
+        return ScalarField(C, a, num, B.nsteps, :e)
+    else
+        error("*(ScalarField, ScalarField): data at nodes is not yet implemented.")
+    end
+end
+
+function /(A::ScalarField, B::ScalarField)
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
+        end
+        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
+        D = []
+        for i in eachindex(sec)
+            n = length(B.A[i])
+            if n != sz
+                D = zeros(n, nsteps)
+                sz = n
+            end
+            for j in 1:n
+                for k in 1:nsteps
+                    D[j, k] = A.A[indS[i]][j, k] / B.A[indT[i]][j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
+        end
+        a = [;;]
+        return ScalarField(C, a, num, B.nsteps, :e)
+    else
+        error("/(ScalarField, ScalarField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.transpose
+function transpose(A::TensorField)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                D = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        D[9j-8:9j, k] = reshape(transpose(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
+                    end
+                end
+                push!(C, D)
+            end
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
+        else
+            error("transpose(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+        end
+    else
+        error("transpose(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.adjoint
+function adjoint(A::TensorField)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                D = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        D[9j-8:9j, k] = reshape(adjoint(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
+                    end
+                end
+                push!(C, D)
+            end
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
+        else
+            error("adjoint(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+        end
+    else
+        error("adjoint(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+function unitTensor(A::TensorField)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                D = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        D[9j-8:9j, k] = reshape([1 0 0; 0 1 0; 0 0 1], 9, 1)
+                    end
+                end
+                push!(C, D)
+            end
+            a = [;;]
+            return TensorField(C, A.numElem, A.nsteps, :e)
+        else
+            error("unit(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
+        end
+    else
+        error("transpose(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+function trace(A::TensorField)
+    if length(A.A) != 0
+        sz = 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            D = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                if sz != n
+                    D = zeros(n, nsteps)
+                    sz = n
+                end
+                for j in 1:n
+                    for k in 1:nsteps
+                        trace = A.A[i][9j-8, k] + A.A[i][9j-4, k] + A.A[i][9j, k]
+                        D[j, k] = trace
+                    end
+                end
+                push!(C, D)
+            end
+            return ScalarField(C, A.numElem, A.nsteps, :e)
+        else
+            error("trace(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
+        end
+    else
+        error("trace(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import LinearAlgebra.det
+function det(A::TensorField)
+    if length(A.A) != 0
+        sz = 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            D = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                if sz != n
+                    D = zeros(n, nsteps)
+                    sz = n
+                end
+                for j in 1:n
+                    for k in 1:nsteps
+                        d = LinearAlgebra.det(reshape(A.A[i][9j-8:9j, k], 3, 3))
+                        D[j, k] = d
+                    end
+                end
+                push!(C, D)
+            end
+            return ScalarField(C, A.numElem, A.nsteps, :sc)
+        else
+            error("det(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
+        end
+    else
+        error("det(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.+
+function +(A::TensorField, B::TensorField)
+    if length(A.A) != 0 && length(B.A) != 0
+        if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+            if length(A.A) != length(B.A)
+                error("+(A::TensoeField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            end
+            nsteps = A.nsteps
+            nsteps2 = B.nsteps
+            if nsteps != nsteps2
+                error("+(A::TensoeField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+            end
+            sec = intersect(A.numElem, B.numElem)
+            ind1 = []
+            ind2 = []
+            sizehint!(ind1, length(sec))
+            sizehint!(ind2, length(sec))
+            for i in sec
+                append!(ind1, findall(j -> j == i, A.numElem))
+                append!(ind2, findall(j -> j == i, B.numElem))
+            end
+            dif1 = setdiff(A.numElem, B.numElem)
+            ind3 = []
+            sizehint!(ind3, length(dif1))
+            for i in dif1
+                append!(ind3, findall(j -> j == i, A.numElem))
+            end
+            dif2 = setdiff(B.numElem, A.numElem)
+            ind4 = []
+            sizehint!(ind4, length(dif2))
+            for i in dif2
+                append!(ind4, findall(j -> j == i, B.numElem))
+            end
+            C = []
+            num = []
+            sizehint!(C, length(sec) + length(dif1) + length(dif2))
+            sizehint!(num, length(sec) + length(dif1) + length(dif2))
+            for i in eachindex(sec)
+                #n = length(A.A[i]) ÷ 9
+                #m = length(B.A[i]) ÷ 9
+                #if n != m
+                #    error("+(A::TensoeField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
+                #end
+                D = A.A[i] + B.A[i]
+                append!(num, sec[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif1)
+                D = A.A[i]
+                append!(num, dif1[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif2)
+                D = B.A[i]
+                append!(num, dif2[i])
+                push!(C, D)
+            end
+            return TensorField(C, num, A.nsteps, :e)
+        else
+            error("+(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        end
+    else
+        error("+(TensorField, TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.-
+function -(A::TensorField, B::TensorField)
+    if length(A.A) != 0 && length(B.A) != 0
+        if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+            if length(A.A) != length(B.A)
+                error("-(A::TensoeField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            end
+            nsteps = A.nsteps
+            nsteps2 = B.nsteps
+            if nsteps != nsteps2
+                error("-(A::TensoeField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+            end
+            sec = intersect(A.numElem, B.numElem)
+            ind1 = []
+            ind2 = []
+            sizehint!(ind1, length(sec))
+            sizehint!(ind2, length(sec))
+            for i in sec
+                append!(ind1, findall(j -> j == i, A.numElem))
+                append!(ind2, findall(j -> j == i, B.numElem))
+            end
+            dif1 = setdiff(A.numElem, B.numElem)
+            ind3 = []
+            sizehint!(ind3, length(dif1))
+            for i in dif1
+                append!(ind3, findall(j -> j == i, A.numElem))
+            end
+            dif2 = setdiff(B.numElem, A.numElem)
+            ind4 = []
+            sizehint!(ind4, length(dif2))
+            for i in dif2
+                append!(ind4, findall(j -> j == i, B.numElem))
+            end
+            C = []
+            num = []
+            sizehint!(C, length(sec) + length(dif1) + length(dif2))
+            sizehint!(num, length(sec) + length(dif1) + length(dif2))
+            for i in eachindex(sec)
+                D = A.A[i] - B.A[i]
+                append!(num, sec[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif1)
+                D = A.A[i]
+                append!(num, dif1[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif2)
+                D = -B.A[i]
+                append!(num, dif2[i])
+                push!(C, D)
+            end
+            return TensorField(C, num, A.nsteps, :e)
+        else
+            error("-(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        end
+    else
+        error("-(TensorField, TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+function *(A::TensorField, b)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                D = A.A[i] * b
+                push!(C, D)
+            end
+            return TensorField(C, A.numElem, A.nsteps, :e)
+        else
+            error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        end
+    else
+        error("*(TensorField, Any): data at nodes is not yet implemented.")
+    end
+end
+
+function *(b, A::TensorField)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                D = A.A[i] * b
+                push!(C, D)
+            end
+            return TensorField(C, A.numElem, A.nsteps, :e)
+        else
+            error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        end
+    else
+        error("*(Any, TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+function *(A::ScalarField, b)
+    if length(A.A) != 0
+        C = []
+        for i in 1:length(A.A)
+            D = A.A[i] * b
+            push!(C, D)
+        end
+        return ScalarField(C, A.numElem, A.nsteps, :e)
+    else
+        error("*(ScalarField, Any): data at nodes is not yet implemented.")
+    end
+end
+
+function *(b, A::ScalarField)
+    if length(A.A) != 0
+        C = []
+        for i in 1:length(A.A)
+            D = A.A[i] * b
+            push!(C, D)
+        end
+        return ScalarField(C, A.numElem, A.nsteps, :e)
+    else
+        error("*(Any, ScalarField): data at nodes is not yet implemented.")
+    end
+end
+
+function /(A::TensorField, b)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            C = []
+            for i in 1:length(A.A)
+                D = A.A[i] / b
+                push!(C, D)
+            end
+            return TensorField(C, A.numElem, A.nsteps, :e)
+        else
+            error("/(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        end
+    else
+        error("/(TensorField, Any): data at nodes is not yet implemented.")
+    end
+end
+
+function /(A::ScalarField, b)
+    if length(A.A) != 0
+        C = []
+        for i in 1:length(A.A)
+            D = A.A[i] / b
+            push!(C, D)
+        end
+        return ScalarField(C, A.numElem, A.nsteps, :e)
+    else
+        error("/(ScalarField, Any): data at nodes is not yet implemented.")
+    end
+end
+
+function /(b, A::ScalarField)
+    if length(A.A) != 0
+        C = []
+        for i in 1:length(A.A)
+            D = A.A[i] ./ b
+            push!(C, D)
+        end
+        return ScalarField(C, A.numElem, A.nsteps, :e)
+    else
+        error("/(Any, ScalarField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.inv
+function inv(A::TensorField)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                D = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        D[9j-8:9j, k] = reshape(inv(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
+                    end
+                end
+                push!(C, D)
+            end
+            return TensorField(C, A.numElem, A.nsteps, :e)
+        else
+            error("inv(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+        end
+    else
+        error("inv(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.sqrt
+function sqrt(A::TensorField)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                D = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        D[9j-8:9j, k] = reshape(sqrt(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
+                    end
+                end
+                push!(C, D)
+            end
+            return TensorField(C, A.numElem, A.nsteps, :e)
+        else
+            error("sqrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+        end
+    else
+        error("sqrt(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.log
+function log(A::TensorField)
+    if length(A.A) != 0
+        if A.type == :s || A.type == :e || A.type == :F
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                D = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        D[9j-8:9j, k] = reshape(log(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
+                    end
+                end
+                push!(C, D)
+            end
+            return TensorField(C, A.numElem, A.nsteps, :e)
+        else
+            error("log(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+        end
+    else
+        error("log(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.log
+function log(A::ScalarField)
+    if length(A.A) != 0
+        nsteps = A.nsteps
+        C = []
+        for i in 1:length(A.A)
+            n = length(A.A[i])
+            D = zeros(n, nsteps)
+            for j in 1:n
+                for k in 1:nsteps
+                    D[j, k] = log(A.A[i][j, k])
                 end
             end
             push!(C, D)
         end
         return ScalarField(C, A.numElem, A.nsteps, :e)
     else
-        error("trace(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
+        error("log(ScalarField): data at nodes is not yet implemented.")
     end
-end
-
-import LinearAlgebra.det
-function det(A::TensorField)
-    sz = 0
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        D = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            if sz != n
-                D = zeros(n, nsteps)
-                sz = n
-            end
-            for j in 1:n
-                for k in 1:nsteps
-                    d = LinearAlgebra.det(reshape(A.A[i][9j-8:9j, k], 3, 3))
-                    D[j, k] = d
-                end
-            end
-            push!(C, D)
-        end
-        return ScalarField(C, A.numElem, A.nsteps, :sc)
-    else
-        error("det(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
-    end
-end
-
-import Base.+
-function +(A::TensorField, B::TensorField)
-    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-        if length(A.A) != length(B.A)
-            error("+(A::TensoeField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-        end
-        nsteps = A.nsteps
-        nsteps2 = B.nsteps
-        if nsteps != nsteps2
-            error("+(A::TensoeField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-        end
-        sec = intersect(A.numElem, B.numElem)
-        ind1 = []
-        ind2 = []
-        sizehint!(ind1, length(sec))
-        sizehint!(ind2, length(sec))
-        for i in sec
-            append!(ind1, findall(j -> j == i, A.numElem))
-            append!(ind2, findall(j -> j == i, B.numElem))
-        end
-        dif1 = setdiff(A.numElem, B.numElem)
-        ind3 = []
-        sizehint!(ind3, length(dif1))
-        for i in dif1
-            append!(ind3, findall(j -> j == i, A.numElem))
-        end
-        dif2 = setdiff(B.numElem, A.numElem)
-        ind4 = []
-        sizehint!(ind4, length(dif2))
-        for i in dif2
-            append!(ind4, findall(j -> j == i, B.numElem))
-        end
-        C = []
-        num = []
-        sizehint!(C, length(sec) + length(dif1) + length(dif2))
-        sizehint!(num, length(sec) + length(dif1) + length(dif2))
-        for i in eachindex(sec)
-            #n = length(A.A[i]) ÷ 9
-            #m = length(B.A[i]) ÷ 9
-            #if n != m
-            #    error("+(A::TensoeField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
-            #end
-            D = A.A[i] + B.A[i]
-            append!(num, sec[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif1)
-            D = A.A[i]
-            append!(num, dif1[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif2)
-            D = B.A[i]
-            append!(num, dif2[i])
-            push!(C, D)
-        end
-        return TensorField(C, num, A.nsteps, :e)
-    else
-        error("+(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
-    end
-end
-
-import Base.-
-function -(A::TensorField, B::TensorField)
-    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-        if length(A.A) != length(B.A)
-            error("-(A::TensoeField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-        end
-        nsteps = A.nsteps
-        nsteps2 = B.nsteps
-        if nsteps != nsteps2
-            error("-(A::TensoeField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-        end
-        sec = intersect(A.numElem, B.numElem)
-        ind1 = []
-        ind2 = []
-        sizehint!(ind1, length(sec))
-        sizehint!(ind2, length(sec))
-        for i in sec
-            append!(ind1, findall(j -> j == i, A.numElem))
-            append!(ind2, findall(j -> j == i, B.numElem))
-        end
-        dif1 = setdiff(A.numElem, B.numElem)
-        ind3 = []
-        sizehint!(ind3, length(dif1))
-        for i in dif1
-            append!(ind3, findall(j -> j == i, A.numElem))
-        end
-        dif2 = setdiff(B.numElem, A.numElem)
-        ind4 = []
-        sizehint!(ind4, length(dif2))
-        for i in dif2
-            append!(ind4, findall(j -> j == i, B.numElem))
-        end
-        C = []
-        num = []
-        sizehint!(C, length(sec) + length(dif1) + length(dif2))
-        sizehint!(num, length(sec) + length(dif1) + length(dif2))
-        for i in eachindex(sec)
-            D = A.A[i] - B.A[i]
-            append!(num, sec[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif1)
-            D = A.A[i]
-            append!(num, dif1[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif2)
-            D = -B.A[i]
-            append!(num, dif2[i])
-            push!(C, D)
-        end
-        return TensorField(C, num, A.nsteps, :e)
-    else
-        error("-(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
-    end
-end
-
-function *(A::TensorField, b)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] * b
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
-    end
-end
-
-function *(b, A::TensorField)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] * b
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
-    end
-end
-
-function *(A::ScalarField, b)
-    nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        D = A.A[i] * b
-        push!(C, D)
-    end
-    return ScalarField(C, A.numElem, A.nsteps, :e)
-end
-
-function *(b, A::ScalarField)
-    C = []
-    for i in 1:length(A.A)
-        D = A.A[i] * b
-        push!(C, D)
-    end
-    return ScalarField(C, A.numElem, A.nsteps, :e)
-end
-
-function /(A::TensorField, b)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] / b
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("/(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
-    end
-end
-
-function /(A::ScalarField, b)
-    nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        D = A.A[i] / b
-        push!(C, D)
-    end
-    return ScalarField(C, A.numElem, A.nsteps, :e)
-end
-
-function /(b, A::ScalarField)
-    nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        D = A.A[i] ./ b
-        push!(C, D)
-    end
-    return ScalarField(C, A.numElem, A.nsteps, :e)
-end
-
-import Base.inv
-function inv(A::TensorField)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(inv(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
-            end
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("inv(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
-    end
-end
-
-import Base.sqrt
-function sqrt(A::TensorField)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(sqrt(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
-            end
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("sqrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
-    end
-end
-
-import Base.log
-function log(A::TensorField)
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(log(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
-            end
-            push!(C, D)
-        end
-        return TensorField(C, A.numElem, A.nsteps, :e)
-    else
-        error("log(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
-    end
-end
-
-import Base.log
-function log(A::ScalarField)
-    nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        n = length(A.A[i])
-        D = zeros(n, nsteps)
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = log(A.A[i][j, k])
-            end
-        end
-        push!(C, D)
-    end
-    return ScalarField(C, A.numElem, A.nsteps, :e)
 end
 
 """
