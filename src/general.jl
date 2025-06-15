@@ -1,5 +1,5 @@
 """
-    Material(phName, E, ν, ρ, k, c, α)
+    Material(phName, E, ν, ρ, k, c, α, λ, μ, κ)
 
 A structure containing the material constants. 
 - E: elastic modulus,
@@ -95,8 +95,15 @@ struct Problem
         elseif type == :AxiSymmetricHeatConduction
             dim = 2
             pdim = 1
+        elseif type == :StVenantKirchhoff
+            dim = 3
+            pdim = 3
+        elseif type == :NeoHookeCompressible
+            dim = 3
+            pdim = 3
         else
-            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction` or `:AxiSymmetricHeatConduction`. Now problem type = $type ????")
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`,
+            `StVenantKirchhoff` or `NeoHookeCompressible`. Now problem type = $type ????")
         end
         if !isa(mat, Vector)
             error("Problem: materials are not arranged in a vector. Put them in [...]")
@@ -501,7 +508,7 @@ struct Eigen
 end
 
 """
-    FEM.material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5)
+    FEM.material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
 
 Returns a structure in which `name` is the name of a physical group, 
 `E` is the modulus of elasticity, `ν` Poisson's ratio and `ρ` is
@@ -524,7 +531,7 @@ Types:
 - `μ`: Float64
 - `κ`: Float64
 """
-function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=E*ν/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
+function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3)
     return Material(name, E, ν, ρ, k, c, α, λ, μ, κ)
 end
 
@@ -828,7 +835,7 @@ function unitTensor(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
         else
             error("unit(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
         end
@@ -858,7 +865,8 @@ function trace(A::TensorField)
                 end
                 push!(C, D)
             end
-            return ScalarField(C, A.numElem, A.nsteps, :e)
+            a = [;;]
+            return ScalarField(C, a, A.numElem, A.nsteps, :e)
         else
             error("trace(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
         end
@@ -889,7 +897,8 @@ function det(A::TensorField)
                 end
                 push!(C, D)
             end
-            return ScalarField(C, A.numElem, A.nsteps, :sc)
+            a = [;;]
+            return ScalarField(C, a, A.numElem, A.nsteps, :sc)
         else
             error("det(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
         end
@@ -955,7 +964,8 @@ function +(A::TensorField, B::TensorField)
                 append!(num, dif2[i])
                 push!(C, D)
             end
-            return TensorField(C, num, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, num, A.nsteps, :e)
         else
             error("+(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1016,7 +1026,8 @@ function -(A::TensorField, B::TensorField)
                 append!(num, dif2[i])
                 push!(C, D)
             end
-            return TensorField(C, num, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, num, A.nsteps, :e)
         else
             error("-(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1034,7 +1045,8 @@ function *(A::TensorField, b)
                 D = A.A[i] * b
                 push!(C, D)
             end
-            return TensorField(C, A.numElem, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
         else
             error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1052,7 +1064,8 @@ function *(b, A::TensorField)
                 D = A.A[i] * b
                 push!(C, D)
             end
-            return TensorField(C, A.numElem, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
         else
             error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1068,7 +1081,8 @@ function *(A::ScalarField, b)
             D = A.A[i] * b
             push!(C, D)
         end
-        return ScalarField(C, A.numElem, A.nsteps, :e)
+        a = [;;]
+        return ScalarField(C, a, A.numElem, A.nsteps, :e)
     else
         error("*(ScalarField, Any): data at nodes is not yet implemented.")
     end
@@ -1081,7 +1095,8 @@ function *(b, A::ScalarField)
             D = A.A[i] * b
             push!(C, D)
         end
-        return ScalarField(C, A.numElem, A.nsteps, :e)
+        a = [;;]
+        return ScalarField(C, a, A.numElem, A.nsteps, :e)
     else
         error("*(Any, ScalarField): data at nodes is not yet implemented.")
     end
@@ -1095,7 +1110,8 @@ function /(A::TensorField, b)
                 D = A.A[i] / b
                 push!(C, D)
             end
-            return TensorField(C, A.numElem, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
         else
             error("/(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1111,7 +1127,8 @@ function /(A::ScalarField, b)
             D = A.A[i] / b
             push!(C, D)
         end
-        return ScalarField(C, A.numElem, A.nsteps, :e)
+        a = [;;]
+        return ScalarField(C, a, A.numElem, A.nsteps, :e)
     else
         error("/(ScalarField, Any): data at nodes is not yet implemented.")
     end
@@ -1124,7 +1141,8 @@ function /(b, A::ScalarField)
             D = A.A[i] ./ b
             push!(C, D)
         end
-        return ScalarField(C, A.numElem, A.nsteps, :e)
+        a = [;;]
+        return ScalarField(C, a, A.numElem, A.nsteps, :e)
     else
         error("/(Any, ScalarField): data at nodes is not yet implemented.")
     end
@@ -1146,7 +1164,8 @@ function inv(A::TensorField)
                 end
                 push!(C, D)
             end
-            return TensorField(C, A.numElem, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
         else
             error("inv(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -1171,7 +1190,8 @@ function sqrt(A::TensorField)
                 end
                 push!(C, D)
             end
-            return TensorField(C, A.numElem, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
         else
             error("sqrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -1196,7 +1216,8 @@ function log(A::TensorField)
                 end
                 push!(C, D)
             end
-            return TensorField(C, A.numElem, A.nsteps, :e)
+            a = [;;]
+            return TensorField(C, a, A.numElem, A.nsteps, :e)
         else
             error("log(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -1220,7 +1241,8 @@ function log(A::ScalarField)
             end
             push!(C, D)
         end
-        return ScalarField(C, A.numElem, A.nsteps, :e)
+        a = [;;]
+        return ScalarField(C, a, A.numElem, A.nsteps, :e)
     else
         error("log(ScalarField): data at nodes is not yet implemented.")
     end

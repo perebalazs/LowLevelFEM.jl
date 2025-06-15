@@ -38,7 +38,7 @@ function deformationGradient(problem, r)
         phName = problem.material[ipg].phName
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim != 3 || problem.type != :Solid
+        if problem.dim != 3 || (problem.type != :StVenantKirchhoff && problem.type != :NeoHookeCompressible)
             error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type). (They must be 3 and :Solid.)")
         end
 
@@ -128,37 +128,23 @@ function stiffnessMatrixLinear(problem, r)
     sizehint!(I, lengthOfIJV)
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
+    II1 = zeros(6, 6)
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
-        E = problem.material[ipg].E
-        ν = problem.material[ipg].ν
+        μ = problem.material[ipg].μ
+        λ = problem.material[ipg].λ
+        κ = problem.material[ipg].κ
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 3 && problem.type == :Solid
-            #=D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
-                ν 1-ν ν 0 0 0;
-                ν ν 1-ν 0 0 0;
-                0 0 0 (1-2ν)/2 0 0;
-                0 0 0 0 (1-2ν)/2 0;
-                0 0 0 0 0 (1-2ν)/2]
-                =#
+        if problem.type == :StVenantKirchhoff
             rowsOfB = 6
             b = 1
-        elseif problem.dim == 2 && problem.type == :PlaneStress
-            D = E / (1 - ν^2) * [1 ν 0;
-                ν 1 0;
-                0 0 (1-ν)/2]
-            rowsOfB = 3
-            b = problem.thickness
-        elseif problem.dim == 2 && problem.type == :PlaneStrain
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
-                ν 1-ν 0;
-                0 0 (1-2ν)/2]
-            rowsOfB = 3
+        elseif problem.type == :NeoHookeCompressible
+            rowsOfB = 6
             b = 1
         else
-            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("stiffnessMatrixLinear: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -259,36 +245,36 @@ function stiffnessMatrixLinear(problem, r)
                     end
                     K1 .*= 0
                     for k in 1:numIntPoints
-                        Ex = 10
-                        νxy = 0.3
-                        λ = Ex * νxy / ((1 + νxy) * (1 - 2νxy))
-                        μ = Ex / (2 * (1 + νxy))
-                        #∂H1 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
-                        #F1 = ∂H1 * r1
-                        #F2 = reshape(F1, 3, 3)
-                        #F2 = [1.0 0 0; 0 1.0 0; 0 0 1.0]
-                        #J1 = det(F2)
-                        #C2 = F2' * F2
-                        #iC2 = inv(C2)
-                        #iC1 = reshape(iC2, 9, 1)
-                        #iCiC1 = iC1[[1, 5, 9, 4, 6, 3]] * iC1[[1, 5, 9, 4, 6, 3]]'
-                        #i1 = [1, 2, 3, 1, 2, 3]
-                        #j1 = [1, 2, 3, 2, 3, 1]
-                        #k1 = [1, 2, 3, 1, 2, 3]
-                        #l1 = [1, 2, 3, 2, 3, 1]
-                        #II1 = zeros(6, 6)
-                        #for i2 in 1:6, j2 in 1:6
-                        #    II1[i2, j2] = (iC2[i1[i2], k1[j2]] * iC2[j1[i2], l1[j2]] + iC2[i1[i2], l1[j2]] * iC2[j1[i2], k1[j2]]) / 2
-                        #end
-                        #C1 = λ * iCiC1 + 2 * (μ - λ * log(J1)) * II1
-                        λ0 = λ
-                        μ0 = μ
-                        C1 = [λ0+2μ0 λ0 λ0 0 0 0;
-                            λ0 λ0+2μ0 λ0 0 0 0;
-                            λ0 λ0 λ0+2μ0 0 0 0;
-                            0 0 0 μ0 0 0;
-                            0 0 0 0 μ0 0;
-                            0 0 0 0 0 μ0]
+                        if problem.type == :StVenantKirchhoff
+                            λ0 = λ
+                            μ0 = μ
+                            C1 = [λ0+2μ0 λ0 λ0 0 0 0;
+                                λ0 λ0+2μ0 λ0 0 0 0;
+                                λ0 λ0 λ0+2μ0 0 0 0;
+                                0 0 0 μ0 0 0;
+                                0 0 0 0 μ0 0;
+                                0 0 0 0 0 μ0]
+                        elseif problem.type == :NeoHookeCompressible
+                            ∂H0 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
+                            F1 = ∂H0 * r1
+                            F2 = reshape(F1, 3, 3)
+                            J1 = det(F2)
+                            C2 = F2' * F2
+                            iC2 = inv(C2)
+                            iC1 = reshape(iC2, 9, 1)
+                            iCiC1 = iC1[[1, 5, 9, 4, 6, 3]] * iC1[[1, 5, 9, 4, 6, 3]]'
+                            i1 = [1, 2, 3, 1, 2, 3]
+                            j1 = [1, 2, 3, 2, 3, 1]
+                            k1 = [1, 2, 3, 1, 2, 3]
+                            l1 = [1, 2, 3, 2, 3, 1]
+                            for i2 in 1:6, j2 in 1:6
+                                II1[i2, j2] = (iC2[i1[i2], k1[j2]] * iC2[j1[i2], l1[j2]] + iC2[i1[i2], l1[j2]] * iC2[j1[i2], k1[j2]]) / 2
+                            end
+                            J1 = J1 > 0 ? J1 : 1e-14
+                            C1 = λ * iCiC1 + 2 * (μ - λ * log(J1)) * II1
+                        else
+                            error("loadVectorNonLinear: type '$(problem.type)' is not defined.")
+                        end
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
                         K1 += B1' * C1 * B1 * b * jacDet[k] * intWeights[k]
                     end
@@ -321,21 +307,19 @@ function stiffnessMatrixNonLinear(problem, r)
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
-        E = problem.material[ipg].E
-        ν = problem.material[ipg].ν
+        μ = problem.material[ipg].μ
+        λ = problem.material[ipg].λ
+        κ = problem.material[ipg].κ
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 3 && problem.type == :Solid
+        if problem.type == :StVenantKirchhoff
             rowsOfB = 6
             b = 1
-        elseif problem.dim == 2 && problem.type == :PlaneStress
-            rowsOfB = 3
-            b = problem.thickness
-        elseif problem.dim == 2 && problem.type == :PlaneStrain
-            rowsOfB = 3
+        elseif problem.type == :NeoHookeCompressible
+            rowsOfB = 6
             b = 1
         else
-            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("stiffnessMatrixNonLinear: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -396,7 +380,6 @@ function stiffnessMatrixNonLinear(problem, r)
                         ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
                     end
                     r1 = r[nn2]
-                    #S1 = S[nn9]
                     B .*= 0
                     ∂H .*= 0
                     if dim == 2 && rowsOfB == 3
@@ -421,24 +404,30 @@ function stiffnessMatrixNonLinear(problem, r)
                             end
                         end
                     else
-                        error("stiffnessMatrixLinear: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                        error("stiffnessMatrixNonLinear: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     K1 .*= 0
                     for k in 1:numIntPoints
-                        Ex = 10
-                        νxy = 0.3
-                        λ = Ex * νxy / ((1 + νxy) * (1 - 2νxy))
-                        μ = Ex / (2 * (1 + νxy))
-                        I3 = [1 0 0; 0 1 0; 0 0 1]
-                        #H1 = H[k*9-(9-1):k*9, 1:9*numNodes]
-                        ∂H0 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
-                        F1 = ∂H0 * r1
-                        F2 = reshape(F1, 3, 3)
-                        #J1 = det(F2)
-                        E = (F2' * F2 - I3) / 2
-                        #iC = inv(C)
-                        S2 = 2μ * E + λ * (E[1, 1] + E[2, 2] + E[3, 3]) * I3
-                        #S0 = reshape(H1 * S1, 3, 3)
+                        if problem.type == :StVenantKirchhoff
+                            I3 = [1 0 0; 0 1 0; 0 0 1]
+                            ∂H0 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
+                            F1 = ∂H0 * r1
+                            F2 = reshape(F1, 3, 3)
+                            E = (F2' * F2 - I3) / 2
+                            S2 = 2μ * E + λ * (E[1, 1] + E[2, 2] + E[3, 3]) * I3
+                        elseif problem.type == :NeoHookeCompressible
+                            I3 = [1 0 0; 0 1 0; 0 0 1]
+                            ∂H0 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
+                            F1 = ∂H0 * r1
+                            F2 = reshape(F1, 3, 3)
+                            J1 = det(F2)
+                            C = F2' * F2
+                            iC = inv(C)
+                            J1 = J1 > 0 ? J1 : 1e-14
+                            S2 = μ * (I3 - iC) + λ * log(J1) * iC
+                        else
+                            error("loadVectorNonLinear: type '$(problem.type)' is not defined.")
+                        end
                         ∂H1 = ∂H[k*9-(9-1):3:k*9-(9-9), 1:pdim*numNodes]
                         ∂H2 = ∂H[k*9-(9-2):3:k*9-(9-9), 1:pdim*numNodes]
                         ∂H3 = ∂H[k*9-(9-3):3:k*9-(9-9), 1:pdim*numNodes]
@@ -465,34 +454,19 @@ function loadVectorNonLinear(problem, r)
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
-        E = problem.material[ipg].E
-        ν = problem.material[ipg].ν
+        μ = problem.material[ipg].μ
+        λ = problem.material[ipg].λ
+        κ = problem.material[ipg].κ
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim == 3 && problem.type == :Solid
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
-                ν 1-ν ν 0 0 0;
-                ν ν 1-ν 0 0 0;
-                0 0 0 (1-2ν)/2 0 0;
-                0 0 0 0 (1-2ν)/2 0;
-                0 0 0 0 0 (1-2ν)/2]
-
+        if problem.type == :StVenantKirchhoff
             rowsOfB = 6
             b = 1
-        elseif problem.dim == 2 && problem.type == :PlaneStress
-            D = E / (1 - ν^2) * [1 ν 0;
-                ν 1 0;
-                0 0 (1-ν)/2]
-            rowsOfB = 3
-            b = problem.thickness
-        elseif problem.dim == 2 && problem.type == :PlaneStrain
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
-                ν 1-ν 0;
-                0 0 (1-2ν)/2]
-            rowsOfB = 3
+        elseif problem.type == :NeoHookeCompressible
+            rowsOfB = 6
             b = 1
         else
-            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("loadVectorNonLinear: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -540,9 +514,9 @@ function loadVectorNonLinear(problem, r)
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
-                    for k in 1:9
-                        nn9[k:9:9*numNodes] = 9 * nnet[j, 1:numNodes] .- (9 - k)
-                    end
+                    #for k in 1:9
+                    #    nn9[k:9:9*numNodes] = 9 * nnet[j, 1:numNodes] .- (9 - k)
+                    #end
                     jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                     Jac = reshape(jac, 3, :)
                     for k in 1:numIntPoints
@@ -553,7 +527,6 @@ function loadVectorNonLinear(problem, r)
                         ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
                     end
                     r1 = r[nn2]
-                    #S1 = S[nn9]
                     B .*= 0
                     ∂H .*= 0
                     if dim == 2 && rowsOfB == 3
@@ -600,28 +573,30 @@ function loadVectorNonLinear(problem, r)
                             end
                         end
                     else
-                        error("stiffnessMatrixLinear: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                        error("loadVectorNonLinear: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     f1 .*= 0
                     for k in 1:numIntPoints
-                        Ex = 10
-                        νxy = 0.3
-                        λ = Ex * νxy / ((1 + νxy) * (1 - 2νxy))
-                        μ = Ex / (2 * (1 + νxy))
-                        I3 = [1 0 0; 0 1 0; 0 0 1]
-                        #H1 = H[k*9-(9-1):k*9, 1:9*numNodes]
-                        ∂H0 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
-                        F1 = ∂H0 * r1
-                        F2 = reshape(F1, 3, 3)
-                        #J1 = det(F2)
-                        E = (F2' * F2 - I3) / 2
-                        #iC = inv(C)
-                        S2 = 2μ * E + λ * (E[1, 1] + E[2, 2] + E[3, 3]) * I3
-                        #S2 = [1 0 0; 0 0 0; 0 0 0]
-                        #S2 = -I3
-                        #S3 = reshape(S2, 9, 1)
-                        #H1 = H[k*9-(9-1):k*9, 1:9*numNodes]
-                        #S0 = H1 * S1
+                        if problem.type == :StVenantKirchhoff
+                            I3 = [1 0 0; 0 1 0; 0 0 1]
+                            ∂H0 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
+                            F1 = ∂H0 * r1
+                            F2 = reshape(F1, 3, 3)
+                            E = (F2' * F2 - I3) / 2
+                            S2 = 2μ * E + λ * (E[1, 1] + E[2, 2] + E[3, 3]) * I3
+                        elseif problem.type == :NeoHookeCompressible
+                            I3 = [1 0 0; 0 1 0; 0 0 1]
+                            ∂H0 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
+                            F1 = ∂H0 * r1
+                            F2 = reshape(F1, 3, 3)
+                            J1 = det(F2)
+                            C = F2' * F2
+                            iC = inv(C)
+                            J1 = J1 > 0 ? J1 : 1e-14
+                            S2 = μ * (I3 - iC) + λ * log(J1) * iC
+                        else
+                            error("loadVectorNonLinear: type '$(problem.type)' is not defined.")
+                        end
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
                         f1 += B1' * S2[[1, 5, 9, 4, 6, 3]] * b * jacDet[k] * intWeights[k]
                     end
