@@ -223,21 +223,21 @@ function stiffnessMatrixLinear(problem, r)
                                 B[k*rowsOfB-5, l*pdim-2] = F[1] * ∂h[1, (k-1)*numNodes+l]
                                 B[k*rowsOfB-4, l*pdim-2] = F[4] * ∂h[2, (k-1)*numNodes+l]
                                 B[k*rowsOfB-3, l*pdim-2] = F[7] * ∂h[3, (k-1)*numNodes+l]
-                                B[k*rowsOfB-2, l*pdim-2] = (F[4] * ∂h[1, (k-1)*numNodes+l] + F[1] * ∂h[2, (k-1)*numNodes+l]) / 2.0
-                                B[k*rowsOfB-1, l*pdim-2] = (F[7] * ∂h[2, (k-1)*numNodes+l] + F[4] * ∂h[3, (k-1)*numNodes+l]) / 2.0
-                                B[k*rowsOfB-0, l*pdim-2] = (F[1] * ∂h[3, (k-1)*numNodes+l] + F[7] * ∂h[1, (k-1)*numNodes+l]) / 2.0
+                                B[k*rowsOfB-2, l*pdim-2] = (F[4] * ∂h[1, (k-1)*numNodes+l] + F[1] * ∂h[2, (k-1)*numNodes+l]) / 2
+                                B[k*rowsOfB-1, l*pdim-2] = (F[7] * ∂h[2, (k-1)*numNodes+l] + F[4] * ∂h[3, (k-1)*numNodes+l]) / 2
+                                B[k*rowsOfB-0, l*pdim-2] = (F[1] * ∂h[3, (k-1)*numNodes+l] + F[7] * ∂h[1, (k-1)*numNodes+l]) / 2
                                 B[k*rowsOfB-5, l*pdim-1] = F[2] * ∂h[1, (k-1)*numNodes+l]
                                 B[k*rowsOfB-4, l*pdim-1] = F[5] * ∂h[2, (k-1)*numNodes+l]
                                 B[k*rowsOfB-3, l*pdim-1] = F[8] * ∂h[3, (k-1)*numNodes+l]
-                                B[k*rowsOfB-2, l*pdim-1] = (F[5] * ∂h[1, (k-1)*numNodes+l] + F[2] * ∂h[2, (k-1)*numNodes+l]) / 2.0
-                                B[k*rowsOfB-1, l*pdim-1] = (F[8] * ∂h[2, (k-1)*numNodes+l] + F[5] * ∂h[3, (k-1)*numNodes+l]) / 2.0
-                                B[k*rowsOfB-0, l*pdim-1] = (F[2] * ∂h[3, (k-1)*numNodes+l] + F[8] * ∂h[1, (k-1)*numNodes+l]) / 2.0
+                                B[k*rowsOfB-2, l*pdim-1] = (F[5] * ∂h[1, (k-1)*numNodes+l] + F[2] * ∂h[2, (k-1)*numNodes+l]) / 2
+                                B[k*rowsOfB-1, l*pdim-1] = (F[8] * ∂h[2, (k-1)*numNodes+l] + F[5] * ∂h[3, (k-1)*numNodes+l]) / 2
+                                B[k*rowsOfB-0, l*pdim-1] = (F[2] * ∂h[3, (k-1)*numNodes+l] + F[8] * ∂h[1, (k-1)*numNodes+l]) / 2
                                 B[k*rowsOfB-5, l*pdim-0] = F[3] * ∂h[1, (k-1)*numNodes+l]
                                 B[k*rowsOfB-4, l*pdim-0] = F[6] * ∂h[2, (k-1)*numNodes+l]
                                 B[k*rowsOfB-3, l*pdim-0] = F[9] * ∂h[3, (k-1)*numNodes+l]
-                                B[k*rowsOfB-2, l*pdim-0] = (F[6] * ∂h[1, (k-1)*numNodes+l] + F[3] * ∂h[2, (k-1)*numNodes+l]) / 2.0
-                                B[k*rowsOfB-1, l*pdim-0] = (F[9] * ∂h[2, (k-1)*numNodes+l] + F[6] * ∂h[3, (k-1)*numNodes+l]) / 2.0
-                                B[k*rowsOfB-0, l*pdim-0] = (F[1] * ∂h[3, (k-1)*numNodes+l] + F[9] * ∂h[1, (k-1)*numNodes+l]) / 2.0
+                                B[k*rowsOfB-2, l*pdim-0] = (F[6] * ∂h[1, (k-1)*numNodes+l] + F[3] * ∂h[2, (k-1)*numNodes+l]) / 2
+                                B[k*rowsOfB-1, l*pdim-0] = (F[9] * ∂h[2, (k-1)*numNodes+l] + F[6] * ∂h[3, (k-1)*numNodes+l]) / 2
+                                B[k*rowsOfB-0, l*pdim-0] = (F[3] * ∂h[3, (k-1)*numNodes+l] + F[9] * ∂h[1, (k-1)*numNodes+l]) / 2
                             end
                         end
                     else
@@ -270,7 +270,7 @@ function stiffnessMatrixLinear(problem, r)
                             for i2 in 1:6, j2 in 1:6
                                 II1[i2, j2] = (iC2[i1[i2], k1[j2]] * iC2[j1[i2], l1[j2]] + iC2[i1[i2], l1[j2]] * iC2[j1[i2], k1[j2]]) / 2
                             end
-                            J1 = J1 > 0 ? J1 : 1e-14
+                            #J1 = J1 > 0 ? J1 : 1e-14
                             C1 = λ * iCiC1 + 2 * (μ - λ * log(J1)) * II1
                         else
                             error("loadVectorNonLinear: type '$(problem.type)' is not defined.")
@@ -423,7 +423,7 @@ function stiffnessMatrixNonLinear(problem, r)
                             J1 = det(F2)
                             C = F2' * F2
                             iC = inv(C)
-                            J1 = J1 > 0 ? J1 : 1e-14
+                            #J1 = J1 > 0 ? J1 : 1e-14
                             S2 = μ * (I3 - iC) + λ * log(J1) * iC
                         else
                             error("loadVectorNonLinear: type '$(problem.type)' is not defined.")
@@ -569,7 +569,7 @@ function loadVectorNonLinear(problem, r)
                                 B[k*rowsOfB-3, l*pdim-0] = F[9] * ∂h[3, (k-1)*numNodes+l]
                                 B[k*rowsOfB-2, l*pdim-0] = (F[6] * ∂h[1, (k-1)*numNodes+l] + F[3] * ∂h[2, (k-1)*numNodes+l]) / 2
                                 B[k*rowsOfB-1, l*pdim-0] = (F[9] * ∂h[2, (k-1)*numNodes+l] + F[6] * ∂h[3, (k-1)*numNodes+l]) / 2
-                                B[k*rowsOfB-0, l*pdim-0] = (F[1] * ∂h[3, (k-1)*numNodes+l] + F[9] * ∂h[1, (k-1)*numNodes+l]) / 2
+                                B[k*rowsOfB-0, l*pdim-0] = (F[3] * ∂h[3, (k-1)*numNodes+l] + F[9] * ∂h[1, (k-1)*numNodes+l]) / 2
                             end
                         end
                     else
@@ -592,7 +592,7 @@ function loadVectorNonLinear(problem, r)
                             J1 = det(F2)
                             C = F2' * F2
                             iC = inv(C)
-                            J1 = J1 > 0 ? J1 : 1e-14
+                            #J1 = J1 > 0 ? J1 : 1e-14
                             S2 = μ * (I3 - iC) + λ * log(J1) * iC
                         else
                             error("loadVectorNonLinear: type '$(problem.type)' is not defined.")
@@ -697,6 +697,7 @@ function followerLoadVector(problem, r, loads)
                         H9 = HH[j*9-(9-1):j*9, 1:9*numNodes]
                         F1 = H9 * F9
                         F1 = reshape(F1, 3, 3)
+                        iF1 =inv(F1)
                         x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
                         y = 0
                         z = 0
@@ -746,7 +747,7 @@ function followerLoadVector(problem, r, loads)
                         else
                             error("loadVector: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
-                        f1 += H1' * F1 * f * Ja * intWeights[j]
+                        f1 += H1' * iF1 * f * Ja * intWeights[j]
                     end
                     fp[nn2] += f1
                 end

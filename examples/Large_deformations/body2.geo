@@ -32,3 +32,19 @@ Physical Surface("top", 26) = {4};
 Physical Surface("front", 27) = {6};
 //+
 Physical Surface("rear", 28) = {5};
+//+
+Point(9) = {5, 0, 0.5, 1.0};
+//+
+Point(10) = {5, 1, 0.5, 1.0};
+//+
+Point(11) = {5, 0.5, 0, 1.0};
+//+
+Point(12) = {5, 0.5, 1, 1.0};
+//+
+Line(13) = {9, 10};
+//+
+Line(14) = {12, 11};
+//+
+Physical Curve("horizontal", 29) = {14};
+//+
+Physical Curve("vertical", 30) = {13};
