@@ -896,7 +896,7 @@ Return: `loadVec`
 Types:
 - `problem`: Problem
 - `loads`: Vector{Tuple{String, Float64, Float64, Float64}}
-- `loadVec`: Vector
+- `loadVec`: VectorField
 """
 function loadVector(problem, loads)
     gmsh.model.setCurrent(problem.name)
@@ -1018,7 +1018,15 @@ function loadVector(problem, loads)
             end
         end
     end
-    return fp
+    type = :null
+    if pdim == 3
+        type = :f3D
+    elseif pdim == 2
+        type = :f2D
+    else
+        error("loadVector: wrong pdim ($pdim).")
+    end
+    return VectorField([], reshape(fp, :, 1), [], [], 1, type)
 end
 
 """
@@ -1176,7 +1184,7 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 f0 = stiffMat[:, nodeTagsX] * ux
                 f0 = sum(f0, dims=2)
             end
-            loadVec .-= f0
+            loadVec.a .-= f0
         end
         if uy != 1im
             nodeTagsY = copy(nodeTags)
@@ -1189,7 +1197,7 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 f0 = stiffMat[:, nodeTagsY] * uy
                 f0 = sum(f0, dims=2)
             end
-            loadVec .-= f0
+            loadVec.a .-= f0
         end
         if pdim == 3 && uz != 1im
             nodeTagsZ = copy(nodeTags)
@@ -1201,7 +1209,7 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 f0 = stiffMat[:, nodeTagsZ] * uz
                 f0 = sum(f0, dims=2)
             end
-            loadVec .-= f0
+            loadVec.a .-= f0
         end
     end
 
@@ -1234,9 +1242,9 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 dampMat[:, j] .= 0
                 dampMat[j, j] = fix
                 if isa(ux, Function)
-                    loadVec[j] = uux[jj]
+                    loadVec.a[j] = uux[jj]
                 else
-                    loadVec[j] = ux
+                    loadVec.a[j] = ux
                 end
             end
         end
@@ -1260,9 +1268,9 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 dampMat[:, j] .= 0
                 dampMat[j, j] = fix
                 if isa(uy, Function)
-                    loadVec[j] = uuy[jj]
+                    loadVec.a[j] = uuy[jj]
                 else
-                    loadVec[j] = uy
+                    loadVec.a[j] = uy
                 end
             end
         end
@@ -1285,9 +1293,9 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
                 dampMat[:, j] .= 0
                 dampMat[j, j] = fix
                 if isa(uz, Function)
-                    loadVec[j] = uuz[jj]
+                    loadVec.a[j] = uuz[jj]
                 else
-                    loadVec[j] = uz
+                    loadVec.a[j] = uz
                 end
             end
         end
@@ -1395,11 +1403,19 @@ Return: `q`
 
 Types:
 - `K`: SparseMatrix 
-- `f`: Vector{Float64} 
-- `q`: Vector{Float64}
+- `f`: VectorField 
+- `q`: VectorField
 """
 function solveDisplacement(K, f)
-    return K \ f
+    type = :null
+    if f.type == :f3D
+        type = :u3D
+    elseif f.type == :f2D
+        type = :u2D
+    else
+        error("solveDisplacement: wrong type of 'f': ($(f.type))")
+    end
+    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type)
 end
 
 """
@@ -1414,13 +1430,21 @@ Types:
 - `problem`: Problem 
 - `load`: Vector{Tuple} 
 - `supp`: Vector{Tuple}
-- `q`: Vector{Float64}
+- `q`: VectorField
 """
 function solveDisplacement(problem, load, supp)
     K = stiffnessMatrix(problem)
     f = loadVector(problem, load)
     applyBoundaryConditions!(problem, K, f, supp)
-    return K \ f
+    type = :null
+    if f.type == :f3D
+        type = :u3D
+    elseif f.type == :f2D
+        type = :u2D
+    else
+        error("solveDisplacement: wrong type of 'f': ($(f.type))")
+    end
+    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type)
 end
 
 """
@@ -1437,19 +1461,28 @@ Return: `E`
 Types:
 - `problem`: Problem
 - `q`: Vector{Float64}
-- `E`: TensorField or Matrix{Float64}
+- `E`: TensorField
 """
 function solveStrain(problem, q; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
-    type = :e
-    nsteps = size(q, 2)
+    if !isa(q, VectorField) 
+        error("solveStrain:argument must be a VectorField. Now it is '$(typeof(q))'.")
+    end
+    if q.type != :u3D && q.type != :u2D
+        error("solveStrain: argument must be a displacement vector. Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStrain: q.A != []")
+    end
+    nsteps = q.nsteps
     ε = []
     numElem = Int[]
     ncoord2 = zeros(3 * problem.non)
     dim = problem.dim
     pdim = problem.pdim
     non = problem.non
+    type = :e
     if DoFResults == true
         E1 = zeros(non * 9, nsteps)
         pcs = zeros(Int64, non * dim)
@@ -1552,7 +1585,7 @@ function solveStrain(problem, q; DoFResults=false)
                         if rowsOfB == 6 && dim == 3 && problem.type == :Solid
                             B1 = B[k*6-5:k*6, 1:3*numNodes]
                             for kk in 1:nsteps
-                                e0 = B1 * q[nn2, kk]
+                                e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], e0[6],
                                         e0[4], e0[2], e0[5],
@@ -1565,7 +1598,7 @@ function solveStrain(problem, q; DoFResults=false)
                         elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
                             B1 = B[k*3-2:k*3, 1:2*numNodes]
                             for kk in 1:nsteps
-                                e0 = B1 * q[nn2, kk]
+                                e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
                                         e0[3], e0[2], 0,
@@ -1578,7 +1611,7 @@ function solveStrain(problem, q; DoFResults=false)
                         elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
                             B1 = B[k*3-2:k*3, 1:2*numNodes]
                             for kk in 1:nsteps
-                                e0 = B1 * q[nn2, kk]
+                                e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
                                         e0[3], e0[2], 0,
@@ -1591,7 +1624,7 @@ function solveStrain(problem, q; DoFResults=false)
                         elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
                             B1 = B[k*4-3:k*4, 1:2*numNodes]
                             for kk in 1:nsteps
-                                e0 = B1 * q[nn2, kk]
+                                e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], 0,
                                         e0[4], e0[3], 0,
@@ -1623,10 +1656,10 @@ function solveStrain(problem, q; DoFResults=false)
         end
     end
     if DoFResults == true
-        return E1
+        epsilon = TensorField([], E1, q.t, [], nsteps, type)
+        return epsilon
     else
-        a = [;;]
-        epsilon = TensorField(ε, a, numElem, nsteps, type)
+        epsilon = TensorField(ε, [;;], q.t, numElem, nsteps, type)
         return epsilon
     end
 end
@@ -1653,9 +1686,19 @@ Types:
 """
 function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
     gmsh.model.setCurrent(problem.name)
+    
+    if !isa(q, VectorField) 
+        error("solveStress:argument must be a VectorField. Now it is '$(typeof(q))'.")
+    end
+    if q.type != :u3D && q.type != :u2D
+        error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStress: q.A != []")
+    end
 
     type = :s
-    nsteps = size(q, 2)
+    nsteps = q.nsteps
     σ = []
     numElem = Int[]
     ncoord2 = zeros(3 * problem.non)
@@ -1804,7 +1847,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
-                                s0 = D * B1 * q[nn2, kk]
+                                s0 = D * B1 * q.a[nn2, kk]
                                 if T != 1im
                                     s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
                                 end
@@ -1821,7 +1864,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
-                                s0 = D * B1 * q[nn2, kk]
+                                s0 = D * B1 * q.a[nn2, kk]
                                 if T != 1im
                                     s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
                                 end
@@ -1838,7 +1881,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                             H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
-                                s0 = D * B1 * q[nn2, kk]
+                                s0 = D * B1 * q.a[nn2, kk]
                                 if T != 1im
                                     s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
                                 end
@@ -1855,7 +1898,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                         elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
                             B1 = B[k*4-3:k*4, 1:2*numNodes]
                             for kk in 1:nsteps
-                                s0 = D * B1 * q[nn2, kk]
+                                s0 = D * B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
                                         s0[4], s0[3], 0,
@@ -1887,10 +1930,10 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
         end
     end
     if DoFResults == true
-        return S1
+        sigma = TensorField([], S1, q.t, [], nsteps, type)
+        return sigma
     else
-        a = [;;]
-        sigma = TensorField(σ, a, numElem, nsteps, type)
+        sigma = TensorField(σ, [;;], q.t, numElem, nsteps, type)
         return sigma
     end
 end

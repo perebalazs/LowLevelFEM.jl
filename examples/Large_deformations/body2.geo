@@ -6,7 +6,7 @@ Box(1) = {0, 0, 0, 10, 1, 1};
 //+
 //MeshSize {:} = 1;
 //+
-Transfinite Curve {9:12} = 11 Using Progression 1;
+Transfinite Curve {9:12} = 21 Using Progression 1;
 Transfinite Curve {1:8} = 5 Using Progression 1;
 //+
 Transfinite Surface {:};
@@ -15,7 +15,7 @@ Transfinite Volume{:};
 //+
 Recombine Surface {:};
 //+
-Mesh.ElementOrder=1;
+Mesh.ElementOrder=2;
 //+
 Mesh 3;
 //+
