@@ -1454,6 +1454,36 @@ function solveDisplacement(problem, load, supp)
 end
 
 """
+    FEM.solveDisplacement(problem, load, supp, elasticSupp)
+
+Solves the displacement vector `q` of `problem` with loads `load`, 
+supports `supp` and elastic supports `elasticSupp`.
+
+Return: `q`
+
+Types:
+- `problem`: Problem 
+- `load`: Vector{Tuple} 
+- `supp`: Vector{Tuple}
+- `q`: VectorField
+"""
+function solveDisplacement(problem, load, supp, elsupp)
+    K = stiffnessMatrix(problem)
+    f = loadVector(problem, load)
+    applyElasticSupport!(problem, K, elsupp)
+    applyBoundaryConditions!(problem, K, f, supp)
+    type = :null
+    if f.type == :f3D
+        type = :u3D
+    elseif f.type == :f2D
+        type = :u2D
+    else
+        error("solveDisplacement: wrong type of 'f': ($(f.type))")
+    end
+    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type)
+end
+
+"""
     FEM.solveStrain(problem, q; DoFResults=false)
 
 Solves the strain field `E` from displacement vector `q`. Strain field is given
