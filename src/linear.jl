@@ -1023,10 +1023,16 @@ function loadVector(problem, loads)
         type = :f3D
     elseif pdim == 2
         type = :f2D
+    elseif pdim == 1
+        type = :qn
     else
         error("loadVector: wrong pdim ($pdim).")
     end
-    return VectorField([], reshape(fp, :, 1), [], [], 1, type)
+    if type == :f3D || type == :f2D
+        return VectorField([], reshape(fp, :, 1), [], [], 1, type)
+    elseif type == :qn
+        return ScalarField([], reshape(fp, :, 1), [], [], 1, type)
+    end
 end
 
 """
@@ -1153,7 +1159,7 @@ Types:
 - `stiffMat`: SparseMatrix 
 - `massMat`: SparseMatrix 
 - `dampMat`: SparseMatrix 
-- `loadVec`: Vector{Float64}
+- `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports; fix=1)

@@ -616,7 +616,7 @@ Return: `heatConvVec`
 Types:
 - `problem`: Problem
 - `heatConvection`: Vector{Tuple{String, Float64, Float64, Float64}}
-- `heatConvVec`: Vector
+- `heatConvVec`: ScalarField
 """
 function heatConvectionVector(problem, heatConvection)
     if !isa(heatConvection, Vector)
@@ -913,7 +913,9 @@ function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
     hf0 = heatConvectionVector(problem, heatConv)
     C0 = heatConvectionMatrix(problem, heatConv)
     heatCondMat .+= C0
-    heatFluxVec .+= hf0
+    #heatFluxVec .+= hf0
+    heatFluxVec.a .+= hf0.a
+    #heatFluxVec = heatFluxVec + hf0
     return nothing
 end
 
@@ -931,7 +933,13 @@ Types:
 - `T`: Vector{Float64}
 """
 function solveTemperature(K, q)
-    return K \ q
+    type = :null
+    if q.type == :qn
+        type = :T
+    else
+        error("solveTemperature: wrong type of 'q': ($(q.type))")
+    end
+    return ScalarField([], reshape(K \ q.a, :, 1), [0.0], [], 1, type)
 end
 
 """
@@ -952,8 +960,14 @@ function solveTemperature(problem, flux, temp)
     K = heatConductionMatrix(problem)
     q = heatFluxVector(problem, flux)
     #applyHeatConvection!(problem, K, q, temp)
-    applyBoundaryConditions(problem, K, q, temp)
-    return K \ q
+    applyBoundaryConditions!(problem, K, q, temp)
+    type = :null
+    if q.type == :qn
+        type = :T
+    else
+        error("solveTemperature: wrong type of 'q': ($(q.type))")
+    end
+    return ScalarField([], reshape(K \ q.a, :, 1), [0.0], [], 1, type)
 end
 
 """
@@ -975,8 +989,14 @@ function solveTemperature(problem, flux, temp, heatconv)
     K = heatConductionMatrix(problem)
     q = heatFluxVector(problem, flux)
     applyHeatConvection!(problem, K, q, heatconv)
-    applyBoundaryConditions(problem, K, q, temp)
-    return K \ q
+    applyBoundaryConditions!(problem, K, q, temp)
+    type = :null
+    if q.type == :qn
+        type = :T
+    else
+        error("solveTemperature: wrong type of 'q': ($(q.type))")
+    end
+    return ScalarField([], reshape(K \ q.a, :, 1), [0.0], [], 1, type)
 end
 
 """
@@ -998,8 +1018,17 @@ Types:
 function solveHeatFlux(problem, T; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
 
+    if !isa(T, ScalarField) 
+        error("solveHeatFlux:argument must be a ScalarField. Now it is '$(typeof(T))'.")
+    end
+    if T.type != :T
+        error("solveHeatFlux: argument must be a temperature vector (ScalarField). Now it is '$(q.type)'.")
+    end
+    if T.A != []
+        error("solveStrain: T.A != []")
+    end
+    nsteps = T.nsteps
     type = :q
-    nsteps = size(T, 2)
     σ = []
     numElem = Int[]
     dim = problem.dim
@@ -1107,7 +1136,7 @@ function solveHeatFlux(problem, T; DoFResults=false)
                         if rowsOfB == 3 && pdim == 1
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
-                                s0 = B1 * T[nn2, kk] * kT
+                                s0 = B1 * T.a[nn2, kk] * kT
                                 s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], s0[3]]
                                 if DoFResults == true
                                     #q1[dim*nnet[j, k]-2, kk] += s0[1]
@@ -1119,7 +1148,7 @@ function solveHeatFlux(problem, T; DoFResults=false)
                         elseif rowsOfB == 2 && pdim == 1
                             B1 = B[k*rowsOfB-1:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
-                                s0 = B1 * T[nn2, kk] * kT
+                                s0 = B1 * T.a[nn2, kk] * kT
                                 s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], 0]
                                 if DoFResults == true
                                     #q1[dim*nnet[j, k]-1, kk] += s0[1]
@@ -1149,9 +1178,9 @@ function solveHeatFlux(problem, T; DoFResults=false)
         end
     end
     if DoFResults == true
-        return q1
+        return VectorField([], q1, T.t, [], nsteps, type)
     else
-        sigma = VectorField(σ, numElem, nsteps, type)
+        sigma = VectorField(σ, [;;], T.t, numElem, nsteps, type)
         return sigma
     end
 end

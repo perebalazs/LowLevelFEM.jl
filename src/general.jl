@@ -424,6 +424,16 @@ struct TensorField
 end
 
 import Base.copy
+function copy(A::ScalarField)
+    a = copy(A.A)
+    b = copy(A.a)
+    c = copy(A.t)
+    d = copy(A.numElem)
+    e = copy(A.nsteps)
+    f = A.type
+    return ScalarField(a, b, c, d, e, f)
+end
+
 function copy(A::VectorField)
     a = copy(A.A)
     b = copy(A.a)
@@ -432,6 +442,16 @@ function copy(A::VectorField)
     e = copy(A.nsteps)
     f = A.type
     return VectorField(a, b, c, d, e, f)
+end
+
+function copy(A::TensorField)
+    a = copy(A.A)
+    b = copy(A.a)
+    c = copy(A.t)
+    d = copy(A.numElem)
+    e = copy(A.nsteps)
+    f = A.type
+    return TensorField(a, b, c, d, e, f)
 end
 
 """
@@ -935,11 +955,157 @@ function det(A::TensorField)
 end
 
 import Base.+
+function +(A::ScalarField, B::ScalarField)
+    if length(A.A) != 0 && length(B.A) != 0
+        if A.type == B.type
+            if length(A.A) != length(B.A)
+                error("+(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            end
+            nsteps = A.nsteps
+            nsteps2 = B.nsteps
+            if nsteps != nsteps2
+                error("+(A::ScalarField, B::ScalarField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+            end
+            sec = intersect(A.numElem, B.numElem)
+            ind1 = []
+            ind2 = []
+            sizehint!(ind1, length(sec))
+            sizehint!(ind2, length(sec))
+            for i in sec
+                append!(ind1, findall(j -> j == i, A.numElem))
+                append!(ind2, findall(j -> j == i, B.numElem))
+            end
+            dif1 = setdiff(A.numElem, B.numElem)
+            ind3 = []
+            sizehint!(ind3, length(dif1))
+            for i in dif1
+                append!(ind3, findall(j -> j == i, A.numElem))
+            end
+            dif2 = setdiff(B.numElem, A.numElem)
+            ind4 = []
+            sizehint!(ind4, length(dif2))
+            for i in dif2
+                append!(ind4, findall(j -> j == i, B.numElem))
+            end
+            C = []
+            num = []
+            sizehint!(C, length(sec) + length(dif1) + length(dif2))
+            sizehint!(num, length(sec) + length(dif1) + length(dif2))
+            for i in eachindex(sec)
+                #n = length(A.A[i]) ÷ 9
+                #m = length(B.A[i]) ÷ 9
+                #if n != m
+                #    error("+(A::VectorField, B::VectorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
+                #end
+                D = A.A[i] + B.A[i]
+                append!(num, sec[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif1)
+                D = A.A[i]
+                append!(num, dif1[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif2)
+                D = B.A[i]
+                append!(num, dif2[i])
+                push!(C, D)
+            end
+            a = [;;]
+            return ScalarField(C, a, A.t, num, A.nsteps, A.type)
+        else
+            error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
+        end
+    elseif length(A.a) != 0 && length(B.a) != 0
+        if A.type == B.type
+            return ScalarField([], A.a + B.a, A.t, [], A.nsteps, A.type)
+        else
+            error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
+        end
+    else
+        error("+(ScalarField, ScalarField): internal error")
+    end
+end
+
+import Base.-
+function -(A::ScalarField, B::ScalarField)
+    if length(A.A) != 0 && length(B.A) != 0
+        if A.type == B.type
+            if length(A.A) != length(B.A)
+                error("-(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            end
+            nsteps = A.nsteps
+            nsteps2 = B.nsteps
+            if nsteps != nsteps2
+                error("-(A::ScalarField, B::ScalarField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+            end
+            sec = intersect(A.numElem, B.numElem)
+            ind1 = []
+            ind2 = []
+            sizehint!(ind1, length(sec))
+            sizehint!(ind2, length(sec))
+            for i in sec
+                append!(ind1, findall(j -> j == i, A.numElem))
+                append!(ind2, findall(j -> j == i, B.numElem))
+            end
+            dif1 = setdiff(A.numElem, B.numElem)
+            ind3 = []
+            sizehint!(ind3, length(dif1))
+            for i in dif1
+                append!(ind3, findall(j -> j == i, A.numElem))
+            end
+            dif2 = setdiff(B.numElem, A.numElem)
+            ind4 = []
+            sizehint!(ind4, length(dif2))
+            for i in dif2
+                append!(ind4, findall(j -> j == i, B.numElem))
+            end
+            C = []
+            num = []
+            sizehint!(C, length(sec) + length(dif1) + length(dif2))
+            sizehint!(num, length(sec) + length(dif1) + length(dif2))
+            for i in eachindex(sec)
+                #n = length(A.A[i]) ÷ 9
+                #m = length(B.A[i]) ÷ 9
+                #if n != m
+                #    error("+(A::VectorField, B::VectorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
+                #end
+                D = A.A[i] - B.A[i]
+                append!(num, sec[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif1)
+                D = A.A[i]
+                append!(num, dif1[i])
+                push!(C, D)
+            end
+            for i in eachindex(dif2)
+                D = -B.A[i]
+                append!(num, dif2[i])
+                push!(C, D)
+            end
+            a = [;;]
+            return ScalarField(C, a, A.t, num, A.nsteps, A.type)
+        else
+            error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
+        end
+    elseif length(A.a) != 0 && length(B.a) != 0
+        if A.type == B.type
+            return ScalarField([], A.a - B.a, A.t, [], A.nsteps, A.type)
+        else
+            error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
+        end
+    else
+        error("+(ScalarField, ScalarField): internal error")
+    end
+end
+
+import Base.+
 function +(A::VectorField, B::VectorField)
     if length(A.A) != 0 && length(B.A) != 0
         if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
             if length(A.A) != length(B.A)
-                error("+(A::TensoeField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+                error("+(A::VectorField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
             end
             nsteps = A.nsteps
             nsteps2 = B.nsteps
@@ -1017,7 +1183,7 @@ function -(A::VectorField, B::VectorField)
             nsteps = A.nsteps
             nsteps2 = B.nsteps
             if nsteps != nsteps2
-                error("-(A::TensoeField, B::VectorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+                error("-(A::VectorField, B::VectorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
             end
             sec = intersect(A.numElem, B.numElem)
             ind1 = []
