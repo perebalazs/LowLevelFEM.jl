@@ -1720,7 +1720,7 @@ Types:
 - `T₀`: Vector{Float64}
 - `S`: TensorField or Matrix{Float64}
 """
-function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
+function solveStress(problem, q; T=ScalarField([],[;;],[],[],0,:null), T₀=ScalarField([],reshape(zeros(problem.non),:,1),[0],[],1,:T), DoFResults=false)
     gmsh.model.setCurrent(problem.name)
     
     if !isa(q, VectorField) 
@@ -1741,9 +1741,9 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
     dim = problem.dim
     pdim = problem.pdim
     non = problem.non
-    if T₀ == 1im
-        T₀ = zeros(problem.non)
-    end
+    #if T₀ == 1im
+    #    T₀ = zeros(problem.non)
+    #end
     if DoFResults == true
         S1 = zeros(non * 9, nsteps)
         pcs = zeros(Int64, non * dim)
@@ -1792,6 +1792,7 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
             dim = 2
             rowsOfB = 4
             b = 1
+            E0 = [1,1,1,0]
         else
             error("solveStress: dimension is $(problem.dim), problem type is $(problem.type).")
         end
@@ -1884,8 +1885,8 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                             B1 = B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
-                                if T != 1im
-                                    s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
                                 end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
@@ -1901,8 +1902,8 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
-                                if T != 1im
-                                    s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
                                 end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
@@ -1918,8 +1919,8 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
-                                if T != 1im
-                                    s0 -= D * E0 * H1 * (T[nn1, kk] - T₀[nn1]) * α
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
                                 end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
@@ -1932,9 +1933,13 @@ function solveStress(problem, q; T=1im, T₀=1im, DoFResults=false)
                                 end
                             end
                         elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                            H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                             B1 = B[k*4-3:k*4, 1:2*numNodes]
                             for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
                                         s0[4], s0[3], 0,

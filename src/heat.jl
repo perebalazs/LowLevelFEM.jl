@@ -637,27 +637,29 @@ Types:
 - `problem`: Problem
 - `T`: Vector{Float64}
 - `T₀`: Vector{Float64}
-- `thermLoadVec`: Vector{Float64}
+- `thermLoadVec`: VectorField
 """
-function thermalLoadVector(problem, T; T₀=1im)
+#function thermalLoadVector(problem, T; T₀=1im)
+function thermalLoadVector(problem, T; T₀=ScalarField([], zeros(problem.non, 1), [0], [], 1, :T))
     if problem.type == :AxiSymmetric
-        return thermalLoadVectorAXI(problem, T, T₀=T₀)
+        return thermalLoadVectorAXI(problem, T, T₀)
     else
-        return thermalLoadVectorSolid(problem, T, T₀=T₀)
+        return thermalLoadVectorSolid(problem, T, T₀)
     end
 end
 
-function thermalLoadVectorSolid(problem, T; T₀=1im)
+#function thermalLoadVectorSolid(problem, T; T₀=1im)
+function thermalLoadVectorSolid(problem, T, T₀)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     dim = problem.dim
     pdim = problem.pdim
     dof = problem.non * pdim
     fT = zeros(dof)
-    if T₀ == 1im
-        T₀ = zeros(problem.non)
-    end
-    if size(T) != size(T₀) || size(T,1) != problem.non
+    #if T₀ == 1im
+    #    T₀ = zeros(problem.non)
+    #end
+    if size(T.a) != size(T₀.a) || size(T.a,1) != problem.non
         error("thermalLoadVectorSolid: size of T [$(size(T))] != size of T₀ [$(size(T₀))], non=$(problem.non)")
     end
 
@@ -765,27 +767,32 @@ function thermalLoadVectorSolid(problem, T; T₀=1im)
                     for k in 1:numIntPoints
                         H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
-                        f1 += B1' * D * E0 * H1 * (T[nn1] - T₀[nn1]) * b * jacDet[k] * intWeights[k]
+                        f1 += B1' * D * E0 * H1 * (T.a[nn1] - T₀.a[nn1]) * b * jacDet[k] * intWeights[k]
                     end
                     fT[nn2] += f1
                 end
             end
         end
     end
-    return fT
+    if pdim == 3
+        type = :f3D
+    elseif pdim == 2
+        type = :f2D
+    end
+    return VectorField([], reshape(fT, :, 1), [0], [], 1, type)
 end
 
-function thermalLoadVectorAXI(problem, T; T₀=1im)
+function thermalLoadVectorAXI(problem, T, T₀)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     dim = problem.dim
     pdim = problem.pdim
     dof = problem.non * pdim
     fT = zeros(dof)
-    if T₀ == 1im
-        T₀ = zeros(problem.non)
-    end
-    if size(T) != size(T₀) || size(T,1) != problem.non
+    #if T₀ == 1im
+    #    T₀ = zeros(problem.non)
+    #end
+    if size(T.a) != size(T₀.a) || size(T.a,1) != problem.non
         error("thermalLoadVectorSolid: size of T [$(size(T))] != size of T₀ [$(size(T₀))], non=$(problem.non)")
     end
     ncoord2 = zeros(3 * problem.non)
@@ -879,14 +886,14 @@ function thermalLoadVectorAXI(problem, T; T₀=1im)
                     for k in 1:numIntPoints
                         H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
-                        f1 += 2π * B1' * D * E0  * H1 * (T[nn1] - T₀[nn1]) * b * r[k] * jacDet[k] * intWeights[k]
+                        f1 += 2π * B1' * D * E0  * H1 * (T.a[nn1] - T₀.a[nn1]) * b * r[k] * jacDet[k] * intWeights[k]
                     end
                     fT[nn2] += f1
                 end
             end
         end
     end
-    return fT
+    return VectorField([], reshape(fT, :, 1), [0], [], 1, :f2D)
 end
 
 """
