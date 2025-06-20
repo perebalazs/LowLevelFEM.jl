@@ -2225,7 +2225,9 @@ function elementsToNodes(problem, S)
     non = problem.non
     if type == :s || type == :e || type == :F
         epn = 9
-    elseif type == :q
+    elseif type == :q3D
+        epn = 3
+    elseif type == :q2D
         epn = 3
     else
         error("elementsToNodes: type is $type .")
@@ -2243,8 +2245,7 @@ function elementsToNodes(problem, S)
     for l in 1:non
         s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
     end
-    if type == :q
-        type = :q3D
+    if type == :q3D || type == :q2D
         return VectorField([], s, S.t, [], S.nsteps, type)
     elseif type == :e || type == :s
         return TensorField([], s, S.t, [], S.nsteps, type)
@@ -2264,7 +2265,7 @@ Return: `e`
 Types:
 - `problem`: Problem
 - `F`: TensorField or VectorField
-- `e`: Matrix{Float64}
+- `e`: ScalarField
 """
 function fieldError(problem, S)
     gmsh.model.setCurrent(problem.name)
@@ -2276,7 +2277,9 @@ function fieldError(problem, S)
     non = problem.non
     if type == :s || type == :e
         epn = 9
-    elseif type == :q
+    elseif type == :q3D
+        epn = 3
+    elseif type == :q2D
         epn = 3
     else
         error("fieldError: type is $type .")
@@ -2307,7 +2310,13 @@ function fieldError(problem, S)
         res[epn * (l - 1) + 1: epn * l, :] /= pcs[l]
         res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(res[epn * (l - 1) + 1: epn * l, :]) # ./ m
     end
-    return res
+    if type == :q3D || type == :q2D
+        return VectorField([], res, S.t, [], S.nsteps, type)
+    elseif type == :e || type == :s
+        return TensorField([], res, S.t, [], S.nsteps, type)
+    else
+        error("elementsToNodes: internal error, type=$type.")
+    end
 end
 
 """
@@ -2322,7 +2331,7 @@ the integral of the field is solved. `field` must have only one component.
 If `grad` is `true`, then the gradient of the `field` will be evaluated and `component` of the gradient
 (`:x`, `:y` or `:z`) will be used to solve the resultant.
 
-Return: `res``
+Return: `res`
 
 or
 
@@ -2781,14 +2790,13 @@ function showBucklingResults(problem, Φ::Eigen; name="buckling", visible=false,
 end
 
 """
-    FEM.showStrainResults(problem, E, comp; t=..., name=..., visible=..., smooth=...)
+    FEM.showStrainResults(problem, E, comp; name=..., visible=..., smooth=...)
 
 Loads strain results into a View in gmsh. `E` is a strain field to show, `comp` is
 the component of the field (:e, :ex, :ey, :ez, :exy, :eyz, :ezx),
-`t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
-smoothing the stress field on or off. If length of `t` is more than one, then a 
+smoothing the stress field on or off. If `E` contains more than one time steps, then a 
 sequence of results will be shown (eg. as an animation). This function returns
 the tag of View.
 
@@ -2798,21 +2806,21 @@ Types:
 - `problem`: Problem
 - `E`: TensorField
 - `comp`: Symbol
-- `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, smooth=true)
+function showStrainResults(problem, E, comp; name=comp, visible=false, smooth=true)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
     #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
     #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
+    t = E.t
     if E.nsteps != length(t)
-        error("showStrainResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
+        error("showStrainResults: number of time steps missmatch ($(E.nsteps) <==> $(length(t))).")
     end
     EE = gmsh.view.add(name)
     if E.A == []
@@ -2875,7 +2883,7 @@ function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, 
 end
 
 """
-    FEM.showElementResults(problem, F, comp; t=..., name=..., visible=..., smooth=...)
+    FEM.showElementResults(problem, F, comp; name=..., visible=..., smooth=...)
 
 Same as `ShowStressResults` or `showStrainResults`, depending on the type of `F` data field.
 
@@ -2885,7 +2893,6 @@ Types:
 - `problem`: Problem
 - `F`: TensorField
 - `comp`: Symbol
-- `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
 - `smooth`: Boolean
@@ -2893,25 +2900,24 @@ Types:
 """
 function showElementResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
     if F.type == :e
-        return showStrainResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
+        return showStrainResults(problem, F, comp; name=comp, visible=false, smooth=smooth)
     elseif F.type == :s
-        return showStressResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
-    elseif F.type == :q
-        return showHeatFluxResults(problem, F, comp; t=t, name=comp, visible=false, smooth=smooth)
+        return showStressResults(problem, F, comp; name=comp, visible=false, smooth=smooth)
+    elseif F.type == :q2D || F.type == :q3D
+        return showHeatFluxResults(problem, F, comp; name=comp, visible=false, smooth=smooth)
     else
-        error("showElementResults: type is '$type'")
+        error("showElementResults: type is '$(F.type)'")
     end
 end
 
 """
-    FEM.showStressResults(problem, S, comp; t=..., name=..., visible=..., smooth=...)
+    FEM.showStressResults(problem, S, comp; name=..., visible=..., smooth=...)
 
 Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
 the component of the field (:s, :sx, :sy, :sz, :sxy, :syz, :szx, :seqv),
-`t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
-smoothing the stress field on or off. If length of `t` is more than one, then a 
+smoothing the stress field on or off. If `S` contains more than one time steps, then a 
 sequence of results will be shown (eg. as an animation). This function returns
 the tag of View.
 
@@ -2921,17 +2927,17 @@ Types:
 - `problem`: Problem
 - `S`: TensorField
 - `comp`: Symbol
-- `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
+function showStressResults(problem, S, comp; name=comp, visible=false, smooth=true)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
+    t = S.t
     #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
     #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
     if S.nsteps != length(t)
@@ -3015,14 +3021,13 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
 end
 
 """
-    FEM.showHeatFluxResults(problem, Q, comp; t=..., name=..., visible=..., smooth=...)
+    FEM.showHeatFluxResults(problem, Q, comp; name=..., visible=..., smooth=...)
 
 Loads heat flux results into a View in gmsh. `Q` is a heat flux field to show, `comp` is
 the component of the field (:qvec, :qx, :qy, :qz, :q),
-`t` is a vector of time steps (same length as the number of stress states),
 `name` is a title to display, `visible` is a true or false value to toggle on or
 off the initial visibility in gmsh and `smooth` is a true of false value to toggle
-smoothing the stress field on or off. If length of `t` is more than one, then a 
+smoothing the stress field on or off. If `Q` contains more than one time steps, then a 
 sequence of results will be shown (eg. as an animation). This function returns
 the tag of View.
 
@@ -3030,19 +3035,19 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `S`: TensorField
+- `S`: VectorField
 - `comp`: Symbol
-- `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false, smooth=true)
+function showHeatFluxResults(problem, S, comp; name=comp, visible=false, smooth=true)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
+    t = S.t
     #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
     #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
     if S.nsteps != length(t)

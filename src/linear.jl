@@ -2172,12 +2172,13 @@ Return: u0
 Types:
 - `problem`: Problem
 - `name`: String 
-- `u0`: Vector{Float64}
+- `u0`: VectorField
 - `ux`: Float64 
 - `uy`: Float64 
 - `uz`: Float64 
 """
-function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im)
+function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im, type=:u)
+    pdim = problem.pdim
     dim = problem.dim
     u0 = zeros(problem.non * problem.dim)
     phg = getTagForPhysicalName(name)
@@ -2197,7 +2198,14 @@ function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im)
             u0[nodeTags[i]*dim] = uz
         end
     end
-    return u0
+    if pdim == 3
+        type = Symbol(String(type) * "3D")
+    elseif pdim == 2
+        type = Symbol(String(type) * "2D")
+    else
+        error("initialDisplacement: wrong pdim=$pdim")
+    end
+    return VectorField([], reshape(u0, :,1), [0], [], 1, type)
 end
 
 """
@@ -2215,25 +2223,26 @@ Types:
 - `ux`: Float64 
 - `uy`: Float64 
 - `uz`: Float64 
-- `u0`: Vector{Float64}
+- `u0`: VectorField
 """
-function initialDisplacement!(problem, name, u0; ux=1im, uy=1im, uz=1im)
+function initialDisplacement!(problem, name, u0; ux=1im, uy=1im, uz=1im, type=:u)
+    pdim = problem.pdim
     dim = problem.dim
     phg = getTagForPhysicalName(name)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
     if ux != 1im
         for i in 1:length(nodeTags)
-            u0[nodeTags[i]*dim-(dim-1)] = ux
+            u0.a[nodeTags[i]*dim-(dim-1)] = ux
         end
     end
     if uy != 1im
         for i in 1:length(nodeTags)
-            u0[nodeTags[i]*dim-(dim-2)] = uy
+            u0.a[nodeTags[i]*dim-(dim-2)] = uy
         end
     end
     if dim == 3 && uz != 1im
         for i in 1:length(nodeTags)
-            u0[nodeTags[i]*dim] = uz
+            u0.a[nodeTags[i]*dim] = uz
         end
     end
 end
@@ -2253,10 +2262,10 @@ Types:
 - `vx`: Float64 
 - `vy`: Float64 
 - `vz`: Float64 
-- `v0`: Vector{Float64}
+- `v0`: VectorField
 """
 function initialVelocity(problem, name; vx=1im, vy=1im, vz=1im)
-    return initialDisplacement(problem, name, ux=vx, uy=vy, uz=vz)
+    return initialDisplacement(problem, name, ux=vx, uy=vy, uz=vz, type=:v)
 end
 
 """
@@ -2437,22 +2446,21 @@ The critical (largest allowed) time step is `Δtₘₐₓ = Tₘᵢₙ / π * (�
 where `Tₘᵢₙ` is the time period of the largest eigenfrequency and `ξₘₐₓ` is the largest
 modal damping.
 
-Return: `u`, `v`, `t`
+Return: `u`, `v`
 
 Types:
 - `K`: SparseMatrix
 - `M`: SparseMatrix
 - `C`: SparseMatrix
-- `f`: Vector{Float64}
-- `u0`: Vector{Float64}
-- `v0`: Vector{Float64}
+- `f`: VectorField
+- `u0`: VectorField
+- `v0`: VectorField
 - `T`: Float64
 - `Δt`: Float64 
-- `u`: Matrix{Float64}
-- `v`: Matrix{Float64}
-- `t`: Vector{Float64}
+- `u`: VectorField
+- `v`: VectorField
 """
-function CDM(K, M, C, f, u0, v0, T, Δt)
+function CDM(K, M, C, f, uu0, vv0, T, Δt)
     invM = spdiagm(1 ./ diag(M))
     nsteps = ceil(Int64, T / Δt)
     dof, dof = size(K)
@@ -2460,32 +2468,33 @@ function CDM(K, M, C, f, u0, v0, T, Δt)
     u = zeros(dof, nsteps)
     v = zeros(dof, nsteps)
     t = zeros(nsteps)
-    kene = zeros(nsteps)
-    sene = zeros(nsteps)
+    #kene = zeros(nsteps)
+    #sene = zeros(nsteps)
     diss = zeros(nsteps)
 
-    a0 = M \ (f - K * u0 - C * v0)
-    u00 = u0 - v0 * Δt + a0 * Δt^2 / 2
+    a0 = M \ (f.a - K * uu0.a - C * vv0.a)
+    u00 = uu0.a - vv0.a * Δt + a0 * Δt^2 / 2
 
-    u[:, 1] = u0
-    v[:, 1] = v0
+    u[:, 1] = uu0.a
+    v[:, 1] = vv0.a
     t[1] = 0
-    kene[1] = dot(v0' * M, v0) / 2
-    sene[1] = dot(u0' * K, u0) / 2
+    #kene[1] = dot(v0' * M, v0) / 2
+    #sene[1] = dot(u0' * K, u0) / 2
+    u0 = uu0.a[:,1]
 
     for i in 2:nsteps
-        u1 = 2.0 * u0 - u00 + Δt * Δt * invM * (f - K * u0) - Δt * invM * (C * (u0 - u00))
+        u1 = 2.0 * u0 - u00 + Δt * Δt * invM * (f.a - K * u0) - Δt * invM * (C * (u0 - u00))
         u[:, i] = u1
         v1 = (u1 - u0) / Δt
         v[:, i] = v1
         t[i] = t[i-1] + Δt
-        kene[i] = dot(v1' * M, v1) / 2
-        sene[i] = dot(u1' * K, u1) / 2
+        #kene[i] = dot(v1' * M, v1) / 2
+        #sene[i] = dot(u1' * K, u1) / 2
         #diss[i] = dot(v1' * C, v1)
         u00 = u0
         u0 = u1
     end
-    return u, v, t
+    return VectorField([], u, t, [], length(t), uu0.type), VectorField([], v, t, [], length(t), vv0.type)
 end
 
 function CDM(K, M, f, u0, v0, T, Δt)

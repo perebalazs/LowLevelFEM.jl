@@ -564,7 +564,7 @@ Return: `heatFluxVec`
 Types:
 - `problem`: Problem
 - `heatFlux`: Vector{Tuple{String, Float64, Float64, Float64}}
-- `heatFluxVec`: Vector
+- `heatFluxVec`: VectorField
 """
 function heatFluxVector(problem, loads)
     if !isa(loads, Vector)
@@ -593,7 +593,7 @@ Return: `heatSourceVec`
 Types:
 - `problem`: Problem
 - `heatSource`: Vector{Tuple{String, Float64, Float64, Float64}}
-- `heatSourceVec`: Vector
+- `heatSourceVec`: VectorField
 """
 function heatSourceVector(problem, loads)
     if !isa(loads, Vector)
@@ -1019,8 +1019,8 @@ Return: `q`
 
 Types:
 - `problem`: Problem
-- `T`: Vector{Float64}
-- `q`: VectorField or Matrix{Float}
+- `T`: ScalarField
+- `q`: VectorField
 """
 function solveHeatFlux(problem, T; DoFResults=false)
     gmsh.model.setCurrent(problem.name)
@@ -1183,6 +1183,11 @@ function solveHeatFlux(problem, T; DoFResults=false)
                 q1[k + dim * l - dim, :] ./= pcs[l]
             end
         end
+    end
+    if dim == 3
+        type = Symbol(String(type) * "3D")
+    elseif dim == 2
+        type = Symbol(String(type) * "2D")
     end
     if DoFResults == true
         return VectorField([], q1, T.t, [], nsteps, type)
