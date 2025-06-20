@@ -1902,16 +1902,17 @@ function scalarField(problem, dataField)
             end
         end
     end
-    return field
+    return ScalarField([], reshape(field, :, 1), [0], [], 1, :scalarInNodes)
 end
 
 """
-    FEM.vectorField(problem, dataField)
+    FEM.vectorField(problem, dataField; type=...)
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
-prescribed values or functions. Mesh details are in `problem`.
+prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
+eg. `:u` or `:f`.
 
-Return: Vector{Float64}
+Return: VectorField
 
 Types:
 - `problem`: Problem
@@ -1928,7 +1929,7 @@ qq = FEM.vectorField(problem, [ff1, ff2])
 qq0 = FEM.showDoFResults(problem, qq, :vector)
 ```
 """
-function vectorField(problem, dataField)
+function vectorField(problem, dataField; type=:u)
     if !isa(dataField, Vector)
         error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
     end
@@ -1979,16 +1980,24 @@ function vectorField(problem, dataField)
             end
         end
     end
-    return field
+    if pdim == 3
+        type = Symbol(String(type) * "3D")
+    elseif pdim == 2
+        type = Symbol(String(type) * "2D")
+    else
+        error("vectorField: dimension is $pdim")
+    end
+    return VectorField([], reshape(field, :,1), [0], [], 1, type)
 end
 
 """
-    FEM.tensorField(problem, dataField)
+    FEM.tensorField(problem, dataField; type=...)
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
-prescribed values or functions. Mesh details are in `problem`.
+prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
+eg. `:u` or `:f`.
 
-Return: Vector{Float64}
+Return: TensorField
 
 Types:
 - `problem`: Problem
@@ -2005,7 +2014,7 @@ qq = FEM.tensorField(problem, [ff1, ff2])
 qq0 = FEM.showDoFResults(problem, qq, :tensor)
 ```
 """
-function tensorField(problem, dataField)
+function tensorField(problem, dataField; type=:e)
     if !isa(dataField, Vector)
         error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
     end
@@ -2122,7 +2131,7 @@ function tensorField(problem, dataField)
             end
         end
     end
-    return field
+    return TensorField([], reshape(field, :,1), [0], [], 1, type)
 end
 
 """
@@ -2593,14 +2602,13 @@ function rotateNodes(problem, phName, CoordSys)
 end
 
 """
-    FEM.showDoFResults(problem, q, comp; t=..., name=..., visible=...)
+    FEM.showDoFResults(problem, q, comp; name=..., visible=...)
 
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
 the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
 :szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar),
-`t` is a vector of time steps (same number of columns as `q`), `name` is a
-title to display and `visible` is a true or false value to toggle on or off the 
+`name` is a title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. If `q` has more columns, then a sequence of results
 will be shown (eg. as an animation). This function returns the tag of View.
 
@@ -2608,7 +2616,7 @@ Return: `tag`
 
 Types:
 - `problem`: Problem
-- `q`: Vector{Matrix}
+- `q`: ScalarField, VectorField or TensorField
 - `comp`: Symbol
 - `t`: Vector{Float64}
 - `name`: String
@@ -2620,6 +2628,9 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     t = q.t
+    if q.a == [;;]
+        error("showDoFResults: No data")
+    end
     dim = problem.dim
     pdim = problem.pdim
     pdim = div(size(q.a,1), problem.non) 
@@ -2745,7 +2756,7 @@ Types:
 - `tag`: Integer
 """
 function showModalResults(problem, Φ::Eigen; name=:modal, visible=false, ff=1)
-    return showDoFResults(problem, Φ.ϕ, :uvec, t=Φ.f, name=name, visible=visible, ff=ff)
+    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D), :uvec, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -2766,7 +2777,7 @@ Types:
 - `tag`: Integer
 """
 function showBucklingResults(problem, Φ::Eigen; name="buckling", visible=false, ff=2)
-    return showDoFResults(problem, Φ.ϕ, :uvec, t=Φ.f, name=name, visible=visible, ff=ff)
+    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D), :uvec, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -2804,6 +2815,9 @@ function showStrainResults(problem, E, comp; t=[0.0], name=comp, visible=false, 
         error("showStrainResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     EE = gmsh.view.add(name)
+    if E.A == []
+        error("showStrainResults: No data")
+    end
     ε = E.A
     numElem = E.numElem
     for jj in 1:length(t)
@@ -2924,6 +2938,9 @@ function showStressResults(problem, S, comp; t=[0.0], name=comp, visible=false, 
         error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     SS = gmsh.view.add(name)
+    if S.A == []
+        error("showStressResults: No data")
+    end
     σ = S.A
     numElem = S.numElem
     for jj in 1:length(t)
@@ -3032,6 +3049,9 @@ function showHeatFluxResults(problem, S, comp; t=[0.0], name=comp, visible=false
         error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
     end
     SS = gmsh.view.add(name)
+    if S.A == []
+        error("showHeatFluxResults: No data")
+    end
     σ = S.A
     numElem = S.numElem
     for jj in 1:length(t)

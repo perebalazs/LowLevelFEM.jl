@@ -393,7 +393,7 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
                         error("nonLinearStiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     K1 .*= 0
-                    q1 = q[nn2]
+                    q1 = q.a[nn2]
                     for k in 1:numIntPoints
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
                         ∂H1 = ∂H[k*dim-(dim-1):k*dim, 1:numNodes]
@@ -2102,7 +2102,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
             Knl = nonLinearStiffnessMatrix(problem, q)
             applyBoundaryConditions!(problem, Knl, f, constraints)
             q = solveDisplacement(K + Knl, f)
-            err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
+            err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
         end
         if count == 10
             @warn("solveModalAnalysis: number of iterations is $count.")
@@ -2149,7 +2149,7 @@ function solveBuckling(problem, loads, constraints; n=6)
         Knl = nonLinearStiffnessMatrix(problem, q)
         applyBoundaryConditions!(problem, Knl, f, constraints)
         q = solveDisplacement(K + Knl, f)
-        err = sum(abs, q - q0) / (sum(abs, q0) == 0 ? 1 : sum(abs, q0))
+        err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
     end
     if count == 10
         @warn("solveBuckling: number of iterations is $count.")
