@@ -2228,7 +2228,7 @@ function elementsToNodes(problem, S)
     elseif type == :q3D
         epn = 3
     elseif type == :q2D
-        epn = 3
+        epn = 2
     else
         error("elementsToNodes: type is $type .")
     end
@@ -2898,7 +2898,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showElementResults(problem, F, comp; t=[0.0], name=comp, visible=false, smooth=true)
+function showElementResults(problem, F, comp; name=comp, visible=false, smooth=true)
     if F.type == :e
         return showStrainResults(problem, F, comp; name=comp, visible=false, smooth=smooth)
     elseif F.type == :s
@@ -3063,18 +3063,27 @@ function showHeatFluxResults(problem, S, comp; name=comp, visible=false, smooth=
 
         k = 1im
         if comp == :qvec
-            σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
+            σcomp = []
+            for i in eachindex(S.numElem)
+                es = length(σ[i][:,jj]) ÷ dim
+                aa = zeros(3es)
+                aa[1:3:3es] .= σ[i][1:dim:dim*es, jj]
+                aa[2:3:3es] .= σ[i][2:dim:dim*es, jj]
+                aa[2:3:3es] .= dim == 3 ? σ[i][3:dim:dim*es, jj] : zeros(es,1)
+                push!(σcomp, aa)
+            end
+            #σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
             nc = 3
         elseif comp == :q
             nc = 1
             σcomp = []
             sizehint!(σcomp, length(numElem))
             for i in 1:length(S.numElem)
-                seqv = zeros(div(size(σ[i], 1), 3))
-                for j in 1:(div(size(σ[i], 1), 3))
-                    sx = σ[i][3j-2, jj]
-                    sy = σ[i][3j-1, jj]
-                    sz = σ[i][3j-0, jj]
+                seqv = zeros(div(size(σ[i], 1), dim))
+                for j in 1:(div(size(σ[i], 1), dim))
+                    sx = σ[i][dim*j-(dim-1), jj]
+                    sy = σ[i][dim*j-(dim-2), jj]
+                    sz = dim == 3 ? σ[i][dim*j-(dim-3), jj] : 0
                     seqv[j] = √(sx^2+sy^2+sz^2)
                 end
                 push!(σcomp, seqv)
@@ -3082,20 +3091,20 @@ function showHeatFluxResults(problem, S, comp; name=comp, visible=false, smooth=
         else
             nc = 1
             if comp == :qx
-                k = 2
-            elseif comp == :qy
                 k = 1
-            elseif comp == :qz
-                k = 0
+            elseif comp == :qy
+                k = 2
+            elseif comp == :qz && dim == 3
+                k = 3
             else
                 error("ShowHeatFluxResults: component is $comp ????")
             end
             σcomp = []
             sizehint!(σcomp, length(numElem))
             for i in 1:length(S.numElem)
-                ss = zeros(div(size(σ[i], 1), 3))
-                for j in 1:(div(size(σ[i], 1), 3))
-                    ss[j] = σ[i][3j-k, jj]
+                ss = zeros(div(size(σ[i], 1), dim))
+                for j in 1:(div(size(σ[i], 1), dim))
+                    ss[j] = σ[i][dim*j-(dim-k), jj]
                 end
                 push!(σcomp, ss)
             end

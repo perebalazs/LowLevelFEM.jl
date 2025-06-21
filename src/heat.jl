@@ -1051,16 +1051,18 @@ function solveHeatFlux(problem, T; DoFResults=false)
         phName = problem.material[ipg].phName
         kT = -problem.material[ipg].k
         dim = 0
+        rowsOfB = 0
+        b = 0
         if problem.dim == 3 && problem.type == :HeatConduction
-            dim = 3
+            #dim = 3
             rowsOfB = 3
             b = 1
         elseif problem.dim == 2 && problem.type == :PlaneHeatConduction
-            dim = 2
+            #dim = 2
             rowsOfB = 2
             b = 1
         elseif problem.dim == 2 && problem.type == :AxiSymmetricHeatConduction
-            dim = 2
+            #dim = 2
             rowsOfB = 2
             b = 1
         else
@@ -1119,6 +1121,7 @@ function solveHeatFlux(problem, T; DoFResults=false)
                     for k in 1:numNodes, l in 1:numNodes
                         ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
                     end
+                    #display("dim=$dim")
                     B .*= 0
                     if pdim == 1 && rowsOfB == 2
                         for k in 1:numNodes, l in 1:numNodes
@@ -1138,29 +1141,31 @@ function solveHeatFlux(problem, T; DoFResults=false)
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
-                    s = zeros(3numNodes, nsteps) # vectors have three elements
+                    s = zeros(dim * numNodes, nsteps) # vectors have three elements
                     for k in 1:numNodes
                         if rowsOfB == 3 && pdim == 1
                             B1 = B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = B1 * T.a[nn2, kk] * kT
-                                s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], s0[3]]
+                                s[(k-1)*dim+1:k*dim, kk] = [s0[1], s0[2], s0[3]]
                                 if DoFResults == true
                                     #q1[dim*nnet[j, k]-2, kk] += s0[1]
                                     #q1[dim*nnet[j, k]-1, kk] += s0[2]
                                     #q1[dim*nnet[j, k]-0, kk] += s0[3]
-                                    q1[dim*nnet[j, k]-2:dim*nnet[j,k], kk] .+= s0
+                                    q1[dim*nnet[j, k]-(dim-1):dim*nnet[j,k], kk] .+= s0
                                 end
                             end
                         elseif rowsOfB == 2 && pdim == 1
                             B1 = B[k*rowsOfB-1:k*rowsOfB, 1:pdim*numNodes]
                             for kk in 1:nsteps
                                 s0 = B1 * T.a[nn2, kk] * kT
-                                s[(k-1)*3+1:k*3, kk] = [s0[1], s0[2], 0]
+                                s[(k-1)*dim+1:k*dim, kk] = [s0[1], s0[2]]
+                                #display("s0: $(size(s0))")
+                                #display("s: $(size(s))")
                                 if DoFResults == true
                                     #q1[dim*nnet[j, k]-1, kk] += s0[1]
                                     #q1[dim*nnet[j, k]-0, kk] += s0[2]
-                                    q1[dim*nnet[j, k]-1:dim*nnet[j,k], kk] .+= s0
+                                    q1[dim*nnet[j, k]-(dim-1):dim*nnet[j,k], kk] .+= s0
                                 end
                             end
                         else

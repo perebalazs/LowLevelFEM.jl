@@ -2537,7 +2537,7 @@ Types:
 - `v`: Matrix{Float64}
 - `t`: Vector{Float64}
 """
-function HHT(K, M, f, u0, v0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
     nsteps = ceil(Int64, T / Δt)
     dof, dof = size(K)
 
@@ -2560,33 +2560,35 @@ function HHT(K, M, f, u0, v0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.
     c6 = dt * (1.0 - γ)
     c7 = γ * dt
 
-    a0 = M \ (f - K * u0)
+    a0 = M \ (f.a - K * uu0.a)
 
-    u[:, 1] = u0
-    v[:, 1] = v0
+    u[:, 1] = uu0.a
+    v[:, 1] = vv0.a
     t[1] = 0
-    kene[1] = dot(v0' * M, v0) / 2
-    sene[1] = dot(u0' * K, u0) / 2
+    #kene[1] = dot(v0' * M, v0) / 2
+    #sene[1] = dot(u0' * K, u0) / 2
     
     A = (α + 1) * K + M * c0
     AA = lu(A)
 
+    u0 = uu0.a[:,1]
+    v0 = vv0.a[:,1]
     for i in 2:nsteps
-        b = f + M * (u0 * c0 + v0 * c2 + a0 * c3) + α * K * u0
+        b = f.a + M * (u0 * c0 + v0 * c2 + a0 * c3) + α * K * u0
         u1 = AA \ b
         u[:, i] = u1
         a1 = (u1 - u0) * c0 - v0 * c2 - a0 * c3
         v1 = v0 + a0 * c6 + a1 * c7
         v[:, i] = v1
         t[i] = t[i-1] + Δt
-        kene[i] = dot(v1' * M, v1) / 2
-        sene[i] = dot(u1' * K, u1) / 2
+        #kene[i] = dot(v1' * M, v1) / 2
+        #sene[i] = dot(u1' * K, u1) / 2
         #diss[i] = dot(v1' * C, v1)
         u0 = u1
         v0 = v1
         a0 = a1
     end
-    return u, v, t
+    return VectorField([], u, t, [], length(t), uu0.type), VectorField([], v, t, [], length(t), vv0.type)
 end
 
 """
