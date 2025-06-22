@@ -1214,7 +1214,7 @@ Types:
 - `problem`: Problem
 - `name`: String 
 - `T`: Float64 
-- `T0`: Vector{Float64}
+- `T0`: ScalarField
 """
 function initialTemperature(problem, name; T=1im)
     dim = problem.pdim
@@ -1226,7 +1226,7 @@ function initialTemperature(problem, name; T=1im)
             T0[nodeTags[i]*dim-(dim-1)] = T
         end
     end
-    return T0
+    return ScalarField([], reshape(T0, :,1), [0], [], 1, :T)
 end
 
 """
@@ -1240,7 +1240,7 @@ Return: none
 Types:
 - `problem`: Problem
 - `name`: String 
-- `T0`: Vector{Float64}
+- `T0`: ScalarField
 - `T`: Float64 
 """
 function initialTemperature!(problem, name, T0; T=1im)
@@ -1249,7 +1249,7 @@ function initialTemperature!(problem, name, T0; T=1im)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
     if T != 1im
         for i in 1:length(nodeTags)
-            T0[nodeTags[i]*dim-(dim-1)] = T
+            T0.a[nodeTags[i]*dim-(dim-1)] = T
         end
     end
 end
@@ -1275,30 +1275,30 @@ is 1/2.
 
 [^5]: Bathe, K. J.: Finite element procedures, Wiley, 1983, <https://doi.org/10.1002/nag.1610070412>
 
-Return: `T`, `t`
+Return: `T`
 
 Types:
 - `K`: SparseMatrix
 - `C`: SparseMatrix
-- `q`: Vector{Float64}
-- `T0`: Vector{Float64}
+- `q`: ScalarField
+- `T0`: ScalarField
 - `tₘₐₓ`: Float64
 - `Δt`: Float64 
-- `T`: Matrix{Float64}
-- `t`: Vector{Float64}
+- `T`: ScalarField
 """
-function FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
+function FDM(K, C, q, TT0, tₘₐₓ, Δt; ϑ=0.5)
     nnz = nonzeros(C)
     dof, dof = size(C)
     nsteps = ceil(Int64, tₘₐₓ / Δt)
     T = zeros(dof, nsteps)
     t = zeros(nsteps)
+    T0 = TT0.a
     T[:, 1] = T0
     t[1] = 0
     if ϑ == 0 && nnz == dof
         invC = spdiagm(1 ./ diag(C))
         for i in 2:nsteps
-            T1 = T0 - (1 - ϑ) * Δt * invC * K * T0 + Δt * invC * q
+            T1 = T0 - (1 - ϑ) * Δt * invC * K * T0 + Δt * invC * q.a
             T[:, i] = T1
             t[i] = t[i-1] + Δt
             T0 = T1
@@ -1308,7 +1308,7 @@ function FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
         b = C - (1 - ϑ) * Δt * K
         AA = lu(A)
         for i in 2:nsteps
-            bb = b * T0 + Δt * q
+            bb = b * T0 + Δt * q.a
             T1 = AA \ bb
             T[:, i] = T1
             t[i] = t[i-1] + Δt
@@ -1316,7 +1316,7 @@ function FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=0.5)
         end
     end
 
-    return T, t
+    return ScalarField([], T, t, [], length(t), :T)
 end
 
 """

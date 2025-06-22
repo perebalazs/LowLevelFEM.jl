@@ -2280,7 +2280,7 @@ function fieldError(problem, S)
     elseif type == :q3D
         epn = 3
     elseif type == :q2D
-        epn = 3
+        epn = 2
     else
         error("fieldError: type is $type .")
     end
