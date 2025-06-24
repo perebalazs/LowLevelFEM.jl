@@ -173,17 +173,27 @@ end
 
 import Base.*
 function *(A::Transformation, B)
-    n = size(B, 1)
-    m = size(B, 2)
+    if issparse(B)
+        n = size(B, 1)
+        m = size(B, 2)
+    elseif B isa VectorField || B isa TensorField
+        n = size(B.a, 1)
+        m = size(B.a, 2)
+    else
+            error("*(A::Transformation, B): B isa $(typeof(B))")
+    end
     non = A.non
     dim = A.dim
     if dim * non == n
         if issparse(B)
             return dropzeros(A.T * B)
+        elseif B isa VectorField && String(B.type)[2:3] == 2D && B.A == []
+            v =  A.T * B.a
+            return VectorField([], v, B.t, [], length(B), B.type)
         else
-            return A.T * B
+            error("*(A::Transformation, B::VectorField): B.type=$(B.type)")
         end
-    elseif 9non == n
+    elseif B isa TensorField && B.A == []
         C = zeros(3non, 3)
         D = zeros(3non, 3)
         E = zeros(n, m)
@@ -206,8 +216,10 @@ function *(A::Transformation, B)
             fn(x, y) = y
             T = sparse(I, J, V, 3non, 3non, fn)
             dropzeros!(T)
-        else
+        elseif dim == 3
             T = A.T
+        else
+            error("*(A::Transformation, B::TensoeField): dim of A is $dim")
         end
         for k in 1:m
             for i in 1:non
@@ -222,7 +234,7 @@ function *(A::Transformation, B)
                 end
             end
         end
-        return E
+        return TensorField([], E, B.t, [], length(B.t), B.type)
     else
         error("*(A::Transformation, B): size missmatch dim * non = $dim * $non ≠ $n.")
     end
