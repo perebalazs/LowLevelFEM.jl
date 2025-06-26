@@ -172,127 +172,25 @@ function adjoint(A::Transformation)
 end
 
 import Base.*
-function *(A::Transformation, B)
-    if issparse(B)
-        n = size(B, 1)
-        m = size(B, 2)
-    elseif B isa VectorField || B isa TensorField
-        n = size(B.a, 1)
-        m = size(B.a, 2)
-    else
-            error("*(A::Transformation, B): B isa $(typeof(B))")
-    end
+function *(A::Transformation, B::SparseMatrixCSC)
+    n = size(B, 1)
     non = A.non
     dim = A.dim
     if dim * non == n
-        if issparse(B)
-            return dropzeros(A.T * B)
-        elseif B isa VectorField && String(B.type)[2:3] == 2D && B.A == []
-            v =  A.T * B.a
-            return VectorField([], v, B.t, [], length(B), B.type)
-        else
-            error("*(A::Transformation, B::VectorField): B.type=$(B.type)")
-        end
-    elseif B isa TensorField && B.A == []
-        C = zeros(3non, 3)
-        D = zeros(3non, 3)
-        E = zeros(n, m)
-        T = []
-        I = []
-        J = []
-        V = Float64[]
-        T1 = zeros(9)
-        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
-        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
-        if dim == 2
-            for i in 1:non
-                T1 = [A.T[2i-1, 2i-1], A.T[2i, 2i-1], 0, A.T[2i-1, 2i], A.T[2i, 2i], 0, 0, 0, 1]
-                Idx = I0 .+ (3i - 3)
-                Jdx = J0 .+ (3i - 3)
-                append!(I, Idx)
-                append!(J, Jdx)
-                append!(V, T1)
-            end
-            fn(x, y) = y
-            T = sparse(I, J, V, 3non, 3non, fn)
-            dropzeros!(T)
-        elseif dim == 3
-            T = A.T
-        else
-            error("*(A::Transformation, B::TensoeField): dim of A is $dim")
-        end
-        for k in 1:m
-            for i in 1:non
-                for j = 1:3
-                    C[3i-2:3i, j] = B[9i-9+3j-2:9i-9+3j, k]
-                end
-            end
-            D = T * C
-            for i in 1:non
-                for j = 1:3
-                    E[9i-9+3j-2:9i-9+3j, k] = D[3i-2:3i, j]
-                end
-            end
-        end
-        return TensorField([], E, B.t, [], length(B.t), B.type)
+        return dropzeros(A.T * B)
     else
-        error("*(A::Transformation, B): size missmatch dim * non = $dim * $non ≠ $n.")
+        error("*(A::Transformation, B::SparseMatrixCSC): size missmatch dim * non = $dim * $non ≠ $n.")
     end
 end
 
-function *(B, A::Transformation)
+function *(B::SparseMatrixCSC, A::Transformation)
     n = size(B, 1)
-    m = size(B, 2)
     non = A.non
     dim = A.dim
     if dim * non == n
-        if issparse(B)
-            return dropzeros(A.T * B)
-        else
-            return A.T * B
-        end
-    elseif 9non == n
-        C = zeros(3, 3non)
-        D = zeros(3, 3non)
-        E = zeros(n, m)
-        T = []
-        I = []
-        J = []
-        V = Float64[]
-        T1 = zeros(9)
-        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
-        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
-        if dim == 2
-            for i in 1:non
-                T1 = [A.T[2i-1, 2i-1], A.T[2i, 2i-1], 0, A.T[2i-1, 2i], A.T[2i, 2i], 0, 0, 0, 1]
-                Idx = I0 .+ (3i - 3)
-                Jdx = J0 .+ (3i - 3)
-                append!(I, Idx)
-                append!(J, Jdx)
-                append!(V, T1)
-            end
-            fn(x, y) = y
-            T = sparse(I, J, V, 3non, 3non, fn)
-            dropzeros!(T)
-        else
-            T = A.T
-        end
-        for k in 1:m
-            for i in 1:non
-                for j = 1:3
-                    C[1:3, 3i-3+j] = B[9i-9+3j-2:9i-9+3j, k]
-                end
-            end
-            D = C * T
-            for i in 1:non
-                for j = 1:3
-                    E[9i-9+3j-2:9i-9+3j, k] = D[1:3, 3i-3+j]
-                end
-            end
-        end
-        return E
+        return dropzeros(B * A.T)
     else
-        error("*(B, A::Transformation): size missmatch dim * non = $dim * $non ≠ $n.")
+        error("*(A::Transformation, B::SparseMatrixCSC): size missmatch dim * non = $dim * $non ≠ $n.")
     end
 end
 
@@ -589,6 +487,142 @@ function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, �
 end
 
 import Base.*
+function *(A::Transformation, B::VectorField)
+    n = size(B.a, 1)
+    non = A.non
+    dim = A.dim
+    if dim * non == n
+        if B.A == []
+            v =  A.T * B.a
+            return VectorField([], v, B.t, [], length(B.t), B.type)
+        else
+            error("*(A::Transformation, B::VectorField): B contains element data instead of nodal data.")
+        end
+    else
+        error("*(A::Transformation, B::VectorField): size missmatch A.dim * A.non = $dim * $non ≠ $n = size(B.a, 1).")
+    end
+end
+
+function *(B::VectorField, A::Transformation)
+    n = size(B.a, 1)
+    non = A.non
+    dim = A.dim
+    if dim * non == n
+        if B.A == []
+            v =  (B.a' * A.T)'
+            return VectorField([], v, B.t, [], length(B.t), B.type)
+        else
+            error("*(B::VectorField, A::Transformation): B contains element data instead of nodal data.")
+        end
+    else
+        error("*(B::VectorField, A::Transformation): size missmatch A.dim * A.non = $dim * $non ≠ $n = size(B.a, 1).")
+    end
+end
+
+function *(A::Transformation, B::TensorField)
+    n = size(B.a, 1)
+    m = size(B.a, 2)
+    non = A.non
+    dim = A.dim
+    if B.A == []
+        C = zeros(3non, 3)
+        D = zeros(3non, 3)
+        E = zeros(n, m)
+        T = []
+        I = []
+        J = []
+        V = Float64[]
+        T1 = zeros(9)
+        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
+        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
+        if dim == 2
+            for i in 1:non
+                T1 = [A.T[2i-1, 2i-1], A.T[2i, 2i-1], 0, A.T[2i-1, 2i], A.T[2i, 2i], 0, 0, 0, 1]
+                Idx = I0 .+ (3i - 3)
+                Jdx = J0 .+ (3i - 3)
+                append!(I, Idx)
+                append!(J, Jdx)
+                append!(V, T1)
+            end
+            fn(x, y) = y
+            T = sparse(I, J, V, 3non, 3non, fn)
+            dropzeros!(T)
+        elseif dim == 3
+            T = A.T
+        else
+            error("*(A::Transformation, B::TensoeField): dim of A is $dim")
+        end
+        for k in 1:m
+            for i in 1:non
+                for j = 1:3
+                    C[3i-2:3i, j] = B.a[9i-9+3j-2:9i-9+3j, k]
+                end
+            end
+            D = T * C
+            for i in 1:non
+                for j = 1:3
+                    E[9i-9+3j-2:9i-9+3j, k] = D[3i-2:3i, j]
+                end
+            end
+        end
+        return TensorField([], E, B.t, [], length(B.t), B.type)
+    else
+        error("*(A::Transformation, B::TensorField): B contains element data instead of nodal data.")
+    end
+end
+
+function *(B::TensorField, A::Transformation)
+    n = size(B.a, 1)
+    m = size(B.a, 2)
+    non = A.non
+    dim = A.dim
+    if B.A == []
+        C = zeros(3, 3non)
+        D = zeros(3, 3non)
+        E = zeros(n, m)
+        T = []
+        I = []
+        J = []
+        V = Float64[]
+        T1 = zeros(9)
+        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
+        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
+        if dim == 2
+            for i in 1:non
+                T1 = [A.T[2i-1, 2i-1], A.T[2i, 2i-1], 0, A.T[2i-1, 2i], A.T[2i, 2i], 0, 0, 0, 1]
+                Idx = I0 .+ (3i - 3)
+                Jdx = J0 .+ (3i - 3)
+                append!(I, Idx)
+                append!(J, Jdx)
+                append!(V, T1)
+            end
+            fn(x, y) = y
+            T = sparse(I, J, V, 3non, 3non, fn)
+            dropzeros!(T)
+        elseif dim == 3
+            T = A.T
+        else
+            error("*(A::Transformation, B::TensoeField): dim of A is $dim")
+        end
+        for k in 1:m
+            for i in 1:non
+                for j = 1:3
+                    C[1:3, 3i-3+j] = B.a[9i-9+3j-2:9i-9+3j, k]
+                end
+            end
+            D = C * T
+            for i in 1:non
+                for j = 1:3
+                    E[9i-9+3j-2:9i-9+3j, k] = D[1:3, 3i-3+j]
+                end
+            end
+        end
+        return TensorField([], E, B.t, [], length(B.t), B.type)
+    else
+        error("*(B::TensorField, A::Transformation): B contains element data instead of nodal data.")
+    end
+end
+
 function *(A::TensorField, B::TensorField)
     if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
         if length(A.A) != length(B.A)
@@ -2259,7 +2293,7 @@ function elementsToNodes(problem, S)
     end
     if type == :q3D || type == :q2D
         return VectorField([], s, S.t, [], S.nsteps, type)
-    elseif type == :e || type == :s
+    elseif type == :e || type == :s || type == :F
         return TensorField([], s, S.t, [], S.nsteps, type)
     else
         error("elementsToNodes: internal error, type=$type.")
@@ -3417,3 +3451,48 @@ function setParameter(name, value)
     gmsh.parser.setNumber(name, [value])
 end
 
+function probe(A::TensorField, x, y, z)
+    elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, 3, false)
+    elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
+    comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
+    SS = [0.0, 0, 0, 0, 0, 0, 0, 0, 0]
+    if A.a == []
+        ind = findfirst(i -> i == elementTag, SII.numElem)
+        for i in range(1, 9)
+            SS[i] = fun' * A.A[ind][i:9:9numNodes, 1]
+        end
+    elseif A.A == []
+        for i in range(1, 9)
+            SS[i] = fun' * A.a[9nodeTags.-(9-i), 1]
+        end
+    end
+    return reshape(SS, 3, 3)
+end
+
+function probe(A::VectorField, x, y, z)
+    elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, 3, false)
+    elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
+    comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
+    dim = 0
+    SS = []
+    if String(A.type)[2:3] == "2D"
+        dim = 2
+        SS = [0.0, 0]
+    elseif String(A.type)[2:3] == "3D"
+        dim = 3
+        SS = [0.0, 0, 0]
+    else
+        error("probe: dimension cannot be determined.")
+    end
+    if A.a == []
+        ind = findfirst(i -> i == elementTag, A.numElem)
+        for i in range(1, 9)
+            SS[i] = fun' * A.A[ind][i:dim:dim*numNodes, 1]
+        end
+    elseif A.A == []
+        for i in range(1, dim)
+            SS[i] = fun' * A.a[dim*nodeTags.-(dim-i), 1]
+        end
+    end
+    return SS
+end

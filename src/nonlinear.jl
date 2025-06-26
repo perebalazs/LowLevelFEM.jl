@@ -19,14 +19,14 @@ function nodePositionVector(problem)
             r[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
         end
     end
-    return r
+    return VectorField([], reshape(r, :,1), [0], [], 1, :u3D)
 end
 
 function deformationGradient(problem, r)
     gmsh.model.setCurrent(problem.name)
 
     type = :F
-    nsteps = size(r, 2)
+    nsteps = size(r.a, 2)
     F = []
     numElem = Int[]
     ncoord2 = zeros(3 * problem.non)
@@ -38,7 +38,7 @@ function deformationGradient(problem, r)
         phName = problem.material[ipg].phName
         dim = problem.dim
         pdim = problem.pdim
-        if problem.dim != 3 || (problem.type != :StVenantKirchhoff && problem.type != :NeoHookeCompressible)
+        if problem.dim != 3 || problem.type != :Solid
             error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type). (They must be 3 and :Solid.)")
         end
 
@@ -81,7 +81,7 @@ function deformationGradient(problem, r)
                     for k in 1:numNodes, l in 1:numNodes
                         ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
                     end
-                    r1 = r[nn2]
+                    #r1 = r[nn2]
                     ∂H .*= 0
                     for k in 1:numNodes
                         for l in 1:numNodes
@@ -100,7 +100,7 @@ function deformationGradient(problem, r)
                     for k in 1:numNodes
                         ∂H1 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
                         for kk in 1:nsteps
-                            F0 = ∂H1 * r[nn2, kk]
+                            F0 = ∂H1 * r.a[nn2, kk]
                             F1[(k-1)*9+1:k*9, kk] = [F0[1], F0[4], F0[7],
                                 F0[2], F0[5], F0[8],
                                 F0[3], F0[6], F0[9]]
@@ -112,7 +112,7 @@ function deformationGradient(problem, r)
         end
     end
     a = [;;]
-    sigma = TensorField(F, a, numElem, nsteps, type)
+    sigma = TensorField(F, a, r.t, numElem, nsteps, type)
     return sigma
 end
 
