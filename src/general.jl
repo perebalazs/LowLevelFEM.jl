@@ -1,7 +1,8 @@
 """
-    Material(phName, E, ν, ρ, k, c, α, λ, μ, κ)
+    Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
 
-A structure containing the material constants. 
+A structure containing the material constants.
+- type: constitutive law: `:Hooke`, `:StVenantKirchhoff`, `:NeoHookeCompressible`
 - E: elastic modulus,
 - ν: Poisson's ratio,
 - ρ: mass density,
@@ -15,6 +16,7 @@ A structure containing the material constants.
 
 Types:
 - `phName`: String
+- `type`: Symbol
 - `E`: Float64
 - `ν`: Float64
 - `ρ`: Float64
@@ -27,6 +29,7 @@ Types:
 """
 struct Material
     phName::String
+    type::Symbol
     E::Float64
     ν::Float64
     ρ::Float64
@@ -459,9 +462,10 @@ struct Eigen
 end
 
 """
-    FEM.material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
+    FEM.material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
 
-Returns a structure in which `name` is the name of a physical group, 
+Returns a structure in which `name` is the name of a physical group,
+`type` is the name of the constitutive law (eg. `:Hooke`),
 `E` is the modulus of elasticity, `ν` Poisson's ratio and `ρ` is
 the mass density, `k` is the heat conductivity, `c` is the specific
 heat, `α` is the coefficient of heat expansion, `λ` and `μ` are the 
@@ -472,6 +476,7 @@ Return: mat
 Types:
 - `mat`: Material
 - `name`: String
+- `type`: Symbol
 - `E`: Float64
 - `ν`: Float64
 - `ρ`: Float64
@@ -482,8 +487,8 @@ Types:
 - `μ`: Float64
 - `κ`: Float64
 """
-function material(name; E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3)
-    return Material(name, E, ν, ρ, k, c, α, λ, μ, κ)
+function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3)
+    return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ)
 end
 
 import Base.*
@@ -1411,8 +1416,10 @@ function +(A::TensorField, B::TensorField)
         else
             error("+(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
+    elseif A.a != [;;] && B.a != [;;]
+        return TensorField([], A.a + B.a, A.t, [], A.steps, A.type)
     else
-        error("+(TensorField, TensorField): data at nodes is not yet implemented.")
+        error("+(TensorField, TensorField): internal error.")
     end
 end
 
@@ -1473,8 +1480,10 @@ function -(A::TensorField, B::TensorField)
         else
             error("-(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
+    elseif A.a != [;;] && B.a != [;;]
+        return TensorField([], A.a - B.a, A.t, [], A.nsteps, A.type)
     else
-        error("-(TensorField, TensorField): data at nodes is not yet implemented.")
+        error("-(TensorField, TensorField): internal error.")
     end
 end
 
@@ -1492,8 +1501,10 @@ function *(A::TensorField, b)
         else
             error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
+    elseif A.a != [;;]
+        return TensorField([], A.a * b, A.t, [], A.nsteps, A.type)
     else
-        error("*(TensorField, Any): data at nodes is not yet implemented.")
+        error("*(TensorField, Any): internal error.")
     end
 end
 
@@ -1511,8 +1522,10 @@ function *(b, A::TensorField)
         else
             error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
+    elseif A.a != [;;]
+        return TensorField([], A.a * b, A.t, [], A.nsteps, A.type)
     else
-        error("*(Any, TensorField): data at nodes is not yet implemented.")
+        error("*(Any, TensorField): internal error.")
     end
 end
 
@@ -3451,26 +3464,26 @@ function setParameter(name, value)
     gmsh.parser.setNumber(name, [value])
 end
 
-function probe(A::TensorField, x, y, z)
-    elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, 3, false)
+function probe(A::TensorField, x, y, z; step=1)
+    elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
     SS = [0.0, 0, 0, 0, 0, 0, 0, 0, 0]
-    if A.a == []
-        ind = findfirst(i -> i == elementTag, SII.numElem)
+    if A.a == [;;]
+        ind = findfirst(i -> i == elementTag, A.numElem)
         for i in range(1, 9)
-            SS[i] = fun' * A.A[ind][i:9:9numNodes, 1]
+            SS[i] = fun' * A.A[ind][i:9:9numNodes, step]
         end
     elseif A.A == []
         for i in range(1, 9)
-            SS[i] = fun' * A.a[9nodeTags.-(9-i), 1]
+            SS[i] = fun' * A.a[9nodeTags.-(9-i), step]
         end
     end
     return reshape(SS, 3, 3)
 end
 
-function probe(A::VectorField, x, y, z)
-    elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, 3, false)
+function probe(A::VectorField, x, y, z; step=1)
+    elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
     dim = 0
@@ -3484,15 +3497,30 @@ function probe(A::VectorField, x, y, z)
     else
         error("probe: dimension cannot be determined.")
     end
-    if A.a == []
+    if A.a == [;;]
         ind = findfirst(i -> i == elementTag, A.numElem)
-        for i in range(1, 9)
-            SS[i] = fun' * A.A[ind][i:dim:dim*numNodes, 1]
+        for i in range(1, dim)
+            SS[i] = fun' * A.A[ind][i:dim:dim*numNodes, step]
         end
     elseif A.A == []
         for i in range(1, dim)
-            SS[i] = fun' * A.a[dim*nodeTags.-(dim-i), 1]
+            SS[i] = fun' * A.a[dim*nodeTags.-(dim-i), step]
         end
+    end
+    return SS
+end
+
+function probe(A::ScalarField, x, y, z; step=1)
+    elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
+    elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
+    comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
+    dim = 0
+    SS = 0
+    if A.a == [;;]
+        ind = findfirst(i -> i == elementTag, A.numElem)
+        SS = fun' * A.A[ind][1:numNodes, step]
+    elseif A.A == []
+        SS = fun' * A.a[nodeTags, step]
     end
     return SS
 end

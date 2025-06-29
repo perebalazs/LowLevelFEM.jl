@@ -1573,8 +1573,8 @@ function solveStrain(problem, q; DoFResults=false)
                 nnet = zeros(Int, length(elemTags[i]), numNodes)
                 invJac = zeros(3, 3numNodes)
                 ∂h = zeros(3, numNodes * numNodes)
-                B = zeros(rowsOfB * numNodes, dim * numNodes)
-                nn2 = zeros(Int, dim * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
                 r = zeros(numNodes)
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
@@ -1623,12 +1623,12 @@ function solveStrain(problem, q; DoFResults=false)
                             for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], e0[6],
-                                        e0[4], e0[2], e0[5],
-                                        e0[6], e0[5], e0[3]]
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, e0[6]/2,
+                                        e0[4]/2, e0[2], e0[5]/2,
+                                        e0[6]/2, e0[5]/2, e0[3]]
                                 end
                                 if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], e0[6], e0[4], e0[2], e0[5], e0[6], e0[5], e0[3]]
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4]/2, e0[6]/2, e0[4]/2, e0[2], e0[5]/2, e0[6]/2, e0[5]/2, e0[3]]
                                 end
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
@@ -1636,12 +1636,12 @@ function solveStrain(problem, q; DoFResults=false)
                             for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
-                                        e0[3], e0[2], 0,
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                        e0[3]/2, e0[2], 0,
                                         0, 0, ν/(ν-1)*(e0[1]+e0[2])]
                                 end
                                 if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν/(ν-1)*(e0[1]+e0[2])]
                                 end
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
@@ -1649,12 +1649,12 @@ function solveStrain(problem, q; DoFResults=false)
                             for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3], 0,
-                                        e0[3], e0[2], 0,
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                        e0[3]/2, e0[2], 0,
                                         0, 0, 0]
                                 end
                                 if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν*(e0[1]+e0[2])]
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
                                 end
                             end
                         elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
@@ -1662,8 +1662,8 @@ function solveStrain(problem, q; DoFResults=false)
                             for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4], 0,
-                                        e0[4], e0[3], 0,
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
+                                        e0[4]/2, e0[3], 0,
                                         0, 0, e0[2]]
                                 end
                                 if DoFResults == true
