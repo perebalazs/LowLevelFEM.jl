@@ -2537,7 +2537,8 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
                         error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                     end
                     #f1 += H1' * f * Ja * intWeights[j]
-                    s1 += f[comp0] * Ja * intWeights[j]
+                    ff = isnan(f[comp0]) ? 0 : f[comp0]
+                    s1 += ff * Ja * intWeights[j]
                 end
                 for k in 1:pdim
                     #nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
