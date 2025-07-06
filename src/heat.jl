@@ -368,9 +368,9 @@ Return: `latHeatMat`
 
 Types:
 - `problem`: Problem
-- `u`: Vector{Float64}
-- `v`: Vector{Float64}
-- `T0`: Vector{Float64}
+- `u`: VectorField
+- `v`: VectorField
+- `T0`: ScalarField
 - `latHeatMat`: SparseMatrix
 """
 function latentHeatMatrix(problem, u, v, T0)
@@ -498,9 +498,9 @@ function latentHeatMatrix(problem, u, v, T0)
                     M1 .*= 0
                     K1 .*= 0
                     for k in 1:numIntPoints
-                        q1 = u[nn2]
-                        dq1 = v[nn2]
-                        T01 = T0[nn1]
+                        q1 = u.a[nn2]
+                        dq1 = v.a[nn2]
+                        T01 = T0.a[nn1]
                         H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
                         ∇H1 = ∇H[k, 1:dim*numNodes]'
                         M1 += H1' * H1 * (∇H1 * dq1) * jacDet[k] * intWeights[k]

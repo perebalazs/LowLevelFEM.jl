@@ -3465,6 +3465,21 @@ function setParameter(name, value)
     gmsh.parser.setNumber(name, [value])
 end
 
+"""
+    FEM.setParameters(name, value)
+
+Defines a parameter `name` and sets its value to `value`, which is a Vector{Float64}. 
+
+Return: none
+
+Types:
+- `name`: String
+- `value`: Vector{Float64}
+"""
+function setParameters(name, value)
+    gmsh.parser.setNumber(name, value)
+end
+
 function probe(A::TensorField, x, y, z; step=1)
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
