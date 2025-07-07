@@ -929,30 +929,24 @@ end
 """
     FEM.solveTemperature(K, q)
 
-Solves the equation K*T=q for the temperature vector `T`. `K` is the heat conduction matrix,
+Solves the equation K*T=q for the temperature field `T`. `K` is the heat conduction matrix,
 `q` is the heat flux vector.
 
 Return: `T`
 
 Types:
 - `K`: SparseMatrix 
-- `q`: Vector{Float64} 
-- `T`: Vector{Float64}
+- `q`: ScalarField 
+- `T`: ScalarField
 """
-function solveTemperature(K, q)
-    type = :null
-    if q.type == :qn
-        type = :T
-    else
-        error("solveTemperature: wrong type of 'q': ($(q.type))")
-    end
-    return ScalarField([], reshape(K \ q.a, :, 1), [0.0], [], 1, type)
+function solveTemperature(K::SparseMatrixCSC, q::ScalarField)
+    return K \ q
 end
 
 """
     FEM.solveTemperature(problem, flux, temp)
 
-Solves the temperature vector `T` of `problem` with given heat flux `flux` and
+Solves the temperature field `T` of `problem` with given heat flux `flux` and
 temperature `temp`.
 
 Return: `T`
@@ -961,26 +955,19 @@ Types:
 - `problem`: Problem 
 - `flux`: Vector{Tuple} 
 - `temp`: Vector{Tuple}
-- `T`: Vector{Float64}
+- `T`: ScalarField
 """
 function solveTemperature(problem, flux, temp)
     K = heatConductionMatrix(problem)
     q = heatFluxVector(problem, flux)
-    #applyHeatConvection!(problem, K, q, temp)
     applyBoundaryConditions!(problem, K, q, temp)
-    type = :null
-    if q.type == :qn
-        type = :T
-    else
-        error("solveTemperature: wrong type of 'q': ($(q.type))")
-    end
-    return ScalarField([], reshape(K \ q.a, :, 1), [0.0], [], 1, type)
+    return K \ q
 end
 
 """
     FEM.solveTemperature(problem, flux, temp, heatconv)
 
-Solves the temperature vector `T` of `problem` with given heat flux `flux`,
+Solves the temperature field `T` of `problem` with given heat flux `flux`,
 temperature `temp` and heat convection `heatconv`.
 
 Return: `T`
@@ -990,20 +977,45 @@ Types:
 - `flux`: Vector{Tuple} 
 - `temp`: Vector{Tuple}
 - `heatconv`: Vector{Tuple}
-- `T`: Vector{Float64}
+- `T`: ScalarField
 """
 function solveTemperature(problem, flux, temp, heatconv)
     K = heatConductionMatrix(problem)
     q = heatFluxVector(problem, flux)
     applyHeatConvection!(problem, K, q, heatconv)
     applyBoundaryConditions!(problem, K, q, temp)
-    type = :null
-    if q.type == :qn
-        type = :T
-    else
-        error("solveTemperature: wrong type of 'q': ($(q.type))")
+    return K \ q
+end
+
+"""
+    FEM.solveTemperature(problem, u; T0=273.0)
+
+Solves the raise of temperature `T` during reversible (no dissipation) elastic deformations,
+where `u` is the displacement field, and `problem` is a heat cunduction problem.
+
+Return: `T`
+
+Types:
+- `problem`: Problem 
+- `u`: VectorField 
+- `T0`: Float64
+- `T`: ScalarField
+"""
+function solveTemperature(problem, u::VectorField; T0=273.0)
+    T00 = []
+    for i in eachindex(problem.material)
+        push!(T00, initialTemperature(problem, problem.material[i].phName, T=T0))
     end
-    return ScalarField([], reshape(K \ q.a, :, 1), [0.0], [], 1, type)
+    for i in eachindex(T00)
+        if i != 1
+            T00[1] += T00[i]
+        end
+    end
+    T00 = T00[1]
+    L = latentHeatMatrix(problem, u, u, T00)
+    C = heatCapacityMatrix(problem)
+    T1 = C \ ((C + L) * T00) - T00
+    return T1
 end
 
 """

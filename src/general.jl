@@ -1043,11 +1043,6 @@ function +(A::ScalarField, B::ScalarField)
             sizehint!(C, length(sec) + length(dif1) + length(dif2))
             sizehint!(num, length(sec) + length(dif1) + length(dif2))
             for i in eachindex(sec)
-                #n = length(A.A[i]) ÷ 9
-                #m = length(B.A[i]) ÷ 9
-                #if n != m
-                #    error("+(A::VectorField, B::VectorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
-                #end
                 D = A.A[i] + B.A[i]
                 append!(num, sec[i])
                 push!(C, D)
@@ -1116,11 +1111,6 @@ function -(A::ScalarField, B::ScalarField)
             sizehint!(C, length(sec) + length(dif1) + length(dif2))
             sizehint!(num, length(sec) + length(dif1) + length(dif2))
             for i in eachindex(sec)
-                #n = length(A.A[i]) ÷ 9
-                #m = length(B.A[i]) ÷ 9
-                #if n != m
-                #    error("+(A::VectorField, B::VectorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
-                #end
                 D = A.A[i] - B.A[i]
                 append!(num, sec[i])
                 push!(C, D)
@@ -1352,6 +1342,71 @@ function /(A::VectorField, b)
         return VectorField([], A.a / b, A.t, [], A.nsteps, A.type)
     else
         error("/(VectorField, b): internal error")
+    end
+end
+
+function *(A::SparseMatrixCSC, B::VectorField)
+    type = :none
+    if B.a != [;;] && B.nsteps == 1
+        if B.type == :u2D
+            type = :f2D
+        elseif B.type == :u3D
+            type = :f3D
+        else
+            error("*(A::SparseMatrixCSC, B::VectorField): ")
+        end
+        C = A * B.a
+        return VectorField([], reshape(C, :,1), [0.0], [], 1, type)
+    else
+        error("*(A::SparseMatrixCSC, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+    end
+end
+
+function *(A::SparseMatrixCSC, B::ScalarField)
+    type = :none
+    if B.a != [;;] && B.nsteps == 1
+        if B.type == :T
+            type = :qn
+        else
+            error("*(A::SparseMatrixCSC, B::ScalarField): ")
+        end
+        C = A * B.a
+        return ScalarField([], reshape(C, :,1), [0.0], [], 1, type)
+    else
+        error("*(A::SparseMatrixCSC, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+    end
+end
+
+import Base.\
+function \(A::SparseMatrixCSC, B::ScalarField)
+    type = :none
+    if B.a != [;;] && B.nsteps == 1
+        if B.type == :qn
+            type = :T
+        else
+            error("\\(A::SparseMatrixCSC, B::ScalarField): type = $(B.type)")
+        end
+        C = A \ B.a
+        return ScalarField([], reshape(C, :,1), [0.0], [], 1, type)
+    else
+        error("\\(A::SparseMatrixCSC, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+    end
+end
+
+function \(A::SparseMatrixCSC, B::VectorField)
+    type = :none
+    if B.a != [;;] && B.nsteps == 1
+        if B.type == :f2D
+            type = :u2D
+        elseif B.type == :f3D
+            type = :u3D
+        else
+            error("\\(A::SparseMatrixCSC, B::VectorField): ")
+        end
+        C = A \ B.a
+        return VectorField([], reshape(C, :,1), [0.0], [], 1, type)
+    else
+        error("\\(A::SparseMatrixCSC, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
 end
 
