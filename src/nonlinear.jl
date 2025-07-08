@@ -116,7 +116,7 @@ function deformationGradient(problem, r)
     return sigma
 end
 
-function stiffnessMatrixLinear(problem, r)
+function tangentMatrixConstitutive(problem, r)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -293,7 +293,7 @@ function stiffnessMatrixLinear(problem, r)
     return K
 end
 
-function stiffnessMatrixNonLinear(problem, r)
+function tangentMatrixInitialStress(problem, r)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -449,7 +449,7 @@ function stiffnessMatrixNonLinear(problem, r)
     return K
 end
 
-function loadVectorNonLinear(problem, r)
+function equivalentNodalForce(problem, r)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     f = zeros(problem.non * problem.pdim)
@@ -611,7 +611,7 @@ function loadVectorNonLinear(problem, r)
     return VectorField([], reshape(f, :,1), [0], [], 1, :f3D)
 end
 
-function followerLoadVector(problem, r, loads)
+function nonFollowerLoadVector(problem, r, loads)
     gmsh.model.setCurrent(problem.name)
     if !isa(loads, Vector)
         error("loadVector: loads are not arranged in a vector. Put them in [...]")
@@ -758,6 +758,282 @@ function followerLoadVector(problem, r, loads)
         end
     end
     return VectorField([], reshape(fp, :,1), [0], [], 1, :f3D)
+end
+
+"""
+    FEM.applyDeformationBoundaryConditions!(problem, deformVec, supports)
+
+Applies displacement boundary conditions `supports` on deformation vector `deformVec`.
+Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
+prescribed displacements `ux`, `uy` and `uz`.
+
+Return: none
+
+Types:
+- `problem`: Problem
+- `deformVec`: VectorField
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+"""
+function applyDeformationBoundaryConditions!(problem, deformVec, supports)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+    end
+    gmsh.model.setCurrent(problem.name)
+    dof, st = size(deformVec.a)
+    pdim = problem.pdim
+
+    for i in 1:length(supports)
+        name, ux, uy, uz = supports[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
+        if ux != 1im
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim-1)
+            if isa(ux, Function)
+                uux = ux.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsX
+                jj += 1
+                if isa(ux, Function)
+                    deformVec.a[j] += uux[jj]
+                else
+                    deformVec.a[j] += ux
+                end
+            end
+        end
+        if uy != 1im
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim-2)
+            if isa(uy, Function)
+                uuy = uy.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsY
+                jj += 1
+                if isa(uy, Function)
+                    deformVec.a[j] += uuy[jj]
+                else
+                    deformVec.a[j] += uy
+                end
+            end
+        end
+        if pdim == 3 && uz != 1im
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= 3
+            if isa(uz, Function)
+                uuz = uz.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsZ
+                jj += 1
+                if isa(uz, Function)
+                    deformVec.a[j] += uuz[jj]
+                else
+                    deformVec.a[j] += uz
+                end
+            end
+        end
+    end
+end
+
+"""
+    FEM.applyDeformationBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
+
+Applies displacement boundary conditions `supports` on a stiffness matrix
+`stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
+Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
+prescribed displacements `ux`, `uy` and `uz`.
+
+Return: none
+
+Types:
+- `problem`: Problem
+- `stiffMat`: SparseMatrix 
+- `massMat`: SparseMatrix 
+- `dampMat`: SparseMatrix 
+- `loadVec`: VectorField
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+"""
+function applyDeformationBoundaryConditions!(problem, stiffMat, loadVec, supports)
+#function applyDeformationBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports; fix=1)
+    if !isa(supports, Vector)
+        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+    end
+    gmsh.model.setCurrent(problem.name)
+    dof, dof = size(stiffMat)
+    pdim = problem.pdim
+
+    for i in 1:length(supports)
+        name, ux, uy, uz = supports[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
+        if ux != 1im
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim - 1)
+            if isa(ux, Function)
+                uux = ux.(xx, yy, zz)
+                f0 = stiffMat[:, nodeTagsX] * uux * 0
+            else
+                f0 = stiffMat[:, nodeTagsX] * ux * 0
+                f0 = sum(f0, dims=2)
+            end
+            loadVec.a .-= f0
+        end
+        if uy != 1im
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim - 2)
+            if isa(uy, Function)
+                uuy = uy.(xx, yy, zz)
+                f0 = stiffMat[:, nodeTagsY] * uuy * 0
+            else
+                f0 = stiffMat[:, nodeTagsY] * uy * 0
+                f0 = sum(f0, dims=2)
+            end
+            loadVec.a .-= f0
+        end
+        if pdim == 3 && uz != 1im
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= 3
+            if isa(uz, Function)
+                uuz = uz.(xx, yy, zz)
+                f0 = stiffMat[:, nodeTagsZ] * uuz * 0
+            else
+                f0 = stiffMat[:, nodeTagsZ] * uz * 0
+                f0 = sum(f0, dims=2)
+            end
+            loadVec.a .-= f0
+        end
+    end
+
+    for i in 1:length(supports)
+        name, ux, uy, uz = supports[i]
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
+            xx = coord[1:3:length(coord)]
+            yy = coord[2:3:length(coord)]
+            zz = coord[3:3:length(coord)]
+        end
+        if ux != 1im
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim-1)
+            if isa(ux, Function)
+                uux = ux.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsX
+                jj += 1
+                stiffMat[j, :] .= 0
+                stiffMat[:, j] .= 0
+                stiffMat[j, j] = 1
+                #massMat[j, :] .= 0
+                #massMat[:, j] .= 0
+                #massMat[j, j] = 1
+                #dampMat[j, :] .= 0
+                #dampMat[:, j] .= 0
+                #dampMat[j, j] = 1
+                if isa(ux, Function)
+                    loadVec.a[j] = uux[jj] * 0
+                else
+                    loadVec.a[j] = ux * 0
+                end
+            end
+        end
+        if uy != 1im
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim-2)
+            if isa(uy, Function)
+                uuy = uy.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsY
+                jj += 1
+                stiffMat[j, :] .= 0
+                stiffMat[:, j] .= 0
+                stiffMat[j, j] = 1
+                #massMat[j, :] .= 0
+                #massMat[:, j] .= 0
+                #massMat[j, j] = 1
+                #dampMat[j, :] .= 0
+                #dampMat[:, j] .= 0
+                #dampMat[j, j] = 1
+                if isa(uy, Function)
+                    loadVec.a[j] = uuy[jj] * 0
+                else
+                    loadVec.a[j] = uy * 0
+                end
+            end
+        end
+        if pdim == 3 && uz != 1im
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= 3
+            if isa(uz, Function)
+                uuz = uz.(xx, yy, zz)
+            end
+            jj = 0
+            for j ∈ nodeTagsZ
+                jj += 1
+                stiffMat[j, :] .= 0
+                stiffMat[:, j] .= 0
+                stiffMat[j, j] = 1
+                #massMat[j, :] .= 0
+                #massMat[:, j] .= 0
+                #massMat[j, j] = 1
+                #dampMat[j, :] .= 0
+                #dampMat[:, j] .= 0
+                #dampMat[j, j] = 1
+                if isa(uz, Function)
+                    loadVec.a[j] = uuz[jj] * 0
+                else
+                    loadVec.a[j] = uz * 0
+                end
+            end
+        end
+    end
+
+    dropzeros!(stiffMat)
+    #dropzeros!(massMat)
+    #dropzeros!(dampMat)
+end
+
+"""
+    FEM.applyDeformationBoundaryConditions(problem, stiffMat, loadVec, supports)
+
+Applies displacement boundary conditions `supports` on a stiffness matrix
+`stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
+Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
+prescribed displacements `ux`, `uy` and `uz`.
+
+Return: none
+
+Types:
+- `problem`: Problem
+- `stiffMat`: SparseMatrix 
+- `loadVec`: VectorField
+- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+"""
+function applyDeformationBoundaryConditions(problem, stiffMat, loadVec, supports)
+    K1 = copy(stiffMat)
+    f1 = copy(loadVec)
+    applyDeformationBoundaryConditions!(problem, K1, f1, supports)
+    return K1, f1
 end
 
 
