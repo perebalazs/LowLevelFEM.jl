@@ -774,7 +774,7 @@ Types:
 - `deformVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyDeformationBoundaryConditions!(problem, deformVec, supports)
+function applyDeformationBoundaryConditions!(problem, deformVec, supports; fact=1.0)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -802,9 +802,9 @@ function applyDeformationBoundaryConditions!(problem, deformVec, supports)
             for j ∈ nodeTagsX
                 jj += 1
                 if isa(ux, Function)
-                    deformVec.a[j] += uux[jj]
+                    deformVec.a[j] += uux[jj] * fact
                 else
-                    deformVec.a[j] += ux
+                    deformVec.a[j] += ux * fact
                 end
             end
         end
@@ -819,9 +819,9 @@ function applyDeformationBoundaryConditions!(problem, deformVec, supports)
             for j ∈ nodeTagsY
                 jj += 1
                 if isa(uy, Function)
-                    deformVec.a[j] += uuy[jj]
+                    deformVec.a[j] += uuy[jj] * fact
                 else
-                    deformVec.a[j] += uy
+                    deformVec.a[j] += uy * fact
                 end
             end
         end
@@ -835,9 +835,9 @@ function applyDeformationBoundaryConditions!(problem, deformVec, supports)
             for j ∈ nodeTagsZ
                 jj += 1
                 if isa(uz, Function)
-                    deformVec.a[j] += uuz[jj]
+                    deformVec.a[j] += uuz[jj] * fact
                 else
-                    deformVec.a[j] += uz
+                    deformVec.a[j] += uz * fact
                 end
             end
         end
@@ -845,7 +845,7 @@ function applyDeformationBoundaryConditions!(problem, deformVec, supports)
 end
 
 """
-    FEM.applyDeformationBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
+    FEM.suppressDeformationAtBoundaries!(problem, stiffMat, massMat, dampMat, loadVec, supports)
 
 Applies displacement boundary conditions `supports` on a stiffness matrix
 `stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
@@ -862,7 +862,7 @@ Types:
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyDeformationBoundaryConditions!(problem, stiffMat, loadVec, supports)
+function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
 #function applyDeformationBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports; fix=1)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
@@ -1014,7 +1014,7 @@ function applyDeformationBoundaryConditions!(problem, stiffMat, loadVec, support
 end
 
 """
-    FEM.applyDeformationBoundaryConditions(problem, stiffMat, loadVec, supports)
+    FEM.suppressDeformationAtBoundaries(problem, stiffMat, loadVec, supports)
 
 Applies displacement boundary conditions `supports` on a stiffness matrix
 `stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
@@ -1029,11 +1029,93 @@ Types:
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyDeformationBoundaryConditions(problem, stiffMat, loadVec, supports)
+function suppressDeformationAtBoundaries(problem, stiffMat, loadVec, supports)
     K1 = copy(stiffMat)
     f1 = copy(loadVec)
-    applyDeformationBoundaryConditions!(problem, K1, f1, supports)
+    suppressDeformationAtBoundaries!(problem, K1, f1, supports)
     return K1, f1
 end
 
+function solveDeformation(problem, load, supp;
+    followerLoad=false,
+    loadSteps = 3,
+    rampedLoad = true,
+    rampedSupport = false,
+    maxIteration = 10,
+    saveSteps = false,
+    saveIterations = false,
+    plotConvergence = false,
+    relativeError = 1e-5,
+    initialDeformation=nodePositionVector(problem))
 
+    r0 = initialDeformation
+    err0 = abs(maximum(r0.a) - minimum(r0.a))
+    f = loadVector(problem, load)
+    r = []
+    r1 = []
+    push!(r, r0.a)
+    r0 = copy(r0)
+    e = []
+
+    for j in range(1, loadSteps)
+        fact = rampedLoad == true ? j / loadSteps : 1
+        if rampedSupport == true
+            applyDeformationBoundaryConditions!(problem, r0, supp, fact=1 / loadSteps)
+        elseif rampedSupport == false && j == 1
+            applyDeformationBoundaryConditions!(problem, r0, supp)
+        end
+        err = 1
+        i = 0
+        while err > relativeError && i < maxIteration
+            i += 1
+       
+            Kl = tangentMatrixConstitutive(problem, r0)
+            Knl = tangentMatrixInitialStress(problem, r0)
+            if followerLoad == false
+                f = nonFollowerLoadVector(problem, r0, load)
+            end
+            fnl = equivalentNodalForce(problem, r0)
+            K1, f1 = suppressDeformationAtBoundaries(problem, Kl + Knl, fact * f - fnl, supp)
+            q = solveDisplacement(K1, f1)
+            r0 += q
+            if saveIterations == true
+                push!(r, r0.a)
+                r0 = copy(r0)
+            end
+            err = maximum(abs.(q.a)) / err0
+            if plotConvergence == true
+                append!(e, err)
+            end
+        end
+        if saveSteps == true
+            push!(r, r0.a)
+            r0 = copy(r0)
+        end
+    end
+    if saveIterations == true || saveSteps == true
+        n = length(r)
+        r1 = zeros(length(r0.a), n)
+        for i in 1:n
+            r1[:, i] = r[i]
+        end
+    else
+        n = length(r)
+        r1 = zeros(length(r0.a), 1)
+        r1[:,1] = r[:,n]
+    end
+    r1 = VectorField([], r1, 1:size(r1, 2), [], size(r1, 2), :u3D)
+    if plotConvergence == true
+        return r1, e
+    else
+        return r1
+    end
+end
+
+function showDeformationResults(problem, r, comp; name=comp, visible=false)
+    r0 = nodePositionVector(problem)
+    u = copy(r)
+    for i in 1:size(r.a, 2)
+        u.a[:, i] = r.a[:, i] - r0.a
+    end
+    return showDoFResults(problem, u, comp, name=name, visible=visible)
+end

@@ -15,7 +15,7 @@ Transfinite Volume{:};
 //+
 Recombine Surface {:};
 //+
-Mesh.ElementOrder=2;
+Mesh.ElementOrder=1;
 //+
 Mesh 3;
 //+
@@ -48,3 +48,7 @@ Line(14) = {12, 11};
 Physical Curve("horizontal", 29) = {14};
 //+
 Physical Curve("vertical", 30) = {13};
+//+
+Point(13) = {5, 0.3, 0.3, 1.0};
+//+
+Physical Point("A", 31) = {13};

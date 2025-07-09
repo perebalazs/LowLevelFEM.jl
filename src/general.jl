@@ -917,6 +917,7 @@ function adjoint(A::TensorField)
     end
 end
 
+export unitTensor
 function unitTensor(A::TensorField)
     if length(A.A) != 0
         if A.type == :s || A.type == :e || A.type == :F
@@ -942,6 +943,7 @@ function unitTensor(A::TensorField)
     end
 end
 
+export trace
 function trace(A::TensorField)
     if length(A.A) != 0
         sz = 0
@@ -3595,3 +3597,11 @@ function probe(A::ScalarField, x, y, z; step=1)
     end
     return SS
 end
+
+function probe(A::VectorField, name::String; step=1)
+    phtag = getTagForPhysicalName(name)
+    pttag = gmsh.model.getEntitiesForPhysicalGroup(0, phtag)[1]
+    coord = gmsh.model.getValue(0, pttag, [])
+    return probe(A, coord[1], coord[2], coord[3], step=step)
+end
+    
