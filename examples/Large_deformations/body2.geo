@@ -49,6 +49,6 @@ Physical Curve("horizontal", 29) = {14};
 //+
 Physical Curve("vertical", 30) = {13};
 //+
-Point(13) = {5, 0.3, 0.3, 1.0};
+Point(13) = {9, 0.8, 0.8, 1.0};
 //+
 Physical Point("A", 31) = {13};

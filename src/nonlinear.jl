@@ -22,6 +22,204 @@ function nodePositionVector(problem)
     return VectorField([], reshape(r, :,1), [0], [], 1, :u3D)
 end
 
+function deformationGradient(problem, r; DoFResults=false)
+    gmsh.model.setCurrent(problem.name)
+
+    type = :F
+    
+    nsteps = r.nsteps
+    ε = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    type = :e
+    if DoFResults == true
+        E1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ν = problem.material[ipg].ν
+        dim = 0
+        if problem.dim == 3 && problem.type == :Solid
+            dim = 3
+            rowsOfB = 9
+            b = 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            dim = 2
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            dim = 2
+            rowsOfB = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            dim = 2
+            rowsOfB = 4
+            b = 1
+        else
+            error("solveStrain: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                #e0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                rr = zeros(numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numNodes
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        rr[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    ∂h .*= 0
+                    for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 9
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*9-(9-1), l*3-(3-1)] = B[k*9-(9-2), l*3-(3-2)] = B[k*9-(9-3), l*3-(3-3)] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*9-(9-4), l*3-(3-1)] = B[k*9-(9-5), l*3-(3-2)] = B[k*9-(9-6), l*3-(3-3)] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*9-(9-7), l*3-(3-1)] = B[k*9-(9-8), l*3-(3-2)] = B[k*9-(9-9), l*3-(3-3)] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 2 && rowsOfB == 4
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = rr[k] < 1e-10 ? 0 : h[l, k] / rr[k]
+                        end
+                    else
+                        error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    push!(numElem, elem)
+                    for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    e = zeros(9numNodes, nsteps) # tensors have nine elements
+                    for k in 1:numNodes
+                        if rowsOfB == 9 && dim == 3 && problem.type == :Solid
+                            B1 = B[k*9-8:k*9, 1:3*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * r.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[2], e0[3],
+                                        e0[4], e0[5], e0[6],
+                                        e0[7], e0[8], e0[9]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3], e0[4], e0[5], e0[6], e0[7], e0[8], e0[9]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
+                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * r.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                        e0[3]/2, e0[2], 0,
+                                        0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
+                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * r.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                        e0[3]/2, e0[2], 0,
+                                        0, 0, 0]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
+                                end
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                            B1 = B[k*4-3:k*4, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * r.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
+                                        e0[4]/2, e0[3], 0,
+                                        0, 0, e0[2]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], 0, e0[4], e0[3], 0, 0, 0, e0[2]]
+                                end
+                            end
+                        else
+                            error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        end
+                    end
+                    if DoFResults == true
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    end
+                    if DoFResults == false
+                        push!(ε, e)
+                    end
+                end
+            end
+        end
+    end
+    if DoFResults == true
+        for k in 1:9
+            for l in 1:non
+                E1[k + 9 * l - 9, :] ./= pcs[l]
+            end
+        end
+    end
+    if DoFResults == true
+        epsilon = TensorField([], E1, r.t, [], nsteps, type)
+        return epsilon
+    else
+        epsilon = TensorField(ε, [;;], r.t, numElem, nsteps, type)
+        return epsilon
+    end
+end
+
+
+
+
+#=
 function deformationGradient(problem, r)
     gmsh.model.setCurrent(problem.name)
 
@@ -78,21 +276,23 @@ function deformationGradient(problem, r)
                         invJac[1:3, 3*k-2:3*k] = @inline inv(Jac[1:3, 3*k-2:3*k])'
                     end
                     ∂h .*= 0
-                    for k in 1:numNodes, l in 1:numNodes
-                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    for k in 1:numNodes
+                        for l in 1:numNodes
+                            ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                        end
                     end
                     #r1 = r[nn2]
                     ∂H .*= 0
                     for k in 1:numNodes
                         for l in 1:numNodes
                             ∂H[k*9-(9-1), l*pdim-(pdim-1)] = ∂h[1, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-2), l*pdim-(pdim-1)] = ∂h[2, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-3), l*pdim-(pdim-1)] = ∂h[3, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-4), l*pdim-(pdim-2)] = ∂h[1, (k-1)*numNodes+l]
+                            ∂H[k*9-(9-2), l*pdim-(pdim-2)] = ∂h[1, (k-1)*numNodes+l]
+                            ∂H[k*9-(9-3), l*pdim-(pdim-3)] = ∂h[1, (k-1)*numNodes+l]
+                            ∂H[k*9-(9-4), l*pdim-(pdim-1)] = ∂h[2, (k-1)*numNodes+l]
                             ∂H[k*9-(9-5), l*pdim-(pdim-2)] = ∂h[2, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-6), l*pdim-(pdim-2)] = ∂h[3, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-7), l*pdim-(pdim-3)] = ∂h[1, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-8), l*pdim-(pdim-3)] = ∂h[2, (k-1)*numNodes+l]
+                            ∂H[k*9-(9-6), l*pdim-(pdim-3)] = ∂h[2, (k-1)*numNodes+l]
+                            ∂H[k*9-(9-7), l*pdim-(pdim-1)] = ∂h[3, (k-1)*numNodes+l]
+                            ∂H[k*9-(9-8), l*pdim-(pdim-2)] = ∂h[3, (k-1)*numNodes+l]
                             ∂H[k*9-(9-9), l*pdim-(pdim-3)] = ∂h[3, (k-1)*numNodes+l]
                         end
                     end
@@ -101,9 +301,9 @@ function deformationGradient(problem, r)
                         ∂H1 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
                         for kk in 1:nsteps
                             F0 = ∂H1 * r.a[nn2, kk]
-                            F1[(k-1)*9+1:k*9, kk] = [F0[1], F0[4], F0[7],
-                                F0[2], F0[5], F0[8],
-                                F0[3], F0[6], F0[9]]
+                            F1[(k-1)*9+1:k*9, kk] = [F0[1], F0[2], F0[3],
+                                F0[4], F0[5], F0[6],
+                                F0[7], F0[8], F0[9]]
                         end
                     end
                     push!(F, F1)
@@ -115,6 +315,7 @@ function deformationGradient(problem, r)
     sigma = TensorField(F, a, r.t, numElem, nsteps, type)
     return sigma
 end
+=#
 
 function tangentMatrixConstitutive(problem, r)
     gmsh.model.setCurrent(problem.name)

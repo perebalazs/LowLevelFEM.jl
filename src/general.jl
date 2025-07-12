@@ -3017,11 +3017,11 @@ Types:
 """
 function showElementResults(problem, F, comp; name=comp, visible=false, smooth=true)
     if F.type == :e
-        return showStrainResults(problem, F, comp; name=comp, visible=false, smooth=smooth)
+        return showStrainResults(problem, F, comp, name=name, visible=visible, smooth=smooth)
     elseif F.type == :s
-        return showStressResults(problem, F, comp; name=comp, visible=false, smooth=smooth)
+        return showStressResults(problem, F, comp, name=name, visible=visible, smooth=smooth)
     elseif F.type == :q2D || F.type == :q3D
-        return showHeatFluxResults(problem, F, comp; name=comp, visible=false, smooth=smooth)
+        return showHeatFluxResults(problem, F, comp, name=name, visible=visible, smooth=smooth)
     else
         error("showElementResults: type is '$(F.type)'")
     end
