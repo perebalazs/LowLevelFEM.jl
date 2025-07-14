@@ -76,6 +76,7 @@ struct Problem
     material::Vector{Material}
     thickness::Float64
     non::Int64
+    Problem() = new()
     function Problem(mat; thickness=1, type=:Solid, bandwidth=:none)
         if type == :Solid
             dim = 3
@@ -229,8 +230,9 @@ struct ScalarField
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
-    function ScalarField(A0, a0, t0, numElem0, nsteps0, type0)
-        return new(A0, a0, t0, numElem0, nsteps0, type0)
+    model::Problem
+    function ScalarField(A0, a0, t0, numElem0, nsteps0, type0, model)
+        return new(A0, a0, t0, numElem0, nsteps0, type0, model)
     end
     function ScalarField(problem, dataField)
         if !isa(dataField, Vector)
@@ -280,7 +282,7 @@ struct ScalarField
         end
         a = [;;]
         t = []
-        return new(A, a, t, numElem, nsteps, type)
+        return new(A, a, t, numElem, nsteps, type, problem)
     end
 end
 
@@ -308,6 +310,7 @@ struct VectorField
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
+    model::Problem
 end
 
 """
@@ -334,6 +337,7 @@ struct TensorField
     numElem::Vector{Int}
     nsteps::Int
     type::Symbol
+    model::Problem
 end
 
 import Base.copy
@@ -344,7 +348,8 @@ function copy(A::ScalarField)
     d = copy(A.numElem)
     e = copy(A.nsteps)
     f = A.type
-    return ScalarField(a, b, c, d, e, f)
+    g = A.model
+    return ScalarField(a, b, c, d, e, f, g)
 end
 
 function copy(A::VectorField)
@@ -354,7 +359,8 @@ function copy(A::VectorField)
     d = copy(A.numElem)
     e = copy(A.nsteps)
     f = A.type
-    return VectorField(a, b, c, d, e, f)
+    g = A.model
+    return VectorField(a, b, c, d, e, f, g)
 end
 
 function copy(A::TensorField)
@@ -364,7 +370,8 @@ function copy(A::TensorField)
     d = copy(A.numElem)
     e = copy(A.nsteps)
     f = A.type
-    return TensorField(a, b, c, d, e, f)
+    g = A.model
+    return TensorField(a, b, c, d, e, f, g)
 end
 
 """
@@ -459,6 +466,7 @@ Types:
 struct Eigen
     f::Vector{Float64}
     ϕ::Matrix{Float64}
+    model::Problem
 end
 
 """
@@ -499,7 +507,7 @@ function *(A::Transformation, B::VectorField)
     if dim * non == n
         if B.A == []
             v =  A.T * B.a
-            return VectorField([], v, B.t, [], length(B.t), B.type)
+            return VectorField([], v, B.t, [], length(B.t), B.type, B.model)
         else
             error("*(A::Transformation, B::VectorField): B contains element data instead of nodal data.")
         end
@@ -515,7 +523,7 @@ function *(B::VectorField, A::Transformation)
     if dim * non == n
         if B.A == []
             v =  (B.a' * A.T)'
-            return VectorField([], v, B.t, [], length(B.t), B.type)
+            return VectorField([], v, B.t, [], length(B.t), B.type. B.model)
         else
             error("*(B::VectorField, A::Transformation): B contains element data instead of nodal data.")
         end
@@ -570,7 +578,7 @@ function *(A::Transformation, B::TensorField)
                 end
             end
         end
-        return TensorField([], E, B.t, [], length(B.t), B.type)
+        return TensorField([], E, B.t, [], length(B.t), B.type, B.model)
     else
         error("*(A::Transformation, B::TensorField): B contains element data instead of nodal data.")
     end
@@ -622,7 +630,7 @@ function *(B::TensorField, A::Transformation)
                 end
             end
         end
-        return TensorField([], E, B.t, [], length(B.t), B.type)
+        return TensorField([], E, B.t, [], length(B.t), B.type, B.model)
     else
         error("*(B::TensorField, A::Transformation): B contains element data instead of nodal data.")
     end
@@ -657,7 +665,7 @@ function *(A::TensorField, B::TensorField)
             push!(C, D)
         end
         a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
     else
         error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
     end
@@ -696,7 +704,7 @@ function *(A::ScalarField, B::TensorField)
             push!(C, D)
         end
         a = [;;]
-        return TensorField(C, a, B.t, num, B.nsteps, :e)
+        return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
     else
         error("*(ScalarField, TensorField): data at nodes is not yet implemented.")
     end
@@ -735,7 +743,7 @@ function *(B::TensorField, A::ScalarField)
             push!(C, D)
         end
         a = [;;]
-        return TensorField(C, a, B.t, num, B.nsteps, :e)
+        return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
     else
         error("*(TensorField, ScalarField): data at nodes is not yet implemented.")
     end
@@ -775,7 +783,7 @@ function /(B::TensorField, A::ScalarField)
             push!(C, D)
         end
         a = [;;]
-        return TensorField(C, a, B.t, num, B.nsteps, :e)
+        return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
     else
         error("/(TensorField, ScalarField): data at nodes is not yet implemented.")
     end
@@ -817,7 +825,7 @@ function *(A::ScalarField, B::ScalarField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, num, A.nsteps, :e)
+        return ScalarField(C, a, A.t, num, A.nsteps, :e, A.model)
     else
         error("*(ScalarField, ScalarField): data at nodes is not yet implemented.")
     end
@@ -859,7 +867,7 @@ function /(A::ScalarField, B::ScalarField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, num, A.nsteps, :e)
+        return ScalarField(C, a, A.t, num, A.nsteps, :e, A.model)
     else
         error("/(ScalarField, ScalarField): data at nodes is not yet implemented.")
     end
@@ -882,7 +890,7 @@ function transpose(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("transpose(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -908,7 +916,7 @@ function adjoint(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("adjoint(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -934,7 +942,7 @@ function unitTensor(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("unit(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
         end
@@ -966,7 +974,7 @@ function trace(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("trace(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
         end
@@ -998,7 +1006,7 @@ function det(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc)
+            return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
         else
             error("det(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
         end
@@ -1060,13 +1068,13 @@ function +(A::ScalarField, B::ScalarField)
                 push!(C, D)
             end
             a = [;;]
-            return ScalarField(C, a, A.t, num, A.nsteps, A.type)
+            return ScalarField(C, a, A.t, num, A.nsteps, A.type, A.model)
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
         if A.type == B.type
-            return ScalarField([], A.a + B.a, A.t, [], A.nsteps, A.type)
+            return ScalarField([], A.a + B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -1128,13 +1136,13 @@ function -(A::ScalarField, B::ScalarField)
                 push!(C, D)
             end
             a = [;;]
-            return ScalarField(C, a, A.t, num, A.nsteps, A.type)
+            return ScalarField(C, a, A.t, num, A.nsteps, A.type, A.model)
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
         if A.type == B.type
-            return ScalarField([], A.a - B.a, A.t, [], A.nsteps, A.type)
+            return ScalarField([], A.a - B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -1201,13 +1209,13 @@ function +(A::VectorField, B::VectorField)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, num, A.nsteps, A.type)
+            return VectorField(C, a, A.t, num, A.nsteps, A.type. A.model)
         else
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
         if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
-            return VectorField([], A.a + B.a, A.t, [], A.nsteps, A.type)
+            return VectorField([], A.a + B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -1269,13 +1277,13 @@ function -(A::VectorField, B::VectorField)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, num, A.nsteps, :e)
+            return VectorField(C, a, A.t, num, A.nsteps, :e, A.model)
         else
             error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
         if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
-            return VectorField([], A.a - B.a, A.t, [], A.nsteps, A.type)
+            return VectorField([], A.a - B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -1294,12 +1302,12 @@ function *(A::VectorField, b)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("*(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0
-        return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type)
+        return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model)
     else
         error("*(VectorField, b): internal error")
     end
@@ -1315,12 +1323,12 @@ function *(b, A::VectorField)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("*(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0
-        return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type)
+        return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model)
     else
         error("*(b, VectorField): internal error")
     end
@@ -1336,12 +1344,12 @@ function /(A::VectorField, b)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e, A.type)
         else
             error("/(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0
-        return VectorField([], A.a / b, A.t, [], A.nsteps, A.type)
+        return VectorField([], A.a / b, A.t, [], A.nsteps, A.type, A.model)
     else
         error("/(VectorField, b): internal error")
     end
@@ -1358,7 +1366,7 @@ function *(A::SparseMatrixCSC, B::VectorField)
             error("*(A::SparseMatrixCSC, B::VectorField): ")
         end
         C = A * B.a
-        return VectorField([], reshape(C, :,1), [0.0], [], 1, type)
+        return VectorField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
         error("*(A::SparseMatrixCSC, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
@@ -1373,7 +1381,7 @@ function *(A::SparseMatrixCSC, B::ScalarField)
             error("*(A::SparseMatrixCSC, B::ScalarField): ")
         end
         C = A * B.a
-        return ScalarField([], reshape(C, :,1), [0.0], [], 1, type)
+        return ScalarField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
         error("*(A::SparseMatrixCSC, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
@@ -1389,7 +1397,7 @@ function \(A::SparseMatrixCSC, B::ScalarField)
             error("\\(A::SparseMatrixCSC, B::ScalarField): type = $(B.type)")
         end
         C = A \ B.a
-        return ScalarField([], reshape(C, :,1), [0.0], [], 1, type)
+        return ScalarField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
         error("\\(A::SparseMatrixCSC, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
@@ -1406,7 +1414,7 @@ function \(A::SparseMatrixCSC, B::VectorField)
             error("\\(A::SparseMatrixCSC, B::VectorField): ")
         end
         C = A \ B.a
-        return VectorField([], reshape(C, :,1), [0.0], [], 1, type)
+        return VectorField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
         error("\\(A::SparseMatrixCSC, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
@@ -1469,12 +1477,12 @@ function +(A::TensorField, B::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, num, A.nsteps, :e)
+            return TensorField(C, a, A.t, num, A.nsteps, :e, A.model)
         else
             error("+(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif A.a != [;;] && B.a != [;;]
-        return TensorField([], A.a + B.a, A.t, [], A.steps, A.type)
+        return TensorField([], A.a + B.a, A.t, [], A.steps, A.type, A.model)
     else
         error("+(TensorField, TensorField): internal error.")
     end
@@ -1533,12 +1541,12 @@ function -(A::TensorField, B::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, num, A.nsteps, :e)
+            return TensorField(C, a, A.t, num, A.nsteps, :e, A.model)
         else
             error("-(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif A.a != [;;] && B.a != [;;]
-        return TensorField([], A.a - B.a, A.t, [], A.nsteps, A.type)
+        return TensorField([], A.a - B.a, A.t, [], A.nsteps, A.type, A.model)
     else
         error("-(TensorField, TensorField): internal error.")
     end
@@ -1554,12 +1562,12 @@ function *(A::TensorField, b)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif A.a != [;;]
-        return TensorField([], A.a * b, A.t, [], A.nsteps, A.type)
+        return TensorField([], A.a * b, A.t, [], A.nsteps, A.type, A.model)
     else
         error("*(TensorField, Any): internal error.")
     end
@@ -1575,12 +1583,12 @@ function *(b, A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
     elseif A.a != [;;]
-        return TensorField([], A.a * b, A.t, [], A.nsteps, A.type)
+        return TensorField([], A.a * b, A.t, [], A.nsteps, A.type, A.model)
     else
         error("*(Any, TensorField): internal error.")
     end
@@ -1594,7 +1602,7 @@ function *(A::ScalarField, b)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
     else
         error("*(ScalarField, Any): data at nodes is not yet implemented.")
     end
@@ -1608,7 +1616,7 @@ function *(b, A::ScalarField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
     else
         error("*(Any, ScalarField): data at nodes is not yet implemented.")
     end
@@ -1623,7 +1631,7 @@ function /(A::TensorField, b)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("/(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1640,7 +1648,7 @@ function /(A::ScalarField, b)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
     else
         error("/(ScalarField, Any): data at nodes is not yet implemented.")
     end
@@ -1654,7 +1662,7 @@ function /(b, A::ScalarField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
     else
         error("/(Any, ScalarField): data at nodes is not yet implemented.")
     end
@@ -1677,7 +1685,7 @@ function inv(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("inv(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -1703,7 +1711,7 @@ function sqrt(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("sqrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -1729,7 +1737,7 @@ function log(A::TensorField)
                 push!(C, D)
             end
             a = [;;]
-            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e)
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
         else
             error("log(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
         end
@@ -1754,7 +1762,7 @@ function log(A::ScalarField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
     else
         error("log(ScalarField): data at nodes is not yet implemented.")
     end
@@ -2018,7 +2026,7 @@ function scalarField(problem, dataField)
             end
         end
     end
-    return ScalarField([], reshape(field, :, 1), [0], [], 1, :scalarInNodes)
+    return ScalarField([], reshape(field, :, 1), [0], [], 1, :scalarInNodes, problem)
 end
 
 """
@@ -2103,7 +2111,7 @@ function vectorField(problem, dataField; type=:u)
     else
         error("vectorField: dimension is $pdim")
     end
-    return VectorField([], reshape(field, :,1), [0], [], 1, type)
+    return VectorField([], reshape(field, :,1), [0], [], 1, type, problem)
 end
 
 """
@@ -2247,7 +2255,7 @@ function tensorField(problem, dataField; type=:e)
             end
         end
     end
-    return TensorField([], reshape(field, :,1), [0], [], 1, type)
+    return TensorField([], reshape(field, :,1), [0], [], 1, type, problem)
 end
 
 """
@@ -2362,12 +2370,16 @@ function elementsToNodes(problem, S)
         s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
     end
     if type == :q3D || type == :q2D
-        return VectorField([], s, S.t, [], S.nsteps, type)
+        return VectorField([], s, S.t, [], S.nsteps, type, problem)
     elseif type == :e || type == :s || type == :F
-        return TensorField([], s, S.t, [], S.nsteps, type)
+        return TensorField([], s, S.t, [], S.nsteps, type, problem)
     else
         error("elementsToNodes: internal error, type=$type.")
     end
+end
+
+function elementsToNodes(S)
+    return elementsToNodes(S.model, S)
 end
 
 """
@@ -2427,12 +2439,16 @@ function fieldError(problem, S)
         res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(res[epn * (l - 1) + 1: epn * l, :]) # ./ m
     end
     if type == :q3D || type == :q2D
-        return VectorField([], res, S.t, [], S.nsteps, type)
+        return VectorField([], res, S.t, [], S.nsteps, type, problem)
     elseif type == :e || type == :s
-        return TensorField([], res, S.t, [], S.nsteps, type)
+        return TensorField([], res, S.t, [], S.nsteps, type, problem)
     else
         error("elementsToNodes: internal error, type=$type.")
     end
+end
+
+function fieldError(S)
+    fieldError(S.model, S)
 end
 
 """
@@ -2467,7 +2483,7 @@ Types:
 - `resz`: Float64 
 """
 function resultant(problem, field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0)
-    if !isa(field, Vector) && !isa(field, Matrix)
+    if !isa(field, VectorField) && !isa(field, Matrix)
         return resultant2(problem, field, phName, grad, component, offsetX, offsetY, offsetZ)
     end
     if problem.type == :NavierStokes
@@ -2486,7 +2502,7 @@ function resultant(problem, field, phName; grad=false, component=:x, offsetX=0, 
     for i in 1:dim
         for j in 1:length(nodes)
             b = axiSymmetric == true ? 2π * coords[3j-2] : 1
-            s[i] += field[dim * nodes[j] - (dim - i)] * b
+            s[i] += field.a[dim * nodes[j] - (dim - i)] * b
         end
     end
     if dim == 1
@@ -2864,6 +2880,10 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     return uvec
 end
 
+function showDoFResults(q, comp; name=comp, visible=false, ff = 0)
+    return showDoFResults(q.model, q, comp, name=name, visible=visible, ff = ff)
+end
+
 """
     FEM.showModalResults(problem, Φ, name=..., visible=...)
 
@@ -2882,7 +2902,11 @@ Types:
 - `tag`: Integer
 """
 function showModalResults(problem, Φ::Eigen; name=:modal, visible=false, ff=1)
-    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D), :uvec, name=name, visible=visible, ff=ff)
+    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, problem), :uvec, name=name, visible=visible, ff=ff)
+end
+
+function showModalResults(Φ::Eigen; name=:modal, visible=false, ff=1)
+    return showModalResults(Φ.model, Φ, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -2903,7 +2927,11 @@ Types:
 - `tag`: Integer
 """
 function showBucklingResults(problem, Φ::Eigen; name="buckling", visible=false, ff=2)
-    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D), :uvec, name=name, visible=visible, ff=ff)
+    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, problem), :uvec, name=name, visible=visible, ff=ff)
+end
+
+function showBucklingResults(Φ::Eigen; name="buckling", visible=false, ff=2)
+    return showBucklingResults(Φ.model, Φ::Eigen, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -2999,6 +3027,10 @@ function showStrainResults(problem, E, comp; name=comp, visible=false, smooth=tr
     return EE
 end
 
+function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
+    return  showStrainResults(E.model, E, comp, name=name, visible=visible, smooth=smooth)
+end
+
 """
     FEM.showElementResults(problem, F, comp; name=..., visible=..., smooth=...)
 
@@ -3025,6 +3057,10 @@ function showElementResults(problem, F, comp; name=comp, visible=false, smooth=t
     else
         error("showElementResults: type is '$(F.type)'")
     end
+end
+
+function showElementResults(F, comp; name=comp, visible=false, smooth=true)
+    return showElementResults(F.model, F, comp, name=name, visible=visible, smooth=smooth)
 end
 
 """
@@ -3137,6 +3173,10 @@ function showStressResults(problem, S, comp; name=comp, visible=false, smooth=tr
     return SS
 end
 
+function showStressResults(S, comp; name=comp, visible=false, smooth=true)
+    return showStressResults(S.model, S, comp, name=name, visible=visible, smooth=smooth)
+end
+
 """
     FEM.showHeatFluxResults(problem, Q, comp; name=..., visible=..., smooth=...)
 
@@ -3247,6 +3287,10 @@ function showHeatFluxResults(problem, S, comp; name=comp, visible=false, smooth=
     return SS
 end
 
+function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true)
+    return showHeatFluxResults(S.model, S, comp, name=name, visible=visible, smooth=smooth)
+end
+
 """
     FEM.plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
 
@@ -3280,7 +3324,7 @@ Types:
 - `xy`: Tuples{Vector{Float64},Vector{Float64}}
 """
 function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
-    gmsh.model.setCurrent(problem.name)
+    #gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
     if points < 2
         error("plotOnPath: number of points is less than two (points = $points)!")
@@ -3371,6 +3415,10 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
     end
 end
 
+function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
+    return plotOnPath(Problem(), pathName, field, points=points, step=step, plot=plot, name=name, visible=visible, offsetX=offsetX, offsetY=offsetY, offsetZ=offsetZ)
+end
+
 """
     FEM.showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
 
@@ -3396,7 +3444,7 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
+function showOnSurface(phName, field; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
     SS = gmsh.view.add(name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
     nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(-1, -1, true, false)

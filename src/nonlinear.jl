@@ -19,7 +19,7 @@ function nodePositionVector(problem)
             r[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
         end
     end
-    return VectorField([], reshape(r, :,1), [0], [], 1, :u3D)
+    return VectorField([], reshape(r, :,1), [0], [], 1, :u3D, problem)
 end
 
 function deformationGradient(problem, r; DoFResults=false)
@@ -208,14 +208,25 @@ function deformationGradient(problem, r; DoFResults=false)
         end
     end
     if DoFResults == true
-        epsilon = TensorField([], E1, r.t, [], nsteps, type)
+        epsilon = TensorField([], E1, r.t, [], nsteps, type, problem)
         return epsilon
     else
-        epsilon = TensorField(ε, [;;], r.t, numElem, nsteps, type)
+        epsilon = TensorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         return epsilon
     end
 end
 
+function deformationGradient(r; DoFResults=false)
+    return deformationGradient(r.model, r, DoFResults=DoFResults)
+end
+
+function gradientOf(r; DoFResults=false)
+    return deformationGradient(r.model, r, DoFResults=DoFResults)
+end
+
+function ∇(r::VectorField; DoFResults=false)
+    return deformationGradient(r.model, r, DoFResults=DoFResults)
+end
 
 
 
@@ -494,6 +505,10 @@ function tangentMatrixConstitutive(problem, r)
     return K
 end
 
+function tangentMatrixConstitutive(r)
+    return tangentMatrixConstitutive(r.model, r)
+end
+
 function tangentMatrixInitialStress(problem, r)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
@@ -648,6 +663,10 @@ function tangentMatrixInitialStress(problem, r)
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
     return K
+end
+
+function tangentMatrixInitialStress(r)
+    return tangentMatrixInitialStress(r.model, r)
 end
 
 function equivalentNodalForce(problem, r)
@@ -809,7 +828,11 @@ function equivalentNodalForce(problem, r)
             end
         end
     end
-    return VectorField([], reshape(f, :,1), [0], [], 1, :f3D)
+    return VectorField([], reshape(f, :,1), [0], [], 1, :f3D, problem)
+end
+
+function equivalentNodalForce(r)
+    return equivalentNodalForce(r.model, r)
 end
 
 function nonFollowerLoadVector(problem, r, loads)
@@ -958,7 +981,11 @@ function nonFollowerLoadVector(problem, r, loads)
             end
         end
     end
-    return VectorField([], reshape(fp, :,1), [0], [], 1, :f3D)
+    return VectorField([], reshape(fp, :,1), [0], [], 1, :f3D, problem)
+end
+
+function nonFollowerLoadVector(r, loads)
+    return nonFollowerLoadVector(r.model, r, loads)
 end
 
 """
@@ -1043,6 +1070,10 @@ function applyDeformationBoundaryConditions!(problem, deformVec, supports; fact=
             end
         end
     end
+end
+
+function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
+    return applyDeformationBoundaryConditions!(deformVec.model, deformVec, supports, fact=fact)
 end
 
 """
@@ -1214,6 +1245,10 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
     #dropzeros!(dampMat)
 end
 
+function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
+    return suppressDeformationAtBoundaries!(loadVec.model, stiffMat, loadVec, supports)
+end
+
 """
     FEM.suppressDeformationAtBoundaries(problem, stiffMat, loadVec, supports)
 
@@ -1235,6 +1270,10 @@ function suppressDeformationAtBoundaries(problem, stiffMat, loadVec, supports)
     f1 = copy(loadVec)
     suppressDeformationAtBoundaries!(problem, K1, f1, supports)
     return K1, f1
+end
+
+function suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
+    return suppressDeformationAtBoundaries(loadVec.model, stiffMat, loadVec, supports)
 end
 
 function solveDeformation(problem, load, supp;
@@ -1304,7 +1343,7 @@ function solveDeformation(problem, load, supp;
         r1 = zeros(length(r0.a), 1)
         r1[:,1] = r[:,n]
     end
-    r1 = VectorField([], r1, 1:size(r1, 2), [], size(r1, 2), :u3D)
+    r1 = VectorField([], r1, 1:size(r1, 2), [], size(r1, 2), :u3D, problem)
     if plotConvergence == true
         return r1, e
     else
@@ -1319,4 +1358,8 @@ function showDeformationResults(problem, r, comp; name=comp, visible=false)
         u.a[:, i] = r.a[:, i] - r0.a
     end
     return showDoFResults(problem, u, comp, name=name, visible=visible)
+end
+
+function showDeformationResults(r, comp; name=comp, visible=false)
+    return showDeformationResults(r.model, r, comp, name=name, visible=visible)
 end

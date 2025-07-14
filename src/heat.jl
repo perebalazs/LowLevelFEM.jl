@@ -640,7 +640,7 @@ Types:
 - `thermLoadVec`: VectorField
 """
 #function thermalLoadVector(problem, T; T₀=1im)
-function thermalLoadVector(problem, T; T₀=ScalarField([], zeros(problem.non, 1), [0], [], 1, :T))
+function thermalLoadVector(problem, T; T₀=ScalarField([], zeros(problem.non, 1), [0], [], 1, :T, problem))
     if problem.type == :AxiSymmetric
         return thermalLoadVectorAXI(problem, T, T₀)
     else
@@ -779,7 +779,7 @@ function thermalLoadVectorSolid(problem, T, T₀)
     elseif pdim == 2
         type = :f2D
     end
-    return VectorField([], reshape(fT, :, 1), [0], [], 1, type)
+    return VectorField([], reshape(fT, :, 1), [0], [], 1, type, problem)
 end
 
 function thermalLoadVectorAXI(problem, T, T₀)
@@ -893,7 +893,7 @@ function thermalLoadVectorAXI(problem, T, T₀)
             end
         end
     end
-    return VectorField([], reshape(fT, :, 1), [0], [], 1, :f2D)
+    return VectorField([], reshape(fT, :, 1), [0], [], 1, :f2D, problem)
 end
 
 """
@@ -1207,11 +1207,15 @@ function solveHeatFlux(problem, T; DoFResults=false)
         type = Symbol(String(type) * "2D")
     end
     if DoFResults == true
-        return VectorField([], q1, T.t, [], nsteps, type)
+        return VectorField([], q1, T.t, [], nsteps, type, problem)
     else
-        sigma = VectorField(σ, [;;], T.t, numElem, nsteps, type)
+        sigma = VectorField(σ, [;;], T.t, numElem, nsteps, type, problem)
         return sigma
     end
+end
+
+function solveHeatFlux(T; DoFResults=false)
+    return solveHeatFlux(T.model, T, DoFResults=DoFResults)
 end
 
 """
@@ -1238,7 +1242,7 @@ function initialTemperature(problem, name; T=1im)
             T0[nodeTags[i]*dim-(dim-1)] = T
         end
     end
-    return ScalarField([], reshape(T0, :,1), [0], [], 1, :T)
+    return ScalarField([], reshape(T0, :,1), [0], [], 1, :T, problem)
 end
 
 """
@@ -1328,7 +1332,7 @@ function FDM(K, C, q, TT0, tₘₐₓ, Δt; ϑ=0.5)
         end
     end
 
-    return ScalarField([], T, t, [], length(t), :T)
+    return ScalarField([], T, t, [], length(t), :T, q.model)
 end
 
 """

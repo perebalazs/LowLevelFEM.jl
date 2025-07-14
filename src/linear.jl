@@ -274,6 +274,10 @@ function nonLinearStiffnessMatrix(problem, q; elements=[])
     end
 end
 
+function nonLinearStiffnessMatrix(q; elements=[])
+    return nonLinearStiffnessMatrix(q.model, q; elements=[])
+end
+
 function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
@@ -1029,9 +1033,9 @@ function loadVector(problem, loads)
         error("loadVector: wrong pdim ($pdim).")
     end
     if type == :f3D || type == :f2D
-        return VectorField([], reshape(fp, :, 1), [], [], 1, type)
+        return VectorField([], reshape(fp, :, 1), [], [], 1, type, problem)
     elseif type == :qn
-        return ScalarField([], reshape(fp, :, 1), [], [], 1, type)
+        return ScalarField([], reshape(fp, :, 1), [], [], 1, type, problem)
     end
 end
 
@@ -1051,7 +1055,7 @@ Types:
 - `loadVec`: Vector 
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, stiffMat, loadVec, supports)
+function applyBoundaryConditions!(problem::Problem, stiffMat::SparseMatrixCSC, loadVec, supports)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -1062,6 +1066,10 @@ function applyBoundaryConditions!(problem, stiffMat, loadVec, supports)
     massMat = []
     dampMat = []
     return
+end
+
+function applyBoundaryConditions!(stiffMat::SparseMatrixCSC, loadVec, supports)
+    return applyBoundaryConditions!(loadVec.model, stiffMat, loadVec, supports)
 end
 
 """
@@ -1095,6 +1103,10 @@ function applyBoundaryConditions(problem, stiffMat0, loadVec0, supports)
     return stiffMat, loadVec
 end
 
+function applyBoundaryConditions(stiffMat0, loadVec0, supports)
+    return applyBoundaryConditions(loadVec0.model, stiffMat0, loadVec0, supports)
+end
+
 """
     FEM.applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec, supports)
 
@@ -1110,7 +1122,7 @@ Types:
 - `loadVec`: Vector 
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec, supports; fix=1)
+function applyBoundaryConditions!(problem, heatCondMat::SparseMatrixCSC, heatCapMat::SparseMatrixCSC, heatFluxVec, supports; fix=1)
     if !isa(supports, Vector)
         error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
     end
@@ -1119,6 +1131,10 @@ function applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec,
     applyBoundaryConditions!(problem, heatCondMat, heatCapMat, dampMat, heatFluxVec, supports, fix=fix)
     dampMat = []
     return
+end
+
+function applyBoundaryConditions!(heatCondMat::SparseMatrixCSC, heatCapMat::SparseMatrixCSC, heatFluxVec, supports; fix=1)
+    return applyBoundaryConditions!(heatFluxVec.model, heatCondMat, heatCapMat, heatFluxVec, supports, fix=fix)
 end
 
 """
@@ -1162,7 +1178,7 @@ Types:
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports; fix=1)
+function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::SparseMatrixCSC, dampMat::SparseMatrixCSC, loadVec, supports; fix=1)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -1312,6 +1328,10 @@ function applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, 
     dropzeros!(dampMat)
 end
 
+function applyBoundaryConditions!(stiffMat::SparseMatrixCSC, massMat::SparseMatrixCSC, dampMat::SparseMatrixCSC, loadVec, supports; fix=1)
+    return applyBoundaryConditions!(loadVec.model, stiffMat, massMat, dampMat, loadVec, supports, fix=fix)
+end
+
 """
     FEM.applyBoundaryConditions!(problem, dispVec, supports)
 
@@ -1326,7 +1346,7 @@ Types:
 - `dispVec`: Vector{Float64}
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, dispVec, supports)
+function applyBoundaryConditions!(problem, dispVec::Matrix, supports)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -1377,6 +1397,14 @@ function applyBoundaryConditions!(problem, dispVec, supports)
     end
 end
 
+function applyBoundaryConditions!(dispVec, supports)
+    return applyBoundaryConditions!(dispVec.model, dispVec, supports)
+end
+
+function applyBoundaryConditions!(problem, dispVec::VectorField, supports)
+    return applyBoundaryConditions!(problem, dispVec.a, supports)
+end
+
 """
     FEM.applyElasticSupport!(problem, stiffMat, elastSupp)
 
@@ -1421,7 +1449,7 @@ function solveDisplacement(K, f)
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
-    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type)
+    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type, f.model)
 end
 
 """
@@ -1450,7 +1478,7 @@ function solveDisplacement(problem, load, supp)
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
-    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type)
+    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type, problem)
 end
 
 """
@@ -1480,7 +1508,7 @@ function solveDisplacement(problem, load, supp, elsupp)
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
-    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type)
+    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type, problem)
 end
 
 """
@@ -1692,12 +1720,16 @@ function solveStrain(problem, q; DoFResults=false)
         end
     end
     if DoFResults == true
-        epsilon = TensorField([], E1, q.t, [], nsteps, type)
+        epsilon = TensorField([], E1, q.t, [], nsteps, type, problem)
         return epsilon
     else
-        epsilon = TensorField(ε, [;;], q.t, numElem, nsteps, type)
+        epsilon = TensorField(ε, [;;], q.t, numElem, nsteps, type, problem)
         return epsilon
     end
+end
+
+function solveStrain(q; DoFResults=false)
+    return solveStrain(q.model, q, DoFResults=DoFResults)
 end
 
 """
@@ -1720,7 +1752,7 @@ Types:
 - `T₀`: Vector{Float64}
 - `S`: TensorField or Matrix{Float64}
 """
-function solveStress(problem, q; T=ScalarField([],[;;],[],[],0,:null), T₀=ScalarField([],reshape(zeros(problem.non),:,1),[0],[],1,:T), DoFResults=false)
+function solveStress(problem, q; T=ScalarField([],[;;],[],[],0,:null,problem), T₀=ScalarField([],reshape(zeros(problem.non),:,1),[0],[],1,:T,problem), DoFResults=false)
     gmsh.model.setCurrent(problem.name)
     
     if !isa(q, VectorField) 
@@ -1971,16 +2003,20 @@ function solveStress(problem, q; T=ScalarField([],[;;],[],[],0,:null), T₀=Scal
         end
     end
     if DoFResults == true
-        sigma = TensorField([], S1, q.t, [], nsteps, type)
+        sigma = TensorField([], S1, q.t, [], nsteps, type, problem)
         return sigma
     else
-        sigma = TensorField(σ, [;;], q.t, numElem, nsteps, type)
+        sigma = TensorField(σ, [;;], q.t, numElem, nsteps, type, problem)
         return sigma
     end
 end
 
+function solveStress(q; T=ScalarField([],[;;],[],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:T,q.model), DoFResults=false)
+    return solveStress(q.model, q, T=T, T₀=T₀, DoFResults=DoFResults)
+end
+
 """
-    FEM.solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
+    FEM.solveEigenModes(problem, K, M; n=6, fₘᵢₙ=1.01)
 
 Solves the eigen frequencies and mode shapes of a problem given by stiffness
 matrix `K` and the mass matrix `M`. `n` is the number of eigenfrequencies to solve,
@@ -1996,7 +2032,7 @@ Types:
 - `fₘᵢₙ`: Float64
 - `modes`: Eigen 
 """
-function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
+function solveEigenModes(problem, K, M; n=6, fₘᵢₙ=0.01)
     ωₘᵢₙ² = (2π * fₘᵢₙ)^2
     ω², ϕ = Arpack.eigs(K, M, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
     #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
@@ -2008,11 +2044,11 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
     #end
     f = sqrt.(abs.(real(ω²))) / 2π
     ϕ1 = real(ϕ)
-    return Eigen(f, ϕ1)
+    return Eigen(f, ϕ1, problem)
 end
 
 """
-    FEM.solveBucklingModes(K, Knl; n=6)
+    FEM.solveBucklingModes(problem, K, Knl; n=6)
 
 Solves the critical force multipliers and buckling mode shapes of a problem given by stiffness
 matrix `K` and the nonlinear stiffness matrix `Knl`. `n` is the number of buckling modes to solve.
@@ -2026,7 +2062,7 @@ Types:
 - `n`: Int64
 - `modes`: Eigen 
 """
-function solveBucklingModes(K, Knl; n=6)
+function solveBucklingModes(problem, K, Knl; n=6)
     λ, ϕ = Arpack.eigs(K, -Knl, nev=n, which=:LR, sigma=0, maxiter=1000)
     #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
     #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
@@ -2037,7 +2073,7 @@ function solveBucklingModes(K, Knl; n=6)
     #end
     f = abs.(real(λ))
     ϕ1 = real(ϕ)
-    return Eigen(f, ϕ1)
+    return Eigen(f, ϕ1, problem)
 end
 
 """
@@ -2070,7 +2106,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
     K = stiffnessMatrix(problem)
     M = massMatrix(problem)
     if length(constraints) == 0
-        return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        return solveEigenModes(problem, K, M, n=n, fₘᵢₙ=fₘᵢₙ)
     elseif length(loads) == 0
         fdof = freeDoFs(problem, constraints)
         cdof = constrainedDoFs(problem, constraints)
@@ -2078,14 +2114,12 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         M = M[fdof, fdof]
         #f = zeros(dof)
         #applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        mod = solveEigenModes(problem, K, M, n=n, fₘᵢₙ=fₘᵢₙ)
         nn = length(mod.f)
         ϕ1 = zeros(dof, nn)
-        #display("ϕ1[fdof,:]: $(size(ϕ1[fdof,:]))")
-        #display("mod.ϕ: $(size(mod.ϕ))")
         ϕ1[fdof,:] .= mod.ϕ
         applyBoundaryConditions!(problem, ϕ1, constraints)
-        return Eigen(mod.f, ϕ1)
+        return Eigen(mod.f, ϕ1, problem)
     else
         fdof = freeDoFs(problem, constraints)
         cdof = constrainedDoFs(problem, constraints)
@@ -2110,10 +2144,10 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         Knl = nonLinearStiffnessMatrix(problem, q)
 
         #applyBoundaryConditions!(problem, K, M, Knl, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes((K + Knl)[fdof,fdof], M[fdof,fdof], n=n, fₘᵢₙ=fₘᵢₙ)
+        mod = solveEigenModes(problem, (K + Knl)[fdof,fdof], M[fdof,fdof], n=n, fₘᵢₙ=fₘᵢₙ)
         ϕ1[fdof,:] .= mod.ϕ
         applyBoundaryConditions!(problem, ϕ1, constraints)
-        return Eigen(mod.f, ϕ1)
+        return Eigen(mod.f, ϕ1, problem)
     end
 end
 
@@ -2157,7 +2191,7 @@ function solveBuckling(problem, loads, constraints; n=6)
     Knl = nonLinearStiffnessMatrix(problem, q)
 
     applyBoundaryConditions!(problem, Knl, f, constraints)
-    return solveBucklingModes(K, Knl, n=n)
+    return solveBucklingModes(problem, K, Knl, n=n)
 end
 
 """
@@ -2205,7 +2239,7 @@ function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im, type=:u)
     else
         error("initialDisplacement: wrong pdim=$pdim")
     end
-    return VectorField([], reshape(u0, :,1), [0], [], 1, type)
+    return VectorField([], reshape(u0, :,1), [0], [], 1, type, problem)
 end
 
 """
@@ -2494,7 +2528,7 @@ function CDM(K, M, C, f, uu0, vv0, T, Δt)
         u00 = u0
         u0 = u1
     end
-    return VectorField([], u, t, [], length(t), uu0.type), VectorField([], v, t, [], length(t), vv0.type)
+    return VectorField([], u, t, [], length(t), uu0.type, f.model), VectorField([], v, t, [], length(t), vv0.type, f.model)
 end
 
 function CDM(K, M, f, u0, v0, T, Δt)
@@ -2588,7 +2622,7 @@ function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (
         v0 = v1
         a0 = a1
     end
-    return VectorField([], u, t, [], length(t), uu0.type), VectorField([], v, t, [], length(t), vv0.type)
+    return VectorField([], u, t, [], length(t), uu0.type, f.model), VectorField([], v, t, [], length(t), vv0.type, f.model)
 end
 
 """
