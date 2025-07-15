@@ -39,6 +39,7 @@ struct Material
     λ::Float64
     μ::Float64
     κ::Float64
+    Material() = new()
 end
 
 
@@ -77,6 +78,7 @@ struct Problem
     thickness::Float64
     non::Int64
     Problem() = new()
+    Problem(name, type, dim, pdim, material, thickness, non) = new(name, type, dim, pdim, material, thickness, non)
     function Problem(mat; thickness=1, type=:Solid, bandwidth=:none)
         if type == :Solid
             dim = 3
