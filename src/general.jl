@@ -40,6 +40,7 @@ struct Material
     μ::Float64
     κ::Float64
     Material() = new()
+    Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 end
 
 
@@ -1294,7 +1295,7 @@ function -(A::VectorField, B::VectorField)
     end
 end
 
-function *(A::VectorField, b)
+function *(A::VectorField, b::Number)
     if length(A.A) != 0
         if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D
             nsteps = A.nsteps
@@ -1315,7 +1316,7 @@ function *(A::VectorField, b)
     end
 end
 
-function *(b, A::VectorField)
+function *(b::Number, A::VectorField)
     if length(A.A) != 0
         if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D
             nsteps = A.nsteps
@@ -1336,7 +1337,7 @@ function *(b, A::VectorField)
     end
 end
 
-function /(A::VectorField, b)
+function /(A::VectorField, b::Number)
     if length(A.A) != 0
         if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D
             nsteps = A.nsteps
@@ -1357,6 +1358,7 @@ function /(A::VectorField, b)
     end
 end
 
+#=
 function *(A::SparseMatrixCSC, B::VectorField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
@@ -1365,7 +1367,7 @@ function *(A::SparseMatrixCSC, B::VectorField)
         elseif B.type == :u3D
             type = :f3D
         else
-            error("*(A::SparseMatrixCSC, B::VectorField): ")
+            error("*(A::SparseMatrixCSC, B::VectorField): neither 2D nor 3D (type=$(B.type))?")
         end
         C = A * B.a
         return VectorField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
@@ -1374,11 +1376,52 @@ function *(A::SparseMatrixCSC, B::VectorField)
     end
 end
 
-function *(A::SparseMatrixCSC, B::ScalarField)
+function *(A::Matrix, B::VectorField)
+    type = :none
+    if B.a != [;;] && B.nsteps == 1
+        if B.type == :u2D
+            type = :f2D
+        elseif B.type == :u3D
+            type = :f3D
+        elseif B.type == :u3D
+            type = :f3D
+        else
+            error("*(A::Matrix, B::VectorField): neither 2D nor 3D (type=$(B.type))?")
+        end
+        C = A * B.a
+        return VectorField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
+    else
+        error("*(A::Matrix, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+    end
+end
+=#
+
+function *(A::Union{SparseMatrixCSC,Matrix}, B::VectorField)
+    type = :none
+    if B.a != [;;] && B.nsteps == 1
+        if B.type == :u2D
+            type = :f2D
+        elseif B.type == :u3D
+            type = :f3D
+        elseif B.type == :other
+            type = :other
+        else
+            error("*(A::Union{SparseMatrixCSC,Matrix}, B::VectorField): neither 2D nor 3D (type=$(B.type))?")
+        end
+        C = A * B.a
+        return VectorField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
+    else
+        error("*(A::Union{SparseMatrixCSC,Matrix}, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+    end
+end
+
+function *(A::Union{SparseMatrixCSC,Matrix}, B::ScalarField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
         if B.type == :T
             type = :qn
+        elseif B.type == :other
+            type = :other
         else
             error("*(A::SparseMatrixCSC, B::ScalarField): ")
         end
@@ -1390,11 +1433,13 @@ function *(A::SparseMatrixCSC, B::ScalarField)
 end
 
 import Base.\
-function \(A::SparseMatrixCSC, B::ScalarField)
+function \(A::Union{SparseMatrixCSC,Matrix}, B::ScalarField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
         if B.type == :qn
             type = :T
+        elseif B.type == :other
+            type = :other
         else
             error("\\(A::SparseMatrixCSC, B::ScalarField): type = $(B.type)")
         end
@@ -1405,13 +1450,15 @@ function \(A::SparseMatrixCSC, B::ScalarField)
     end
 end
 
-function \(A::SparseMatrixCSC, B::VectorField)
+function \(A::Union{SparseMatrixCSC,Matrix}, B::VectorField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
         if B.type == :f2D
             type = :u2D
         elseif B.type == :f3D
             type = :u3D
+        elseif B.type == :other
+            type = :other
         else
             error("\\(A::SparseMatrixCSC, B::VectorField): ")
         end
@@ -1554,7 +1601,7 @@ function -(A::TensorField, B::TensorField)
     end
 end
 
-function *(A::TensorField, b)
+function *(A::TensorField, b::Number)
     if length(A.A) != 0
         if A.type == :s || A.type == :e || A.type == :F
             nsteps = A.nsteps
@@ -1575,7 +1622,7 @@ function *(A::TensorField, b)
     end
 end
 
-function *(b, A::TensorField)
+function *(b::Number, A::TensorField)
     if length(A.A) != 0
         if A.type == :s || A.type == :e || A.type == :F
             nsteps = A.nsteps
@@ -1596,7 +1643,7 @@ function *(b, A::TensorField)
     end
 end
 
-function *(A::ScalarField, b)
+function *(A::ScalarField, b::Number)
     if length(A.A) != 0
         C = []
         for i in 1:length(A.A)
@@ -1610,7 +1657,7 @@ function *(A::ScalarField, b)
     end
 end
 
-function *(b, A::ScalarField)
+function *(b::Number, A::ScalarField)
     if length(A.A) != 0
         C = []
         for i in 1:length(A.A)
@@ -1624,7 +1671,7 @@ function *(b, A::ScalarField)
     end
 end
 
-function /(A::TensorField, b)
+function /(A::TensorField, b::Number)
     if length(A.A) != 0
         if A.type == :s || A.type == :e || A.type == :F
             C = []
@@ -1642,7 +1689,7 @@ function /(A::TensorField, b)
     end
 end
 
-function /(A::ScalarField, b)
+function /(A::ScalarField, b::Number)
     if length(A.A) != 0
         C = []
         for i in 1:length(A.A)
@@ -1656,7 +1703,7 @@ function /(A::ScalarField, b)
     end
 end
 
-function /(b, A::ScalarField)
+function /(b::Number, A::ScalarField)
     if length(A.A) != 0
         C = []
         for i in 1:length(A.A)
