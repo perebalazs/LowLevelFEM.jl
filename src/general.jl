@@ -41,6 +41,7 @@ struct Material
     κ::Float64
     Material() = new()
     Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ)
 end
 
 
@@ -206,6 +207,19 @@ function *(A::Transformation, B::Transformation)
         error("*(A::Transformation, B::Transformation): size missmatch non = $(A.non) ≠ $(B.non), dim = $(A.dim) ≠ $(B.dim).")
     end
     return Transformation(dropzeros(A.T * B.T), A.non, A.dim)
+end
+
+struct SystemMatrix
+    A::SparseMatrixCSC
+    model::Problem
+end
+
+function Base.show(io::IO, M::SystemMatrix)
+    display(M.A)
+end
+
+function copy(A::SystemMatrix)
+    return SystemMatrix(copy(A.A), A.model)
 end
 
 """

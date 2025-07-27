@@ -139,7 +139,7 @@ function stiffnessMatrixSolid(problem; elements=[])
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
 function stiffnessMatrixAXI(problem; elements=[])
@@ -250,7 +250,7 @@ function stiffnessMatrixAXI(problem; elements=[])
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
 """
@@ -428,7 +428,7 @@ function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
 function nonLinearStiffnessMatrixAXI(problem; elements=[])
@@ -539,7 +539,7 @@ function nonLinearStiffnessMatrixAXI(problem; elements=[])
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
 """
@@ -673,7 +673,7 @@ function massMatrix(problem; elements=[], lumped=true)
         M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
     end
     dropzeros!(M)
-    return M
+    return SystemMatrix(M, problem)
 end
 
 """
@@ -700,6 +700,9 @@ Types:
 - `dampingMatrix`: SparseMatrix
 """
 function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
+    if K.model != M.model
+        error("dampingMatrix: problem of K and M are not the same.")
+    end
     dof, dof = size(M)
     dof2, dof2 = size(K)
     if dof != nnz(M)
@@ -719,7 +722,7 @@ function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐ�
         C += β[i] * MK
     end
     dropzeros!(C)
-    return C
+    return SystemMatrix(C, K.model)
 end
 
 """
@@ -878,7 +881,7 @@ function elasticSupportMatrix(problem, elSupports)
 
     C = sparse(I, J, V, dof, dof)
     dropzeros!(C)
-    return C
+    return SystemMatrix(C, problem)
 end
 
 """
@@ -1055,21 +1058,17 @@ Types:
 - `loadVec`: Vector 
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem::Problem, stiffMat::SparseMatrixCSC, loadVec, supports)
+function applyBoundaryConditions!(stiffMat::SystemMatrix, loadVec, supports)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
-    dof, dof = size(stiffMat)
-    massMat = spzeros(dof, dof)
-    dampMat = spzeros(dof, dof)
+    dof, dof = size(stiffMat.A)
+    massMat = SystemMatrix(spzeros(dof, dof), stiffMat.model)
+    dampMat = SystemMatrix(spzeros(dof, dof), stiffMat.model)
     applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
-    massMat = []
-    dampMat = []
+    massMat.A = []
+    dampMat.A = []
     return
-end
-
-function applyBoundaryConditions!(stiffMat::SparseMatrixCSC, loadVec, supports)
-    return applyBoundaryConditions!(loadVec.model, stiffMat, loadVec, supports)
 end
 
 """
@@ -1088,23 +1087,19 @@ Types:
 - `loadVec`: Vector 
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions(problem, stiffMat0, loadVec0, supports)
+function applyBoundaryConditions(stiffMat0, loadVec0, supports)
     if !isa(supports, Vector)
         error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
     end
-    dof, dof = size(stiffMat0)
-    massMat = spzeros(dof, dof)
-    dampMat = spzeros(dof, dof)
+    dof, dof = size(stiffMat0.A)
+    massMat = SystemMatrix(spzeros(dof, dof), stiffMat0
+    dampMat = SystemMatrix(spzeros(dof, dof), stiffMat0.model)
     stiffMat = copy(stiffMat0)
     loadVec = copy(loadVec0)
-    applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
-    massMat = []
-    dampMat = []
+    applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
+    massMat.A = []
+    dampMat.A = []
     return stiffMat, loadVec
-end
-
-function applyBoundaryConditions(stiffMat0, loadVec0, supports)
-    return applyBoundaryConditions(loadVec0.model, stiffMat0, loadVec0, supports)
 end
 
 """
@@ -1122,19 +1117,15 @@ Types:
 - `loadVec`: Vector 
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, heatCondMat::SparseMatrixCSC, heatCapMat::SparseMatrixCSC, heatFluxVec, supports; fix=1)
+function applyBoundaryConditions!(heatCondMat::SystemMatrix, heatCapMat::SystemMatrix, heatFluxVec, supports; fix=1)
     if !isa(supports, Vector)
         error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
     end
-    dof, dof = size(heatCondMat)
-    dampMat = spzeros(dof, dof)
-    applyBoundaryConditions!(problem, heatCondMat, heatCapMat, dampMat, heatFluxVec, supports, fix=fix)
-    dampMat = []
+    dof, dof = size(heatCondMat.A)
+    dampMat = SystemMatrix(spzeros(dof, dof), heatCondMat.model)
+    applyBoundaryConditions!(heatCondMat, heatCapMat, dampMat, heatFluxVec, supports, fix=fix)
+    dampMat.A = []
     return
-end
-
-function applyBoundaryConditions!(heatCondMat::SparseMatrixCSC, heatCapMat::SparseMatrixCSC, heatFluxVec, supports; fix=1)
-    return applyBoundaryConditions!(heatFluxVec.model, heatCondMat, heatCapMat, heatFluxVec, supports, fix=fix)
 end
 
 """
@@ -1178,13 +1169,16 @@ Types:
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::SparseMatrixCSC, dampMat::SparseMatrixCSC, loadVec, supports; fix=1)
+function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix, dampMat::SystemMatrix, loadVec, supports; fix=1)
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
-    gmsh.model.setCurrent(problem.name)
+    if stiffMat.model != massMat.model || massMat.model != dampMat.model
+        error("applyBoundaryConditions!: K, M or C does not belong to the same problem.")
+    end
+    gmsh.model.setCurrent(stiffMat.model.name)
     dof, dof = size(stiffMat)
-    pdim = problem.pdim
+    pdim = stiffMat.model.pdim
 
     for i in 1:length(supports)
         name, ux, uy, uz = supports[i]
@@ -1201,9 +1195,9 @@ function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::S
             nodeTagsX .-= (pdim - 1)
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
-                f0 = stiffMat[:, nodeTagsX] * uux
+                f0 = stiffMat.A[:, nodeTagsX] * uux
             else
-                f0 = stiffMat[:, nodeTagsX] * ux
+                f0 = stiffMat.A[:, nodeTagsX] * ux
                 f0 = sum(f0, dims=2)
             end
             loadVec.a .-= f0
@@ -1214,9 +1208,9 @@ function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::S
             nodeTagsY .-= (pdim - 2)
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
-                f0 = stiffMat[:, nodeTagsY] * uuy
+                f0 = stiffMat.A[:, nodeTagsY] * uuy
             else
-                f0 = stiffMat[:, nodeTagsY] * uy
+                f0 = stiffMat.A[:, nodeTagsY] * uy
                 f0 = sum(f0, dims=2)
             end
             loadVec.a .-= f0
@@ -1226,9 +1220,9 @@ function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::S
             nodeTagsZ *= 3
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
-                f0 = stiffMat[:, nodeTagsZ] * uuz
+                f0 = stiffMat.A[:, nodeTagsZ] * uuz
             else
-                f0 = stiffMat[:, nodeTagsZ] * uz
+                f0 = stiffMat.A[:, nodeTagsZ] * uz
                 f0 = sum(f0, dims=2)
             end
             loadVec.a .-= f0
@@ -1254,15 +1248,15 @@ function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::S
             jj = 0
             for j ∈ nodeTagsX
                 jj += 1
-                stiffMat[j, :] .= 0
-                stiffMat[:, j] .= 0
-                stiffMat[j, j] = fix
-                massMat[j, :] .= 0
-                massMat[:, j] .= 0
-                massMat[j, j] = 1
-                dampMat[j, :] .= 0
-                dampMat[:, j] .= 0
-                dampMat[j, j] = fix
+                stiffMat.A[j, :] .= 0
+                stiffMat.A[:, j] .= 0
+                stiffMat.A[j, j] = fix
+                massMat.A[j, :] .= 0
+                massMat.A[:, j] .= 0
+                massMat.A[j, j] = 1
+                dampMat.A[j, :] .= 0
+                dampMat.A[:, j] .= 0
+                dampMat.A[j, j] = fix
                 if isa(ux, Function)
                     loadVec.a[j] = uux[jj]
                 else
@@ -1280,15 +1274,15 @@ function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::S
             jj = 0
             for j ∈ nodeTagsY
                 jj += 1
-                stiffMat[j, :] .= 0
-                stiffMat[:, j] .= 0
-                stiffMat[j, j] = fix
-                massMat[j, :] .= 0
-                massMat[:, j] .= 0
-                massMat[j, j] = 1
-                dampMat[j, :] .= 0
-                dampMat[:, j] .= 0
-                dampMat[j, j] = fix
+                stiffMat.A[j, :] .= 0
+                stiffMat.A[:, j] .= 0
+                stiffMat.A[j, j] = fix
+                massMat.A[j, :] .= 0
+                massMat.A[:, j] .= 0
+                massMat.A[j, j] = 1
+                dampMat.A[j, :] .= 0
+                dampMat.A[:, j] .= 0
+                dampMat.A[j, j] = fix
                 if isa(uy, Function)
                     loadVec.a[j] = uuy[jj]
                 else
@@ -1305,15 +1299,15 @@ function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::S
             jj = 0
             for j ∈ nodeTagsZ
                 jj += 1
-                stiffMat[j, :] .= 0
-                stiffMat[:, j] .= 0
-                stiffMat[j, j] = fix
-                massMat[j, :] .= 0
-                massMat[:, j] .= 0
-                massMat[j, j] = 1
-                dampMat[j, :] .= 0
-                dampMat[:, j] .= 0
-                dampMat[j, j] = fix
+                stiffMat.A[j, :] .= 0
+                stiffMat.A[:, j] .= 0
+                stiffMat.A[j, j] = fix
+                massMat.A[j, :] .= 0
+                massMat.A[:, j] .= 0
+                massMat.A[j, j] = 1
+                dampMat.A[j, :] .= 0
+                dampMat.A[:, j] .= 0
+                dampMat.A[j, j] = fix
                 if isa(uz, Function)
                     loadVec.a[j] = uuz[jj]
                 else
@@ -1323,13 +1317,9 @@ function applyBoundaryConditions!(problem, stiffMat::SparseMatrixCSC, massMat::S
         end
     end
 
-    dropzeros!(stiffMat)
-    dropzeros!(massMat)
-    dropzeros!(dampMat)
-end
-
-function applyBoundaryConditions!(stiffMat::SparseMatrixCSC, massMat::SparseMatrixCSC, dampMat::SparseMatrixCSC, loadVec, supports; fix=1)
-    return applyBoundaryConditions!(loadVec.model, stiffMat, massMat, dampMat, loadVec, supports, fix=fix)
+    dropzeros!(stiffMat.A)
+    dropzeros!(massMat.A)
+    dropzeros!(dampMat.A)
 end
 
 """
@@ -1397,12 +1387,8 @@ function applyBoundaryConditions!(problem, dispVec::Matrix, supports)
     end
 end
 
-function applyBoundaryConditions!(dispVec, supports)
-    return applyBoundaryConditions!(dispVec.model, dispVec, supports)
-end
-
-function applyBoundaryConditions!(problem, dispVec::VectorField, supports)
-    return applyBoundaryConditions!(problem, dispVec.a, supports)
+function applyBoundaryConditions!(dispVec::VectorField, supports)
+    return applyBoundaryConditions!(dispVec.model, dispVec.a, supports)
 end
 
 """
@@ -1419,12 +1405,12 @@ Types:
 - `stiffMat`: SparseMatrix 
 - `elastSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyElasticSupport!(problem, stiffMat, elastSupp)
+function applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
     if !isa(elastSupp, Vector)
         error("applyElasticSupport!: elastic supports are not arranged in a vector. Put them in [...]")
     end
-    C0 = elasticSupportMatrix(problem, elastSupp)
-    stiffMat .+= C0
+    C0 = elasticSupportMatrix(stiffMat.model, elastSupp)
+    stiffMat.A .+= C0.A
 end
 
 """
@@ -1449,7 +1435,7 @@ function solveDisplacement(K, f)
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
-    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type, f.model)
+    return VectorField([], reshape(K.A \ f.a, :, 1), [0.0], [], 1, type, K.model)
 end
 
 """
@@ -1469,7 +1455,7 @@ Types:
 function solveDisplacement(problem, load, supp)
     K = stiffnessMatrix(problem)
     f = loadVector(problem, load)
-    applyBoundaryConditions!(problem, K, f, supp)
+    applyBoundaryConditions!(K, f, supp)
     type = :null
     if f.type == :f3D
         type = :u3D
@@ -1478,7 +1464,7 @@ function solveDisplacement(problem, load, supp)
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
-    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type, problem)
+    return VectorField([], reshape(K.A \ f.a, :, 1), [0.0], [], 1, type, problem)
 end
 
 """
@@ -1498,8 +1484,8 @@ Types:
 function solveDisplacement(problem, load, supp, elsupp)
     K = stiffnessMatrix(problem)
     f = loadVector(problem, load)
-    applyElasticSupport!(problem, K, elsupp)
-    applyBoundaryConditions!(problem, K, f, supp)
+    applyElasticSupport!(K, elsupp)
+    applyBoundaryConditions!(K, f, supp)
     type = :null
     if f.type == :f3D
         type = :u3D
@@ -1508,9 +1494,9 @@ function solveDisplacement(problem, load, supp, elsupp)
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
-    return VectorField([], reshape(K \ f.a, :, 1), [0.0], [], 1, type, problem)
+    return VectorField([], reshape(K.A \ f.a, :, 1), [0.0], [], 1, type, problem)
 end
-
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 """
     FEM.solveStrain(problem, q; DoFResults=false)
 
