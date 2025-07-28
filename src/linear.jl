@@ -266,19 +266,17 @@ Types:
 - `q`: Vector{Float64}
 - `stiffMat`: SparseMatrix
 """
-function nonLinearStiffnessMatrix(problem, q; elements=[])
+function nonLinearStiffnessMatrix(q; elements=[])
+    problem = q.model
     if problem.type == :AxiSymmetric
         return nonLinearStiffnessMatrixAXI(problem, elements=elements)
     else
-        return nonLinearStiffnessMatrixSolid(problem, q, elements=elements)
+        return nonLinearStiffnessMatrixSolid(q, elements=elements)
     end
 end
 
-function nonLinearStiffnessMatrix(q; elements=[])
-    return nonLinearStiffnessMatrix(q.model, q; elements=[])
-end
-
-function nonLinearStiffnessMatrixSolid(problem, q; elements=[])
+function nonLinearStiffnessMatrixSolid(q; elements=[])
+    problem = q.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -1092,7 +1090,7 @@ function applyBoundaryConditions(stiffMat0, loadVec0, supports)
         error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
     end
     dof, dof = size(stiffMat0.A)
-    massMat = SystemMatrix(spzeros(dof, dof), stiffMat0
+    massMat = SystemMatrix(spzeros(dof, dof), stiffMat0.model)
     dampMat = SystemMatrix(spzeros(dof, dof), stiffMat0.model)
     stiffMat = copy(stiffMat0)
     loadVec = copy(loadVec0)
@@ -1496,7 +1494,7 @@ function solveDisplacement(problem, load, supp, elsupp)
     end
     return VectorField([], reshape(K.A \ f.a, :, 1), [0.0], [], 1, type, problem)
 end
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
 """
     FEM.solveStrain(problem, q; DoFResults=false)
 
@@ -1513,7 +1511,8 @@ Types:
 - `q`: Vector{Float64}
 - `E`: TensorField
 """
-function solveStrain(problem, q; DoFResults=false)
+function solveStrain(q; DoFResults=false)
+    problem = q.model
     gmsh.model.setCurrent(problem.name)
 
     if !isa(q, VectorField) 
@@ -1714,10 +1713,6 @@ function solveStrain(problem, q; DoFResults=false)
     end
 end
 
-function solveStrain(q; DoFResults=false)
-    return solveStrain(q.model, q, DoFResults=DoFResults)
-end
-
 """
     FEM.solveStress(problem, q; T=..., T₀=..., DoFResults=false)
 
@@ -1738,7 +1733,8 @@ Types:
 - `T₀`: Vector{Float64}
 - `S`: TensorField or Matrix{Float64}
 """
-function solveStress(problem, q; T=ScalarField([],[;;],[],[],0,:null,problem), T₀=ScalarField([],reshape(zeros(problem.non),:,1),[0],[],1,:T,problem), DoFResults=false)
+function solveStress(q; T=ScalarField([],[;;],[],[],0,:null,problem), T₀=ScalarField([],reshape(zeros(problem.non),:,1),[0],[],1,:T,problem), DoFResults=false)
+    problem = q.model
     gmsh.model.setCurrent(problem.name)
     
     if !isa(q, VectorField) 
@@ -1997,10 +1993,6 @@ function solveStress(problem, q; T=ScalarField([],[;;],[],[],0,:null,problem), T
     end
 end
 
-function solveStress(q; T=ScalarField([],[;;],[],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:T,q.model), DoFResults=false)
-    return solveStress(q.model, q, T=T, T₀=T₀, DoFResults=DoFResults)
-end
-
 """
     FEM.solveEigenModes(problem, K, M; n=6, fₘᵢₙ=1.01)
 
@@ -2018,9 +2010,13 @@ Types:
 - `fₘᵢₙ`: Float64
 - `modes`: Eigen 
 """
-function solveEigenModes(problem, K, M; n=6, fₘᵢₙ=0.01)
+function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
+    if K.model != M.model
+        error("solveEigenModes: K and M does not belong to the same model.")
+    end
+    problem = K.model
     ωₘᵢₙ² = (2π * fₘᵢₙ)^2
-    ω², ϕ = Arpack.eigs(K, M, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
+    ω², ϕ = Arpack.eigs(K.A, M.A, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
     #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
     #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     #end
@@ -2048,8 +2044,12 @@ Types:
 - `n`: Int64
 - `modes`: Eigen 
 """
-function solveBucklingModes(problem, K, Knl; n=6)
-    λ, ϕ = Arpack.eigs(K, -Knl, nev=n, which=:LR, sigma=0, maxiter=1000)
+function solveBucklingModes(K, Knl; n=6)
+    if K.model != Knl.model
+        error("solveBucklingModes: K and Knl does not belong to the same model.")
+    end
+    problem = K.model
+    λ, ϕ = Arpack.eigs(K.A, -Knl.A, nev=n, which=:LR, sigma=0, maxiter=1000)
     #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
     #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     #end
@@ -2092,12 +2092,12 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
     K = stiffnessMatrix(problem)
     M = massMatrix(problem)
     if length(constraints) == 0
-        return solveEigenModes(problem, K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        return solveEigenModes(problem, K.A, M.A, n=n, fₘᵢₙ=fₘᵢₙ)
     elseif length(loads) == 0
         fdof = freeDoFs(problem, constraints)
         cdof = constrainedDoFs(problem, constraints)
-        K = K[fdof, fdof]
-        M = M[fdof, fdof]
+        K = K.A[fdof, fdof]
+        M = M.A[fdof, fdof]
         #f = zeros(dof)
         #applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
         mod = solveEigenModes(problem, K, M, n=n, fₘᵢₙ=fₘᵢₙ)
@@ -2111,7 +2111,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         cdof = constrainedDoFs(problem, constraints)
         ϕ1 = zeros(dof, n)
         f = loadVector(problem, loads)
-        applyBoundaryConditions!(problem, K, f, constraints)
+        applyBoundaryConditions!(K, f, constraints)
         q = solveDisplacement(K, f)
 
         err = 1
@@ -2119,20 +2119,20 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         while err > 1e-3 && count < 10
             count += 1
             q0 = copy(q)
-            Knl = nonLinearStiffnessMatrix(problem, q)
-            applyBoundaryConditions!(problem, Knl, f, constraints)
+            Knl = nonLinearStiffnessMatrix(q)
+            applyBoundaryConditions!(Knl, f, constraints)
             q = solveDisplacement(K + Knl, f)
             err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
         end
         if count == 10
             @warn("solveModalAnalysis: number of iterations is $count.")
         end
-        Knl = nonLinearStiffnessMatrix(problem, q)
+        Knl = nonLinearStiffnessMatrix(q)
 
         #applyBoundaryConditions!(problem, K, M, Knl, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
         mod = solveEigenModes(problem, (K + Knl)[fdof,fdof], M[fdof,fdof], n=n, fₘᵢₙ=fₘᵢₙ)
         ϕ1[fdof,:] .= mod.ϕ
-        applyBoundaryConditions!(problem, ϕ1, constraints)
+        applyBoundaryConditions!(VectorField([], ϕ1, [0.0], [], 1, q.type, q.model), constraints)
         return Eigen(mod.f, ϕ1, problem)
     end
 end
@@ -2245,7 +2245,8 @@ Types:
 - `uz`: Float64 
 - `u0`: VectorField
 """
-function initialDisplacement!(problem, name, u0; ux=1im, uy=1im, uz=1im, type=:u)
+function initialDisplacement!(name, u0; ux=1im, uy=1im, uz=1im, type=:u)
+    problem = u0.model
     pdim = problem.pdim
     dim = problem.dim
     phg = getTagForPhysicalName(name)
@@ -2305,8 +2306,8 @@ Types:
 - `vy`: Float64 
 - `vz`: Float64 
 """
-function initialVelocity!(problem, name, v0; vx=1im, vy=1im, vz=1im)
-    initialDisplacement!(problem, name, v0, ux=vx, uy=vy, uz=vz)
+function initialVelocity!(name, v0; vx=1im, vy=1im, vz=1im)
+    initialDisplacement!(name, v0, ux=vx, uy=vy, uz=vz)
 end
 
 """
@@ -2326,8 +2327,8 @@ Types:
 - `fy`: Float64 
 - `fz`: Float64 
 """
-function nodalForce!(problem, name, f0; fx=1im, fy=1im, fz=1im)
-    initialDisplacement!(problem, name, f0, ux=fx, uy=fy, uz=fz)
+function nodalForce!(name, f0; fx=1im, fy=1im, fz=1im)
+    initialDisplacement!(name, f0, ux=fx, uy=fy, uz=fz)
 end
 
 """
@@ -2347,8 +2348,8 @@ Types:
 - `ay`: Float64
 - `az`: Float64
 """
-function nodalAcceleration!(problem, name, a0; ax=1im, ay=1im, az=1im)
-    initialDisplacement!(problem, name, a0, ux=ax, uy=ay, uz=az)
+function nodalAcceleration!(name, a0; ax=1im, ay=1im, az=1im)
+    initialDisplacement!(name, a0, ux=ax, uy=ay, uz=az)
 end
 
 """
@@ -2481,18 +2482,21 @@ Types:
 - `v`: VectorField
 """
 function CDM(K, M, C, f, uu0, vv0, T, Δt)
-    invM = spdiagm(1 ./ diag(M))
+    if K.model != M.model || M.model != C.model || C.model != f.model
+        error("CDM: K, M, C and f does not belong to the same model.")
+    end
+    invM = spdiagm(1 ./ diag(M.A))
     nsteps = ceil(Int64, T / Δt)
-    dof, dof = size(K)
+    dof, dof = size(K.A)
 
     u = zeros(dof, nsteps)
     v = zeros(dof, nsteps)
     t = zeros(nsteps)
     #kene = zeros(nsteps)
     #sene = zeros(nsteps)
-    diss = zeros(nsteps)
+    #diss = zeros(nsteps)
 
-    a0 = M \ (f.a - K * uu0.a - C * vv0.a)
+    a0 = M.A \ (f.a - K.A * uu0.a - C.A * vv0.a)
     u00 = uu0.a - vv0.a * Δt + a0 * Δt^2 / 2
 
     u[:, 1] = uu0.a
@@ -2503,7 +2507,7 @@ function CDM(K, M, C, f, uu0, vv0, T, Δt)
     u0 = uu0.a[:,1]
 
     for i in 2:nsteps
-        u1 = 2.0 * u0 - u00 + Δt * Δt * invM * (f.a - K * u0) - Δt * invM * (C * (u0 - u00))
+        u1 = 2.0 * u0 - u00 + Δt * Δt * invM * (f.a - K.A * u0) - Δt * invM * (C.A * (u0 - u00))
         u[:, i] = u1
         v1 = (u1 - u0) / Δt
         v[:, i] = v1
@@ -2518,8 +2522,8 @@ function CDM(K, M, C, f, uu0, vv0, T, Δt)
 end
 
 function CDM(K, M, f, u0, v0, T, Δt)
-    dof, dof = size(K)
-    C = zeros(dof, dof)
+    C = K * 0.0
+    dropzeros!(C.A)
     return CDM(K, M, C, f, u0, v0, T, Δt)
 end
 
@@ -2559,7 +2563,7 @@ Types:
 """
 function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
     nsteps = ceil(Int64, T / Δt)
-    dof, dof = size(K)
+    dof, dof = size(K.A)
 
     u = zeros(dof, nsteps)
     v = zeros(dof, nsteps)
@@ -2580,7 +2584,7 @@ function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (
     c6 = dt * (1.0 - γ)
     c7 = γ * dt
 
-    a0 = M \ (f.a - K * uu0.a)
+    a0 = M \ (f.a - K.A * uu0.a)
 
     u[:, 1] = uu0.a
     v[:, 1] = vv0.a
@@ -2588,13 +2592,13 @@ function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (
     #kene[1] = dot(v0' * M, v0) / 2
     #sene[1] = dot(u0' * K, u0) / 2
     
-    A = (α + 1) * K + M * c0
+    A = (α + 1) * K.A + M.A * c0
     AA = lu(A)
 
     u0 = uu0.a[:,1]
     v0 = vv0.a[:,1]
     for i in 2:nsteps
-        b = f.a + M * (u0 * c0 + v0 * c2 + a0 * c3) + α * K * u0
+        b = f.a + M.A * (u0 * c0 + v0 * c2 + a0 * c3) + α * K.A * u0
         u1 = AA \ b
         u[:, i] = u1
         a1 = (u1 - u0) * c0 - v0 * c2 - a0 * c3

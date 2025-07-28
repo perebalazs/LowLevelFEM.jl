@@ -179,26 +179,31 @@ function adjoint(A::Transformation)
     return Transformation(adjoint(A.T), A.non, A.dim)
 end
 
+struct SystemMatrix
+    A::SparseMatrixCSC
+    model::Problem
+end
+
 import Base.*
-function *(A::Transformation, B::SparseMatrixCSC)
-    n = size(B, 1)
+function *(A::Transformation, B::SystemMatrix)
+    n = size(B.A, 1)
     non = A.non
     dim = A.dim
     if dim * non == n
-        return dropzeros(A.T * B)
+        return SystemMatrix(dropzeros(A.T * B.A). B.model)
     else
-        error("*(A::Transformation, B::SparseMatrixCSC): size missmatch dim * non = $dim * $non ≠ $n.")
+        error("*(A::Transformation, B::SystemMatrix): size missmatch dim * non = $dim * $non ≠ $n.")
     end
 end
 
-function *(B::SparseMatrixCSC, A::Transformation)
-    n = size(B, 1)
+function *(B::SystemMatrix, A::Transformation)
+    n = size(B.A, 1)
     non = A.non
     dim = A.dim
     if dim * non == n
-        return dropzeros(B * A.T)
+        return SystemMatrix(dropzeros(B.A * A.T), B.model)
     else
-        error("*(A::Transformation, B::SparseMatrixCSC): size missmatch dim * non = $dim * $non ≠ $n.")
+        error("*(A::Transformation, B::SystemMatrix): size missmatch dim * non = $dim * $non ≠ $n.")
     end
 end
 
@@ -209,17 +214,30 @@ function *(A::Transformation, B::Transformation)
     return Transformation(dropzeros(A.T * B.T), A.non, A.dim)
 end
 
-struct SystemMatrix
-    A::SparseMatrixCSC
-    model::Problem
-end
-
 function Base.show(io::IO, M::SystemMatrix)
     display(M.A)
 end
 
 function copy(A::SystemMatrix)
     return SystemMatrix(copy(A.A), A.model)
+end
+
+function *(A::SystemMatrix, b::Number)
+    return SystemMatrix(A.A * b, A.model)
+end
+
+function *(b::Number, A::SystemMatrix)
+    return SystemMatrix(A.A * b, A.model)
+end
+
+import Base.+
+function +(A::SystemMatrix, B::SystemMatrix)
+    return SystemMatrix(A.A + B.A, A.model)
+end
+
+import Base.-
+function -(A::SystemMatrix, B::SystemMatrix)
+    return SystemMatrix(A.A + B.A, A.model)
 end
 
 """
@@ -1410,7 +1428,7 @@ function *(A::Matrix, B::VectorField)
 end
 =#
 
-function *(A::Union{SparseMatrixCSC,Matrix}, B::VectorField)
+function *(A::Union{SystemMatrix,Matrix}, B::VectorField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
         if B.type == :u2D
@@ -1420,16 +1438,16 @@ function *(A::Union{SparseMatrixCSC,Matrix}, B::VectorField)
         elseif B.type == :other
             type = :other
         else
-            error("*(A::Union{SparseMatrixCSC,Matrix}, B::VectorField): neither 2D nor 3D (type=$(B.type))?")
+            error("*(A::Union{SystemMatrix,Matrix}, B::VectorField): neither 2D nor 3D (type=$(B.type))?")
         end
-        C = A * B.a
+        C = A isa Matrix ? A * B.a : A.A * B.a
         return VectorField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
-        error("*(A::Union{SparseMatrixCSC,Matrix}, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("*(A::Union{SystemMatrix,Matrix}, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
 end
 
-function *(A::Union{SparseMatrixCSC,Matrix}, B::ScalarField)
+function *(A::Union{SystemMatrix,Matrix}, B::ScalarField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
         if B.type == :T
@@ -1437,17 +1455,17 @@ function *(A::Union{SparseMatrixCSC,Matrix}, B::ScalarField)
         elseif B.type == :other
             type = :other
         else
-            error("*(A::SparseMatrixCSC, B::ScalarField): ")
+            error("*(A::SystemMatrix, B::ScalarField): ")
         end
-        C = A * B.a
+        C = A isa Matrix ? A * B.a : A.A * B.a
         return ScalarField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
-        error("*(A::SparseMatrixCSC, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("*(A::SystemMatrix, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
 end
 
 import Base.\
-function \(A::Union{SparseMatrixCSC,Matrix}, B::ScalarField)
+function \(A::Union{SystemMatrix,Matrix}, B::ScalarField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
         if B.type == :qn
@@ -1455,16 +1473,16 @@ function \(A::Union{SparseMatrixCSC,Matrix}, B::ScalarField)
         elseif B.type == :other
             type = :other
         else
-            error("\\(A::SparseMatrixCSC, B::ScalarField): type = $(B.type)")
+            error("\\(A::SystemMatrix, B::ScalarField): type = $(B.type)")
         end
-        C = A \ B.a
+        C = A isa Matrix ? A \ B.a : A.A \ B.a
         return ScalarField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
-        error("\\(A::SparseMatrixCSC, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("\\(A::SystemMatrix, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
 end
 
-function \(A::Union{SparseMatrixCSC,Matrix}, B::VectorField)
+function \(A::Union{SystemMatrix,Matrix}, B::VectorField)
     type = :none
     if B.a != [;;] && B.nsteps == 1
         if B.type == :f2D
@@ -1474,12 +1492,12 @@ function \(A::Union{SparseMatrixCSC,Matrix}, B::VectorField)
         elseif B.type == :other
             type = :other
         else
-            error("\\(A::SparseMatrixCSC, B::VectorField): ")
+            error("\\(A::SystemMatrix, B::VectorField): ")
         end
-        C = A \ B.a
+        C = A isa Matrix ? A \ B.a : A.A \ B.a
         return VectorField([], reshape(C, :,1), [0.0], [], 1, type, B.model)
     else
-        error("\\(A::SparseMatrixCSC, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("\\(A::SystemMatrix, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
 end
 
