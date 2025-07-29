@@ -1063,9 +1063,9 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, loadVec, supports)
     dof, dof = size(stiffMat.A)
     massMat = SystemMatrix(spzeros(dof, dof), stiffMat.model)
     dampMat = SystemMatrix(spzeros(dof, dof), stiffMat.model)
-    applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
-    massMat.A = []
-    dampMat.A = []
+    applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
+    #massMat.A *= 0
+    #dampMat.A *= 0
     return
 end
 
@@ -1095,8 +1095,8 @@ function applyBoundaryConditions(stiffMat0, loadVec0, supports)
     stiffMat = copy(stiffMat0)
     loadVec = copy(loadVec0)
     applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
-    massMat.A = []
-    dampMat.A = []
+    #massMat.A = []
+    #dampMat.A = []
     return stiffMat, loadVec
 end
 
@@ -1122,7 +1122,7 @@ function applyBoundaryConditions!(heatCondMat::SystemMatrix, heatCapMat::SystemM
     dof, dof = size(heatCondMat.A)
     dampMat = SystemMatrix(spzeros(dof, dof), heatCondMat.model)
     applyBoundaryConditions!(heatCondMat, heatCapMat, dampMat, heatFluxVec, supports, fix=fix)
-    dampMat.A = []
+    #dampMat.A = []
     return
 end
 
@@ -1175,7 +1175,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
         error("applyBoundaryConditions!: K, M or C does not belong to the same problem.")
     end
     gmsh.model.setCurrent(stiffMat.model.name)
-    dof, dof = size(stiffMat)
+    dof, dof = size(stiffMat.A)
     pdim = stiffMat.model.pdim
 
     for i in 1:length(supports)
@@ -1733,7 +1733,7 @@ Types:
 - `T₀`: Vector{Float64}
 - `S`: TensorField or Matrix{Float64}
 """
-function solveStress(q; T=ScalarField([],[;;],[],[],0,:null,problem), T₀=ScalarField([],reshape(zeros(problem.non),:,1),[0],[],1,:T,problem), DoFResults=false)
+function solveStress(q; T=ScalarField([],[;;],[],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:T,q.model), DoFResults=false)
     problem = q.model
     gmsh.model.setCurrent(problem.name)
     

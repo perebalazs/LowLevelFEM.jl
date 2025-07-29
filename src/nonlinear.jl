@@ -22,7 +22,8 @@ function nodePositionVector(problem)
     return VectorField([], reshape(r, :,1), [0], [], 1, :u3D, problem)
 end
 
-function deformationGradient(problem, r; DoFResults=false)
+function deformationGradient(r; DoFResults=false)
+    problem = r.model
     gmsh.model.setCurrent(problem.name)
 
     type = :F
@@ -216,16 +217,13 @@ function deformationGradient(problem, r; DoFResults=false)
     end
 end
 
-function deformationGradient(r; DoFResults=false)
-    return deformationGradient(r.model, r, DoFResults=DoFResults)
-end
-
 function gradientOf(r; DoFResults=false)
-    return deformationGradient(r.model, r, DoFResults=DoFResults)
+    return deformationGradient(r, DoFResults=DoFResults)
 end
 
+export ∇
 function ∇(r::VectorField; DoFResults=false)
-    return deformationGradient(r.model, r, DoFResults=DoFResults)
+    return deformationGradient(r, DoFResults=DoFResults)
 end
 
 
@@ -328,7 +326,8 @@ function deformationGradient(problem, r)
 end
 =#
 
-function tangentMatrixConstitutive(problem, r)
+function tangentMatrixConstitutive(r)
+    problem = r.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -502,14 +501,11 @@ function tangentMatrixConstitutive(problem, r)
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
-function tangentMatrixConstitutive(r)
-    return tangentMatrixConstitutive(r.model, r)
-end
-
-function tangentMatrixInitialStress(problem, r)
+function tangentMatrixInitialStress(r)
+    problem = r.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -662,14 +658,11 @@ function tangentMatrixInitialStress(problem, r)
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
-function tangentMatrixInitialStress(r)
-    return tangentMatrixInitialStress(r.model, r)
-end
-
-function equivalentNodalForce(problem, r)
+function equivalentNodalForce(r)
+    problem = r.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     f = zeros(problem.non * problem.pdim)
@@ -831,11 +824,8 @@ function equivalentNodalForce(problem, r)
     return VectorField([], reshape(f, :,1), [0], [], 1, :f3D, problem)
 end
 
-function equivalentNodalForce(r)
-    return equivalentNodalForce(r.model, r)
-end
-
-function nonFollowerLoadVector(problem, r, loads)
+function nonFollowerLoadVector(r, loads)
+    problem = r.model
     gmsh.model.setCurrent(problem.name)
     if !isa(loads, Vector)
         error("loadVector: loads are not arranged in a vector. Put them in [...]")
@@ -984,10 +974,6 @@ function nonFollowerLoadVector(problem, r, loads)
     return VectorField([], reshape(fp, :,1), [0], [], 1, :f3D, problem)
 end
 
-function nonFollowerLoadVector(r, loads)
-    return nonFollowerLoadVector(r.model, r, loads)
-end
-
 """
     FEM.applyDeformationBoundaryConditions!(problem, deformVec, supports)
 
@@ -1002,7 +988,8 @@ Types:
 - `deformVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyDeformationBoundaryConditions!(problem, deformVec, supports; fact=1.0)
+function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
+    problem = deformVec.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -1072,10 +1059,6 @@ function applyDeformationBoundaryConditions!(problem, deformVec, supports; fact=
     end
 end
 
-function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
-    return applyDeformationBoundaryConditions!(deformVec.model, deformVec, supports, fact=fact)
-end
-
 """
     FEM.suppressDeformationAtBoundaries!(problem, stiffMat, massMat, dampMat, loadVec, supports)
 
@@ -1094,13 +1077,17 @@ Types:
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
+function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
 #function applyDeformationBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports; fix=1)
+    if stiffMat.model != loadVec.model
+        error("suppressDeformationAtBoundaries!: system matrix and load vector does not belong to the same problem.")
+    end
+    problem = stiffMat.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
-    dof, dof = size(stiffMat)
+    dof, dof = size(stiffMat.A)
     pdim = problem.pdim
 
     for i in 1:length(supports)
@@ -1118,9 +1105,9 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
             nodeTagsX .-= (pdim - 1)
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
-                f0 = stiffMat[:, nodeTagsX] * uux * 0
+                f0 = stiffMat.A[:, nodeTagsX] * uux * 0
             else
-                f0 = stiffMat[:, nodeTagsX] * ux * 0
+                f0 = stiffMat.A[:, nodeTagsX] * ux * 0
                 f0 = sum(f0, dims=2)
             end
             loadVec.a .-= f0
@@ -1131,9 +1118,9 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
             nodeTagsY .-= (pdim - 2)
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
-                f0 = stiffMat[:, nodeTagsY] * uuy * 0
+                f0 = stiffMat.A[:, nodeTagsY] * uuy * 0
             else
-                f0 = stiffMat[:, nodeTagsY] * uy * 0
+                f0 = stiffMat.A[:, nodeTagsY] * uy * 0
                 f0 = sum(f0, dims=2)
             end
             loadVec.a .-= f0
@@ -1143,9 +1130,9 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
             nodeTagsZ *= 3
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
-                f0 = stiffMat[:, nodeTagsZ] * uuz * 0
+                f0 = stiffMat.A[:, nodeTagsZ] * uuz * 0
             else
-                f0 = stiffMat[:, nodeTagsZ] * uz * 0
+                f0 = stiffMat.A[:, nodeTagsZ] * uz * 0
                 f0 = sum(f0, dims=2)
             end
             loadVec.a .-= f0
@@ -1171,9 +1158,9 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
             jj = 0
             for j ∈ nodeTagsX
                 jj += 1
-                stiffMat[j, :] .= 0
-                stiffMat[:, j] .= 0
-                stiffMat[j, j] = 1
+                stiffMat.A[j, :] .= 0
+                stiffMat.A[:, j] .= 0
+                stiffMat.A[j, j] = 1
                 #massMat[j, :] .= 0
                 #massMat[:, j] .= 0
                 #massMat[j, j] = 1
@@ -1197,9 +1184,9 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
             jj = 0
             for j ∈ nodeTagsY
                 jj += 1
-                stiffMat[j, :] .= 0
-                stiffMat[:, j] .= 0
-                stiffMat[j, j] = 1
+                stiffMat.A[j, :] .= 0
+                stiffMat.A[:, j] .= 0
+                stiffMat.A[j, j] = 1
                 #massMat[j, :] .= 0
                 #massMat[:, j] .= 0
                 #massMat[j, j] = 1
@@ -1222,9 +1209,9 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
             jj = 0
             for j ∈ nodeTagsZ
                 jj += 1
-                stiffMat[j, :] .= 0
-                stiffMat[:, j] .= 0
-                stiffMat[j, j] = 1
+                stiffMat.A[j, :] .= 0
+                stiffMat.A[:, j] .= 0
+                stiffMat.A[j, j] = 1
                 #massMat[j, :] .= 0
                 #massMat[:, j] .= 0
                 #massMat[j, j] = 1
@@ -1240,13 +1227,9 @@ function suppressDeformationAtBoundaries!(problem, stiffMat, loadVec, supports)
         end
     end
 
-    dropzeros!(stiffMat)
+    dropzeros!(stiffMat.A)
     #dropzeros!(massMat)
     #dropzeros!(dampMat)
-end
-
-function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
-    return suppressDeformationAtBoundaries!(loadVec.model, stiffMat, loadVec, supports)
 end
 
 """
@@ -1265,15 +1248,15 @@ Types:
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function suppressDeformationAtBoundaries(problem, stiffMat, loadVec, supports)
+function suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
+    if stiffMat.model != loadVec.model
+        error("suppressDeformationAtBoundaries!: system matrix and load vector does not belong to the same problem.")
+    end
+    problem = stiffMat.model
     K1 = copy(stiffMat)
     f1 = copy(loadVec)
     suppressDeformationAtBoundaries!(problem, K1, f1, supports)
     return K1, f1
-end
-
-function suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
-    return suppressDeformationAtBoundaries(loadVec.model, stiffMat, loadVec, supports)
 end
 
 function solveDeformation(problem, load, supp;

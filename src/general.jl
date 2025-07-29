@@ -218,6 +218,7 @@ function Base.show(io::IO, M::SystemMatrix)
     display(M.A)
 end
 
+import Base.copy
 function copy(A::SystemMatrix)
     return SystemMatrix(copy(A.A), A.model)
 end

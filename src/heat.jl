@@ -117,7 +117,7 @@ function heatCondMatrixSolid(problem; elements=[])
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
 function heatCondMatrixAXI(problem; elements=[])
@@ -222,7 +222,7 @@ function heatCondMatrixAXI(problem; elements=[])
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
 """
@@ -354,7 +354,7 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
         M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
     end
     dropzeros!(M)
-    return M
+    return SystemMatrix(M, problem)
 end
 
 """
@@ -373,7 +373,8 @@ Types:
 - `T0`: ScalarField
 - `latHeatMat`: SparseMatrix
 """
-function latentHeatMatrix(problem, u, v, T0)
+function latentHeatMatrix(u, v, T0)
+    problem = T0.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -519,7 +520,7 @@ function latentHeatMatrix(problem, u, v, T0)
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
-    return K
+    return SystemMatrix(K, problem)
 end
 
 """
@@ -919,7 +920,7 @@ function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
     end
     hf0 = heatConvectionVector(problem, heatConv)
     C0 = heatConvectionMatrix(problem, heatConv)
-    heatCondMat .+= C0
+    heatCondMat.A .+= C0.A
     #heatFluxVec .+= hf0
     heatFluxVec.a .+= hf0.a
     #heatFluxVec = heatFluxVec + hf0
@@ -939,7 +940,7 @@ Types:
 - `q`: ScalarField 
 - `T`: ScalarField
 """
-function solveTemperature(K::SparseMatrixCSC, q::ScalarField)
+function solveTemperature(K::SystemMatrix, q::ScalarField)
     return K \ q
 end
 
@@ -960,7 +961,7 @@ Types:
 function solveTemperature(problem, flux, temp)
     K = heatConductionMatrix(problem)
     q = heatFluxVector(problem, flux)
-    applyBoundaryConditions!(problem, K, q, temp)
+    applyBoundaryConditions!(K, q, temp)
     return K \ q
 end
 
@@ -983,7 +984,7 @@ function solveTemperature(problem, flux, temp, heatconv)
     K = heatConductionMatrix(problem)
     q = heatFluxVector(problem, flux)
     applyHeatConvection!(problem, K, q, heatconv)
-    applyBoundaryConditions!(problem, K, q, temp)
+    applyBoundaryConditions!(K, q, temp)
     return K \ q
 end
 
@@ -1034,7 +1035,8 @@ Types:
 - `T`: ScalarField
 - `q`: VectorField
 """
-function solveHeatFlux(problem, T; DoFResults=false)
+function solveHeatFlux(T; DoFResults=false)
+    problem = T.model
     gmsh.model.setCurrent(problem.name)
 
     if !isa(T, ScalarField) 
@@ -1214,10 +1216,6 @@ function solveHeatFlux(problem, T; DoFResults=false)
     end
 end
 
-function solveHeatFlux(T; DoFResults=false)
-    return solveHeatFlux(T.model, T, DoFResults=DoFResults)
-end
-
 """
     FEM.initialTemperature(problem, name; T=...)
 
@@ -1259,7 +1257,8 @@ Types:
 - `T0`: ScalarField
 - `T`: Float64 
 """
-function initialTemperature!(problem, name, T0; T=1im)
+function initialTemperature!(name, T0; T=1im)
+    problem = T0.model
     dim = problem.pdim
     phg = getTagForPhysicalName(name)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
@@ -1303,8 +1302,8 @@ Types:
 - `T`: ScalarField
 """
 function FDM(K, C, q, TT0, tₘₐₓ, Δt; ϑ=0.5)
-    nnz = nonzeros(C)
-    dof, dof = size(C)
+    nnz = nonzeros(C.A)
+    dof, dof = size(C.A)
     nsteps = ceil(Int64, tₘₐₓ / Δt)
     T = zeros(dof, nsteps)
     t = zeros(nsteps)
@@ -1312,16 +1311,16 @@ function FDM(K, C, q, TT0, tₘₐₓ, Δt; ϑ=0.5)
     T[:, 1] = T0
     t[1] = 0
     if ϑ == 0 && nnz == dof
-        invC = spdiagm(1 ./ diag(C))
+        invC = spdiagm(1 ./ diag(C.A))
         for i in 2:nsteps
-            T1 = T0 - (1 - ϑ) * Δt * invC * K * T0 + Δt * invC * q.a
+            T1 = T0 - (1 - ϑ) * Δt * invC * K.A * T0 + Δt * invC * q.a
             T[:, i] = T1
             t[i] = t[i-1] + Δt
             T0 = T1
         end
     else
-        A = C + ϑ * Δt * K
-        b = C - (1 - ϑ) * Δt * K
+        A = C.A + ϑ * Δt * K.A
+        b = C.A - (1 - ϑ) * Δt * K.A
         AA = lu(A)
         for i in 2:nsteps
             bb = b * T0 + Δt * q.a
