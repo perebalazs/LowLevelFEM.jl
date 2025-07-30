@@ -1003,17 +1003,16 @@ Types:
 - `T`: ScalarField
 """
 function solveTemperature(problem, u::VectorField; T0=273.0)
-    T00 = []
+    T00 = initialTemperature(problem, problem.material[1].phName, T=T0)
     for i in eachindex(problem.material)
-        push!(T00, initialTemperature(problem, problem.material[i].phName, T=T0))
-    end
-    for i in eachindex(T00)
-        if i != 1
-            T00[1] += T00[i]
+        if i == 1
+            T00 = initialTemperature(problem, problem.material[i].phName, T=T0)
+        else
+            T00 += initialTemperature(problem, problem.material[i].phName, T=T0)
         end
     end
-    T00 = T00[1]
-    L = latentHeatMatrix(problem, u, u, T00)
+
+    L = latentHeatMatrix(u, u, T00)
     C = heatCapacityMatrix(problem)
     T1 = C \ ((C + L) * T00) - T00
     return T1

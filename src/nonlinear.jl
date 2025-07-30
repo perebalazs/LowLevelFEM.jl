@@ -1255,7 +1255,7 @@ function suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
     problem = stiffMat.model
     K1 = copy(stiffMat)
     f1 = copy(loadVec)
-    suppressDeformationAtBoundaries!(problem, K1, f1, supports)
+    suppressDeformationAtBoundaries!(K1, f1, supports)
     return K1, f1
 end
 
@@ -1283,22 +1283,22 @@ function solveDeformation(problem, load, supp;
     for j in range(1, loadSteps)
         fact = rampedLoad == true ? j / loadSteps : 1
         if rampedSupport == true
-            applyDeformationBoundaryConditions!(problem, r0, supp, fact=1 / loadSteps)
+            applyDeformationBoundaryConditions!(r0, supp, fact=1 / loadSteps)
         elseif rampedSupport == false && j == 1
-            applyDeformationBoundaryConditions!(problem, r0, supp)
+            applyDeformationBoundaryConditions!(r0, supp)
         end
         err = 1
         i = 0
         while err > relativeError && i < maxIteration
             i += 1
        
-            Kl = tangentMatrixConstitutive(problem, r0)
-            Knl = tangentMatrixInitialStress(problem, r0)
+            Kl = tangentMatrixConstitutive(r0)
+            Knl = tangentMatrixInitialStress(r0)
             if followerLoad == false
-                f = nonFollowerLoadVector(problem, r0, load)
+                f = nonFollowerLoadVector(r0, load)
             end
-            fnl = equivalentNodalForce(problem, r0)
-            K1, f1 = suppressDeformationAtBoundaries(problem, Kl + Knl, fact * f - fnl, supp)
+            fnl = equivalentNodalForce(r0)
+            K1, f1 = suppressDeformationAtBoundaries(Kl + Knl, fact * f - fnl, supp)
             q = solveDisplacement(K1, f1)
             r0 += q
             if saveIterations == true
@@ -1334,15 +1334,12 @@ function solveDeformation(problem, load, supp;
     end
 end
 
-function showDeformationResults(problem, r, comp; name=comp, visible=false)
+function showDeformationResults(r, comp; name=comp, visible=false)
+    problem = r.model
     r0 = nodePositionVector(problem)
     u = copy(r)
     for i in 1:size(r.a, 2)
         u.a[:, i] = r.a[:, i] - r0.a
     end
     return showDoFResults(problem, u, comp, name=name, visible=visible)
-end
-
-function showDeformationResults(r, comp; name=comp, visible=false)
-    return showDeformationResults(r.model, r, comp, name=name, visible=visible)
 end

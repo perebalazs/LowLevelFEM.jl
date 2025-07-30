@@ -2092,15 +2092,15 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
     K = stiffnessMatrix(problem)
     M = massMatrix(problem)
     if length(constraints) == 0
-        return solveEigenModes(problem, K.A, M.A, n=n, fₘᵢₙ=fₘᵢₙ)
+        return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
     elseif length(loads) == 0
         fdof = freeDoFs(problem, constraints)
         cdof = constrainedDoFs(problem, constraints)
-        K = K.A[fdof, fdof]
-        M = M.A[fdof, fdof]
+        K = SystemMatrix(K.A[fdof, fdof], K.model)
+        M = SystemMatrix(M.A[fdof, fdof], M.model)
         #f = zeros(dof)
         #applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes(problem, K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        mod = solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
         nn = length(mod.f)
         ϕ1 = zeros(dof, nn)
         ϕ1[fdof,:] .= mod.ϕ
@@ -2130,7 +2130,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         Knl = nonLinearStiffnessMatrix(q)
 
         #applyBoundaryConditions!(problem, K, M, Knl, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes(problem, (K + Knl)[fdof,fdof], M[fdof,fdof], n=n, fₘᵢₙ=fₘᵢₙ)
+        mod = solveEigenModes(SystemMatrix((K.A + Knl.A)[fdof,fdof], K.model), SystemMatrix(M.A[fdof,fdof], M.model), n=n, fₘᵢₙ=fₘᵢₙ)
         ϕ1[fdof,:] .= mod.ϕ
         applyBoundaryConditions!(VectorField([], ϕ1, [0.0], [], 1, q.type, q.model), constraints)
         return Eigen(mod.f, ϕ1, problem)
@@ -2158,7 +2158,7 @@ Types:
 function solveBuckling(problem, loads, constraints; n=6)
     f = loadVector(problem, loads)
     K = stiffnessMatrix(problem)
-    applyBoundaryConditions!(problem, K, f, constraints)
+    applyBoundaryConditions!(K, f, constraints)
     q = solveDisplacement(K, f)
 
     err = 1
@@ -2166,18 +2166,18 @@ function solveBuckling(problem, loads, constraints; n=6)
     while err > 1e-3 && count < 10
         count += 1
         q0 = copy(q)
-        Knl = nonLinearStiffnessMatrix(problem, q)
-        applyBoundaryConditions!(problem, Knl, f, constraints)
+        Knl = nonLinearStiffnessMatrix(q)
+        applyBoundaryConditions!(Knl, f, constraints)
         q = solveDisplacement(K + Knl, f)
         err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
     end
     if count == 10
         @warn("solveBuckling: number of iterations is $count.")
     end
-    Knl = nonLinearStiffnessMatrix(problem, q)
+    Knl = nonLinearStiffnessMatrix(q)
 
-    applyBoundaryConditions!(problem, Knl, f, constraints)
-    return solveBucklingModes(problem, K, Knl, n=n)
+    applyBoundaryConditions!(Knl, f, constraints)
+    return solveBucklingModes(K, Knl, n=n)
 end
 
 """
@@ -2366,11 +2366,11 @@ Types:
 - `Δt`: Float64 
 """
 function largestPeriodTime(K, M)
-    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=0.01, maxiter=10000)
+    ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LR, sigma=0.01, maxiter=10000)
     if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
-        ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+        ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     end
-    err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
+    err = norm(K.A * ϕ[:,1] - ω²[1] * M.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
@@ -2392,9 +2392,9 @@ Types:
 - `Δt`: Float64 
 """
 function smallestPeriodTime(K, M)
-    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LM, maxiter=10000)
+    ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LM, maxiter=10000)
     
-    err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
+    err = norm(K.A * ϕ[:,1] - ω²[1] * M.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
@@ -2416,11 +2416,11 @@ Types:
 - `λₘₐₓ`: Float64 
 """
 function smallestEigenValue(K, C)
-    λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
+    λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
     if real(λ[1]) > 0.999 && real(λ[1]) < 1.001
-        λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+        λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     end
-    err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
+    err = norm(K.A * ϕ[:,1] - λ[1] * C.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
@@ -2442,9 +2442,9 @@ Types:
 - `λₘᵢₙ`: Float64 
 """
 function largestEigenValue(K, C)
-    λ, ϕ = Arpack.eigs(K, C, nev=1, which=:LM)
+    λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LM)
 
-    err = norm(K * ϕ[:,1] - λ[1] * C * ϕ[:,1]) / norm(K * ϕ[:,1])
+    err = norm(K.A * ϕ[:,1] - λ[1] * C.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end

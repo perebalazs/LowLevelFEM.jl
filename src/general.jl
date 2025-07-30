@@ -103,15 +103,15 @@ struct Problem
         elseif type == :AxiSymmetricHeatConduction
             dim = 2
             pdim = 1
-        elseif type == :StVenantKirchhoff
-            dim = 3
-            pdim = 3
-        elseif type == :NeoHookeCompressible
-            dim = 3
-            pdim = 3
+        #elseif type == :StVenantKirchhoff
+        #    dim = 3
+        #    pdim = 3
+        #elseif type == :NeoHookeCompressible
+        #    dim = 3
+        #    pdim = 3
         else
-            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`,
-            `StVenantKirchhoff` or `NeoHookeCompressible`. Now problem type = $type ????")
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`.
+            Now problem type = $type ????")
         end
         if !isa(mat, Vector)
             error("Problem: materials are not arranged in a vector. Put them in [...]")
@@ -190,7 +190,7 @@ function *(A::Transformation, B::SystemMatrix)
     non = A.non
     dim = A.dim
     if dim * non == n
-        return SystemMatrix(dropzeros(A.T * B.A). B.model)
+        return SystemMatrix(dropzeros(A.T * B.A), B.model)
     else
         error("*(A::Transformation, B::SystemMatrix): size missmatch dim * non = $dim * $non ≠ $n.")
     end
@@ -532,6 +532,11 @@ Types:
 - `κ`: Float64
 """
 function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3)
+    if type != :Hooke &&
+        type != :StVenantKirchhoff &&
+        type != :NeoHookeCompressible
+        error("material: type can be :Hooke, :StVenantKirchhoff or :NeoHookeCompressible. Now type is $type.")
+    end
     return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ)
 end
 
