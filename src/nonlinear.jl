@@ -1341,5 +1341,5 @@ function showDeformationResults(r, comp; name=comp, visible=false)
     for i in 1:size(r.a, 2)
         u.a[:, i] = r.a[:, i] - r0.a
     end
-    return showDoFResults(problem, u, comp, name=name, visible=visible)
+    return showDoFResults(u, comp, name=name, visible=visible)
 end

@@ -2852,7 +2852,9 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
+#function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
+function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0)
+    problem = q.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
@@ -2958,6 +2960,7 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     if visible == false
         gmsh.view.option.setNumber(uvec, "Visible", 0)
     end
+    gmsh.view.option.setNumber(uvec, "ShowTime", 0)
     if ff == 0 && length(t) > 1
         gmsh.view.option.setNumber(uvec, "ShowTime", 1)
     elseif ff == 1 || ff == 2
@@ -2967,9 +2970,9 @@ function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff 
     return uvec
 end
 
-function showDoFResults(q, comp; name=comp, visible=false, ff = 0)
-    return showDoFResults(q.model, q, comp, name=name, visible=visible, ff = ff)
-end
+#function showDoFResults(q, comp; name=comp, visible=false, ff = 0)
+#    return showDoFResults(q.model, q, comp, name=name, visible=visible, ff = ff)
+#end
 
 """
     FEM.showModalResults(problem, Φ, name=..., visible=...)
@@ -2988,12 +2991,8 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showModalResults(problem, Φ::Eigen; name=:modal, visible=false, ff=1)
-    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, problem), :uvec, name=name, visible=visible, ff=ff)
-end
-
 function showModalResults(Φ::Eigen; name=:modal, visible=false, ff=1)
-    return showModalResults(Φ.model, Φ, name=name, visible=visible, ff=ff)
+    return showDoFResults(VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, Φ.model), :uvec, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -3013,12 +3012,8 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showBucklingResults(problem, Φ::Eigen; name="buckling", visible=false, ff=2)
-    return showDoFResults(problem, VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, problem), :uvec, name=name, visible=visible, ff=ff)
-end
-
 function showBucklingResults(Φ::Eigen; name="buckling", visible=false, ff=2)
-    return showBucklingResults(Φ.model, Φ::Eigen, name=name, visible=visible, ff=ff)
+    return showDoFResults(VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, Φ.model), :uvec, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -3043,8 +3038,9 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStrainResults(problem, E, comp; name=comp, visible=false, smooth=true)
+function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    problem = E.model
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -3107,15 +3103,12 @@ function showStrainResults(problem, E, comp; name=comp, visible=false, smooth=tr
     if visible == false
         gmsh.view.option.setNumber(EE, "Visible", 0)
     end
+    gmsh.view.option.setNumber(EE, "ShowTime", 0)
     if length(t) > 1
         gmsh.view.option.setNumber(EE, "ShowTime", 1)
     end
     #display("$comp..ok")
     return EE
-end
-
-function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
-    return  showStrainResults(E.model, E, comp, name=name, visible=visible, smooth=smooth)
 end
 
 """
@@ -3134,20 +3127,16 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showElementResults(problem, F, comp; name=comp, visible=false, smooth=true)
+function showElementResults(F, comp; name=comp, visible=false, smooth=true)
     if F.type == :e
-        return showStrainResults(problem, F, comp, name=name, visible=visible, smooth=smooth)
+        return showStrainResults(F, comp, name=name, visible=visible, smooth=smooth)
     elseif F.type == :s
-        return showStressResults(problem, F, comp, name=name, visible=visible, smooth=smooth)
+        return showStressResults(F, comp, name=name, visible=visible, smooth=smooth)
     elseif F.type == :q2D || F.type == :q3D
-        return showHeatFluxResults(problem, F, comp, name=name, visible=visible, smooth=smooth)
+        return showHeatFluxResults(F, comp, name=name, visible=visible, smooth=smooth)
     else
         error("showElementResults: type is '$(F.type)'")
     end
-end
-
-function showElementResults(F, comp; name=comp, visible=false, smooth=true)
-    return showElementResults(F.model, F, comp, name=name, visible=visible, smooth=smooth)
 end
 
 """
@@ -3172,8 +3161,9 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(problem, S, comp; name=comp, visible=false, smooth=true)
+function showStressResults(S, comp; name=comp, visible=false, smooth=true)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    problem = S.model
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
@@ -3253,15 +3243,12 @@ function showStressResults(problem, S, comp; name=comp, visible=false, smooth=tr
     if visible == false
         gmsh.view.option.setNumber(SS, "Visible", 0)
     end
+    gmsh.view.option.setNumber(SS, "ShowTime", 0)
     if length(t) > 1
         gmsh.view.option.setNumber(SS, "ShowTime", 1)
     end
     #display("$comp..ok")
     return SS
-end
-
-function showStressResults(S, comp; name=comp, visible=false, smooth=true)
-    return showStressResults(S.model, S, comp, name=name, visible=visible, smooth=smooth)
 end
 
 """
@@ -3286,7 +3273,8 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showHeatFluxResults(problem, S, comp; name=comp, visible=false, smooth=true)
+function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true)
+    problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
@@ -3367,15 +3355,12 @@ function showHeatFluxResults(problem, S, comp; name=comp, visible=false, smooth=
     if visible == false
         gmsh.view.option.setNumber(SS, "Visible", 0)
     end
+    gmsh.view.option.setNumber(SS, "ShowTime", 0)
     if length(t) > 1
         gmsh.view.option.setNumber(SS, "ShowTime", 1)
     end
     #display("$comp..ok")
     return SS
-end
-
-function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true)
-    return showHeatFluxResults(S.model, S, comp, name=name, visible=visible, smooth=smooth)
 end
 
 """
@@ -3410,7 +3395,7 @@ Types:
 - `tag`: Integer
 - `xy`: Tuples{Vector{Float64},Vector{Float64}}
 """
-function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
+function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
     #gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
     if points < 2
@@ -3502,9 +3487,9 @@ function plotOnPath(problem, pathName, field; points=100, step=1im, plot=false, 
     end
 end
 
-function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
-    return plotOnPath(Problem(), pathName, field, points=points, step=step, plot=plot, name=name, visible=visible, offsetX=offsetX, offsetY=offsetY, offsetZ=offsetZ)
-end
+#function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
+#    return plotOnPath(Problem(), pathName, field, points=points, step=step, plot=plot, name=name, visible=visible, offsetX=offsetX, offsetY=offsetY, offsetZ=offsetZ)
+#end
 
 """
     FEM.showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)

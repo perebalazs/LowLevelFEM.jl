@@ -2392,7 +2392,7 @@ Types:
 - `Δt`: Float64 
 """
 function smallestPeriodTime(K, M)
-    ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LM, maxiter=10000)
+    ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LM, maxiter=100)
     
     err = norm(K.A * ϕ[:,1] - ω²[1] * M.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
     if err > 1e-3 # || true
@@ -2584,7 +2584,7 @@ function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (
     c6 = dt * (1.0 - γ)
     c7 = γ * dt
 
-    a0 = M \ (f.a - K.A * uu0.a)
+    a0 = M.A \ (f.a - K.A * uu0.a)
 
     u[:, 1] = uu0.a
     v[:, 1] = vv0.a
