@@ -1507,6 +1507,18 @@ function \(A::Union{SystemMatrix,Matrix}, B::VectorField)
     end
 end
 
+function \(A::Union{SystemMatrix,Matrix,SparseMatrixCSC}, b::SparseMatrixCSC)
+    m, n = size(b)
+    c = zeros(m)
+    d = zeros(m, n)
+    AA = A isa SystemMatrix ? lu(A.A) : lu(A)
+    for i in 1:n
+        c .= b[:,i]
+        d[:,i] = AA \ c
+    end
+    return d
+end
+
 function +(A::TensorField, B::TensorField)
     if length(A.A) != 0 && length(B.A) != 0
         if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
@@ -2426,7 +2438,8 @@ Types:
 - `T`: TensorField or VectorField
 - `F`: TensorField or VectorField
 """
-function elementsToNodes(problem, S)
+function elementsToNodes(S)
+    problem = S.model
     gmsh.model.setCurrent(problem.name)
 
     type = S.type
@@ -2436,13 +2449,15 @@ function elementsToNodes(problem, S)
     non = problem.non
     if type == :s || type == :e || type == :F
         epn = 9
-    elseif type == :q3D
+    elseif type == :q3D || type == :u3D
         epn = 3
-    elseif type == :q2D
+    elseif type == :q2D || type == :u2D
         epn = 2
     else
         error("elementsToNodes: type is $type .")
     end
+    display("type=$type")
+    display("epn=$epn")
     s = zeros(non * epn, nsteps)
     pcs = zeros(Int64, non)
 
@@ -2465,8 +2480,225 @@ function elementsToNodes(problem, S)
     end
 end
 
-function elementsToNodes(S)
-    return elementsToNodes(S.model, S)
+function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
+    problem = r.model
+    gmsh.model.setCurrent(problem.name)
+
+    if r isa ScalarField
+        size = 1
+    elseif r isa VectorField
+        size = r.model.dim
+    elseif r isa TensorField
+        size = 9
+    end
+    type = r.type
+    
+    nsteps = r.nsteps
+    ε = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    #type = :e
+#    if DoFResults == true
+#        E1 = zeros(non * 9, nsteps)
+#        pcs = zeros(Int64, non * dim)
+#    end
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        #ν = problem.material[ipg].ν
+        dim = 0
+        if problem.dim == 3 && problem.type == :Solid
+            dim = 3
+            rowsOfH = 3
+            #rowsOfB = 9
+            #b = 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            dim = 2
+            rowsOfH = 2
+            #rowsOfB = 3
+            #b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            dim = 2
+            rowsOfH = 2
+            #rowsOfB = 3
+            #b = 1
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            dim = 2
+            rowsOfH = 2
+            #rowsOfB = 4
+            #b = 1
+        else
+            error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                #e0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                #comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                #∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                #invJac = zeros(3, 3numNodes)
+                #∂h = zeros(3, numNodes * numNodes)
+                #B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                H = zeros(rowsOfH * numNodes, pdim * numNodes)
+                for k in 1:numNodes, l in 1:numNodes
+                    for kk in 1:pdim
+                        H[k*pdim-(pdim-kk), l*pdim-(pdim-kk)] = h[(k-1)*numNodes+l]
+                    end
+                end
+                #rr = zeros(numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    #Jac = reshape(jac, 3, :)
+                    #for k in 1:numNodes
+                    #    invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                    #    rr[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    #end
+                    #∂h .*= 0
+                    #for k in 1:numNodes, l in 1:numNodes
+                    #    ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    #end
+                    #B .*= 0
+                    #if dim == 2 && rowsOfB == 3
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                    #    end
+                    #elseif dim == 3 && rowsOfB == 9
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*9-(9-1), l*3-(3-1)] = B[k*9-(9-2), l*3-(3-2)] = B[k*9-(9-3), l*3-(3-3)] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*9-(9-4), l*3-(3-1)] = B[k*9-(9-5), l*3-(3-2)] = B[k*9-(9-6), l*3-(3-3)] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*9-(9-7), l*3-(3-1)] = B[k*9-(9-8), l*3-(3-2)] = B[k*9-(9-9), l*3-(3-3)] = ∂h[3, (k-1)*numNodes+l]
+                    #    end
+                    #elseif dim == 2 && rowsOfB == 4
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*4-2, l*2-1] = rr[k] < 1e-10 ? 0 : h[l, k] / rr[k]
+                    #    end
+                    #else
+                    #    error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    #end
+                    push!(numElem, elem)
+                    for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    e = zeros(size*numNodes, nsteps)
+                    for k in 1:numNodes
+                        #if #=rowsOfB == 9 &&=# dim == 3 && problem.type == :Solid
+                            #B1 = B[k*9-8:k*9, 1:3*numNodes]
+                            H1 = H[k*dim-(dim-1):k*dim, 1:dim*numNodes]
+                            for kk in 1:nsteps
+                                #e0 = B1 * r.a[nn2, kk]
+                                e0 = H1 * r.a[nn2, kk]
+                                #if DoFResults == false
+                                    #e[(k-1)*size+1:k*size, kk] = [e0[1], e0[2], e0[3],
+                                    #    e0[4], e0[5], e0[6],
+                                    #    e0[7], e0[8], e0[9]]
+                                    e[(k-1)*size+1:k*size, kk] = [e0[ll] for ll in 1:size]
+                                #end
+                                #if DoFResults == true
+                                #    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3], e0[4], e0[5], e0[6], e0[7], e0[8], e0[9]]
+                                #end
+                            end
+                        #elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
+                        #    B1 = B[k*3-2:k*3, 1:2*numNodes]
+                        #    for kk in 1:nsteps
+                        #        e0 = B1 * r.a[nn2, kk]
+                        #        if DoFResults == false
+                        #            e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                        #                e0[3]/2, e0[2], 0,
+                        #                0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                        #        end
+                        #        if DoFResults == true
+                        #            E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                        #        end
+                        #    end
+                        #elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
+                        #    B1 = B[k*3-2:k*3, 1:2*numNodes]
+                        #    for kk in 1:nsteps
+                        #        e0 = B1 * r.a[nn2, kk]
+                        #        if DoFResults == false
+                        #            e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                        #                e0[3]/2, e0[2], 0,
+                        #                0, 0, 0]
+                        #        end
+                        #        if DoFResults == true
+                        #            E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
+                        #        end
+                        #    end
+                        #elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                        #    B1 = B[k*4-3:k*4, 1:2*numNodes]
+                        #    for kk in 1:nsteps
+                        #        e0 = B1 * r.a[nn2, kk]
+                        #        if DoFResults == false
+                        #            e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
+                        #                e0[4]/2, e0[3], 0,
+                        #                0, 0, e0[2]]
+                        #        end
+                        #        if DoFResults == true
+                        #            E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], 0, e0[4], e0[3], 0, 0, 0, e0[2]]
+                        #        end
+                        #    end
+                        #else
+                        #    error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        #end
+                    end
+                    #if DoFResults == true
+                    #    pcs[nnet[j,1:numNodes]] .+= 1
+                    #end
+                    #if DoFResults == false
+                        push!(ε, e)
+                    #end
+                end
+            end
+        end
+    end
+    #if DoFResults == true
+    #    for k in 1:9
+    #        for l in 1:non
+    #            E1[k + 9 * l - 9, :] ./= pcs[l]
+    #        end
+    #    end
+    #end
+    #if DoFResults == true
+    #    epsilon = TensorField([], E1, r.t, [], nsteps, type, problem)
+    #    return epsilon
+    #else
+    if r isa ScalarField
+        epsilon = ScalarField(ε, [;;], r.t, numElem, nsteps, type, problem)
+    elseif r isa VectorField
+        epsilon = VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
+    elseif r isa TensorField
+        epsilon = TensorField(ε, [;;], r.t, numElem, nsteps, type, problem)
+    end
+    return epsilon
+    #end
 end
 
 """
@@ -2853,7 +3085,7 @@ Types:
 - `tag`: Integer
 """
 #function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
-function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0)
+function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0, factor=0)
     problem = q.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
@@ -2867,20 +3099,20 @@ function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0)
     pdim = div(size(q.a,1), problem.non) 
     nodeTags = []
     ##############################################################################
-    if problem.type == :Reynolds || problem.type == :NavierStokes
-        phName = problem.material.phName
-        tag = getTagForPhysicalName(phName)
-        nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
-        append!(nodeTags, nT)
+    #if problem.type == :Reynolds || problem.type == :NavierStokes
+    #    phName = problem.material.phName
+    #    tag = getTagForPhysicalName(phName)
+    #    nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
+    #    append!(nodeTags, nT)
     ##############################################################################
-    else #########################################################################
+    #else #########################################################################
         for ipg in 1:length(problem.material)
             phName = problem.material[ipg].phName
             tag = getTagForPhysicalName(phName)
             nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
             append!(nodeTags, nT)
         end
-    end #########################################################################
+    #end #########################################################################
 
     #nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
     non = length(nodeTags)
@@ -2967,6 +3199,7 @@ function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0)
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
     end
+    gmsh.view.option.setNumber(uvec, "DisplacementFactor", factor)
     return uvec
 end
 
@@ -3665,11 +3898,11 @@ function probe(A::TensorField, x, y, z; step=1)
     if A.a == [;;]
         ind = findfirst(i -> i == elementTag, A.numElem)
         for i in range(1, 9)
-            SS[i] = fun' * A.A[ind][i:9:9numNodes, step]
+            SS[i] = round(fun' * A.A[ind][i:9:9numNodes, step], digits=10)
         end
     elseif A.A == []
         for i in range(1, 9)
-            SS[i] = fun' * A.a[9nodeTags.-(9-i), step]
+            SS[i] = round(fun' * A.a[9nodeTags.-(9-i), step], digits=10)
         end
     end
     return reshape(SS, 3, 3)
@@ -3693,11 +3926,11 @@ function probe(A::VectorField, x, y, z; step=1)
     if A.a == [;;]
         ind = findfirst(i -> i == elementTag, A.numElem)
         for i in range(1, dim)
-            SS[i] = fun' * A.A[ind][i:dim:dim*numNodes, step]
+            SS[i] = round(fun' * A.A[ind][i:dim:dim*numNodes, step], digits=10)
         end
     elseif A.A == []
         for i in range(1, dim)
-            SS[i] = fun' * A.a[dim*nodeTags.-(dim-i), step]
+            SS[i] = round(fun' * A.a[dim*nodeTags.-(dim-i), step], digits=10)
         end
     end
     return SS
@@ -3711,14 +3944,14 @@ function probe(A::ScalarField, x, y, z; step=1)
     SS = 0
     if A.a == [;;]
         ind = findfirst(i -> i == elementTag, A.numElem)
-        SS = fun' * A.A[ind][1:numNodes, step]
+        SS = round(fun' * A.A[ind][1:numNodes, step], digits=10)
     elseif A.A == []
-        SS = fun' * A.a[nodeTags, step]
+        SS = round(fun' * A.a[nodeTags, step], digits=10)
     end
     return SS
 end
 
-function probe(A::VectorField, name::String; step=1)
+function probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step=1)
     phtag = getTagForPhysicalName(name)
     pttag = gmsh.model.getEntitiesForPhysicalGroup(0, phtag)[1]
     coord = gmsh.model.getValue(0, pttag, [])

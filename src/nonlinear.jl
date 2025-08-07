@@ -62,7 +62,7 @@ function deformationGradient(r; DoFResults=false)
             rowsOfB = 4
             b = 1
         else
-            error("solveStrain: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -1341,5 +1341,5 @@ function showDeformationResults(r, comp; name=comp, visible=false)
     for i in 1:size(r.a, 2)
         u.a[:, i] = r.a[:, i] - r0.a
     end
-    return showDoFResults(u, comp, name=name, visible=visible)
+    return showDoFResults(u, comp, name=name, visible=visible, factor=1)
 end
