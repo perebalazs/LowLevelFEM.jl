@@ -1336,6 +1336,9 @@ end
 
 function showDeformationResults(r, comp; name=comp, visible=false)
     problem = r.model
+    if r.a == [;;]
+        r = elementsToNodes(r)
+    end
     r0 = nodePositionVector(problem)
     u = copy(r)
     for i in 1:size(r.a, 2)

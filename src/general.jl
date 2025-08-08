@@ -564,7 +564,7 @@ function *(B::VectorField, A::Transformation)
     if dim * non == n
         if B.A == []
             v =  (B.a' * A.T)'
-            return VectorField([], v, B.t, [], length(B.t), B.type. B.model)
+            return VectorField([], v, B.t, [], length(B.t), B.type, B.model)
         else
             error("*(B::VectorField, A::Transformation): B contains element data instead of nodal data.")
         end
@@ -604,7 +604,7 @@ function *(A::Transformation, B::TensorField)
         elseif dim == 3
             T = A.T
         else
-            error("*(A::Transformation, B::TensoeField): dim of A is $dim")
+            error("*(A::Transformation, B::TensorField): dim of A is $dim")
         end
         for k in 1:m
             for i in 1:non
@@ -656,7 +656,7 @@ function *(B::TensorField, A::Transformation)
         elseif dim == 3
             T = A.T
         else
-            error("*(A::Transformation, B::TensoeField): dim of A is $dim")
+            error("*(A::Transformation, B::TensorField): dim of A is $dim")
         end
         for k in 1:m
             for i in 1:non
@@ -680,22 +680,22 @@ end
 function *(A::TensorField, B::TensorField)
     if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
         if length(A.A) != length(B.A)
-            error("*(A::TensoeField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            error("*(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
         end
         if A.numElem != B.numElem
-            error("*(A::TensoeField, B::TensorField): tensor fields are not compatible.")
+            error("*(A::TensorField, B::TensorField): tensor fields are not compatible.")
         end
         nsteps = A.nsteps
         nsteps2 = B.nsteps
         if nsteps != nsteps2
-            error("*(A::TensoeField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+            error("*(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
         end
         C = []
         for i in 1:length(A.A)
             n = length(A.A[i]) ÷ 9
             m = length(B.A[i]) ÷ 9
             if n != m
-                error("*(A::TensoeField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
+                error("*(A::TensorField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
             end
             D = zeros(9n, nsteps)
             for j in 1:n
@@ -709,6 +709,42 @@ function *(A::TensorField, B::TensorField)
         return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
     else
         error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+    end
+end
+
+function *(A::TensorField, b::VectorField)
+    #if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+    if b.model.dim == 3
+        if length(A.A) != length(b.A)
+            error("*(A::TensorField, b::VectorField): size of A=$(length(A.A)) != size of b=$(length(b.A))")
+        end
+        if A.numElem != b.numElem
+            error("*(A::TensorField, b::VectorField): tensor fields are not compatible.")
+        end
+        nsteps = A.nsteps
+        nsteps2 = b.nsteps
+        if nsteps != nsteps2
+            error("*(A::TensorField, b::VectorField): nsteps of A=$(A.nsteps) != nsteps of b=$(b.nsteps)")
+        end
+        C = []
+        for i in 1:length(A.A)
+            n = length(A.A[i]) ÷ 9
+            m = length(b.A[i]) ÷ 3
+            if n != m
+                error("*(A::TensorField, b::VectorField): size of A.A[$i]=$(9n) != size of 3*b.A[$j]=$(3m)")
+            end
+            D = zeros(3n, nsteps)
+            for j in 1:n
+                for k in 1:nsteps
+                    D[3j-2:3j, k] = reshape(reshape(A.A[i][9j-8:9j, k], 3, 3) * reshape(b.A[i][3j-2:3j, k], 3, 1), 3, 1)
+                end
+            end
+            push!(C, D)
+        end
+        a = [;;]
+        return VectorField(C, a, A.t, A.numElem, A.nsteps, b.type, A.model)
+    else
+        error("*(A::TensorField, b::VectorField): Multiply by 2D vector is not yet implemented.")
     end
 end
 
@@ -1250,7 +1286,7 @@ function +(A::VectorField, B::VectorField)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, num, A.nsteps, A.type. A.model)
+            return VectorField(C, a, A.t, num, A.nsteps, A.type, A.model)
         else
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -1268,7 +1304,8 @@ end
 import Base.-
 function -(A::VectorField, B::VectorField)
     if length(A.A) != 0 && length(B.A) != 0
-        if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
+        #if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
+        if A.type == B.type
             if length(A.A) != length(B.A)
                 error("-(A::VectorField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
             end
@@ -1318,9 +1355,9 @@ function -(A::VectorField, B::VectorField)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, num, A.nsteps, :e, A.model)
+            return VectorField(C, a, A.t, num, A.nsteps, A.type, A.model)
         else
-            error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
+            error("-(A::VectorField, B::VectorField): Operation with type ($(A.type) and $(B.type)) is not supported.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
         if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
@@ -1343,7 +1380,7 @@ function *(A::VectorField, b::Number)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+            return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
         else
             error("*(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1364,7 +1401,7 @@ function *(b::Number, A::VectorField)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+            return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
         else
             error("*(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1385,7 +1422,7 @@ function /(A::VectorField, b::Number)
                 push!(C, D)
             end
             a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, :e, A.type)
+            return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.type)
         else
             error("/(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
         end
@@ -1523,12 +1560,12 @@ function +(A::TensorField, B::TensorField)
     if length(A.A) != 0 && length(B.A) != 0
         if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
             if length(A.A) != length(B.A)
-                error("+(A::TensoeField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+                error("+(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
             end
             nsteps = A.nsteps
             nsteps2 = B.nsteps
             if nsteps != nsteps2
-                error("+(A::TensoeField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+                error("+(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
             end
             sec = intersect(A.numElem, B.numElem)
             ind1 = []
@@ -1592,12 +1629,12 @@ function -(A::TensorField, B::TensorField)
     if length(A.A) != 0 && length(B.A) != 0
         if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
             if length(A.A) != length(B.A)
-                error("-(A::TensoeField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+                error("-(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
             end
             nsteps = A.nsteps
             nsteps2 = B.nsteps
             if nsteps != nsteps2
-                error("-(A::TensoeField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+                error("-(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
             end
             sec = intersect(A.numElem, B.numElem)
             ind1 = []
@@ -2456,8 +2493,8 @@ function elementsToNodes(S)
     else
         error("elementsToNodes: type is $type .")
     end
-    display("type=$type")
-    display("epn=$epn")
+    #display("type=$type")
+    #display("epn=$epn")
     s = zeros(non * epn, nsteps)
     pcs = zeros(Int64, non)
 
@@ -2471,9 +2508,11 @@ function elementsToNodes(S)
     for l in 1:non
         s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
     end
-    if type == :q3D || type == :q2D
+    if S isa VectorField
+    #if type == :q3D || type == :q2D
         return VectorField([], s, S.t, [], S.nsteps, type, problem)
-    elseif type == :e || type == :s || type == :F
+    elseif S isa TensorField
+    #elseif type == :e || type == :s || type == :F
         return TensorField([], s, S.t, [], S.nsteps, type, problem)
     else
         error("elementsToNodes: internal error, type=$type.")
@@ -3092,6 +3131,9 @@ function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0, fact
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     t = q.t
     if q.a == [;;]
+        q = elementsToNodes(q)
+    end
+    if q.a == [;;]
         error("showDoFResults: No data")
     end
     dim = problem.dim
@@ -3360,13 +3402,13 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showElementResults(F, comp; name=comp, visible=false, smooth=true)
+function showElementResults(F, comp; name=comp, visible=false, smooth=true, factor=0)
     if F.type == :e
         return showStrainResults(F, comp, name=name, visible=visible, smooth=smooth)
     elseif F.type == :s
         return showStressResults(F, comp, name=name, visible=visible, smooth=smooth)
-    elseif F.type == :q2D || F.type == :q3D
-        return showHeatFluxResults(F, comp, name=name, visible=visible, smooth=smooth)
+    elseif F isa VectorField && F.A != []
+        return showHeatFluxResults(F, comp, name=name, visible=visible, smooth=smooth, factor=factor)
     else
         error("showElementResults: type is '$(F.type)'")
     end
@@ -3506,7 +3548,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true)
+function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, factor=0)
     problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
@@ -3527,7 +3569,7 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true)
     for jj in 1:length(t)
 
         k = 1im
-        if comp == :qvec
+        if comp == :qvec || comp == :vector
             σcomp = []
             for i in eachindex(S.numElem)
                 es = length(σ[i][:,jj]) ÷ dim
@@ -3592,6 +3634,7 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true)
     if length(t) > 1
         gmsh.view.option.setNumber(SS, "ShowTime", 1)
     end
+    gmsh.view.option.setNumber(SS, "DisplacementFactor", factor)
     #display("$comp..ok")
     return SS
 end
