@@ -1830,6 +1830,67 @@ function inv(A::TensorField)
     end
 end
 
+import LinearAlgebra.eigen
+function eigen(A::TensorField)
+    if length(A.A) != 0
+        if A isa TensorField
+            nsteps = A.nsteps
+            C = []
+            c = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                D = zeros(9n, nsteps)
+                h = zeros(3n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        E = reshape(A.A[i][9j-8:9j, k], 3, 3)
+                        f, G = eigen(E, sortby=-)
+                        GG = mapslices(v -> v ./ norm(v), G, dims=1)
+                        D[9j-8:9j, k] = reshape(GG, 9, 1)
+                        h[3j-2:3j, k] = reshape(f, 3, 1)
+                    end
+                end
+                push!(C, D)
+                push!(c, h)
+            end
+            a = [;;]
+            return VectorField(c, a, A.t, A.numElem, A.nsteps, :e3D, A.model), TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+        else
+            error("eigen(A::TensorField): A is not a TensorField.")
+        end
+    else
+        error("eigen(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+import LinearAlgebra.diagm
+function diagm(A::VectorField)
+    if length(A.A) != 0
+        if A isa VectorField && A.model.dim == 3
+            nsteps = A.nsteps
+            C = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 3
+                D = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        e = reshape(A.A[i][3j-2:3j, k], 3, 1)
+                        F = [e[1] 0 0; 0 e[2] 0; 0 0 e[3]]
+                        D[9j-8:9j, k] = reshape(F, 9, 1)
+                    end
+                end
+                push!(C, D)
+            end
+            a = [;;]
+            return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+        else
+            error("diagm(A::VectorField): A is not a VectorField or dim != 3.")
+        end
+    else
+        error("diagm(VectorField): data at nodes is not yet implemented.")
+    end
+end
+
 import Base.sqrt
 function sqrt(A::TensorField)
     if length(A.A) != 0
