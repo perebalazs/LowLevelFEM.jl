@@ -1,6 +1,7 @@
 module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
+using StaticArrays
 using Arpack
 #using Base.Threads
 import gmsh_jll

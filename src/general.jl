@@ -308,7 +308,7 @@ struct ScalarField
                                 else
                                     ff = f
                                 end
-                                sc1[k] = f
+                                sc1[k, 1] = f
                             end
                         end
                         push!(A, sc1)
@@ -678,7 +678,7 @@ function *(B::TensorField, A::Transformation)
 end
 
 function *(A::TensorField, B::TensorField)
-    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+    if true #(A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
         if length(A.A) != length(B.A)
             error("*(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
         end
@@ -707,6 +707,78 @@ function *(A::TensorField, B::TensorField)
         end
         a = [;;]
         return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+    else
+        error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+    end
+end
+
+import LinearAlgebra.⋅
+function ⋅(A::VectorField, B::VectorField)
+    if true #(A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+        if length(A.A) != length(B.A)
+            error("*(A::VectorField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+        end
+        if A.numElem != B.numElem
+            error("*(A::VectorField, B::VectorField): vector fields are not compatible.")
+        end
+        nsteps = A.nsteps
+        nsteps2 = B.nsteps
+        if nsteps != nsteps2
+            error("*(A::VectorField, B::VectorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+        end
+        C = []
+        for i in 1:length(A.A)
+            n = length(A.A[i]) ÷ 3
+            m = length(B.A[i]) ÷ 3
+            if n != m
+                error("*(A::VectorField, B::VectorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
+            end
+            D = zeros(n, nsteps)
+            for j in 1:n
+                for k in 1:nsteps
+                    D[j, k] = reshape(A.A[i][3j-2:3j, k], 3, 1) ⋅ reshape(B.A[i][3j-2:3j, k], 3, 1)
+                end
+            end
+            push!(C, D)
+        end
+        a = [;;]
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+    else
+        error("*(A::VectorField, B::VectorField): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
+    end
+end
+
+function ⋅(A::TensorField, B::TensorField)
+    if true #(A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+        if length(A.A) != length(B.A)
+            error("*(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+        end
+        if A.numElem != B.numElem
+            error("*(A::TensorField, B::TensorField): tensor fields are not compatible.")
+        end
+        nsteps = A.nsteps
+        nsteps2 = B.nsteps
+        if nsteps != nsteps2
+            error("*(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+        end
+        C = []
+        for i in 1:length(A.A)
+            n = length(A.A[i]) ÷ 9
+            m = length(B.A[i]) ÷ 9
+            if n != m
+                error("*(A::TensorField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
+            end
+            D = zeros(n, nsteps)
+            for j in 1:n
+                for k in 1:nsteps
+                    E = reshape(A.A[i][9j-8:9j, k], 3, 3) .* reshape(B.A[i][9j-8:9j, k], 3, 3)
+                    D[j, k] = sum(E)
+                end
+            end
+            push!(C, D)
+        end
+        a = [;;]
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
     else
         error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
     end
@@ -826,6 +898,84 @@ function *(B::TensorField, A::ScalarField)
     end
 end
 
+function *(A::ScalarField, B::VectorField)
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
+        end
+        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
+        D = []
+        for i in eachindex(sec)
+            n = length(B.A[i]) ÷ 3
+            if n != sz
+                D = zeros(3n, nsteps)
+                sz = n
+            end
+            for j in 1:n
+                for k in 1:nsteps
+                    D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
+        end
+        a = [;;]
+        return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
+    else
+        error("*(ScalarField, VectorField): data at nodes is not yet implemented.")
+    end
+end
+
+function *(B::VectorField, A::ScalarField)
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
+        end
+        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
+        D = []
+        for i in eachindex(sec)
+            n = length(B.A[i]) ÷ 3
+            if n != sz
+                D = zeros(3n, nsteps)
+                sz = n
+            end
+            for j in 1:n
+                for k in 1:nsteps
+                    D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
+        end
+        a = [;;]
+        return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
+    else
+        error("*(VectorField, ScalarField): data at nodes is not yet implemented.")
+    end
+end
+
 import Base./
 function /(B::TensorField, A::ScalarField)
     if length(A.A) != 0 && length(B.A) != 0
@@ -863,6 +1013,45 @@ function /(B::TensorField, A::ScalarField)
         return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
     else
         error("/(TensorField, ScalarField): data at nodes is not yet implemented.")
+    end
+end
+
+function /(B::VectorField, A::ScalarField)
+    if length(A.A) != 0 && length(B.A) != 0
+        sz = 0
+        nsteps = B.nsteps
+        sec = intersect(B.numElem, A.numElem)
+        indS = []
+        indT = []
+        sizehint!(indS, length(sec))
+        sizehint!(indT, length(sec))
+        for i in sec
+            append!(indS, findall(j -> j == i, A.numElem))
+            append!(indT, findall(j -> j == i, B.numElem))
+        end
+        C = []
+        num = []
+        sizehint!(C, length(sec))
+        sizehint!(num, length(sec))
+        D = []
+        for i in eachindex(sec)
+            n = length(B.A[i]) ÷ 3
+            if n != sz
+                D = zeros(3n, nsteps)
+                sz = n
+            end
+            for j in 1:n
+                for k in 1:nsteps
+                    D[3j-2:3j, k] = B.A[indT[i]][3j-2:3j, k] / A.A[indS[i]][j, k]
+                end
+            end
+            append!(num, sec[i])
+            push!(C, D)
+        end
+        a = [;;]
+        return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
+    else
+        error("/(VectorField, ScalarField): data at nodes is not yet implemented.")
     end
 end
 
@@ -953,7 +1142,8 @@ end
 import Base.transpose
 function transpose(A::TensorField)
     if length(A.A) != 0
-        if A.type == :s || A.type == :e || A.type == :F
+        #if A.type == :s || A.type == :e || A.type == :F
+        if true
             nsteps = A.nsteps
             C = []
             for i in 1:length(A.A)
@@ -979,7 +1169,7 @@ end
 import Base.adjoint
 function adjoint(A::TensorField)
     if length(A.A) != 0
-        if A.type == :s || A.type == :e || A.type == :F
+        if true
             nsteps = A.nsteps
             C = []
             for i in 1:length(A.A)
@@ -1005,7 +1195,7 @@ end
 export unitTensor
 function unitTensor(A::TensorField)
     if length(A.A) != 0
-        if A.type == :s || A.type == :e || A.type == :F
+        if true #A.type == :s || A.type == :e || A.type == :F
             nsteps = A.nsteps
             C = []
             for i in 1:length(A.A)
@@ -1032,7 +1222,7 @@ export trace
 function trace(A::TensorField)
     if length(A.A) != 0
         sz = 0
-        if A.type == :s || A.type == :e || A.type == :F
+        if true #A.type == :s || A.type == :e || A.type == :F
             nsteps = A.nsteps
             C = []
             D = []
@@ -1064,7 +1254,7 @@ import LinearAlgebra.det
 function det(A::TensorField)
     if length(A.A) != 0
         sz = 0
-        if A.type == :s || A.type == :e || A.type == :F
+        if true #A.type == :s || A.type == :e || A.type == :F
             nsteps = A.nsteps
             C = []
             D = []
@@ -1372,7 +1562,7 @@ end
 
 function *(A::VectorField, b::Number)
     if length(A.A) != 0
-        if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D
+        if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D || true
             nsteps = A.nsteps
             C = []
             for i in 1:length(A.A)
@@ -1382,7 +1572,7 @@ function *(A::VectorField, b::Number)
             a = [;;]
             return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
         else
-            error("*(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
+            error("*(A::VectorField, b): VectorField type ($(A.type) or $(b.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0
         return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model)
@@ -1393,7 +1583,7 @@ end
 
 function *(b::Number, A::VectorField)
     if length(A.A) != 0
-        if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D
+        if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D || true
             nsteps = A.nsteps
             C = []
             for i in 1:length(A.A)
@@ -1403,7 +1593,7 @@ function *(b::Number, A::VectorField)
             a = [;;]
             return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
         else
-            error("*(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
+            error("*(A::VectorField, b): VectorField type ($(A.type) or $(b.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0
         return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model)
@@ -1854,12 +2044,84 @@ function eigen(A::TensorField)
                 push!(c, h)
             end
             a = [;;]
-            return VectorField(c, a, A.t, A.numElem, A.nsteps, :e3D, A.model), TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+            return VectorField(c, a, A.t, A.numElem, A.nsteps, :e3D, A.model), TensorField(C, a, A.t, A.numElem, A.nsteps, :Q, A.model)
         else
             error("eigen(A::TensorField): A is not a TensorField.")
         end
     else
         error("eigen(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+function getEigenVectors(A::TensorField)
+    if length(A.A) != 0
+        if A isa TensorField
+            nsteps = A.nsteps
+            c1 = []
+            c2 = []
+            c3 = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 9
+                h1 = zeros(3n, nsteps)
+                h2 = zeros(3n, nsteps)
+                h3 = zeros(3n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        E = reshape(A.A[i][9j-8:9j, k], 3, 3)
+                        h1[3j-2:3j, k] = reshape(E[:,1], 3, 1)
+                        h2[3j-2:3j, k] = reshape(E[:,2], 3, 1)
+                        h3[3j-2:3j, k] = reshape(E[:,3], 3, 1)
+                    end
+                end
+                push!(c1, h1)
+                push!(c2, h2)
+                push!(c3, h3)
+            end
+            a = [;;]
+            return VectorField(c1, a, A.t, A.numElem, A.nsteps, :e3D, A.model), 
+                   VectorField(c2, a, A.t, A.numElem, A.nsteps, :e3D, A.model), 
+                   VectorField(c3, a, A.t, A.numElem, A.nsteps, :e3D, A.model)
+        else
+            error("getEigenVectors(A::TensorField): A is not a TensorField.")
+        end
+    else
+        error("getEigenVectors(TensorField): data at nodes is not yet implemented.")
+    end
+end
+
+function getEigenValues(A::VectorField)
+    if length(A.A) != 0
+        if A isa VectorField
+            nsteps = A.nsteps
+            c1 = []
+            c2 = []
+            c3 = []
+            for i in 1:length(A.A)
+                n = length(A.A[i]) ÷ 3
+                h1 = zeros(n, nsteps)
+                h2 = zeros(n, nsteps)
+                h3 = zeros(n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        E = reshape(A.A[i][3j-2:3j, k], 3, 1)
+                        h1[j, k] = E[1,1]
+                        h2[j, k] = E[2,1]
+                        h3[j, k] = E[3,1]
+                    end
+                end
+                push!(c1, h1)
+                push!(c2, h2)
+                push!(c3, h3)
+            end
+            a = [;;]
+            return ScalarField(c1, a, A.t, A.numElem, A.nsteps, :scalar, A.model), 
+                   ScalarField(c2, a, A.t, A.numElem, A.nsteps, :scalar, A.model), 
+                   ScalarField(c3, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
+        else
+            error("getEigenValues(A::VectorField): A is not a VectorField.")
+        end
+    else
+        error("getEigenValues(VectorField): data at nodes is not yet implemented.")
     end
 end
 
@@ -1888,6 +2150,38 @@ function diagm(A::VectorField)
         end
     else
         error("diagm(VectorField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.∘
+function ∘(a::VectorField, b::VectorField)
+    G = MMatrix{3,3}([0.0 0 0;0 0 0;0 0 0])
+    if length(a.A) != 0 && length(b.A) != 0
+        if a isa VectorField && b isa VectorField
+            nsteps = a.nsteps
+            C = []
+            for i in 1:length(a.A)
+                n = length(a.A[i]) ÷ 3
+                H = zeros(9n, nsteps)
+                for j in 1:n
+                    for k in 1:nsteps
+                        e = reshape(a.A[i][3j-2:3j, k], 3, 1)
+                        f = reshape(b.A[i][3j-2:3j, k], 3, 1)
+                        for p in 1:3, q in 1:3
+                            G[p, q] = e[p,1] * f[q,1]
+                        end
+                        H[9j-8:9j, k] = G[:]
+                    end
+                end
+                push!(C, H)
+            end
+            aa = [;;]
+            return TensorField(C, aa, a.t, a.numElem, a.nsteps, :e, a.model)
+        else
+            error("∘(a::VectorField, b::VectorField): a and b are not VectorField(s).")
+        end
+    else
+        error("∘(a::VectorField, b::VectorField): data at nodes is not yet implemented.")
     end
 end
 
@@ -1962,6 +2256,28 @@ function log(A::ScalarField)
         return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
     else
         error("log(ScalarField): data at nodes is not yet implemented.")
+    end
+end
+
+import Base.sqrt
+function sqrt(A::ScalarField)
+    if length(A.A) != 0
+        nsteps = A.nsteps
+        C = []
+        for i in 1:length(A.A)
+            n = length(A.A[i])
+            D = zeros(n, nsteps)
+            for j in 1:n
+                for k in 1:nsteps
+                    D[j, k] = sqrt(A.A[i][j, k])
+                end
+            end
+            push!(C, D)
+        end
+        a = [;;]
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
+    else
+        error("sqrt(ScalarField): data at nodes is not yet implemented.")
     end
 end
 
@@ -2545,12 +2861,16 @@ function elementsToNodes(S)
     numElem = S.numElem
     σ = S.A
     non = problem.non
-    if type == :s || type == :e || type == :F
+    #if type == :s || type == :e || type == :F
+    if S isa TensorField
         epn = 9
-    elseif type == :q3D || type == :u3D
+    elseif S.model.dim == 3 && S isa VectorField
         epn = 3
-    elseif type == :q2D || type == :u2D
+    #elseif type == :q2D || type == :u2D
+    elseif S.model.dim == 2 && S isa VectorField
         epn = 2
+    elseif S isa ScalarField #type == :scalar
+        epn = 1
     else
         error("elementsToNodes: type is $type .")
     end
@@ -2575,6 +2895,9 @@ function elementsToNodes(S)
     elseif S isa TensorField
     #elseif type == :e || type == :s || type == :F
         return TensorField([], s, S.t, [], S.nsteps, type, problem)
+    elseif S isa ScalarField
+    #elseif type == :e || type == :s || type == :F
+        return ScalarField([], s, S.t, [], S.nsteps, type, problem)
     else
         error("elementsToNodes: internal error, type=$type.")
     end
@@ -3637,7 +3960,7 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, fac
                 aa = zeros(3es)
                 aa[1:3:3es] .= σ[i][1:dim:dim*es, jj]
                 aa[2:3:3es] .= σ[i][2:dim:dim*es, jj]
-                aa[2:3:3es] .= dim == 3 ? σ[i][3:dim:dim*es, jj] : zeros(es,1)
+                aa[3:3:3es] .= dim == 3 ? σ[i][3:dim:dim*es, jj] : zeros(es,1)
                 push!(σcomp, aa)
             end
             #σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
@@ -4021,7 +4344,7 @@ function probe(A::VectorField, x, y, z; step=1)
     if String(A.type)[2:3] == "2D"
         dim = 2
         SS = [0.0, 0]
-    elseif String(A.type)[2:3] == "3D"
+    elseif String(A.type)[2:3] == "3D" || A.model.dim == 3
         dim = 3
         SS = [0.0, 0, 0]
     else
