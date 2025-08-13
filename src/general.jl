@@ -1251,6 +1251,8 @@ function trace(A::TensorField)
 end
 
 import LinearAlgebra.det
+#using LinearAlgebra: det
+export det
 function det(A::TensorField)
     if length(A.A) != 0
         sz = 0
