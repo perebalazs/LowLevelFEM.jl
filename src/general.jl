@@ -1110,6 +1110,10 @@ function elementsToNodes(S)
     problem = S.model
     gmsh.model.setCurrent(problem.name)
 
+    if S.a != [;;]
+        return S
+    end
+    T = typeof(S)
     type = S.type
     nsteps = S.nsteps
     numElem = S.numElem
@@ -1143,18 +1147,7 @@ function elementsToNodes(S)
     for l in 1:non
         s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
     end
-    if S isa VectorField
-    #if type == :q3D || type == :q2D
-        return VectorField([], s, S.t, [], S.nsteps, type, problem)
-    elseif S isa TensorField
-    #elseif type == :e || type == :s || type == :F
-        return TensorField([], s, S.t, [], S.nsteps, type, problem)
-    elseif S isa ScalarField
-    #elseif type == :e || type == :s || type == :F
-        return ScalarField([], s, S.t, [], S.nsteps, type, problem)
-    else
-        error("elementsToNodes: internal error, type=$type.")
-    end
+    return T([], s, S.t, [], S.nsteps, type, problem)
 end
 
 function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
@@ -1316,7 +1309,7 @@ function fieldError(problem, S)
     elseif type == :e || type == :s
         return TensorField([], res, S.t, [], S.nsteps, type, problem)
     else
-        error("elementsToNodes: internal error, type=$type.")
+        error("fieldError: internal error, type=$type.")
     end
 end
 
