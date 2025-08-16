@@ -10,6 +10,7 @@ import .gmsh
 export gmsh
 
 include("general.jl")
+include("operators.jl")
 include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
