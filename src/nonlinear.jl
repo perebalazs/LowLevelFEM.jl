@@ -22,9 +22,13 @@ function nodePositionVector(problem)
     return VectorField([], reshape(r, :,1), [0], [], 1, :u3D, problem)
 end
 
-function deformationGradient(r; DoFResults=false)
+export ∇
+function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
     problem = r.model
     gmsh.model.setCurrent(problem.name)
+    if r.a == [;;]
+        error("$nabla: use nodal data")
+    end
 
     type = :F
     
@@ -45,24 +49,36 @@ function deformationGradient(r; DoFResults=false)
         phName = problem.material[ipg].phName
         ν = problem.material[ipg].ν
         dim = 0
-        if problem.dim == 3 && problem.type == :Solid
+        if problem.dim == 3 && r isa VectorField && nabla == :grad
             dim = 3
+            pdim = 3
             rowsOfB = 9
             b = 1
-        elseif problem.dim == 2 && problem.type == :PlaneStress
-            dim = 2
-            rowsOfB = 3
-            b = problem.thickness
-        elseif problem.dim == 2 && problem.type == :PlaneStrain
-            dim = 2
+            sz = 9
+        elseif problem.dim == 3 && r isa VectorField && nabla == :div
+            dim = 3
+            pdim = 3
+            rowsOfB = 9
+            b = 1
+            sz = 1
+        elseif problem.dim == 3 && r isa VectorField && nabla == :curl
+            dim = 3
+            pdim = 3
+            rowsOfB = 9
+            b = 1
+            sz = 3
+        elseif problem.dim == 3 && r isa ScalarField
+            dim = 3
+            pdim = 1
             rowsOfB = 3
             b = 1
+            sz = 3
         elseif problem.dim == 2 && problem.type == :AxiSymmetric
             dim = 2
             rowsOfB = 4
             b = 1
         else
-            error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("∇: dimension is $(problem.dim), problem type is $(problem.type).")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -90,7 +106,7 @@ function deformationGradient(r; DoFResults=false)
                 nnet = zeros(Int, length(elemTags[i]), numNodes)
                 invJac = zeros(3, 3numNodes)
                 ∂h = zeros(3, numNodes * numNodes)
-                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes) # spzeros????
                 nn2 = zeros(Int, pdim * numNodes)
                 rr = zeros(numNodes)
                 for j in 1:length(elemTags[i])
@@ -109,16 +125,17 @@ function deformationGradient(r; DoFResults=false)
                         ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
                     end
                     B .*= 0
-                    if dim == 2 && rowsOfB == 3
-                        for k in 1:numNodes, l in 1:numNodes
-                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
-                        end
-                    elseif dim == 3 && rowsOfB == 9
+                    if dim == 3 && r isa VectorField
                         for k in 1:numNodes, l in 1:numNodes
                             B[k*9-(9-1), l*3-(3-1)] = B[k*9-(9-2), l*3-(3-2)] = B[k*9-(9-3), l*3-(3-3)] = ∂h[1, (k-1)*numNodes+l]
                             B[k*9-(9-4), l*3-(3-1)] = B[k*9-(9-5), l*3-(3-2)] = B[k*9-(9-6), l*3-(3-3)] = ∂h[2, (k-1)*numNodes+l]
                             B[k*9-(9-7), l*3-(3-1)] = B[k*9-(9-8), l*3-(3-2)] = B[k*9-(9-9), l*3-(3-3)] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 3 && r isa ScalarField
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-(3-1), l] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-(3-2), l] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*3-(3-3), l] = ∂h[3, (k-1)*numNodes+l]
                         end
                     elseif dim == 2 && rowsOfB == 4
                         for k in 1:numNodes, l in 1:numNodes
@@ -133,45 +150,44 @@ function deformationGradient(r; DoFResults=false)
                     for k in 1:dim
                         nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
                     end
-                    e = zeros(9numNodes, nsteps) # tensors have nine elements
+                    e = zeros(sz * numNodes, nsteps) # tensors have nine elements
                     for k in 1:numNodes
-                        if rowsOfB == 9 && dim == 3 && problem.type == :Solid
+                        if rowsOfB == 9 && dim == 3
                             B1 = B[k*9-8:k*9, 1:3*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * r.a[nn2, kk]
                                 if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[2], e0[3],
-                                        e0[4], e0[5], e0[6],
-                                        e0[7], e0[8], e0[9]]
+                                    if nabla == :grad
+                                        e[(k-1)*9+1:k*9, kk] = [e0[1], e0[2], e0[3],
+                                            e0[4], e0[5], e0[6],
+                                            e0[7], e0[8], e0[9]]
+                                    elseif nabla == :div
+                                        e[k, kk] = e0[1] + e0[5] + e0[9]
+                                    elseif nabla == :curl
+                                        e[(k-1)*3+1:k*3, kk] = [e0[6] - e0[8],
+                                            e0[7] - e0[3],
+                                            e0[2] - e0[4]]
+                                    end
                                 end
                                 if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3], e0[4], e0[5], e0[6], e0[7], e0[8], e0[9]]
+                                    if nabla == :grad
+                                        E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3], e0[4], e0[5], e0[6], e0[7], e0[8], e0[9]]
+                                    elseif nabla == :div
+                                        E1[nnet[j, k], kk] .+= e0[1] + e0[5] + e0[9]
+                                    elseif nabla == :curl
+                                        E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[6] - e0[8], e0[7] - e0[3], e0[2] - e0[4]]
+                                    end
                                 end
                             end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
-                            B1 = B[k*3-2:k*3, 1:2*numNodes]
+                        elseif rowsOfB == 3 && dim == 3
+                            B1 = B[k*3-2:k*3, 1:numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * r.a[nn2, kk]
                                 if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
-                                        e0[3]/2, e0[2], 0,
-                                        0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[2], e0[3]]
                                 end
                                 if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν/(ν-1)*(e0[1]+e0[2])]
-                                end
-                            end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
-                            B1 = B[k*3-2:k*3, 1:2*numNodes]
-                            for kk in 1:nsteps
-                                e0 = B1 * r.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
-                                        e0[3]/2, e0[2], 0,
-                                        0, 0, 0]
-                                end
-                                if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
+                                    E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3]]
                                 end
                             end
                         elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
@@ -202,31 +218,55 @@ function deformationGradient(r; DoFResults=false)
         end
     end
     if DoFResults == true
-        for k in 1:9
+        for k in 1:rowsOfB
             for l in 1:non
-                E1[k + 9 * l - 9, :] ./= pcs[l]
+                E1[k + rowsOfB * l - rowsOfB, :] ./= pcs[l]
             end
         end
     end
     if DoFResults == true
-        epsilon = TensorField([], E1, r.t, [], nsteps, type, problem)
-        return epsilon
+        if r isa VectorField && nabla == :grad
+            return TensorField([], E1, r.t, [], nsteps, type, problem)
+        elseif r isa VectorField && nabla == :div
+            return ScalarField([], E1, r.t, [], nsteps, type, problem)
+        elseif r isa VectorField && nabla == :curl
+            return VectorField([], E1, r.t, [], nsteps, type, problem)
+        elseif r isa ScalarField
+            return VectorField([], E1, r.t, [], nsteps, type, problem)
+        end
     else
-        epsilon = TensorField(ε, [;;], r.t, numElem, nsteps, type, problem)
-        return epsilon
+        if r isa VectorField && nabla == :grad
+            return TensorField(ε, [;;], r.t, numElem, nsteps, type, problem)
+        elseif r isa VectorField && nabla == :div
+            return ScalarField(ε, [;;], r.t, numElem, nsteps, type, problem)
+        elseif r isa VectorField && nabla == :curl
+            return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
+        elseif r isa ScalarField
+            return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
+        end
     end
 end
 
-function gradientOf(r; DoFResults=false)
-    return deformationGradient(r, DoFResults=DoFResults)
+export curl
+function curl(r::VectorField)
+    return ∇(r, nabla=:curl)
 end
 
-export ∇
-function ∇(r::VectorField; DoFResults=false)
-    return deformationGradient(r, DoFResults=DoFResults)
+export rot
+function rot(r::VectorField)
+    return ∇(r, nabla=:curl)
 end
 
+import Base.div
+export div
+function div(r::VectorField)
+    return ∇(r, nabla=:div)
+end
 
+export grad
+function grad(r::Union{VectorField,ScalarField})
+    return ∇(r)
+end
 
 #=
 function deformationGradient(problem, r)
@@ -837,8 +877,8 @@ function nonFollowerLoadVector(r, loads)
     dof = pdim * non
     fp = zeros(dof)
     ncoord2 = zeros(3 * problem.non)
-    F0 = deformationGradient(problem, r)
-    F0 = elementsToNodes(problem, F0)
+    F0 = ∇(r)
+    F0 = elementsToNodes(F0)
     for n in 1:length(loads)
         name, fx, fy, fz = loads[n]
         if pdim == 3
