@@ -1267,7 +1267,12 @@ function transpose(A::TensorField)
     end
 end
 
-function adjoint(A::TensorField)
+function adjoint(AA::TensorField)
+    if AA.A == []
+        A = nodesToElements(AA)
+    else
+        A = AA
+    end
     if length(A.A) != 0
         if true
             nsteps = A.nsteps
@@ -1771,5 +1776,69 @@ function *(B::SystemMatrix, A::Transformation)
         return SystemMatrix(dropzeros(B.A * A.T), B.model)
     else
         error("*(A::Transformation, B::SystemMatrix): size missmatch dim * non = $dim * $non ≠ $n.")
+    end
+end
+
+###############################################################################
+#                                                                             #
+#                  Differential operators operations                          #
+#                                                                             #
+###############################################################################
+
+import LinearAlgebra.×
+
+function ∘(A::Union{ScalarField,VectorField}, D::Function)
+    if D == ∇
+        return grad(A)
+    else
+        error("⋅(A::Union{ScalarField,VectorField}, D::Function): D is not a differential operator.")
+    end
+end
+
+function ∘(D::Function, A::Union{ScalarField,VectorField})
+    if D == ∇
+        if A isa ScalarField
+            return grad(A)
+        elseif A isa VectorField
+            return grad(A)'
+        end
+    else
+        error("⋅(A::Union{ScalarField,VectorField}, D::Function): D is not a differential operator.")
+    end
+end
+
+function ⋅(A::Union{VectorField,TensorField}, D::Function)
+    if D == ∇
+        return div(A)
+    else
+        error("⋅(A::Union{VectorField,TensorField}, D::Function): D is not a differential operator.")
+    end
+end
+
+function ⋅(D::Function, A::Union{VectorField,TensorField})
+    if D == ∇
+        if A isa VectorField
+            return div(A)
+        elseif A isa TensorField
+            return div(A')
+        end
+    else
+        error("⋅(D::Function, A::Union{VectorField,TensorField}): D is not a differential operator.")
+    end
+end
+
+function ×(D::Function, A::VectorField)
+    if D == ∇
+        return curl(A)
+    else
+        error("×(D::Function, A::VectorField): D is not a differential operator.")
+    end
+end
+
+function ×(A::VectorField, D::Function)
+    if D == ∇
+        return curl(A) * (-1)
+    else
+        error("×(A::VectorField, D::Function): D is not a differential operator.")
     end
 end

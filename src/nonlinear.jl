@@ -23,13 +23,15 @@ function nodePositionVector(problem)
 end
 
 export ∇
-function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
-    problem = r.model
+function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+    problem = rr.model
     gmsh.model.setCurrent(problem.name)
-    if r.a == [;;]
-        error("$nabla: use nodal data")
+    if rr.a == [;;]
+        r = elementsToNodes(rr)
+    else
+        r = rr
     end
-
+    DoFResults=false
     type = :F
     
     nsteps = r.nsteps
@@ -70,6 +72,12 @@ function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
         elseif problem.dim == 3 && r isa ScalarField
             dim = 3
             pdim = 1
+            rowsOfB = 3
+            b = 1
+            sz = 3
+        elseif problem.dim == 3 && r isa TensorField && nabla == :div
+            dim = 3
+            pdim = 9
             rowsOfB = 3
             b = 1
             sz = 3
@@ -137,6 +145,12 @@ function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
                             B[k*3-(3-2), l] = ∂h[2, (k-1)*numNodes+l]
                             B[k*3-(3-3), l] = ∂h[3, (k-1)*numNodes+l]
                         end
+                    elseif dim == 3 && r isa TensorField && nabla == :div
+                        for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-(3-1), l*9-(9-1)] = B[k*3-(3-2), l*9-(9-2)] = B[k*3-(3-3), l*9-(9-3)] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-(3-1), l*9-(9-4)] = B[k*3-(3-2), l*9-(9-5)] = B[k*3-(3-3), l*9-(9-6)] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*3-(3-1), l*9-(9-7)] = B[k*3-(3-2), l*9-(9-8)] = B[k*3-(3-3), l*9-(9-9)] = ∂h[3, (k-1)*numNodes+l]
+                        end
                     elseif dim == 2 && rowsOfB == 4
                         for k in 1:numNodes, l in 1:numNodes
                             B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
@@ -147,12 +161,12 @@ function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
                         error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     push!(numElem, elem)
-                    for k in 1:dim
-                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
                     end
                     e = zeros(sz * numNodes, nsteps) # tensors have nine elements
                     for k in 1:numNodes
-                        if rowsOfB == 9 && dim == 3
+                        if rowsOfB == 9 && dim == 3 && r isa VectorField
                             B1 = B[k*9-8:k*9, 1:3*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * r.a[nn2, kk]
@@ -179,12 +193,23 @@ function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
                                     end
                                 end
                             end
-                        elseif rowsOfB == 3 && dim == 3
+                        elseif rowsOfB == 3 && dim == 3 && r isa ScalarField && nabla == :grad
                             B1 = B[k*3-2:k*3, 1:numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * r.a[nn2, kk]
                                 if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[2], e0[3]]
+                                    e[(k-1)*3+1:k*3, kk] = [e0[1], e0[2], e0[3]]
+                                end
+                                if DoFResults == true
+                                    E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 3 && r isa TensorField && nabla == :div
+                            B1 = B[k*3-2:k*3, 1:9*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * r.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*3+1:k*3, kk] = [e0[1], e0[2], e0[3]]
                                 end
                                 if DoFResults == true
                                     E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3]]
@@ -233,6 +258,8 @@ function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
             return VectorField([], E1, r.t, [], nsteps, type, problem)
         elseif r isa ScalarField
             return VectorField([], E1, r.t, [], nsteps, type, problem)
+        elseif r isa TensorField && nabla == :div
+            return VectorField([], E1, r.t, [], nsteps, type, problem)
         end
     else
         if r isa VectorField && nabla == :grad
@@ -242,6 +269,8 @@ function ∇(r::Union{VectorField, ScalarField}; DoFResults=false, nabla=:grad)
         elseif r isa VectorField && nabla == :curl
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa ScalarField
+            return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
+        elseif r isa TensorField && nabla == :div
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         end
     end
@@ -259,7 +288,7 @@ end
 
 import Base.div
 export div
-function div(r::VectorField)
+function div(r::Union{VectorField,TensorField})
     return ∇(r, nabla=:div)
 end
 
