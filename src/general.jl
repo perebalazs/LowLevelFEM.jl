@@ -1,7 +1,7 @@
 """
     Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
 
-A structure containing the material constants.
+A structure containing the material type and constants.
 - type: constitutive law: `:Hooke`, `:StVenantKirchhoff`, `:NeoHookeCompressible`
 - E: elastic modulus,
 - ν: Poisson's ratio,
@@ -50,18 +50,18 @@ end
 
 A structure containing the most important data of the problem. 
 - Parts of the model with their material constants. More materials can be given. (see `material` function)
-- type of the problem: 3D `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`,
-  `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`.
-  In the case of `:AxiSymmetric`, the axis of symmetry is the "y" axis, 
-  while the geometry must be drawn in the positive "x" half-plane.
+- type of the problem: `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`,
+  `:HeatConduction`, `:PlaneHeatConduction`, `:AxiSymmetricHeatConduction`.
+  In the case of `:AxiSymmetric`, the axis of symmetry is the `y` axis, 
+  while the geometry must be drawn in the positive `x` half-plane.
 - bandwidth optimization using built-in `gmsh` function.
   Possibilities: `:RCMK`, `:Hilbert`, `:Metis` or `:none` (default)
 - dimension of the problem, determined from `type`
-- material constants: Young's modulus, Poisson's ratio,
-  mass density, heat conduction corfficient, specific heat, heat 
-  expansion coefficient (in a vector of material structure `materials`)
+- material constants (in a vector of material structure `materials`). See `Material` struct
 - thickness of the plate
 - number of nodes (non)
+- dimension of the geometry
+- dimension of the problem (eg. a 3D heat conduction problem is a 1D problem)
 
 Types:
 - `materials`: Material
@@ -70,6 +70,8 @@ Types:
 - `dim`: Integer
 - `thickness`: Float64
 - `non`: Integer
+- `dim`: Integer
+- `pdim`: Integer
 """
 struct Problem
     name::String
@@ -103,12 +105,6 @@ struct Problem
         elseif type == :AxiSymmetricHeatConduction
             dim = 2
             pdim = 1
-        #elseif type == :StVenantKirchhoff
-        #    dim = 3
-        #    pdim = 3
-        #elseif type == :NeoHookeCompressible
-        #    dim = 3
-        #    pdim = 3
         else
             error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`.
             Now problem type = $type ????")
@@ -1119,12 +1115,10 @@ function elementsToNodes(S)
     numElem = S.numElem
     σ = S.A
     non = problem.non
-    #if type == :s || type == :e || type == :F
     if S isa TensorField
         epn = 9
     elseif S.model.dim == 3 && S isa VectorField
         epn = 3
-    #elseif type == :q2D || type == :u2D
     elseif S.model.dim == 2 && S isa VectorField
         epn = 2
     elseif S isa ScalarField #type == :scalar
@@ -1132,8 +1126,6 @@ function elementsToNodes(S)
     else
         error("elementsToNodes: type is $type .")
     end
-    #display("type=$type")
-    #display("epn=$epn")
     s = zeros(non * epn, nsteps)
     pcs = zeros(Int64, non)
 
@@ -1741,6 +1733,8 @@ function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0, fact
     gmsh.view.option.setNumber(uvec, "MaxRecursionLevel", 1)
     if visible == false
         gmsh.view.option.setNumber(uvec, "Visible", 0)
+    elseif visible == true
+        gmsh.view.option.setNumber(uvec, "Visible", 1)
     end
     gmsh.view.option.setNumber(uvec, "ShowTime", 0)
     if ff == 0 && length(t) > 1
@@ -2509,3 +2503,15 @@ function probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step
     return probe(A, coord[1], coord[2], coord[3], step=step)
 end
     
+function saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
+    @save fileName * "-LLF-Data.jld2" variable
+end
+
+function loadField(fileName::String)
+    @load fileName * "-LLF-Data.jld2" variable
+    return variable
+end
+
+function isSaved(fileName::String)
+    return isfile(fileName * "-LLF-Data.jld2")
+end
