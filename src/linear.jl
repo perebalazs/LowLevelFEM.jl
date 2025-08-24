@@ -1,3 +1,15 @@
+export stiffnessMatrix, nonLinearStiffnessMatrix, massMatrix, dampingMatrix
+export elasticSupportMatrix
+export loadVector
+export applyBoundaryConditions, applyBoundaryConditions!, applyElasticSupport!
+export solveDisplacement, solveStrain, solveStress
+export solveEigenModes, solveBucklingModes
+export solveModalAnalysis, solveBuckling
+export initialDisplacement, initialDisplacement!, initialVelocity, initialVelocity!
+export nodalForce!, nodalAcceleration!
+export largestPeriodTime, smallestPeriodTime, largestEigenValue, smallestEigenValue
+export CMD, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
+
 """
     FEM.stiffnessMatrix(problem)
 

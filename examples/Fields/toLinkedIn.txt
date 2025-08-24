@@ -1,0 +1,58 @@
+Next version of LowLevelFEM Julia package is coming soon. Here's a sneak peek at the new post-processing capabilities.
+
+cube.geo:
+
+SetFactory("OpenCASCADE");
+// Draw a box and mesh it
+Box(1) = {0, 0, 0, 1, 1, 1};
+MeshSize {:} = 0.2;
+Mesh 3;
+// Give a point inside the box
+Point(9) = {0.5, 0.5, 0.5, 1.0};
+// Give a name to the box and the point
+Physical Volume("cube", 13) = {1};
+Physical Point("P", 14) = {9};
+
+cross-curl.jl
+
+using LowLevelFEM
+gmsh.initialize()
+gmsh.open("cube.geo")
+
+# give a dummy material and define the 3D problem
+mat = material("cube")
+demo = Problem([mat])
+
+# position vectors inside the box
+rx(x, y, z) = x
+ry(x, y, z) = y
+rz(x, y, z) = z
+r0 = field("cube", fx=rx, fy=ry, fz=rz)
+r = vectorField(demo, [r0])
+
+# (constant) angular velocity of the box
+ω0 = field("cube", fx=1, fy=2, fz=3)
+ω = vectorField(demo, [ω0])
+
+# solving the velocity field
+using LinearAlgebra
+v = ω × r
+
+# plot the velocity field
+showDoFResults(v, :vector, visible=true)
+openPostProcessor()
+
+# What is the angular velocity of the vector field v?
+ω1 = ∇ × v / 2
+
+probe(ω1, "P")
+> 3-element Vector{Float64}:
+ 1.0
+ 2.0
+ 3.0
+
+gmsh.finalize()
+
+--------------------------
+
+Other scalar, vector and tenzor field operation are also possible: ×,⋅,∘ even if one of the vectors is the ∇ operator (to solve div,curl,grad)

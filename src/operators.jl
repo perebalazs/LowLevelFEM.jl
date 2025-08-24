@@ -229,6 +229,10 @@ function -(A::ScalarField, B::ScalarField)
     end
 end
 
+function -(A::ScalarField)
+    return A * (-1)
+end
+
 function *(A::ScalarField, b::Number)
     if length(A.A) != 0
         C = []
@@ -334,6 +338,7 @@ end
 ###############################################################################
 
 import LinearAlgebra.⋅
+import LinearAlgebra.×
 import Base.∘
 import LinearAlgebra.norm
 import LinearAlgebra.diagm
@@ -595,6 +600,10 @@ function -(A::VectorField, B::VectorField)
     end
 end
 
+function -(A::VectorField)
+    return A * (-1)
+end
+    
 function *(A::VectorField, b::Number)
     if length(A.A) != 0
         if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D || true
@@ -639,18 +648,14 @@ end
 
 function /(A::VectorField, b::Number)
     if length(A.A) != 0
-        if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D
-            nsteps = A.nsteps
-            C = []
-            for i in 1:length(A.A)
-                D = A.A[i] / b
-                push!(C, D)
-            end
-            a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.type)
-        else
-            error("/(A::VectorField, b): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        nsteps = A.nsteps
+        C = []
+        for i in 1:length(A.A)
+            D = A.A[i] / b
+            push!(C, D)
         end
+        a = [;;]
+        return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
     elseif length(A.a) != 0
         return VectorField([], A.a / b, A.t, [], A.nsteps, A.type, A.model)
     else
@@ -728,6 +733,41 @@ function ∘(a::VectorField, b::VectorField)
     end
 end
 
+function ×(aa::VectorField, bb::VectorField)
+    if length(aa.A) == 0
+        a = nodesToElements(aa)
+    else
+        a = aa
+    end
+    if length(bb.A) == 0
+        b = nodesToElements(bb)
+    else
+        b = bb
+    end
+
+    if a isa VectorField && b isa VectorField
+        nsteps = a.nsteps
+        C = []
+        for i in 1:length(a.A)
+            n = length(a.A[i]) ÷ 3
+            H = zeros(3n, nsteps)
+            for j in 1:n
+                for k in 1:nsteps
+                    e = SVector{3}(a.A[i][3j-2:3j, k])
+                    f = SVector{3}(b.A[i][3j-2:3j, k])
+                    g = e × f
+                    H[3j-2:3j, k] = g[1:3]
+                end
+            end
+            push!(C, H)
+        end
+        aa = [;;]
+        return VectorField(C, aa, a.t, a.numElem, a.nsteps, :vector, a.model)
+    else
+        error("×(a::VectorField, b::VectorField): a and b are not VectorField(s).")
+    end
+end
+
 function norm(A::VectorField)
     if A.A != [] #(A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
         nsteps = A.nsteps
@@ -789,6 +829,8 @@ import LinearAlgebra.det
 import LinearAlgebra.eigen
 
 export det
+export unitTensor
+export trace
 
 function *(A::TensorField, B::TensorField)
     if true #(A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
@@ -992,6 +1034,10 @@ function -(A::TensorField, B::TensorField)
     end
 end
 
+function -(A::TensorField)
+    return A * (-1)
+end
+    
 function *(A::TensorField, b::VectorField)
     #if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
     if b.model.dim == 3
@@ -1297,7 +1343,6 @@ function adjoint(AA::TensorField)
     end
 end
 
-export unitTensor
 function unitTensor(A::TensorField)
     if length(A.A) != 0
         if true #A.type == :s || A.type == :e || A.type == :F
@@ -1323,7 +1368,6 @@ function unitTensor(A::TensorField)
     end
 end
 
-export trace
 function trace(A::TensorField)
     if length(A.A) != 0
         sz = 0
@@ -1784,8 +1828,6 @@ end
 #                  Differential operators operations                          #
 #                                                                             #
 ###############################################################################
-
-import LinearAlgebra.×
 
 function ∘(A::Union{ScalarField,VectorField}, D::Function)
     if D == ∇

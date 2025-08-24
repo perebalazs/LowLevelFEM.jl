@@ -1,3 +1,18 @@
+export Problem, material, getEigenVectors, getEigenValues
+export displacementConstraint, load, elasticSupport
+export temperatureConstraint, heatFlux, heatSource, heatConvection
+export field, scalarField, vectorField, tensorField
+export constrainedDoFs, freeDoFs
+export elementsToNodes, nodesToElements
+export fieldError, resultant
+export rotateNodes
+export showDoFResults, showModalResults, showBucklingResults
+export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
+export plotOnPath, showOnSurface
+export openPreProcessor, openPostProcessor, setParameter, setParameters
+export probe
+export saveField, loadField, isSaved
+
 """
     Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
 
@@ -2235,6 +2250,7 @@ function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="fie
 
     gmsh.view.option.setNumber(pathView, "Type", 2)
     gmsh.view.option.setNumber(pathView, "Axes", 1)
+    gmsh.view.option.setNumber(pathView, "AdaptVisualizationGrid", 0)
 
     if visible == false
         gmsh.view.option.setNumber(pathView, "Visible", 0)
@@ -2459,10 +2475,10 @@ function probe(A::VectorField, x, y, z; step=1)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
     dim = 0
     SS = []
-    if String(A.type)[2:3] == "2D"
+    if A.model.dim == 2
         dim = 2
         SS = [0.0, 0]
-    elseif String(A.type)[2:3] == "3D" || A.model.dim == 3
+    elseif A.model.dim == 3
         dim = 3
         SS = [0.0, 0, 0]
     else

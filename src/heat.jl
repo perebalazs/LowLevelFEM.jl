@@ -1,3 +1,12 @@
+export heatConductionMatrix, heatCapacityMatrix, latentHeatMatrix
+export heatConvectionMatrix, heatConvectionVector
+export heatFluxVector, heatSourceVector
+export thermalLoadVector
+export applyHeatConvection!
+export solveTemperature, solveHeatFlux
+export initialTemperature, initialTemperature!
+export FDM
+
 """
     FEM.heatConductionMatrix(problem)
 

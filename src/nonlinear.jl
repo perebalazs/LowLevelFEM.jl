@@ -1,3 +1,9 @@
+export nodePositionVector, ∇, curl, rot, div, grad
+export tangentMatrixConstitutive, tangentMatrixInitialStress
+export equivalentNodalForce, nonFollowerLoadVector
+export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, suppressDeformationAtBoundaries
+export solveDeformation, showDeformationResults
+
 function nodePositionVector(problem)
     dim = problem.dim
     non = problem.non
@@ -22,7 +28,6 @@ function nodePositionVector(problem)
     return VectorField([], reshape(r, :,1), [0], [], 1, :u3D, problem)
 end
 
-export ∇
 function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
@@ -276,23 +281,19 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     end
 end
 
-export curl
 function curl(r::VectorField)
     return ∇(r, nabla=:curl)
 end
 
-export rot
 function rot(r::VectorField)
     return ∇(r, nabla=:curl)
 end
 
 import Base.div
-export div
 function div(r::Union{VectorField,TensorField})
     return ∇(r, nabla=:div)
 end
 
-export grad
 function grad(r::Union{VectorField,ScalarField})
     return ∇(r)
 end
