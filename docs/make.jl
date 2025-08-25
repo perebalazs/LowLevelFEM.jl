@@ -24,6 +24,7 @@ makedocs(
 )
 
 # LaTeX (PDF) dokumentáció
+@info "STARTING LATEX BUILD"
 makedocs(
     sitename = "LowLevelFEM",
     authors = "Balázs Pere",

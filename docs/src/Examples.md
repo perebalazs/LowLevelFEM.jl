@@ -270,7 +270,9 @@ Physical Curve("path", 10) = {8};
 
 ## Wave propagation in a plate
 
+```@onlyhtml
 ![velocity field](pic/wave.mp4)
+```
 
 wavePropagation.jl
 ```Julia
