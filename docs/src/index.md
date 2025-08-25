@@ -79,5 +79,6 @@ The above described steps can be easily performed using the LowLevelFEM package.
 - [ ] Plastic deformation (within small strain theory).
 - [ ] Solver for arbitrary weak forms.
 
-Any suggestions are welcome. Download documentation as ![PDF](LowLevelFEM.pdf).
+Any suggestions are welcome. Download documentation as 
+PDF LowLevelFEM.pdf .
 
