@@ -6,14 +6,16 @@ version = "1.8.5"
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
-##LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-##SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 gmsh_jll = "630162c2-fc9b-58b3-9910-8442a8a132e6"
 
 [compat]
 Arpack = "v0.5"
 JLD2 = "0.5.15"
+LinearAlgebra = "1.11.0"
+SparseArrays = "1.11.0"
 StaticArrays = "1.9.14"
 julia = "1"
 
