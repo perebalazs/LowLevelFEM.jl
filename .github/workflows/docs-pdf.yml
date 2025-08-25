@@ -18,7 +18,7 @@ jobs:
           version: '1.11'
 
       - name: Install LaTeX (TeX Live)
-        run: sudo apt-get update && sudo apt-get install -y texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-xetex latexmk
+        run: sudo apt-get update && sudo apt-get install -y texlive-full
 
       - name: Install Julia dependencies
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate()'
