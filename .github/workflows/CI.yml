@@ -10,15 +10,33 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v2
-      - uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
         with:
           version: '1.11'
-      - name: Install dependencies
-        run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
-      - name: Build and deploy
+
+      - name: Install LaTeX (TeX Live)
+        run: sudo apt-get update && sudo apt-get install -y texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-xetex
+
+      - name: Install Julia dependencies
+        run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+
+      - name: Build HTML and LaTeX docs
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # If authenticating with GitHub Actions token
-          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }} # If authenticating with SSH deploy key
-        run: julia --project=docs/ docs/make.jl
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+        run: julia --project=docs docs/make.jl
+
+      - name: Compile PDF from LaTeX
+        run: |
+          cd docs/build/latex
+          pdflatex LowLevelFEM.tex
+          pdflatex LowLevelFEM.tex
+
+      - name: Copy PDF to build folder
+        run: cp docs/build/latex/LowLevelFEM.pdf docs/build/LowLevelFEM.pdf
+
+      # A deploydocs() Documenter-en keresztül fut, nem kell külön lépés

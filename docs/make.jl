@@ -2,28 +2,37 @@ push!(LOAD_PATH,"../src/")
 using Documenter
 using LowLevelFEM
 
+const DOC_PAGES = [
+    "Introduction" => "index.md",
+    "Functions" => "Functions.md",
+    "Examples" => "Examples.md"
+]
+
+# HTML dokumentáció
 makedocs(
     sitename = "LowLevelFEM",
-    authors="Balázs Pere",
+    authors = "Balázs Pere",
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        #assets=String[],
-        collapselevel=1
+        collapselevel = 1
     ),
-    pages = [
-         "Introduction" => "index.md",
-         "Functions" => "Functions.md",
-         "Examples" => "Examples.md"],
-    doctest=false,
+    pages = DOC_PAGES,
+    doctest = false,
 )
 
-# Documenter can also automatically deploy documentation to gh-pages.
-# See "Hosting Documentation" and deploydocs() in the Documenter manual
-# for more information.
+# LaTeX (PDF) dokumentáció
+makedocs(
+    sitename = "LowLevelFEM",
+    authors = "Balázs Pere",
+    format = Documenter.LaTeX(),
+    pages = DOC_PAGES,
+    doctest = false,
+)
+
 deploydocs(
     repo = "github.com/perebalazs/LowLevelFEM.jl.git",
     branch = "gh-pages",
-    target="build",
-    devbranch="main",
-    push_preview=true
+    target = "build",
+    devbranch = "main",
+    push_preview = true
 )
