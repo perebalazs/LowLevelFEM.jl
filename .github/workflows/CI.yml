@@ -32,11 +32,11 @@ jobs:
 
       - name: Compile PDF from LaTeX
         run: |
-          cd docs/build/latex
-          pdflatex LowLevelFEM.tex
-          pdflatex LowLevelFEM.tex
+          #cd docs/build/latex
+          #pdflatex LowLevelFEM.tex
+          #pdflatex LowLevelFEM.tex
 
       - name: Copy PDF to build folder
-        run: cp docs/build/latex/LowLevelFEM.pdf docs/build/LowLevelFEM.pdf
+        #run: cp docs/build/latex/LowLevelFEM.pdf docs/build/LowLevelFEM.pdf
 
       # A deploydocs() Documenter-en keresztül fut, nem kell külön lépés
