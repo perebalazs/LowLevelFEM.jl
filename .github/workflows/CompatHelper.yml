@@ -29,4 +29,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.COMPATHELPER_TOKEN }}
           COMPATHELPER_PRIV: ""
         run: |
-          julia --project=@. -e 'using CompatHelper; CompatHelper.main(compat_helper_priv=nothing)'
+          julia --project=@. -e 'using CompatHelper; CompatHelper.main()'
