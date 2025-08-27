@@ -1639,7 +1639,7 @@ Types:
 - `tag`: Integer
 """
 #function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
-function showDoFResults(q, comp; t=[0.0], name=comp, visible=false, ff = 0, factor=0)
+function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     problem = q.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)

@@ -1046,9 +1046,9 @@ function loadVector(problem, loads)
         error("loadVector: wrong pdim ($pdim).")
     end
     if type == :f3D || type == :f2D
-        return VectorField([], reshape(fp, :, 1), [], [], 1, type, problem)
+        return VectorField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
     elseif type == :qn
-        return ScalarField([], reshape(fp, :, 1), [], [], 1, type, problem)
+        return ScalarField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
     end
 end
 
@@ -1745,7 +1745,7 @@ Types:
 - `T₀`: Vector{Float64}
 - `S`: TensorField or Matrix{Float64}
 """
-function solveStress(q; T=ScalarField([],[;;],[],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:T,q.model), DoFResults=false)
+function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:T,q.model), DoFResults=false)
     problem = q.model
     gmsh.model.setCurrent(problem.name)
     
