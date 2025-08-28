@@ -80,7 +80,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
             rowsOfB = 3
             b = 1
             sz = 3
-        elseif problem.dim == 3 && r isa TensorField && nabla == :div
+        elseif r isa TensorField && nabla == :div
             dim = 3
             pdim = 9
             rowsOfB = 3
@@ -150,7 +150,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                             B[k*3-(3-2), l] = ∂h[2, (k-1)*numNodes+l]
                             B[k*3-(3-3), l] = ∂h[3, (k-1)*numNodes+l]
                         end
-                    elseif dim == 3 && r isa TensorField && nabla == :div
+                    elseif r isa TensorField && nabla == :div
                         for k in 1:numNodes, l in 1:numNodes
                             B[k*3-(3-1), l*9-(9-1)] = B[k*3-(3-2), l*9-(9-2)] = B[k*3-(3-3), l*9-(9-3)] = ∂h[1, (k-1)*numNodes+l]
                             B[k*3-(3-1), l*9-(9-4)] = B[k*3-(3-2), l*9-(9-5)] = B[k*3-(3-3), l*9-(9-6)] = ∂h[2, (k-1)*numNodes+l]
@@ -209,7 +209,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                                     E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3]]
                                 end
                             end
-                        elseif rowsOfB == 3 && dim == 3 && r isa TensorField && nabla == :div
+                        elseif r isa TensorField && nabla == :div
                             B1 = B[k*3-2:k*3, 1:9*numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * r.a[nn2, kk]
@@ -268,14 +268,19 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
         end
     else
         if r isa VectorField && nabla == :grad
+            type = :tensor
             return TensorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa VectorField && nabla == :div
+            type = :scalar
             return ScalarField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa VectorField && nabla == :curl
+            type = :vector
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa ScalarField
+            type = :vector
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa TensorField && nabla == :div
+            type = :vector
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         end
     end
