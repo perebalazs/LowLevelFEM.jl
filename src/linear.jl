@@ -11,7 +11,7 @@ export largestPeriodTime, smallestPeriodTime, largestEigenValue, smallestEigenVa
 export CMD, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
 
 """
-    FEM.stiffnessMatrix(problem)
+    stiffnessMatrix(problem)
 
 Solves the stiffness matrix of the `problem`.
 
@@ -19,7 +19,7 @@ Return: `stiffMat`
 
 Types:
 - `problem`: Problem
-- `stiffMat`: SparseMatrix
+- `stiffMat`: SystemMatrix
 """
 function stiffnessMatrix(problem; elements=[])
     if problem.type == :AxiSymmetric
@@ -154,6 +154,181 @@ function stiffnessMatrixSolid(problem; elements=[])
     return SystemMatrix(K, problem)
 end
 
+# Segédfüggvény az elemi merevségi mátrix számításához
+# Minden szükséges változót argumentumként kap, így nem kell a külső hatókörre támaszkodni
+function calculate_element_stiffness(elem_tag, pdim, numNodes_elem, D, rowsOfB, b, intPoints_raw, intWeights, ∇h_local_grads, elemNodeTags_phase, i, j, dim)
+    
+    # Globális szabadságfokok (DOFs) az aktuális elemhez
+    num_dofs_per_element = pdim * numNodes_elem
+    
+    # Globális csomópont ID-k az aktuális elemhez
+    element_node_tags = Vector{Int}(undef, numNodes_elem)
+    for k in 1:numNodes_elem
+        element_node_tags[k] = elemNodeTags_phase[i][(j-1)*numNodes_elem+k]
+    end
+
+    # Globális szabadságfokok (DOFs) az aktuális elemhez
+    global_dofs_for_element = Vector{Int}(undef, num_dofs_per_element)
+    for k_node in 1:numNodes_elem
+        for l_dof in 1:pdim
+            global_dofs_for_element[(k_node-1)*pdim + l_dof] = pdim * element_node_tags[k_node] - (pdim - l_dof)
+        end
+    end
+    
+    # Jacobian mátrixok és determinánsok lekérése
+    jac_raw, jacDet_raw, coord_raw = gmsh.model.mesh.getJacobian(elem_tag, intPoints_raw)
+    
+    # inverz Jacobi mátrixok SMatrix formátumban
+    invJac_matrices = Vector{SMatrix{dim, dim, Float64}}(undef, length(intWeights))
+    for k_int in 1:length(intWeights)
+        Jac_k_full = SMatrix{3, 3, Float64}(jac_raw[9*(k_int-1)+1 : 9*k_int])
+        invJac_matrices[k_int] = inv(Jac_k_full[1:dim, 1:dim])'
+    end
+    
+    # Elemi merevségi mátrix és B mátrix
+    K_element_local = zeros(num_dofs_per_element, num_dofs_per_element)
+    B_int_point = zeros(rowsOfB, num_dofs_per_element)
+
+    # Integrációs pontokon végigfutó ciklus
+    for k_int in 1:length(intWeights)
+        invJac_k = invJac_matrices[k_int]
+        jacDet_k = jacDet_raw[k_int]
+        intWeight_k = intWeights[k_int]
+        
+        fill!(B_int_point, 0.0)
+        
+        for l_node in 1:numNodes_elem
+            dN_global_vec = invJac_k * ∇h_local_grads[k_int][l_node]
+
+            if dim == 2 && rowsOfB == 3
+                B_int_point[1, (l_node-1)*pdim + 1] = dN_global_vec[1]
+                B_int_point[2, (l_node-1)*pdim + 2] = dN_global_vec[2]
+                B_int_point[3, (l_node-1)*pdim + 1] = dN_global_vec[2]
+                B_int_point[3, (l_node-1)*pdim + 2] = dN_global_vec[1]
+            elseif dim == 3 && rowsOfB == 6
+                B_int_point[1, (l_node-1)*pdim+1] = dN_global_vec[1]
+                B_int_point[2, (l_node-1)*pdim+2] = dN_global_vec[2]
+                B_int_point[3, (l_node-1)*pdim+3] = dN_global_vec[3]
+                B_int_point[4, (l_node-1)*pdim+1] = dN_global_vec[2]
+                B_int_point[4, (l_node-1)*pdim+2] = dN_global_vec[1]
+                B_int_point[5, (l_node-1)*pdim+2] = dN_global_vec[3]
+                B_int_point[5, (l_node-1)*pdim+3] = dN_global_vec[2]
+                B_int_point[6, (l_node-1)*pdim+1] = dN_global_vec[3]
+                B_int_point[6, (l_node-1)*pdim+3] = dN_global_vec[1]
+            else
+                error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+            end
+        end
+        K_element_local += B_int_point' * D * B_int_point * b * jacDet_k * intWeight_k
+    end
+    
+    global_row_dofs = repeat(global_dofs_for_element, 1, num_dofs_per_element)[:]
+    global_col_dofs = repeat(global_dofs_for_element', num_dofs_per_element, 1)[:]
+
+    return global_row_dofs, global_col_dofs, K_element_local[:]
+end
+
+function stiffnessMatrixSolidParallel(problem; elements=Int[])
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    
+    lengthOfIJV = 0
+    for i in 1:length(elemTags)
+        if !isempty(elemTags[i])
+            nodes_per_elem = div(length(elemNodeTags[i]), length(elemTags[i]))
+            dofs_per_elem = nodes_per_elem * problem.dim
+            lengthOfIJV += dofs_per_elem^2 * length(elemTags[i])
+        end
+    end
+
+    I_global = Vector{Int}(undef, 0)
+    J_global = Vector{Int}(undef, 0)
+    V_global = Vector{Float64}(undef, 0)
+    sizehint!(I_global, lengthOfIJV)
+    sizehint!(J_global, lengthOfIJV)
+    sizehint!(V_global, lengthOfIJV)
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim = problem.dim
+        pdim = problem.dim
+
+        local D::SMatrix
+        local rowsOfB::Int
+        local b::Float64
+
+        if dim == 3 && problem.type == :Solid
+            D_base = @SMatrix [1-ν ν ν 0 0 0; ν 1-ν ν 0 0 0; ν ν 1-ν 0 0 0; 0 0 0 (1-2ν)/2 0 0; 0 0 0 0 (1-2ν)/2 0; 0 0 0 0 0 (1-2ν)/2]
+            D = E / ((1 + ν) * (1 - 2ν)) * D_base
+            rowsOfB = 6
+            b = 1.0
+        elseif dim == 2 && problem.type == :PlaneStress
+            D_base = @SMatrix [1 ν 0; ν 1 0; 0 0 (1-ν)/2]
+            D = E / (1 - ν^2) * D_base
+            rowsOfB = 3
+            b = problem.thickness
+        elseif dim == 2 && problem.type == :PlaneStrain
+            D_base = @SMatrix [1-ν ν 0; ν 1-ν 0; 0 0 (1-2ν)/2]
+            D = E / ((1 + ν) * (1 - 2ν)) * D_base
+            rowsOfB = 3
+            b = 1.0
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+
+            elemTypes_phase, elemTags_phase, elemNodeTags_phase = gmsh.model.mesh.getElements(edim, etag)
+
+            for i in 1:length(elemTypes_phase)
+                et = elemTypes_phase[i]
+                elementName, dim_elem, order, numNodes_elem::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints_raw, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, dfun_raw, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints_raw, "GradLagrange")
+                
+                ∇h_local_grads = Vector{Vector{SVector{dim, Float64}}}(undef, numIntPoints)
+                for k_int in 1:numIntPoints
+                    ∇h_local_grads[k_int] = Vector{SVector{dim, Float64}}(undef, numNodes_elem)
+                    for l_node in 1:numNodes_elem
+                        idx_start = (k_int - 1) * (numNodes_elem * dim) + (l_node - 1) * dim + 1
+                        ∇h_local_grads[k_int][l_node] = SVector{dim, Float64}(dfun_raw[idx_start : idx_start + dim - 1])
+                    end
+                end
+
+                all_I_threads = [Vector{Int}() for _ in 1:Threads.nthreads()]
+                all_J_threads = [Vector{Int}() for _ in 1:Threads.nthreads()]
+                all_V_threads = [Vector{Float64}() for _ in 1:Threads.nthreads()]
+
+                #for j in 1:length(elemTags_phase[i])
+                @batch for j in 1:length(elemTags_phase[i])
+                    tid = Threads.threadid()
+                    I_local, J_local, V_local = calculate_element_stiffness(elemTags_phase[i][j], pdim, numNodes_elem, D, rowsOfB, b, intPoints_raw, intWeights, ∇h_local_grads, elemNodeTags_phase, i, j, dim)
+                    append!(all_I_threads[tid], I_local)
+                    append!(all_J_threads[tid], J_local)
+                    append!(all_V_threads[tid], V_local)
+                end
+
+                append!(I_global, vcat(all_I_threads...))
+                append!(J_global, vcat(all_J_threads...))
+                append!(V_global, vcat(all_V_threads...))
+            end
+        end
+    end
+    
+    dof = problem.dim * problem.non
+    K = sparse(I_global, J_global, V_global, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
 function stiffnessMatrixAXI(problem; elements=[])
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
@@ -266,7 +441,7 @@ function stiffnessMatrixAXI(problem; elements=[])
 end
 
 """
-    FEM.nonLinearStiffnessMatrix(problem, q)
+    nonLinearStiffnessMatrix(problem, q)
 
 Solves the nonlinear stiffness matrix of the `problem`. `q` is a
 displacement field.
@@ -275,8 +450,8 @@ Return: `stiffMat`
 
 Types:
 - `problem`: Problem
-- `q`: Vector{Float64}
-- `stiffMat`: SparseMatrix
+- `q`: VectorField
+- `stiffMat`: SystemMatrix
 """
 function nonLinearStiffnessMatrix(q; elements=[])
     problem = q.model
@@ -553,7 +728,7 @@ function nonLinearStiffnessMatrixAXI(problem; elements=[])
 end
 
 """
-    FEM.massMatrix(problem; lumped=...)
+    massMatrix(problem; lumped=...)
 
 Solves the mass matrix of the `problem`. If `lumped` is true, solves lumped mass matrix.
 
@@ -562,7 +737,7 @@ Return: `massMat`
 Types:
 - `problem`: Problem
 - `lumped`: Boolean
-- `massMat`: SparseMatrix
+- `massMat`: SystemMatrix
 """
 function massMatrix(problem; elements=[], lumped=true)
     gmsh.model.setCurrent(problem.name)
@@ -687,7 +862,7 @@ function massMatrix(problem; elements=[], lumped=true)
 end
 
 """
-    FEM.dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=..., β=...)
+    dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=..., β=...)
 
 Generates the damping matrix for proportional damping case. **C**=α**M**+β**K**
 or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅. The latter corresponds 
@@ -701,13 +876,13 @@ largest natural frequency.
 Return: `dampingMatrix`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
+- `K`: SystemMatrix
+- `M`: SystemMatrix
 - `ωₘₐₓ`: Float64
 - `α`: Float64
 - `ξ`: Float64 of Vector{Float64}
 - `β`: Float64 of Vector{Float64}
-- `dampingMatrix`: SparseMatrix
+- `dampingMatrix`: SystemMatrix
 """
 function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
     if K.model != M.model
@@ -736,10 +911,10 @@ function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐ�
 end
 
 """
-    FEM.elasticSupportMatrix(problem, elSupp)
+    elasticSupportMatrix(problem, elSupp)
 
 Solves the elastic support matrix of the `problem`. `elSupp` is a vector of elastic
-supports defined in function `FEM.elasticSupport`. With the displacementent vector `q` in hand the
+supports defined in function `elasticSupport`. With the displacementent vector `q` in hand the
 reaction force vector `fR` arising from the elastic support can be solved.
 (`fR = heatConvMat * q`)
 
@@ -748,7 +923,7 @@ Return: `elSuppMat`
 Types:
 - `problem`: Problem
 - `elSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
-- `elSuppMat`: SparseMatrix
+- `elSuppMat`: SystemMatrix
 """
 function elasticSupportMatrix(problem, elSupports)
     gmsh.model.setCurrent(problem.name)
@@ -895,7 +1070,7 @@ function elasticSupportMatrix(problem, elSupports)
 end
 
 """
-    FEM.loadVector(problem, loads)
+    loadVector(problem, loads)
 
 Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
 `name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
@@ -1053,7 +1228,7 @@ function loadVector(problem, loads)
 end
 
 """
-    FEM.applyBoundaryConditions!(problem, stiffMat, loadVec, supports)
+    applyBoundaryConditions!(stiffMat, loadVec, supports)
 
 Applies displacement boundary conditions `supports` on a stiffness matrix
 `stiffMat` and load vector `loadVec`. Mesh details are in `problem`. `supports`
@@ -1063,9 +1238,8 @@ and `uz`.
 Return: none
 
 Types:
-- `problem`: Problem
-- `stiffMat`: SparseMatrix 
-- `loadVec`: Vector 
+- `stiffMat`: SystemMatrix 
+- `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions!(stiffMat::SystemMatrix, loadVec, supports)
@@ -1082,7 +1256,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, loadVec, supports)
 end
 
 """
-    FEM.applyBoundaryConditions(problem, stiffMat, loadVec, supports)
+    applyBoundaryConditions(stiffMat, loadVec, supports)
 
 Applies displacement boundary conditions `supports` on a stiffness matrix
 `stiffMat` and load vector `loadVec`. Mesh details are in `problem`. `supports`
@@ -1092,12 +1266,12 @@ and `uz`. Creates a new stiffness matrix and load vector.
 Return: `stiffMat`, `loadVec`
 
 Types:
-- `problem`: Problem
-- `stiffMat`: SparseMatrix 
-- `loadVec`: Vector 
+- `stiffMat`: SystemMatrix 
+- `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions(stiffMat0, loadVec0, supports)
+    problem = stiffMat.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
     end
@@ -1113,18 +1287,17 @@ function applyBoundaryConditions(stiffMat0, loadVec0, supports)
 end
 
 """
-    FEM.applyBoundaryConditions!(problem, heatCondMat, heatCapMat, heatFluxVec, supports)
+    applyBoundaryConditions!(heatCondMat, heatCapMat, heatFluxVec, supports)
 
 Applies boundary conditions `supports` on a heat conduction matrix
 `heatCondMat`, heat capacity matrix `heatCapMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `supports`
 is a tuple of `name` of physical group and prescribed temperature `T`.
 
-Return: `stiffMat`, `loadVec`
+Return: none
 
 Types:
-- `problem`: Problem
-- `stiffMat`: SparseMatrix 
-- `loadVec`: Vector 
+- `stiffMat`: SystemMatrix 
+- `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions!(heatCondMat::SystemMatrix, heatCapMat::SystemMatrix, heatFluxVec, supports; fix=1)
@@ -1139,7 +1312,7 @@ function applyBoundaryConditions!(heatCondMat::SystemMatrix, heatCapMat::SystemM
 end
 
 """
-    FEM.getTagForPhysicalName(name)
+    getTagForPhysicalName(name)
 
 Returns `tags` of elements of physical group `name`.
 
@@ -1162,7 +1335,7 @@ function getTagForPhysicalName(name)
 end
 
 """
-    FEM.applyBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports)
+    applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
 
 Applies displacement boundary conditions `supports` on a stiffness matrix
 `stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
@@ -1172,10 +1345,9 @@ prescribed displacements `ux`, `uy` and `uz`.
 Return: none
 
 Types:
-- `problem`: Problem
-- `stiffMat`: SparseMatrix 
-- `massMat`: SparseMatrix 
-- `dampMat`: SparseMatrix 
+- `stiffMat`: SystemMatrix 
+- `massMat`: SystemMatrix 
+- `dampMat`: SystemMatrix 
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
@@ -1333,7 +1505,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
 end
 
 """
-    FEM.applyBoundaryConditions!(problem, dispVec, supports)
+    applyBoundaryConditions!(dispVec, supports)
 
 Applies displacement boundary conditions `supports` on a displacement vector
 `dispVec`. Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
@@ -1343,10 +1515,11 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `dispVec`: Vector{Float64}
+- `dispVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem, dispVec::Matrix, supports)
+function applyBoundaryConditions!(dispVec::Matrix, supports)
+    problem = dispVec.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -1402,7 +1575,7 @@ function applyBoundaryConditions!(dispVec::VectorField, supports)
 end
 
 """
-    FEM.applyElasticSupport!(problem, stiffMat, elastSupp)
+    applyElasticSupport!(stiffMat, elastSupp)
 
 Applies elastic support boundary conditions `elastSupp` on a stiffness matrix
 `stiffMat`. Mesh details are in `problem`. `elastSupp` is a tuple of `name`
@@ -1411,11 +1584,11 @@ of physical group and prescribed `kx`, `ky` and `kz` stiffnesses.
 Return: none
 
 Types:
-- `problem`: Problem
-- `stiffMat`: SparseMatrix 
+- `stiffMat`: SystemMatrix 
 - `elastSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
+    problem = stiffMat.model
     if !isa(elastSupp, Vector)
         error("applyElasticSupport!: elastic supports are not arranged in a vector. Put them in [...]")
     end
@@ -1424,7 +1597,7 @@ function applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
 end
 
 """
-    FEM.solveDisplacement(K, q)
+    solveDisplacement(K, q)
 
 Solves the equation K*q=f for the displacement vector `q`. `K` is the stiffness Matrix,
 `q` is the load vector.
@@ -1432,7 +1605,7 @@ Solves the equation K*q=f for the displacement vector `q`. `K` is the stiffness 
 Return: `q`
 
 Types:
-- `K`: SparseMatrix 
+- `K`: SystemMatrix 
 - `f`: VectorField 
 - `q`: VectorField
 """
@@ -1449,7 +1622,7 @@ function solveDisplacement(K, f)
 end
 
 """
-    FEM.solveDisplacement(problem, load, supp)
+    solveDisplacement(problem, load, supp)
 
 Solves the displacement vector `q` of `problem` with loads `load` and
 supports `supp`.
@@ -1478,7 +1651,7 @@ function solveDisplacement(problem, load, supp)
 end
 
 """
-    FEM.solveDisplacement(problem, load, supp, elasticSupp)
+    solveDisplacement(problem, load, supp, elasticSupp)
 
 Solves the displacement vector `q` of `problem` with loads `load`, 
 supports `supp` and elastic supports `elasticSupp`.
@@ -1508,7 +1681,7 @@ function solveDisplacement(problem, load, supp, elsupp)
 end
 
 """
-    FEM.solveStrain(problem, q; DoFResults=false)
+    solveStrain(q; DoFResults=false)
 
 Solves the strain field `E` from displacement vector `q`. Strain field is given
 per elements, so it usually contains jumps at the boundaries of elements. Details
@@ -1519,8 +1692,7 @@ nodal results. In this case `showDoFResults` can be used to show the results
 Return: `E`
 
 Types:
-- `problem`: Problem
-- `q`: Vector{Float64}
+- `q`: VectorField
 - `E`: TensorField
 """
 function solveStrain(q; DoFResults=false)
@@ -1726,7 +1898,7 @@ function solveStrain(q; DoFResults=false)
 end
 
 """
-    FEM.solveStress(problem, q; T=..., T₀=..., DoFResults=false)
+    solveStress(q; T=..., T₀=..., DoFResults=false)
 
 Solves the stress field `S` from displacement vector `q`. Stress field is given
 per elements, so it usually contains jumps at the boundary of elements. Details
@@ -1739,11 +1911,10 @@ function solves also the thermal stresses.
 Return: `S`
 
 Types:
-- `problem`: Problem
-- `q`: Vector{Float64}
-- `T`: Vector{Float64}
-- `T₀`: Vector{Float64}
-- `S`: TensorField or Matrix{Float64}
+- `q`: VectorField
+- `T`: ScalarField
+- `T₀`: ScalarField
+- `S`: TensorField
 """
 function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:T,q.model), DoFResults=false)
     problem = q.model
@@ -2006,7 +2177,7 @@ function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=Sc
 end
 
 """
-    FEM.solveEigenModes(problem, K, M; n=6, fₘᵢₙ=1.01)
+    solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
 
 Solves the eigen frequencies and mode shapes of a problem given by stiffness
 matrix `K` and the mass matrix `M`. `n` is the number of eigenfrequencies to solve,
@@ -2016,8 +2187,8 @@ and eigen modes. Results can be presented by `showModalResults` function.
 Return: `modes`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
+- `K`: SystemMatrix
+- `M`: SystemMatrix
 - `n`: Int64
 - `fₘᵢₙ`: Float64
 - `modes`: Eigen 
@@ -2042,7 +2213,7 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
 end
 
 """
-    FEM.solveBucklingModes(problem, K, Knl; n=6)
+    solveBucklingModes(K, Knl; n=6)
 
 Solves the critical force multipliers and buckling mode shapes of a problem given by stiffness
 matrix `K` and the nonlinear stiffness matrix `Knl`. `n` is the number of buckling modes to solve.
@@ -2051,8 +2222,8 @@ Returns the struct of critical forces and buckling modes. Results can be present
 Return: `modes`
 
 Types:
-- `K`: SparseMatrix
-- `Knl`: SparseMatrix
+- `K`: SystemMatrix
+- `Knl`: SystemMatrix
 - `n`: Int64
 - `modes`: Eigen 
 """
@@ -2075,7 +2246,7 @@ function solveBucklingModes(K, Knl; n=6)
 end
 
 """
-    FEM.solveModalAnalysis(problem; constraints=[]; loads=[], n=6)
+    solveModalAnalysis(problem; constraints=[]; loads=[], n=6)
 
 Solves the first `n` eigenfrequencies and the corresponding 
 mode shapes for the `problem`, when `loads` and 
@@ -2150,7 +2321,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
 end
 
 """
-    FEM.solveBuckling(problem, loads, constraints; n=6)
+    solveBuckling(problem, loads, constraints; n=6)
 
 Solves the multipliers for the first `n` critical forces and the corresponding 
 buckling shapes for the instability of the `problem`, when `loads` and 
@@ -2193,7 +2364,7 @@ function solveBuckling(problem, loads, constraints; n=6)
 end
 
 """
-    FEM.initialDisplacement(problem, name; ux=..., uy=..., uz=...)
+    initialDisplacement(problem, name; ux=..., uy=..., uz=...)
 
 Sets the displacement values `ux`, `uy` and `uz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Returns the initial
@@ -2241,7 +2412,7 @@ function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im, type=:u)
 end
 
 """
-    FEM.initialDisplacement!(problem, name, u0; ux=..., uy=..., uz=...)
+    initialDisplacement!(name, u0; ux=..., uy=..., uz=...)
 
 Changes the displacement values to `ux`, `uy` and `uz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
@@ -2250,7 +2421,6 @@ displacement vector `u0`.
 Return: u0
 
 Types:
-- `problem`: Problem
 - `name`: String 
 - `ux`: Float64 
 - `uy`: Float64 
@@ -2281,7 +2451,7 @@ function initialDisplacement!(name, u0; ux=1im, uy=1im, uz=1im, type=:u)
 end
 
 """
-    FEM.initialVelocity(problem, name; vx=..., vy=..., vz=...)
+    initialVelocity(problem, name; vx=..., vy=..., vz=...)
 
 Sets the velocity values `vx`, `vy` and `vz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Returns the initial
@@ -2302,7 +2472,7 @@ function initialVelocity(problem, name; vx=1im, vy=1im, vz=1im)
 end
 
 """
-    FEM.initialVelocity!(problem, name, v0; vx=..., vy=..., vz=...)
+    initialVelocity!(name, v0; vx=..., vy=..., vz=...)
 
 Changes the velocity values `vx`, `vy` and `vz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
@@ -2311,9 +2481,8 @@ velocity vector `v0`.
 Return: none
 
 Types:
-- `problem`: Problem
 - `name`: String 
-- `v0`: Vector{Float64}
+- `v0`: VectorField
 - `vx`: Float64 
 - `vy`: Float64 
 - `vz`: Float64 
@@ -2323,28 +2492,27 @@ function initialVelocity!(name, v0; vx=1im, vy=1im, vz=1im)
 end
 
 """
-    FEM.nodalForce!(problem, name, f0; fx=..., fy=..., fz=...)
+    nodalForce!(name, f0; fx=..., fy=..., fz=...)
 
 Changes the force values `fx`, `fy` and `fz` (depending on the dimension of
-the `problem`) at nodes belonging to physical group `name`. Original values are in
+the problem) at nodes belonging to physical group `name`. Original values are in
 load vector `f0`.
 
 Return: none
 
 Types:
-- `problem`: Problem
 - `name`: String 
-- `f0`: Vector{Float64}
+- `f0`: VectorField
 - `fx`: Float64 
 - `fy`: Float64 
 - `fz`: Float64 
 """
-function nodalForce!(name, f0; fx=1im, fy=1im, fz=1im)
-    initialDisplacement!(name, f0, ux=fx, uy=fy, uz=fz)
+function nodalForce!(f0; fx=1im, fy=1im, fz=1im)
+    initialDisplacement!(f0, ux=fx, uy=fy, uz=fz)
 end
 
 """
-    FEM.nodalAcceleration!(problem, name, a0; ax=..., ay=..., az=...)
+    nodalAcceleration!(name, a0; ax=..., ay=..., az=...)
 
 Changes the acceleration values `ax`, `ay` and `az` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
@@ -2353,19 +2521,18 @@ acceleration vector `a0`.
 Return: none
 
 Types:
-- `problem`: Problem
 - `name`: String 
-- `a0`: Vector{Float64}
+- `a0`: VectorField
 - `ax`: Float64
 - `ay`: Float64
 - `az`: Float64
 """
-function nodalAcceleration!(name, a0; ax=1im, ay=1im, az=1im)
-    initialDisplacement!(name, a0, ux=ax, uy=ay, uz=az)
+function nodalAcceleration!(a0; ax=1im, ay=1im, az=1im)
+    initialDisplacement!(a0, ux=ax, uy=ay, uz=az)
 end
 
 """
-    FEM.largestPeriodTime(K, M)
+    largestPeriodTime(K, M)
 
 Solves the largest period of time for a dynamic problem given by stiffness
 matrix `K` and the mass matrix `M`.
@@ -2373,8 +2540,8 @@ matrix `K` and the mass matrix `M`.
 Return: `Δt`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
+- `K`: SystemMatrix
+- `M`: SystemMatrix
 - `Δt`: Float64 
 """
 function largestPeriodTime(K, M)
@@ -2391,7 +2558,7 @@ function largestPeriodTime(K, M)
 end
 
 """
-    FEM.smallestPeriodTime(K, M)
+    smallestPeriodTime(K, M)
 
 Solves the smallest period of time for a dynamic problem given by stiffness
 matrix `K` and the mass matrix `M`.
@@ -2399,8 +2566,8 @@ matrix `K` and the mass matrix `M`.
 Return: `Δt`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
+- `K`: SystemMatrix
+- `M`: SystemMatrix
 - `Δt`: Float64 
 """
 function smallestPeriodTime(K, M)
@@ -2415,7 +2582,7 @@ function smallestPeriodTime(K, M)
 end
 
 """
-    FEM.smallestEigenValue(K, M)
+    smallestEigenValue(K, M)
 
 Solves the largest eigenvalue for a transient problem given by stiffness (heat conduction)
 matrix `K` and the mass (heat capacity) matrix `M` (`C`).
@@ -2423,8 +2590,8 @@ matrix `K` and the mass (heat capacity) matrix `M` (`C`).
 Return: `λₘₐₓ`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
+- `K`: SystemMatrix
+- `M`: SystemMatrix
 - `λₘₐₓ`: Float64 
 """
 function smallestEigenValue(K, C)
@@ -2441,7 +2608,7 @@ function smallestEigenValue(K, C)
 end
 
 """
-    FEM.largestEigenValue(K, M)
+    largestEigenValue(K, M)
 
 Solves the smallest eigenvalue for a transient problem given by stiffness (heat conduction)
 matrix `K` and the mass (heat capacity) matrix `M` (`C`).
@@ -2449,8 +2616,8 @@ matrix `K` and the mass (heat capacity) matrix `M` (`C`).
 Return: `λₘᵢₙ`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
+- `K`: SystemMatrix
+- `M`: SystemMatrix
 - `λₘᵢₙ`: Float64 
 """
 function largestEigenValue(K, C)
@@ -2465,7 +2632,7 @@ function largestEigenValue(K, C)
 end
 
 """
-    FEM.CDM(K, M, C, f, u0, v0, T, Δt)
+    CDM(K, M, C, f, u0, v0, T, Δt)
 
 Solves a transient dynamic problem using central difference method (CDM) (explicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `C` is the damping matrix,
@@ -2482,9 +2649,9 @@ modal damping.
 Return: `u`, `v`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
-- `C`: SparseMatrix
+- `K`: SystemMatrix
+- `M`: SystemMatrix
+- `C`: SystemMatrix
 - `f`: VectorField
 - `u0`: VectorField
 - `v0`: VectorField
@@ -2540,7 +2707,7 @@ function CDM(K, M, f, u0, v0, T, Δt)
 end
 
 """
-    FEM.HHT(K, M, f, u0, v0, T, Δt; α=..., δ=..., γ=..., β=...)
+    HHT(K, M, f, u0, v0, T, Δt; α=..., δ=..., γ=..., β=...)
 
 Solves a transient dynamic problem using HHT-α method[^1] (implicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
@@ -2555,23 +2722,22 @@ of the time instants used. For the meaning of `α`, `β` and `γ` see [^1]. If
     numerical dissipation for time integration algorithms in structural 
     dynamics." Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
 
-Return: `u`, `v`, `t`
+Return: `u`, `v`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
-- `f`: Vector{Float64}
-- `u0`: Vector{Float64}
-- `v0`: Vector{Float64}
+- `K`: SystemMatrix
+- `M`: SystemMatrix
+- `f`: VectorField
+- `u0`: VectorField
+- `v0`: VectorField
 - `T`: Float64
 - `Δt`: Float64 
 - `α`: Float64
 - `β`: Float64
 - `γ`: Float64
 - `δ`: Float64
-- `u`: Matrix{Float64}
-- `v`: Matrix{Float64}
-- `t`: Vector{Float64}
+- `u`: VectorField
+- `v`: VectorField
 """
 function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
     nsteps = ceil(Int64, T / Δt)
@@ -2628,7 +2794,7 @@ function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (
 end
 
 """
-    FEM.CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=..., ξ=..., β=..., show_β=..., show_ξ=...)
+    CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=..., ξ=..., β=..., show_β=..., show_ξ=...)
 
 Gives some functions (graphs) for accuracy analysis of the CDM method. 
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
@@ -2655,8 +2821,6 @@ Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 Return: `xy`
 
 Types:
-- `K`: SparseMatrix
-- `M`: SparseMatrix
 - `ωₘᵢₙ`: Float64
 - `ωₘₐₓ`: Float64
 - `Δt`: Float64 
@@ -2727,7 +2891,7 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
 end
 
 """
-    FEM.HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
 
 Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1]. 
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the

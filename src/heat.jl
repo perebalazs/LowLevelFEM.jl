@@ -8,7 +8,7 @@ export initialTemperature, initialTemperature!
 export FDM
 
 """
-    FEM.heatConductionMatrix(problem)
+    heatConductionMatrix(problem)
 
 Solves the heat conduction matrix of the `problem`.
 
@@ -16,7 +16,7 @@ Return: `heatCondMat`
 
 Types:
 - `problem`: Problem
-- `heatCondMat`: SparseMatrix
+- `heatCondMat`: SystemMatrix
 """
 function heatConductionMatrix(problem; elements=[])
     if problem.type == :AxiSymmetricHeatConduction
@@ -235,7 +235,7 @@ function heatCondMatrixAXI(problem; elements=[])
 end
 
 """
-    FEM.heatCapacityMatrix(problem; lumped=...)
+    heatCapacityMatrix(problem; lumped=...)
 
 Solves the heat capacity matrix of the `problem`. If `lumped` is true, solves lumped heat capacity matrix.
 
@@ -244,7 +244,7 @@ Return: `heatCapMat`
 Types:
 - `problem`: Problem
 - `lumped`: Boolean
-- `massMat`: SparseMatrix
+- `massMat`: SystemMatrix
 """
 function heatCapacityMatrix(problem; elements=[], lumped=false)
     gmsh.model.setCurrent(problem.name)
@@ -367,7 +367,7 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
 end
 
 """
-    FEM.latentHeatMatrix(problem, u, v, T0)
+    latentHeatMatrix(problem, u, v, T0)
 
 Solves the latent heat matrix of the `problem`. With this matrix the generated heat due to deformations
 (given with displacement field `u` and velocity field `v`) can be solved. `T0` is the current temperature
@@ -380,7 +380,7 @@ Types:
 - `u`: VectorField
 - `v`: VectorField
 - `T0`: ScalarField
-- `latHeatMat`: SparseMatrix
+- `latHeatMat`: SystemMatrix
 """
 function latentHeatMatrix(u, v, T0)
     problem = T0.model
@@ -533,11 +533,11 @@ function latentHeatMatrix(u, v, T0)
 end
 
 """
-    FEM.heatConvectionMatrix(problem, heatConvection)
+    heatConvectionMatrix(problem, heatConvection)
 
 Solves the heat convection matrix of the `problem`. `heatConvection` 
 is a vector of heat convection boundary condicions defined in function
-`FEM.heatConduction`. With the heat convection vector (see the `heatConvectionVector` function)
+`heatConduction`. With the heat convection vector (see the `heatConvectionVector` function)
 `heatConvVec`, temperature field vector `T` in hand the heat flux vector `qCV` arising from the
 heat convection boundary condition can be solved. `qCV = heatConvMat * T - heatConvVec`
 
@@ -546,7 +546,7 @@ Return: `heatConvMat`
 Types:
 - `problem`: Problem
 - `heatConvection`: Vector{Tuple{String, Float64, Float64, Float64}}
-- `heatConvMat`: SparseMatrix
+- `heatConvMat`: SystemMatrix
 """
 function heatConvectionMatrix(problem, heatConvection)
     if !isa(heatConvection, Vector)
@@ -556,7 +556,7 @@ function heatConvectionMatrix(problem, heatConvection)
 end
 
 """
-    FEM.heatFluxVector(problem, heatFlux)
+    heatFluxVector(problem, heatFlux)
 
 Solves a heat flux or heat source vector of `problem`. `heatFlux` is a tuple of name of physical group 
 `name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
@@ -584,7 +584,7 @@ function heatFluxVector(problem, loads)
 end
 
 """
-    FEM.heatSourceVector(problem, heatSource)
+    heatSourceVector(problem, heatSource)
 
 Solves a heat flux or heat source vector of `problem`. `heatSource` is a tuple of name of physical group 
 `name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
@@ -613,11 +613,11 @@ function heatSourceVector(problem, loads)
 end
 
 """
-    FEM.heatConvectionVector(problem, heatConvection)
+    heatConvectionVector(problem, heatConvection)
 
 Solves a heat convection vector of `problem`. `heatConvection` 
 is a vector of heat convection boundary condicions defined in function
-`FEM.heatConduction`. With the heat convection matrix (see the `heatConvectionMatrix` function)
+`heatConduction`. With the heat convection matrix (see the `heatConvectionMatrix` function)
 `heatConvMat`, temperature field vector `T` in hand the heat flux vector `qCV` arising from the
 heat convection boundary condition can be solved. `qCV = heatConvMat * T - heatConvVec`
 
@@ -636,17 +636,17 @@ function heatConvectionVector(problem, heatConvection)
 end
 
 """
-    FEM.thermalLoadVector(problem, T; T₀=...)
+    thermalLoadVector(problem, T; T₀=...)
 
 Solves the thermal load vector from a temperature field `T` for problem `problem`.
-`T₀` is the initial temperature field.
+`T₀` is the initial temperature field. `problem` is an elastic problem.
 
 Return: `thermLoadVec`
 
 Types:
 - `problem`: Problem
-- `T`: Vector{Float64}
-- `T₀`: Vector{Float64}
+- `T`: ScalarField
+- `T₀`: ScalarField
 - `thermLoadVec`: VectorField
 """
 #function thermalLoadVector(problem, T; T₀=1im)
@@ -907,7 +907,7 @@ function thermalLoadVectorAXI(problem, T, T₀)
 end
 
 """
-    FEM.applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
+    applyHeatConvection!(heatCondMat, heatFluxVec, heatConv)
 
 Applies heat convectiom boundary conditions `heatConv` on a heat conduction matrix
 `heatCondMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `heatConv`
@@ -919,11 +919,12 @@ Return: none
 
 Types:
 - `problem`: Problem
-- `heatCondMat`: SparseMatrix 
-- `heatFluxVec`: Vector 
+- `heatCondMat`: SystemMatrix 
+- `heatFluxVec`: VectorField
 - `heatConv`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
+function applyHeatConvection!(heatCondMat, heatFluxVec, heatConv)
+    problem = heatCondMat.model
     if !isa(heatConv, Vector)
         error("applyHeatConvection!: heat convections are not arranged in a vector. Put them in [...]")
     end
@@ -937,7 +938,7 @@ function applyHeatConvection!(problem, heatCondMat, heatFluxVec, heatConv)
 end
 
 """
-    FEM.solveTemperature(K, q)
+    solveTemperature(K, q)
 
 Solves the equation K*T=q for the temperature field `T`. `K` is the heat conduction matrix,
 `q` is the heat flux vector.
@@ -945,7 +946,7 @@ Solves the equation K*T=q for the temperature field `T`. `K` is the heat conduct
 Return: `T`
 
 Types:
-- `K`: SparseMatrix 
+- `K`: SystemMatrix 
 - `q`: ScalarField 
 - `T`: ScalarField
 """
@@ -954,7 +955,7 @@ function solveTemperature(K::SystemMatrix, q::ScalarField)
 end
 
 """
-    FEM.solveTemperature(problem, flux, temp)
+    solveTemperature(problem, flux, temp)
 
 Solves the temperature field `T` of `problem` with given heat flux `flux` and
 temperature `temp`.
@@ -975,7 +976,7 @@ function solveTemperature(problem, flux, temp)
 end
 
 """
-    FEM.solveTemperature(problem, flux, temp, heatconv)
+    solveTemperature(problem, flux, temp, heatconv)
 
 Solves the temperature field `T` of `problem` with given heat flux `flux`,
 temperature `temp` and heat convection `heatconv`.
@@ -998,7 +999,7 @@ function solveTemperature(problem, flux, temp, heatconv)
 end
 
 """
-    FEM.solveTemperature(problem, u; T0=273.0)
+    solveTemperature(problem, u; T0=273.0)
 
 Solves the raise of temperature `T` during reversible (no dissipation) elastic deformations,
 where `u` is the displacement field, and `problem` is a heat cunduction problem.
@@ -1028,7 +1029,7 @@ function solveTemperature(problem, u::VectorField; T0=273.0)
 end
 
 """
-    FEM.solveHeatFlux(problem, T; DoFResults=false)
+    solveHeatFlux(T; DoFResults=false)
 
 Solves the heat flux field `q` from temperature vector `T`. heat flux is given
 per elements, so it usually contains jumps at the boundary of elements. Details
@@ -1225,7 +1226,7 @@ function solveHeatFlux(T; DoFResults=false)
 end
 
 """
-    FEM.initialTemperature(problem, name; T=...)
+    initialTemperature(problem, name; T=...)
 
 Sets the temperature value `T` at nodes belonging to physical group `name`.
 Returns the `T0` initial nodal temperature vector.
@@ -1252,7 +1253,7 @@ function initialTemperature(problem, name; T=1im)
 end
 
 """
-    FEM.initialTemperature!(problem, name, T0; T=...)
+    initialTemperature!(name, T0; T=...)
 
 Changes the tempetature value to `T` at nodes belonging to physical group `name`.
 Original values are in temperature vector `T0`.
@@ -1260,7 +1261,6 @@ Original values are in temperature vector `T0`.
 Return: none
 
 Types:
-- `problem`: Problem
 - `name`: String 
 - `T0`: ScalarField
 - `T`: Float64 
@@ -1278,7 +1278,7 @@ function initialTemperature!(name, T0; T=1im)
 end
 
 """
-    FEM.FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)
+    FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)
 
 Solves a transient heat conduction problem using Finite Difference Method (FDM).
 Introducing a `ϑ` parameter, special cases can be used as the Forward Euler (explicit, ϑ=0),
@@ -1301,8 +1301,8 @@ is 1/2.
 Return: `T`
 
 Types:
-- `K`: SparseMatrix
-- `C`: SparseMatrix
+- `K`: SystemMatrix
+- `C`: SystemMatrix
 - `q`: ScalarField
 - `T0`: ScalarField
 - `tₘₐₓ`: Float64
@@ -1343,7 +1343,7 @@ function FDM(K, C, q, TT0, tₘₐₓ, Δt; ϑ=0.5)
 end
 
 """
-    FEM.FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type, n=100, ϑ=...)
+    FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type, n=100, ϑ=...)
 
 Gives a functions (graphs) for accuracy analysis of the ϑ-method[^5]. 
 `λₘᵢₙ` and `λₘₐₓ` are the smallest and largest eigenvalues of the

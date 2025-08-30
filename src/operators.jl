@@ -1064,7 +1064,7 @@ function +(AA::TensorField, BB::TensorField)
     else
         B = BB
     end
-    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F) || true
         if length(A.A) != length(B.A)
             error("+(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
         end
@@ -1136,7 +1136,7 @@ function -(AA::TensorField, BB::TensorField)
     else
         B = BB
     end
-    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
+    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F) || true
         if length(A.A) != length(B.A)
             error("-(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
         end
