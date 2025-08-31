@@ -4,6 +4,18 @@ export equivalentNodalForce, nonFollowerLoadVector
 export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, suppressDeformationAtBoundaries
 export solveDeformation, showDeformationResults
 
+"""
+    nodePositionVector(problem)
+
+    Gives back the positiond vectors of all the nodes of the mesh as a VectorField. (Initial configuration)
+
+    Return: R
+
+    Types:
+
+    - `problem`: Problem
+    - `R`: VectorField
+"""
 function nodePositionVector(problem)
     dim = problem.dim
     non = problem.non
@@ -28,6 +40,23 @@ function nodePositionVector(problem)
     return VectorField([], reshape(r, :,1), [0], [], 1, :u3D, problem)
 end
 
+"""
+    ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+
+    Solves the deriavatives of `rr`.
+    - If `rr` is a ScalarField, `nabla` is :grad, it solves the gradient of `rr`, which is a VectorField.
+    - If `rr` is a VectorField, `nabla` is :grad, it solves the gradient of `rr`, which is a TensorField.
+    - If `rr` is a VectorField, `nabla` is :curl, it solves the rotation of `rr`, which is a VectorField.
+    - If `rr` is a VectorField, `nabla` is :div, it solves the divergence of `rr`, which is a ScalarField.
+    - If `rr` is a TensorField, `nabla` is :div, it solves the divergence of `rr`, which is a VectorField.
+
+    Return: ScalarField, VectorField or TensorField
+
+    Types:
+
+    - `rr`: ScalarField, VectorField or TensorField
+    - `nabla`: Symbol
+"""
 function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
@@ -286,122 +315,132 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     end
 end
 
+"""
+    curl(r::VectorField)
+
+    Solves the rotation of the vector field `r`.
+    An alternative way to solve `curl` is to use `∇` as a differencial operator.
+
+    Return: VectorField
+
+    Types:
+    - `r`: VectorField
+
+    # Examples
+
+    ```julia
+    x(X, Y, Z) = 2X + 3Y
+    y(X, Y, Z) = Y
+    z(X, Y, Z) = Z
+    fld = field("body", fx=x, fy=y, fz=z)
+    v = vectorField(problem, [fld])
+    D1 = curl(v)
+    D2 = ∇ × v
+    println(D1 == D2)
+    ```
+"""
 function curl(r::VectorField)
     return ∇(r, nabla=:curl)
 end
 
+"""
+    rot(r::VectorField)
+
+    Solves the rotation of the vector field `r`. In some countries "rot" denotes the English "curl".
+    (See the `curl` function.)
+
+    Return: VectorField
+
+    Types:
+    - `r`: VectorField
+"""
 function rot(r::VectorField)
     return ∇(r, nabla=:curl)
 end
 
 import Base.div
+
+"""
+    div(r::Union{VectorField,TensorField})
+
+    Solves the divergence of the vector field or tensor field `r`.
+    An alternative way to solve `div` is to use `∇` as a differencial operator.
+
+    Return: ScalarField or VectorField
+
+    Types:
+
+    - `r`: VectorField or TensorField
+
+    # Examples
+
+    ```julia
+    x(X, Y, Z) = 2X + 3Y
+    y(X, Y, Z) = Y
+    z(X, Y, Z) = Z
+    fld = field("body", fx=x, fy=y, fz=z)
+    v = vectorField(problem, [fld])
+    D1 = div(v)
+    D2 = ∇ ⋅ v
+    println(D1 == D2)
+
+    fsz(X, Y, Z) = 10 - Z
+    s0 = field("body", fz=fsz)
+    S = tensorField(problem, [s0])
+    b1 = -div(S)
+    b2 = -S ⋅ ∇
+    println(b1 == b2)
+    ```
+"""
 function div(r::Union{VectorField,TensorField})
     return ∇(r, nabla=:div)
 end
 
+"""
+    grad(r::Union{ScalarField,VectorField})
+
+    Solves the gradient of the scalar field or vector field `r`.
+    An alternative way to solve `grad` is to use `∇` as a differencial operator.
+
+    Return: VectorField or TensorField
+
+    Types:
+
+    - `r`: ScalarField or VectorField
+
+    # Examples
+
+    ```julia
+    x(X, Y, Z) = 2X + 3Y
+    y(X, Y, Z) = Y
+    z(X, Y, Z) = Z
+    fld = field("body", fx=x, fy=y, fz=z)
+    v = vectorField(problem, [fld])
+    D1 = grad(v)
+    D2 = v ∘ ∇
+    println(D1 == D2)
+    ```
+"""
 function grad(r::Union{VectorField,ScalarField})
     return ∇(r)
 end
 
-#=
-function deformationGradient(problem, r)
-    gmsh.model.setCurrent(problem.name)
+"""
+    tangentMatrixConstitutive(r::VectorField)
 
-    type = :F
-    nsteps = size(r.a, 2)
-    F = []
-    numElem = Int[]
-    ncoord2 = zeros(3 * problem.non)
-    dim = problem.dim
-    pdim = problem.pdim
-    non = problem.non
+    Solves the constitutive part of the tangent matrix (when solving large deformation problems).
+    (See [^6]) `r` is the position vector field in the current configuration.
 
-    for ipg in 1:length(problem.material)
-        phName = problem.material[ipg].phName
-        dim = problem.dim
-        pdim = problem.pdim
-        if problem.dim != 3 || problem.type != :Solid
-            error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type). (They must be 3 and :Solid.)")
-        end
+    Return: SystemMatrix
 
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-        for idm in 1:length(dimTags)
-            dimTag = dimTags[idm]
-            edim = dimTag[1]
-            etag = dimTag[2]
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            for i in 1:length(elemTypes)
-                et = elemTypes[i]
-                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                F1 = zeros(9numNodes, nsteps)
-                nodeCoord = zeros(numNodes * 3)
-                for k in 1:dim, j = 1:numNodes
-                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
-                end
-                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
-                ∇h = reshape(dfun, :, numNodes)
-                nnet = zeros(Int, length(elemTags[i]), numNodes)
-                invJac = zeros(3, 3numNodes)
-                ∂h = zeros(dim, numNodes * numNodes)
-                ∂H = spzeros(9 * numNodes, pdim * numNodes)
-                nn2 = zeros(Int, pdim * numNodes)
-                sizehint!(∂H, 9 * numNodes)
-                for j in 1:length(elemTags[i])
-                    elem = elemTags[i][j]
-                    for k in 1:numNodes
-                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
-                    end
-                    for k in 1:pdim
-                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
-                    end
-                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
-                    Jac = reshape(jac, 3, :)
-                    for k in 1:numNodes
-                        invJac[1:3, 3*k-2:3*k] = @inline inv(Jac[1:3, 3*k-2:3*k])'
-                    end
-                    ∂h .*= 0
-                    for k in 1:numNodes
-                        for l in 1:numNodes
-                            ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
-                        end
-                    end
-                    #r1 = r[nn2]
-                    ∂H .*= 0
-                    for k in 1:numNodes
-                        for l in 1:numNodes
-                            ∂H[k*9-(9-1), l*pdim-(pdim-1)] = ∂h[1, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-2), l*pdim-(pdim-2)] = ∂h[1, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-3), l*pdim-(pdim-3)] = ∂h[1, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-4), l*pdim-(pdim-1)] = ∂h[2, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-5), l*pdim-(pdim-2)] = ∂h[2, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-6), l*pdim-(pdim-3)] = ∂h[2, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-7), l*pdim-(pdim-1)] = ∂h[3, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-8), l*pdim-(pdim-2)] = ∂h[3, (k-1)*numNodes+l]
-                            ∂H[k*9-(9-9), l*pdim-(pdim-3)] = ∂h[3, (k-1)*numNodes+l]
-                        end
-                    end
-                    push!(numElem, elem)
-                    for k in 1:numNodes
-                        ∂H1 = ∂H[k*9-(9-1):k*9, 1:pdim*numNodes]
-                        for kk in 1:nsteps
-                            F0 = ∂H1 * r.a[nn2, kk]
-                            F1[(k-1)*9+1:k*9, kk] = [F0[1], F0[2], F0[3],
-                                F0[4], F0[5], F0[6],
-                                F0[7], F0[8], F0[9]]
-                        end
-                    end
-                    push!(F, F1)
-                end
-            end
-        end
-    end
-    a = [;;]
-    sigma = TensorField(F, a, r.t, numElem, nsteps, type)
-    return sigma
-end
-=#
+    Types:
 
-function tangentMatrixConstitutive(r)
+    - `r`: VectorField
+
+    [^6]: Javier Bonet, Richard D. Wood: *Nonlinear Continuum Mechanics for Finite Element Analysis*, 
+    Cambridge University Press, 2008, <https://doi.org/10.1017/CBO9780511755446>
+"""
+function tangentMatrixConstitutive(r::VectorField)
     problem = r.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
@@ -579,7 +618,19 @@ function tangentMatrixConstitutive(r)
     return SystemMatrix(K, problem)
 end
 
-function tangentMatrixInitialStress(r)
+"""
+    tangentMatrixInitialStress(r::VectorField)
+
+    Solves the initial stress part of the tangent matrix (when solving large deformation problems).
+    (See [^6]) `r` is the position vector field in the current configuration.
+
+    Return: SystemMatrix
+
+    Types:
+
+    - `r`: VectorField
+"""
+function tangentMatrixInitialStress(r::VectorField)
     problem = r.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
@@ -736,7 +787,19 @@ function tangentMatrixInitialStress(r)
     return SystemMatrix(K, problem)
 end
 
-function equivalentNodalForce(r)
+"""
+    equivalentNodalForce(r::VectorField)
+
+    Solves the equivalent nodal force (when solving large deformation problems).
+    (See [^6]) `r` is the position vector field in the current configuration.
+
+    Return: VectorField
+
+    Types:
+
+    - `r`: VectorField
+"""
+function equivalentNodalForce(r::VectorField)
     problem = r.model
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
@@ -899,7 +962,19 @@ function equivalentNodalForce(r)
     return VectorField([], reshape(f, :,1), [0], [], 1, :f3D, problem)
 end
 
-function nonFollowerLoadVector(r, loads)
+"""
+    nonFollowerLoadVector(r::VectorField, load)
+
+    Solves the non-follower load vector (when solving large deformation problems).
+    `r` is the position vector field in the current configuration.
+
+    Return: VectorField
+
+    Types:
+
+    - `r`: VectorField
+"""
+function nonFollowerLoadVector(r::VectorField, loads)
     problem = r.model
     gmsh.model.setCurrent(problem.name)
     if !isa(loads, Vector)
@@ -1050,7 +1125,7 @@ function nonFollowerLoadVector(r, loads)
 end
 
 """
-    FEM.applyDeformationBoundaryConditions!(problem, deformVec, supports)
+    applyDeformationBoundaryConditions!(deformVec, supports)
 
 Applies displacement boundary conditions `supports` on deformation vector `deformVec`.
 Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
@@ -1059,14 +1134,13 @@ prescribed displacements `ux`, `uy` and `uz`.
 Return: none
 
 Types:
-- `problem`: Problem
 - `deformVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
     problem = deformVec.model
     if !isa(supports, Vector)
-        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+        error("applyDeformationBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     dof, st = size(deformVec.a)
@@ -1135,20 +1209,18 @@ function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
 end
 
 """
-    FEM.suppressDeformationAtBoundaries!(problem, stiffMat, massMat, dampMat, loadVec, supports)
+    suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
 
-Applies displacement boundary conditions `supports` on a stiffness matrix
-`stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
-Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
+Suppresses the displacements given in `support` in `stiffMat` and `loadVec` 
+so that it is only necessary to consider them once during iteration.
+`stiffMat` is the stiffness matrix, `loadVec` is the load vector.
+`supports` is a tuple of `name` of physical group and
 prescribed displacements `ux`, `uy` and `uz`.
 
 Return: none
 
 Types:
-- `problem`: Problem
-- `stiffMat`: SparseMatrix 
-- `massMat`: SparseMatrix 
-- `dampMat`: SparseMatrix 
+- `stiffMat`: SystemMatrix 
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
@@ -1308,20 +1380,22 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
 end
 
 """
-    FEM.suppressDeformationAtBoundaries(problem, stiffMat, loadVec, supports)
+    suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
 
-Applies displacement boundary conditions `supports` on a stiffness matrix
-`stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
-Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
+Suppresses the displacements given in `support` in `stiffMat` and `loadVec` 
+so that it is only necessary to consider them once during iteration.
+`stiffMat` is the stiffness matrix, `loadVec` is the load vector.
+`supports` is a tuple of `name` of physical group and
 prescribed displacements `ux`, `uy` and `uz`.
 
-Return: none
+Return: stiffMat1, loadVec1
 
 Types:
-- `problem`: Problem
-- `stiffMat`: SparseMatrix 
+- `stiffMat`: SystemMatrix 
 - `loadVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `stiffMat1`: SystemMatrix 
+- `loadVec1`: VectorField
 """
 function suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
     if stiffMat.model != loadVec.model
@@ -1334,6 +1408,21 @@ function suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
     return K1, f1
 end
 
+"""
+    solveDeformation(problem::Problem, load, supp;
+                    followerLoad=false,
+                    loadSteps = 3,
+                    rampedLoad = true,
+                    rampedSupport = false,
+                    maxIteration = 10,
+                    saveSteps = false,
+                    saveIterations = false,
+                    plotConvergence = false,
+                    relativeError = 1e-5,
+                    initialDeformation=nodePositionVector(problem))
+
+    Solves the deformed shape of a non-linearly elastic body...
+"""
 function solveDeformation(problem, load, supp;
     followerLoad=false,
     loadSteps = 3,
@@ -1409,7 +1498,13 @@ function solveDeformation(problem, load, supp;
     end
 end
 
-function showDeformationResults(r, comp; name=comp, visible=false)
+"""
+    showDeformationResults(r::VectorField, comp; name=String, visible=Boolean)
+
+    Shows deformation result, where `r` contains the position vectors of nodes 
+    in the *current configuration*.
+"""
+function showDeformationResults(r::VectorField, comp; name=comp, visible=false)
     problem = r.model
     if r.a == [;;]
         r = elementsToNodes(r)

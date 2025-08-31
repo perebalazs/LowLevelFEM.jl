@@ -81,7 +81,7 @@ A structure containing the most important data of the problem.
 Types:
 - `materials`: Material
 - `type`: Symbol
-- `bandwidth`: String
+- `bandwidth`: Symbol
 - `dim`: Integer
 - `thickness`: Float64
 - `non`: Integer
@@ -174,22 +174,54 @@ struct Problem
 end
 
 using SparseArrays
+
+"""
+    Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
+
+    Structure which contains the transformation matrix `T` of each nodes in the FE mesh, 
+    the number of nodes `non` and the dimension of the problem `dim`.
+
+Types:
+- `T`: SparseMatrixCSC{Float64}
+- `non`: Int64
+- `dim`: Int64
+"""
 struct Transformation
     T::SparseMatrixCSC{Float64}
     non::Int64
     dim::Int64
 end
 
+"""
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem)
+
+    Structure which contains the stiffness/mass/heatconduction/heatcapacity/latentheat/... matrix and given `Problem`.
+
+Types:
+- `A`: SparseMatrixCSC{Float64}
+- `model`: Problem
+"""
 struct SystemMatrix
     A::SparseMatrixCSC
     model::Problem
 end
 
+"""
+    Base.show(io::IO, M::SystemMatrix)
+
+    Internal function to display `SystemMatrix` as a SparseMatrixCSC{Float64}.
+"""
 function Base.show(io::IO, M::SystemMatrix)
     display(M.A)
 end
 
 import Base.copy
+
+"""
+    Base.copy(A::SystemMatrix)
+
+    Internal function to copy the hole content of a `SystemMatrix`.
+"""
 function copy(A::SystemMatrix)
     return SystemMatrix(copy(A.A), A.model)
 end
@@ -197,14 +229,16 @@ end
 abstract type AbstractField end
 
 """
-    ScalarField(A, a, t, numElem, nsteps, type)
+    ScalarField(A, a, t, numElem, nsteps, type, model)
     ScalarField(problem, dataField)
 
-A structure containing the data of a heat flux field. 
+A structure containing all data of a scalar field (eg. Temperature field). 
 - A: vector of ElementNodeData type scalar data (see gmsh.jl)
+- a: matrix of nodal data of scalar field
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in `A` (for animations).
-- type: type of data (eg. heat flux `:q`)
+- type: type of data (eg. temperature `:T`)
+- model: the same as `Problem`
 
 Types:
 - `A`: Vector{Vector{Float64}}
@@ -213,6 +247,16 @@ Types:
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
 - `type`: Symbol
+- `model`: Problem
+
+# Example
+
+```julia
+s(x,y,z) = 2x + 3y
+fs = field("body", f=s)
+S = ScalarField(problem, [fs])
+```
+Here `S` is defined element-wise.
 """
 struct ScalarField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -278,13 +322,15 @@ struct ScalarField <: AbstractField
 end
 
 """
-    VectorField(A, a, t, numElem, nsteps, type)
+    VectorField(A, a, t, numElem, nsteps, type, model)
 
-A structure containing the data of a heat flux field. 
+A structure containing the data of a vector field (eg. displacement field). 
 - A: vector of ElementNodeData type heat flux data (see gmsh.jl)
+- a: matrix of nodal data of scalar field
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in `A` (for animations).
 - type: type of data (eg. heat flux `:q`)
+- model: the same as `Problem`
 
 Types:
 - `A`: Vector{Matrix{Float64}}
@@ -293,6 +339,7 @@ Types:
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
 - `type`: Symbol
+- `model`: Problem
 """
 struct VectorField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -305,13 +352,15 @@ struct VectorField <: AbstractField
 end
 
 """
-    TensorField(A, a, t, numElem, nsteps, type)
+    TensorField(A, a, t, numElem, nsteps, type, model)
 
-A structure containing the data of a stress or strain field. 
-- A: vector of ElementNodeData type stress data (see gmsh.jl)
+A structure containing the data of a tensor field (eg. stress field). 
+- A: vector of ElementNodeData type heat flux data (see gmsh.jl)
+- a: matrix of nodal data of scalar field
 - numElem: vector of tags of elements
 - nsteps: number of stress fields stored in `A` (for animations).
-- type: type of data (eg. stress `:s` and strain `:e`)
+- type: type of data (eg. stress `:s`)
+- model: the same as `Problem`
 
 Types:
 - `A`: Vector{Matrix{Float64}}
@@ -320,6 +369,7 @@ Types:
 - `numElem`: Vector{Integer}
 - `nsteps`: Integer
 - `type`: Symbol
+- `model`: Problem
 """
 struct TensorField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -365,8 +415,8 @@ Types:
 # 2D case
 nx(x, y) = x
 ny(x, y) = y
-cs = FEM.CoordinateSystem([nx, ny])
-Q = FEM.rotateNodes(problem, "body", cs)
+cs = CoordinateSystem([nx, ny])
+Q = rotateNodes(problem, "body", cs)
 q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
              # `q1` is a nodal displacement vector.
 S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
@@ -377,8 +427,8 @@ n1x(x, y, z) = x
 n1y(x, y, z) = y
 n2x(x, y, z) = -y
 n2y = n1x
-cs = FEM.CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
-Q = FEM.rotateNodes(problem, "body", cs)
+cs = CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
+Q = rotateNodes(problem, "body", cs)
 ```
 """
 struct CoordinateSystem
@@ -423,15 +473,17 @@ struct CoordinateSystem
 end
 
 """
-    Eigen(f, ϕ)
+    Eigen(f, ϕ, model)
 
 A structure containing the eigenfrequencies and eigen modes.
 - f: eigenfrequencies
 - ϕ: eigen modes
+- model: same as `Problem`
 
 Types:
 - `f`: Matrix{Float64}
 - `ϕ`: Vector{Float64}
+- `model`: Problem
 """
 struct Eigen
     f::Vector{Float64}
@@ -440,7 +492,7 @@ struct Eigen
 end
 
 """
-    FEM.material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
+    material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
 
 Returns a structure in which `name` is the name of a physical group,
 `type` is the name of the constitutive law (eg. `:Hooke`),
@@ -474,6 +526,28 @@ function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8,
     return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ)
 end
 
+"""
+    getEigenVectors(A::TensorField)
+
+    A function to extract the columns of a tensor field to separate vector fields.
+
+    Return: N1, N2, N3
+
+Types:
+
+- `A`: TensorField
+- `N1`: VectorField
+- `N2`: VectorField
+- `N3`: VectorField
+
+# Examples:
+
+```julia
+using LinearAlgebra
+λ, Q = eigen(S)
+N1, N2, N2 = getEigenVectors(Q)
+```
+"""
 function getEigenVectors(A::TensorField)
     if length(A.A) != 0
         if A isa TensorField
@@ -510,6 +584,28 @@ function getEigenVectors(A::TensorField)
     end
 end
 
+"""
+    getEigenValues(A::VectorField)
+
+    A function to extract the elements of a vector field to separate scalar fields.
+
+    Return: λ1, λ2, λ3
+
+Types:
+
+- `A`: VectorField
+- `λ1`: ScalarField
+- `λ2`: ScalarField
+- `λ3`: ScalarField
+
+# Examples:
+
+```julia
+using LinearAlgebra
+λ, Q = eigen(S)
+λ1, λ2, λ2 = getEigenVectors(λ)
+```
+"""
 function getEigenValues(A::VectorField)
     if length(A.A) != 0
         if A isa VectorField
@@ -547,12 +643,12 @@ function getEigenValues(A::VectorField)
 end
 
 """
-    FEM.displacementConstraint(name; ux=..., uy=..., uz=...)
+    displacementConstraint(name; ux=..., uy=..., uz=...)
 
 Gives the displacement constraints on `name` physical group. At least one `ux`, 
 `uy` or `uz` value have to be given (depending on the dimension of the problem).
 `ux`, `uy` or `uz` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.displacementConstraint("support1", ux=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); displacementConstraint("support1", ux=fn)`)
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
@@ -568,12 +664,12 @@ function displacementConstraint(name; ux=1im, uy=1im, uz=1im)
 end
 
 """
-    FEM.load(name; fx=..., fy=..., fz=...)
+    load(name; fx=..., fy=..., fz=...)
 
 Gives the intensity of distributed load on `name` physical group. At least one `fx`, 
 `fy` or `fz` value have to be given (depending on the dimension of the problem). `fx`, 
 `fy` or `fz` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("load1", fx=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); load("load1", fx=fn)`)
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
@@ -589,11 +685,11 @@ function load(name; fx=0, fy=0, fz=0)
 end
 
 """
-    FEM.elasticSupport(name; kx=..., ky=..., kz=...)
+    elasticSupport(name; kx=..., ky=..., kz=...)
 
 Gives the distributed stiffness of the elastic support on `name` physical group.
 `kx`, `ky` or `kz` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.elasticSupport("supp1", kx=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); elasticSupport("supp1", kx=fn)`)
 Default values are 1.
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
@@ -610,11 +706,11 @@ function elasticSupport(name; kx=0, ky=0, kz=0)
 end
 
 """
-    FEM.temperatureConstraint(name; T=...)
+    temperatureConstraint(name; T=...)
 
 Gives the temperature constraints on `name` physical group. 
 `T` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.temperatureConstraint("surf1", T=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); temperatureConstraint("surf1", T=fn)`)
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
@@ -628,11 +724,11 @@ function temperatureConstraint(name; T=1im)
 end
 
 """
-    FEM.heatFlux(name; qn=...)
+    heatFlux(name; qn=...)
 
 Gives the heat flux normal to the surface of `name` physical group.
 `qn` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("flux1", qn=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); load("flux1", qn=fn)`)
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
@@ -649,11 +745,11 @@ function heatFlux(name; qn=0)
 end
 
 """
-    FEM.heatSource(name; h=...)
+    heatSource(name; h=...)
 
 Gives the body heat source in `name` physical group.
 `h` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.load("source1", h=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); load("source1", h=fn)`)
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
@@ -670,7 +766,7 @@ function heatSource(name; h=0)
 end
 
 """
-    FEM.heatConvection(name; h=..., Tₐ=...)
+    heatConvection(name; h=..., Tₐ=...)
 
 Gives the heat convection of the surface given with `name` physical group.
 `h` is the heat transfer coefficient of the surrounding media,
@@ -691,7 +787,7 @@ function heatConvection(name; h=10., Tₐ=20.)
 end
 
 """
-    FEM.generateMesh(problem, surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
+    generateMesh(problem, surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
 
 Obsolate, use gmsh script (.geo) instead.
 
@@ -700,6 +796,7 @@ Return: none
 Types:
 - ``: x
 """
+
 function generateMesh(surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
     all = gmsh.model.getEntities(0)
     gmsh.model.mesh.setSize(all, elemSize)
@@ -718,12 +815,12 @@ function generateMesh(surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, 
 end
 
 """
-    FEM.field(name; f=..., fx=..., fy=..., fz=..., fxy=..., fyz=..., fzx=...)
+    field(name; f=..., fx=..., fy=..., fz=..., fxy=..., fyz=..., fzx=...)
 
 Gives the value of scalar, vector or tensor field on `name` physical group. At least one `fx`, 
 `fy` or `fz` etc. value have to be given (depending on the dimension of the problem). `fx`, 
 `fy` or `fz` etc. can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); FEM.field("surf1", fx=fn)`)
+(E.g. `fn(x,y,z)=5*(5-x)); field("surf1", fx=fn)`)
 
 Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function,...x7}
 
@@ -741,9 +838,9 @@ Types:
 
 ```julia
 f1(x, y, z) = y
-f2 = FEM.field("face1", f=f1)
-qq = FEM.scalarField(problem, [f2])
-qqq = FEM.showDoFResults(problem, qq, :scalar)
+f2 = field("face1", f=f1)
+qq = scalarField(problem, [f2])
+qqq = showDoFResults(problem, qq, :scalar)
 ```
 """
 function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, fzy=:no, fzx=:no, fxz=:no)
@@ -755,7 +852,7 @@ function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, f
 end
 
 """
-    FEM.scalarField(problem, dataField)
+    scalarField(problem, dataField)
 
 Defines a scalar field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`.
@@ -769,10 +866,12 @@ Types:
 # Examples
 
 ```julia
-f2 = FEM.field("face1", f=1)
-qq = FEM.scalarField(problem, [f2])
-qqq = FEM.showDoFResults(problem, qq, :scalar)
+f2 = field("face1", f=1)
+qq = scalarField(problem, [f2])
+qqq = showDoFResults(problem, qq, :scalar)
 ```
+
+Here ScalarField is defined in nodes.
 """
 function scalarField(problem, dataField)
     if !isa(dataField, Vector)
@@ -808,7 +907,7 @@ function scalarField(problem, dataField)
 end
 
 """
-    FEM.vectorField(problem, dataField; type=...)
+    vectorField(problem, dataField; type=...)
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
@@ -825,11 +924,13 @@ Types:
 ```julia
 f1(x, y, z) = sin(x)
 f2(x, y, z) = 5y
-ff1 = FEM.field("face1", fx=f1, fy=f2, fz=0)
-ff2 = FEM.field("face2", fx=f2, fy=f1, fz=1)
-qq = FEM.vectorField(problem, [ff1, ff2])
-qq0 = FEM.showDoFResults(problem, qq, :vector)
+ff1 = field("face1", fx=f1, fy=f2, fz=0)
+ff2 = field("face2", fx=f2, fy=f1, fz=1)
+qq = vectorField(problem, [ff1, ff2])
+qq0 = showDoFResults(problem, qq, :vector)
 ```
+
+Here VectorField is defined in nodes.
 """
 function vectorField(problem, dataField; type=:u)
     if !isa(dataField, Vector)
@@ -893,7 +994,7 @@ function vectorField(problem, dataField; type=:u)
 end
 
 """
-    FEM.tensorField(problem, dataField; type=...)
+    tensorField(problem, dataField; type=...)
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
@@ -910,11 +1011,13 @@ Types:
 ```julia
 f1(x, y, z) = sin(x)
 f2(x, y, z) = 5y
-ff1 = FEM.field("face1", fx=f1, fy=f2, fz=0, fxy=1, fyz=1, fzx=f2)
-ff2 = FEM.field("face2", fx=f2, fy=f1, fz=1, fxy=1, fyz=f1, fzx=1)
-qq = FEM.tensorField(problem, [ff1, ff2])
-qq0 = FEM.showDoFResults(problem, qq, :tensor)
+ff1 = field("face1", fx=f1, fy=f2, fz=0, fxy=1, fyz=1, fzx=f2)
+ff2 = field("face2", fx=f2, fy=f1, fz=1, fxy=1, fyz=f1, fzx=1)
+qq = tensorField(problem, [ff1, ff2])
+qq0 = showDoFResults(problem, qq, :tensor)
 ```
+
+Here TensorField is defined in nodes.
 """
 function tensorField(problem, dataField; type=:e)
     if !isa(dataField, Vector)
@@ -1037,7 +1140,7 @@ function tensorField(problem, dataField; type=:e)
 end
 
 """
-    FEM.constrainedDoFs(problem, supports)
+    constrainedDoFs(problem, supports)
 
 Returns the serial numbers of constrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
 
@@ -1086,7 +1189,7 @@ function constrainedDoFs(problem, supports)
 end
 
 """
-    FEM.freeDoFs(problem, supports)
+    freeDoFs(problem, supports)
 
 Returns the serial numbers of unconstrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
 
@@ -1105,17 +1208,16 @@ function freeDoFs(problem, supports)
 end
 
 """
-    FEM.elementsToNodes(problem, T)
+    elementsToNodes(T)
 
 Solves the nodal results `F` from the elemental results `T`.
-`T` can be tensor field or vector field.
+`T` can be ScalarField, VectorField or TensorField.
 
 Return: `F`
 
 Types:
-- `problem`: Problem
-- `T`: TensorField or VectorField
-- `F`: TensorField or VectorField
+- `T`: ScalarField, VectorField or TensorField
+- `F`: ScalarField, VectorField or TensorField
 """
 function elementsToNodes(S)
     problem = S.model
@@ -1157,6 +1259,18 @@ function elementsToNodes(S)
     return T([], s, S.t, [], S.nsteps, type, problem)
 end
 
+"""
+    nodesToElements(T)
+
+Solves the element results `F` from the nodal results `T`.
+`T` can be ScalarField, VectorField or TensorField.
+
+Return: `F`
+
+Types:
+- `T`: ScalarField, VectorField or TensorField
+- `F`: ScalarField, VectorField or TensorField
+"""
 function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
     problem = r.model
     gmsh.model.setCurrent(problem.name)
@@ -1256,7 +1370,7 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
 end
 
 """
-    FEM.fieldError(problem, F)
+    fieldError(F)
 
 Solves the deviation of field results `F` (stresses, strains, heat flux components) at nodes, where the field has jumps.
 The result can be displayed with the `showDoFResults` function.
@@ -1264,11 +1378,11 @@ The result can be displayed with the `showDoFResults` function.
 Return: `e`
 
 Types:
-- `problem`: Problem
-- `F`: TensorField or VectorField
+- `F`: VectorField or TensorField
 - `e`: ScalarField
 """
-function fieldError(problem, S)
+function fieldError(S)
+    problem = S.model
     gmsh.model.setCurrent(problem.name)
 
     type = S.type
@@ -1320,12 +1434,8 @@ function fieldError(problem, S)
     end
 end
 
-function fieldError(S)
-    fieldError(S.model, S)
-end
-
 """
-    FEM.resultant(problem, field, phName; grad=false, component=:x)
+    resultant(problem, field, phName; grad=false, component=:x)
 
 Solves the resultant of `field` on `phName` physical group.
 Return the resultant(s) in `tuple`.
@@ -1497,7 +1607,7 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
 end
 
 """
-    FEM.rotateNodes(problem, phName, CoordSys)
+    rotateNodes(problem, phName, CoordSys)
 
 Creates the `T` transformation matrix, which rotates the nodal coordinate system
 of the nodes in `phName` physical group to the coordinate systen defined by `CoordSys`.
@@ -1617,12 +1727,12 @@ function rotateNodes(problem, phName, CoordSys)
 end
 
 """
-    FEM.showDoFResults(problem, q, comp; name=..., visible=...)
+    showDoFResults(q, comp; name=..., visible=...)
 
 Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
 the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
-:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar),
+:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar, :tensor),
 `name` is a title to display and `visible` is a true or false value to toggle on or off the 
 initial visibility in gmsh. If `q` has more columns, then a sequence of results
 will be shown (eg. as an animation). This function returns the tag of View.
@@ -1630,15 +1740,12 @@ will be shown (eg. as an animation). This function returns the tag of View.
 Return: `tag`
 
 Types:
-- `problem`: Problem
 - `q`: ScalarField, VectorField or TensorField
 - `comp`: Symbol
-- `t`: Vector{Float64}
 - `name`: String
 - `visible`: Boolean
 - `tag`: Integer
 """
-#function showDoFResults(problem, q, comp; t=[0.0], name=comp, visible=false, ff = 0)
 function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     problem = q.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
@@ -1762,12 +1869,8 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     return uvec
 end
 
-#function showDoFResults(q, comp; name=comp, visible=false, ff = 0)
-#    return showDoFResults(q.model, q, comp, name=name, visible=visible, ff = ff)
-#end
-
 """
-    FEM.showModalResults(problem, Φ, name=..., visible=...)
+    showModalResults(Φ, name=..., visible=...)
 
 Loads modal results into a View in gmsh. `Φ` is a struct of Eigen. `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
@@ -1777,7 +1880,6 @@ returns the tag of View.
 Return: `tag`
 
 Types:
-- `problem`: Problem
 - `Φ`: Eigen
 - `name`: String
 - `visible`: Boolean
@@ -1788,7 +1890,7 @@ function showModalResults(Φ::Eigen; name=:modal, visible=false, ff=1)
 end
 
 """
-    FEM.showBucklingResults(problem, Φ, name=..., visible=...)
+    showBucklingResults(Φ, name=..., visible=...)
 
 Loads buckling results into a View in gmsh. `Φ` is a struct of Eigen. `name` is a
 title to display and `visible` is a true or false value to toggle on or off the 
@@ -1798,7 +1900,6 @@ returns the tag of View.
 Return: `tag`
 
 Types:
-- `problem`: Problem
 - `Φ`: Eigen
 - `name`: String
 - `visible`: Boolean
@@ -1809,7 +1910,7 @@ function showBucklingResults(Φ::Eigen; name="buckling", visible=false, ff=2)
 end
 
 """
-    FEM.showStrainResults(problem, E, comp; name=..., visible=..., smooth=...)
+    showStrainResults(E, comp; name=..., visible=..., smooth=...)
 
 Loads strain results into a View in gmsh. `E` is a strain field to show, `comp` is
 the component of the field (:e, :ex, :ey, :ez, :exy, :eyz, :ezx),
@@ -1822,7 +1923,6 @@ the tag of View.
 Return: `tag`
 
 Types:
-- `problem`: Problem
 - `E`: TensorField
 - `comp`: Symbol
 - `name`: String
@@ -1904,14 +2004,13 @@ function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
 end
 
 """
-    FEM.showElementResults(problem, F, comp; name=..., visible=..., smooth=...)
+    showElementResults(F, comp; name=..., visible=..., smooth=...)
 
 Same as `ShowStressResults` or `showStrainResults`, depending on the type of `F` data field.
 
 Return: `tag`
 
 Types:
-- `problem`: Problem
 - `F`: TensorField
 - `comp`: Symbol
 - `name`: String
@@ -1932,7 +2031,7 @@ function showElementResults(F, comp; name=comp, visible=false, smooth=true, fact
 end
 
 """
-    FEM.showStressResults(problem, S, comp; name=..., visible=..., smooth=...)
+    showStressResults(S, comp; name=..., visible=..., smooth=...)
 
 Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
 the component of the field (:s, :sx, :sy, :sz, :sxy, :syz, :szx, :seqv),
@@ -1945,7 +2044,6 @@ the tag of View.
 Return: `tag`
 
 Types:
-- `problem`: Problem
 - `S`: TensorField
 - `comp`: Symbol
 - `name`: String
@@ -2044,7 +2142,7 @@ function showStressResults(S, comp; name=comp, visible=false, smooth=true)
 end
 
 """
-    FEM.showHeatFluxResults(problem, Q, comp; name=..., visible=..., smooth=...)
+    showHeatFluxResults(Q, comp; name=..., visible=..., smooth=...)
 
 Loads heat flux results into a View in gmsh. `Q` is a heat flux field to show, `comp` is
 the component of the field (:qvec, :qx, :qy, :qz, :q),
@@ -2057,7 +2155,6 @@ the tag of View.
 Return: `tag`
 
 Types:
-- `problem`: Problem
 - `S`: VectorField
 - `comp`: Symbol
 - `name`: String
@@ -2157,7 +2254,7 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, fac
 end
 
 """
-    FEM.plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
+    plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
 
 Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
 gmsh from which the data of a field is imported. `pathName` is the name of a
@@ -2281,12 +2378,8 @@ function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="fie
     end
 end
 
-#function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
-#    return plotOnPath(Problem(), pathName, field, points=points, step=step, plot=plot, name=name, visible=visible, offsetX=offsetX, offsetY=offsetY, offsetZ=offsetZ)
-#end
-
 """
-    FEM.showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
+    showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
 
 Shows the values of a scalar field at a surface which has a physical name `phName`.
 `field` is the tag of a view in GMSH. The values of the field are calculated at the
@@ -2388,7 +2481,7 @@ end
 
 
 """
-    FEM.openPreProcessor(; openGL=...)
+    openPreProcessor(; openGL=...)
 
 Launches the GMSH preprocessor window with openGL disabled by default.
 
@@ -2407,7 +2500,7 @@ function openPreProcessor(; openGL=false)
 end
 
 """
-    FEM.openPostProcessor(; model=...)
+    openPostProcessor(; model=...)
 
 Launches the GMSH postprocessor window with open postprocessor tree (of `model`).
 
@@ -2422,7 +2515,7 @@ function openPostProcessor(; model=0)
 end
 
 """
-    FEM.setParameter(name, value)
+    setParameter(name, value)
 
 Defines a parameter `name` and sets its value to `value`. 
 
@@ -2437,7 +2530,7 @@ function setParameter(name, value)
 end
 
 """
-    FEM.setParameters(name, value)
+    setParameters(name, value)
 
 Defines a parameter `name` and sets its value to `value`, which is a Vector{Float64}. 
 
@@ -2451,6 +2544,21 @@ function setParameters(name, value)
     gmsh.parser.setNumber(name, value)
 end
 
+"""
+    probe(A::Union{ScalarField,VectorField,TensorField}, x::Number, y::Number, z::Number; step=Int)
+
+    Get a value of the field `A` in a point given with its coordinates `x`,`y`,`z` at time step `step`.
+
+    Return: Float64 or Vector{Float64} or Matrix{Float64}
+
+    Types:
+
+    - `A`: ScalarField or VectorField or TensorField
+    - `x`: Number
+    - `y`: Number
+    - `z`: Number
+    - `step`: Int
+"""
 function probe(A::TensorField, x, y, z; step=1)
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
@@ -2512,22 +2620,73 @@ function probe(A::ScalarField, x, y, z; step=1)
     return SS
 end
 
+"""
+    probe(A::Union{ScalarField,VectorField,TensorField}, s::String; step=Int)
+
+    Get a value of the field `A` in a point given its physical name in GMSH at time step `step`.
+
+    Return: Float64 or Vector{Float64} or Matrix{Float64}
+
+    Types:
+
+    - `A`: ScalarField or VectorField or TensorField
+    - `x`: Number
+    - `y`: Number
+    - `z`: Number
+    - `step`: Int
+"""
 function probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step=1)
     phtag = getTagForPhysicalName(name)
     pttag = gmsh.model.getEntitiesForPhysicalGroup(0, phtag)[1]
     coord = gmsh.model.getValue(0, pttag, [])
     return probe(A, coord[1], coord[2], coord[3], step=step)
 end
-    
+
+"""
+    saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
+
+    Saves `variable` of type ScalarField, VectorField, or TensorField to a file named `fileName`.
+    The name of the file will be complemented with the string "-LLF-Data.jld2"
+
+    Return: none
+
+    Types:
+
+    - `fileName`: String
+    - `variable`: ScalarField, VectorField or TensorField
+"""
 function saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
     @save fileName * "-LLF-Data.jld2" variable
 end
 
+"""
+    loadField(fileName::String)
+
+    Loads a ScalarField, VectorField, or TensorField from a file named `fileName` (without "-LLF-Data.jld2"). 
+
+    Return: variabla
+
+    Types:
+
+    - `fileName`: String
+    - `variable`: ScalarField, VectorField or TensorField
+"""
 function loadField(fileName::String)
     @load fileName * "-LLF-Data.jld2" variable
     return variable
 end
 
+"""
+    isSaved(fileName::String)
+
+Checks whether a variable has been saved or not.
+
+Return: Boolean
+
+Types:
+
+- `fileName`: String
+"""
 function isSaved(fileName::String)
     return isfile(fileName * "-LLF-Data.jld2")
 end

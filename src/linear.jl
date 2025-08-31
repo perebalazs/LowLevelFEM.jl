@@ -2718,9 +2718,9 @@ step arranged in the columns of the two matrices `u` and `v` and a vector `t`
 of the time instants used. For the meaning of `α`, `β` and `γ` see [^1]. If
 `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
 
-[^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. "Improved 
+[^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. *Improved 
     numerical dissipation for time integration algorithms in structural 
-    dynamics." Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
+    dynamics*. Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
 
 Return: `u`, `v`
 
@@ -2815,8 +2815,8 @@ vectors. If `show_β` or `show_ξ` is `true`, the corresponding `β` or `ξ` val
 sent to the output.
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
-[^4]: Serfőző, D., Pere, B.: An effective reduction method with Caughey damping for 
-    spurious oscillations in dynamic problems, preprint, <https://doi.org/10.21203/rs.3.rs-3930320/v1>
+[^4]: Serfőző, D., Pere, B.: *An effective reduction method with Caughey damping for 
+    spurious oscillations in dynamic problems*, Meccanica, <https://doi.org/10.1007/s11012-025-02036-9>
 
 Return: `xy`
 
@@ -2905,11 +2905,11 @@ For details see [^2] and [^3].
 see [^1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
 
-[^2]: Belytschko, Ted, and Thomas JR, Hughes: "Computational methods for 
-    transient analysis", North-Holland, (1983).
+[^2]: Belytschko, Ted, and Thomas JR, Hughes: *Computational methods for 
+    transient analysis*, North-Holland, (1983).
 
-[^3]: Serfőző, D., Pere, B.: A method to accurately define arbitrary algorithmic
-    damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).
+[^3]: Serfőző, D., Pere, B.: *A method to accurately define arbitrary algorithmic
+    damping character as viscous damping*. Arch Appl Mech 93, 3581–3595 (2023).
     <https://doi.org/10.1007/s00419-023-02454-9>
 
 Return: `xy`
