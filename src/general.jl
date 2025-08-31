@@ -178,8 +178,8 @@ using SparseArrays
 """
     Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
 
-    Structure which contains the transformation matrix `T` of each nodes in the FE mesh, 
-    the number of nodes `non` and the dimension of the problem `dim`.
+Structure which contains the transformation matrix `T` of each nodes in the FE mesh, 
+the number of nodes `non` and the dimension of the problem `dim`.
 
 Types:
 - `T`: SparseMatrixCSC{Float64}
@@ -195,7 +195,7 @@ end
 """
     SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem)
 
-    Structure which contains the stiffness/mass/heatconduction/heatcapacity/latentheat/... matrix and given `Problem`.
+Structure which contains the stiffness/mass/heatconduction/heatcapacity/latentheat/... matrix and given `Problem`.
 
 Types:
 - `A`: SparseMatrixCSC{Float64}
@@ -209,7 +209,7 @@ end
 """
     Base.show(io::IO, M::SystemMatrix)
 
-    Internal function to display `SystemMatrix` as a SparseMatrixCSC{Float64}.
+Internal function to display `SystemMatrix` as a SparseMatrixCSC{Float64}.
 """
 function Base.show(io::IO, M::SystemMatrix)
     display(M.A)
@@ -220,7 +220,7 @@ import Base.copy
 """
     Base.copy(A::SystemMatrix)
 
-    Internal function to copy the hole content of a `SystemMatrix`.
+Internal function to copy the hole content of a `SystemMatrix`.
 """
 function copy(A::SystemMatrix)
     return SystemMatrix(copy(A.A), A.model)
@@ -529,12 +529,11 @@ end
 """
     getEigenVectors(A::TensorField)
 
-    A function to extract the columns of a tensor field to separate vector fields.
+A function to extract the columns of a tensor field to separate vector fields.
 
-    Return: N1, N2, N3
+Return: N1, N2, N3
 
 Types:
-
 - `A`: TensorField
 - `N1`: VectorField
 - `N2`: VectorField
@@ -587,12 +586,11 @@ end
 """
     getEigenValues(A::VectorField)
 
-    A function to extract the elements of a vector field to separate scalar fields.
+A function to extract the elements of a vector field to separate scalar fields.
 
-    Return: λ1, λ2, λ3
+Return: λ1, λ2, λ3
 
 Types:
-
 - `A`: VectorField
 - `λ1`: ScalarField
 - `λ2`: ScalarField
@@ -2547,17 +2545,17 @@ end
 """
     probe(A::Union{ScalarField,VectorField,TensorField}, x::Number, y::Number, z::Number; step=Int)
 
-    Get a value of the field `A` in a point given with its coordinates `x`,`y`,`z` at time step `step`.
+Get a value of the field `A` in a point given with its coordinates `x`,`y`,`z` at time step `step`.
 
-    Return: Float64 or Vector{Float64} or Matrix{Float64}
+Return: Float64 or Vector{Float64} or Matrix{Float64}
 
-    Types:
+Types:
 
-    - `A`: ScalarField or VectorField or TensorField
-    - `x`: Number
-    - `y`: Number
-    - `z`: Number
-    - `step`: Int
+- `A`: ScalarField or VectorField or TensorField
+- `x`: Number
+- `y`: Number
+- `z`: Number
+- `step`: Int
 """
 function probe(A::TensorField, x, y, z; step=1)
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
@@ -2623,17 +2621,17 @@ end
 """
     probe(A::Union{ScalarField,VectorField,TensorField}, s::String; step=Int)
 
-    Get a value of the field `A` in a point given its physical name in GMSH at time step `step`.
+Get a value of the field `A` in a point given its physical name in GMSH at time step `step`.
 
-    Return: Float64 or Vector{Float64} or Matrix{Float64}
+Return: Float64 or Vector{Float64} or Matrix{Float64}
 
-    Types:
+Types:
 
-    - `A`: ScalarField or VectorField or TensorField
-    - `x`: Number
-    - `y`: Number
-    - `z`: Number
-    - `step`: Int
+- `A`: ScalarField or VectorField or TensorField
+- `x`: Number
+- `y`: Number
+- `z`: Number
+- `step`: Int
 """
 function probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step=1)
     phtag = getTagForPhysicalName(name)
@@ -2645,15 +2643,15 @@ end
 """
     saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
 
-    Saves `variable` of type ScalarField, VectorField, or TensorField to a file named `fileName`.
-    The name of the file will be complemented with the string "-LLF-Data.jld2"
+Saves `variable` of type ScalarField, VectorField, or TensorField to a file named `fileName`.
+The name of the file will be complemented with the string "-LLF-Data.jld2"
 
-    Return: none
+Return: none
 
-    Types:
+Types:
 
-    - `fileName`: String
-    - `variable`: ScalarField, VectorField or TensorField
+- `fileName`: String
+- `variable`: ScalarField, VectorField or TensorField
 """
 function saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
     @save fileName * "-LLF-Data.jld2" variable
@@ -2662,14 +2660,14 @@ end
 """
     loadField(fileName::String)
 
-    Loads a ScalarField, VectorField, or TensorField from a file named `fileName` (without "-LLF-Data.jld2"). 
+Loads a ScalarField, VectorField, or TensorField from a file named `fileName` (without "-LLF-Data.jld2"). 
 
-    Return: variabla
+Return: variabla
 
-    Types:
+Types:
 
-    - `fileName`: String
-    - `variable`: ScalarField, VectorField or TensorField
+- `fileName`: String
+- `variable`: ScalarField, VectorField or TensorField
 """
 function loadField(fileName::String)
     @load fileName * "-LLF-Data.jld2" variable

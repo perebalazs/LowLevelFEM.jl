@@ -7,14 +7,14 @@ export solveDeformation, showDeformationResults
 """
     nodePositionVector(problem)
 
-    Gives back the positiond vectors of all the nodes of the mesh as a VectorField. (Initial configuration)
+Gives back the positiond vectors of all the nodes of the mesh as a VectorField. (Initial configuration)
 
-    Return: R
+Return: R
 
-    Types:
+Types:
 
-    - `problem`: Problem
-    - `R`: VectorField
+- `problem`: Problem
+- `R`: VectorField
 """
 function nodePositionVector(problem)
     dim = problem.dim
@@ -43,19 +43,18 @@ end
 """
     ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
 
-    Solves the deriavatives of `rr`.
-    - If `rr` is a ScalarField, `nabla` is :grad, it solves the gradient of `rr`, which is a VectorField.
-    - If `rr` is a VectorField, `nabla` is :grad, it solves the gradient of `rr`, which is a TensorField.
-    - If `rr` is a VectorField, `nabla` is :curl, it solves the rotation of `rr`, which is a VectorField.
-    - If `rr` is a VectorField, `nabla` is :div, it solves the divergence of `rr`, which is a ScalarField.
-    - If `rr` is a TensorField, `nabla` is :div, it solves the divergence of `rr`, which is a VectorField.
+Solves the deriavatives of `rr`.
+- If `rr` is a ScalarField, `nabla` is :grad, it solves the gradient of `rr`, which is a VectorField.
+- If `rr` is a VectorField, `nabla` is :grad, it solves the gradient of `rr`, which is a TensorField.
+- If `rr` is a VectorField, `nabla` is :curl, it solves the rotation of `rr`, which is a VectorField.
+- If `rr` is a VectorField, `nabla` is :div, it solves the divergence of `rr`, which is a ScalarField.
+- If `rr` is a TensorField, `nabla` is :div, it solves the divergence of `rr`, which is a VectorField.
 
-    Return: ScalarField, VectorField or TensorField
+Return: ScalarField, VectorField or TensorField
 
-    Types:
-
-    - `rr`: ScalarField, VectorField or TensorField
-    - `nabla`: Symbol
+Types:
+- `rr`: ScalarField, VectorField or TensorField
+- `nabla`: Symbol
 """
 function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
@@ -318,26 +317,26 @@ end
 """
     curl(r::VectorField)
 
-    Solves the rotation of the vector field `r`.
-    An alternative way to solve `curl` is to use `∇` as a differencial operator.
+Solves the rotation of the vector field `r`.
+An alternative way to solve `curl` is to use `∇` as a differencial operator.
 
-    Return: VectorField
+Return: VectorField
 
-    Types:
-    - `r`: VectorField
+Types:
+- `r`: VectorField
 
-    # Examples
+# Examples
 
-    ```julia
-    x(X, Y, Z) = 2X + 3Y
-    y(X, Y, Z) = Y
-    z(X, Y, Z) = Z
-    fld = field("body", fx=x, fy=y, fz=z)
-    v = vectorField(problem, [fld])
-    D1 = curl(v)
-    D2 = ∇ × v
-    println(D1 == D2)
-    ```
+```julia
+x(X, Y, Z) = 2X + 3Y
+y(X, Y, Z) = Y
+z(X, Y, Z) = Z
+fld = field("body", fx=x, fy=y, fz=z)
+v = vectorField(problem, [fld])
+D1 = curl(v)
+D2 = ∇ × v
+println(D1 == D2)
+```
 """
 function curl(r::VectorField)
     return ∇(r, nabla=:curl)
@@ -346,13 +345,13 @@ end
 """
     rot(r::VectorField)
 
-    Solves the rotation of the vector field `r`. In some countries "rot" denotes the English "curl".
-    (See the `curl` function.)
+Solves the rotation of the vector field `r`. In some countries "rot" denotes the English "curl".
+(See the `curl` function.)
 
-    Return: VectorField
+Return: VectorField
 
-    Types:
-    - `r`: VectorField
+Types:
+- `r`: VectorField
 """
 function rot(r::VectorField)
     return ∇(r, nabla=:curl)
@@ -363,34 +362,34 @@ import Base.div
 """
     div(r::Union{VectorField,TensorField})
 
-    Solves the divergence of the vector field or tensor field `r`.
-    An alternative way to solve `div` is to use `∇` as a differencial operator.
+Solves the divergence of the vector field or tensor field `r`.
+An alternative way to solve `div` is to use `∇` as a differencial operator.
 
-    Return: ScalarField or VectorField
+Return: ScalarField or VectorField
 
-    Types:
+Types:
 
-    - `r`: VectorField or TensorField
+- `r`: VectorField or TensorField
 
-    # Examples
+# Examples
 
-    ```julia
-    x(X, Y, Z) = 2X + 3Y
-    y(X, Y, Z) = Y
-    z(X, Y, Z) = Z
-    fld = field("body", fx=x, fy=y, fz=z)
-    v = vectorField(problem, [fld])
-    D1 = div(v)
-    D2 = ∇ ⋅ v
-    println(D1 == D2)
+```julia
+x(X, Y, Z) = 2X + 3Y
+y(X, Y, Z) = Y
+z(X, Y, Z) = Z
+fld = field("body", fx=x, fy=y, fz=z)
+v = vectorField(problem, [fld])
+D1 = div(v)
+D2 = ∇ ⋅ v
+println(D1 == D2)
 
-    fsz(X, Y, Z) = 10 - Z
-    s0 = field("body", fz=fsz)
-    S = tensorField(problem, [s0])
-    b1 = -div(S)
-    b2 = -S ⋅ ∇
-    println(b1 == b2)
-    ```
+fsz(X, Y, Z) = 10 - Z
+s0 = field("body", fz=fsz)
+S = tensorField(problem, [s0])
+b1 = -div(S)
+b2 = -S ⋅ ∇
+println(b1 == b2)
+```
 """
 function div(r::Union{VectorField,TensorField})
     return ∇(r, nabla=:div)
@@ -399,27 +398,27 @@ end
 """
     grad(r::Union{ScalarField,VectorField})
 
-    Solves the gradient of the scalar field or vector field `r`.
-    An alternative way to solve `grad` is to use `∇` as a differencial operator.
+Solves the gradient of the scalar field or vector field `r`.
+An alternative way to solve `grad` is to use `∇` as a differencial operator.
 
-    Return: VectorField or TensorField
+Return: VectorField or TensorField
 
-    Types:
+Types:
 
-    - `r`: ScalarField or VectorField
+- `r`: ScalarField or VectorField
 
-    # Examples
+# Examples
 
-    ```julia
-    x(X, Y, Z) = 2X + 3Y
-    y(X, Y, Z) = Y
-    z(X, Y, Z) = Z
-    fld = field("body", fx=x, fy=y, fz=z)
-    v = vectorField(problem, [fld])
-    D1 = grad(v)
-    D2 = v ∘ ∇
-    println(D1 == D2)
-    ```
+```julia
+x(X, Y, Z) = 2X + 3Y
+y(X, Y, Z) = Y
+z(X, Y, Z) = Z
+fld = field("body", fx=x, fy=y, fz=z)
+v = vectorField(problem, [fld])
+D1 = grad(v)
+D2 = v ∘ ∇
+println(D1 == D2)
+```
 """
 function grad(r::Union{VectorField,ScalarField})
     return ∇(r)
@@ -428,17 +427,16 @@ end
 """
     tangentMatrixConstitutive(r::VectorField)
 
-    Solves the constitutive part of the tangent matrix (when solving large deformation problems).
-    (See [^6]) `r` is the position vector field in the current configuration.
+Solves the constitutive part of the tangent matrix (when solving large deformation problems).
+(See [^6]) `r` is the position vector field in the current configuration.
 
-    Return: SystemMatrix
+Return: SystemMatrix
 
-    Types:
-
+Types:
     - `r`: VectorField
 
-    [^6]: Javier Bonet, Richard D. Wood: *Nonlinear Continuum Mechanics for Finite Element Analysis*, 
-    Cambridge University Press, 2008, <https://doi.org/10.1017/CBO9780511755446>
+[^6]: Javier Bonet, Richard D. Wood: *Nonlinear Continuum Mechanics for Finite Element Analysis*, 
+Cambridge University Press, 2008, <https://doi.org/10.1017/CBO9780511755446>
 """
 function tangentMatrixConstitutive(r::VectorField)
     problem = r.model
@@ -621,14 +619,14 @@ end
 """
     tangentMatrixInitialStress(r::VectorField)
 
-    Solves the initial stress part of the tangent matrix (when solving large deformation problems).
-    (See [^6]) `r` is the position vector field in the current configuration.
+Solves the initial stress part of the tangent matrix (when solving large deformation problems).
+(See [^6]) `r` is the position vector field in the current configuration.
 
-    Return: SystemMatrix
+Return: SystemMatrix
 
-    Types:
+Types:
 
-    - `r`: VectorField
+- `r`: VectorField
 """
 function tangentMatrixInitialStress(r::VectorField)
     problem = r.model
@@ -790,14 +788,14 @@ end
 """
     equivalentNodalForce(r::VectorField)
 
-    Solves the equivalent nodal force (when solving large deformation problems).
-    (See [^6]) `r` is the position vector field in the current configuration.
+Solves the equivalent nodal force (when solving large deformation problems).
+(See [^6]) `r` is the position vector field in the current configuration.
 
-    Return: VectorField
+Return: VectorField
 
-    Types:
+Types:
 
-    - `r`: VectorField
+- `r`: VectorField
 """
 function equivalentNodalForce(r::VectorField)
     problem = r.model
@@ -965,14 +963,14 @@ end
 """
     nonFollowerLoadVector(r::VectorField, load)
 
-    Solves the non-follower load vector (when solving large deformation problems).
-    `r` is the position vector field in the current configuration.
+Solves the non-follower load vector (when solving large deformation problems).
+`r` is the position vector field in the current configuration.
 
-    Return: VectorField
+Return: VectorField
 
-    Types:
+Types:
 
-    - `r`: VectorField
+- `r`: VectorField
 """
 function nonFollowerLoadVector(r::VectorField, loads)
     problem = r.model
@@ -1421,7 +1419,7 @@ end
                     relativeError = 1e-5,
                     initialDeformation=nodePositionVector(problem))
 
-    Solves the deformed shape of a non-linearly elastic body...
+Solves the deformed shape of a non-linearly elastic body...
 """
 function solveDeformation(problem, load, supp;
     followerLoad=false,
@@ -1501,8 +1499,8 @@ end
 """
     showDeformationResults(r::VectorField, comp; name=String, visible=Boolean)
 
-    Shows deformation result, where `r` contains the position vectors of nodes 
-    in the *current configuration*.
+Shows deformation result, where `r` contains the position vectors of nodes 
+in the *current configuration*.
 """
 function showDeformationResults(r::VectorField, comp; name=comp, visible=false)
     problem = r.model
