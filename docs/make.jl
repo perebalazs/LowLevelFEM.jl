@@ -25,8 +25,9 @@ makedocs(
         prettyurls = get(ENV, "CI", nothing) == "true",
         collapselevel = 1,
         sidebar_sitename = true,
-        size_threshold_warn = 250,  # KiB (integers required)
-        size_threshold = 400,       # KiB (integers required)
+        # thresholds are in BYTES (integers)
+        size_threshold_warn = 300_000,  # ~293 KiB
+        size_threshold = 600_000,       # ~586 KiB
     ),
     pages = DOC_PAGES,
     doctest = false,
