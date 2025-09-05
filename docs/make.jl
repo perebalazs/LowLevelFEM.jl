@@ -7,8 +7,14 @@ using LowLevelFEM
 
 const DOC_PAGES = [
     "Introduction" => "index.md",
-    "Functions" => "Functions.md",
-    "Examples" => "Examples.md"
+    "API Reference" => [
+        "General" => "General.md",
+        "Linear" => "Linear.md",
+        "Heat" => "Heat.md",
+        "Nonlinear" => "Nonlinear.md",
+        "Operators" => "Operators.md",
+    ],
+    "Examples" => "Examples.md",
 ]
 
 # HTML dokumentáció
@@ -17,7 +23,10 @@ makedocs(
     authors = "Balázs Pere",
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        collapselevel = 1
+        collapselevel = 1,
+        sidebar_sitename = true,
+        size_threshold_warn = 250.0,  # KiB
+        size_threshold = 400.0,       # KiB
     ),
     pages = DOC_PAGES,
     doctest = false,
