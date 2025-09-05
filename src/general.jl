@@ -16,18 +16,18 @@ export saveField, loadField, isSaved
 """
     Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
 
-A structure containing the material type and constants.
-- type: constitutive law: `:Hooke`, `:StVenantKirchhoff`, `:NeoHookeCompressible`
-- E: elastic modulus,
-- ν: Poisson's ratio,
-- ρ: mass density,
-- k: heat conductivity,
-- c: specific heat,
-- α: heat expansion coefficient
+Structure containing the material type and constants.
+- type: constitutive law (`:Hooke`, `:StVenantKirchhoff`, `:NeoHookeCompressible`)
+- E: elastic modulus
+- ν: Poisson's ratio
+- ρ: mass density
+- k: thermal conductivity
+- c: specific heat
+- α: thermal expansion coefficient
 - λ: Lamé parameter
 - μ: Lamé parameter
-- κ: Bulk modulus
-`phName` is the name of the physical group where the given material is used.
+- κ: bulk modulus
+`phName` is the name of the physical group where the material is used.
 
 Types:
 - `phName`: String
@@ -63,20 +63,17 @@ end
 """
     Problem(materials; thickness=..., type=..., bandwidth=...)
 
-A structure containing the most important data of the problem. 
-- Parts of the model with their material constants. More materials can be given. (see `material` function)
-- type of the problem: `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`,
-  `:HeatConduction`, `:PlaneHeatConduction`, `:AxiSymmetricHeatConduction`.
-  In the case of `:AxiSymmetric`, the axis of symmetry is the `y` axis, 
-  while the geometry must be drawn in the positive `x` half-plane.
-- bandwidth optimization using built-in `gmsh` function.
-  Possibilities: `:RCMK`, `:Hilbert`, `:Metis` or `:none` (default)
-- dimension of the problem, determined from `type`
-- material constants (in a vector of material structure `materials`). See `Material` struct
-- thickness of the plate
-- number of nodes (non)
-- dimension of the geometry
-- dimension of the problem (eg. a 3D heat conduction problem is a 1D problem)
+Structure containing key data for a problem.
+- Parts of the model with their material constants. Multiple materials can be provided (see `material`).
+- Problem type: `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`, `:HeatConduction`, `:PlaneHeatConduction`, `:AxiSymmetricHeatConduction`.
+  For `:AxiSymmetric`, the symmetry axis is `y`, and the geometry must be drawn in the positive `x` half-plane.
+- Bandwidth optimization using Gmsh's built-in reordering. Options: `:RCMK`, `:Hilbert`, `:Metis`, or `:none` (default).
+- Dimension of the problem, determined by `type`.
+- Material constants (vector of `Material`; see the `Material` struct).
+- Plate thickness (for 2D plate problems).
+- Number of nodes (`non`).
+- Geometry dimension.
+- Problem dimension (e.g., a 3D heat conduction problem is a 1D problem).
 
 Types:
 - `materials`: Material
@@ -178,8 +175,8 @@ using SparseArrays
 """
     Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
 
-Structure which contains the transformation matrix `T` of each nodes in the FE mesh, 
-the number of nodes `non` and the dimension of the problem `dim`.
+Structure containing the transformation matrix `T` at each node in the FE mesh, the number of
+nodes `non`, and the problem dimension `dim`.
 
 Types:
 - `T`: SparseMatrixCSC{Float64}
@@ -195,7 +192,7 @@ end
 """
     SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem)
 
-Structure which contains the stiffness/mass/heatconduction/heatcapacity/latentheat/... matrix and given `Problem`.
+Structure containing the stiffness/mass/heat conduction/heat capacity/latent heat/... matrix and the associated `Problem`.
 
 Types:
 - `A`: SparseMatrixCSC{Float64}
@@ -209,7 +206,7 @@ end
 """
     Base.show(io::IO, M::SystemMatrix)
 
-Internal function to display `SystemMatrix` as a SparseMatrixCSC{Float64}.
+Internal function to display `SystemMatrix` as a `SparseMatrixCSC{Float64}`.
 """
 function Base.show(io::IO, M::SystemMatrix)
     display(M.A)
@@ -220,7 +217,7 @@ import Base.copy
 """
     Base.copy(A::SystemMatrix)
 
-Internal function to copy the hole content of a `SystemMatrix`.
+Internal function to copy the whole content of a `SystemMatrix`.
 """
 function copy(A::SystemMatrix)
     return SystemMatrix(copy(A.A), A.model)
@@ -232,13 +229,13 @@ abstract type AbstractField end
     ScalarField(A, a, t, numElem, nsteps, type, model)
     ScalarField(problem, dataField)
 
-A structure containing all data of a scalar field (eg. Temperature field). 
-- A: vector of ElementNodeData type scalar data (see gmsh.jl)
-- a: matrix of nodal data of scalar field
-- numElem: vector of tags of elements
-- nsteps: number of stress fields stored in `A` (for animations).
-- type: type of data (eg. temperature `:T`)
-- model: the same as `Problem`
+Structure containing all data of a scalar field (e.g., temperature).
+- A: vector of element-wise scalar data
+- a: matrix of nodal values of the scalar field
+- numElem: vector of element tags
+- nsteps: number of time steps stored in `A` (for animations)
+- type: type of data (e.g., `:T` for temperature)
+- model: associated `Problem`
 
 Types:
 - `A`: Vector{Vector{Float64}}
@@ -324,13 +321,13 @@ end
 """
     VectorField(A, a, t, numElem, nsteps, type, model)
 
-A structure containing the data of a vector field (eg. displacement field). 
-- A: vector of ElementNodeData type heat flux data (see gmsh.jl)
-- a: matrix of nodal data of scalar field
-- numElem: vector of tags of elements
-- nsteps: number of stress fields stored in `A` (for animations).
-- type: type of data (eg. heat flux `:q`)
-- model: the same as `Problem`
+Structure containing the data of a vector field (e.g., displacement or heat flux).
+- A: vector of element-wise vector data
+- a: matrix of nodal values of the vector field
+- numElem: vector of element tags
+- nsteps: number of time steps stored in `A` (for animations)
+- type: type of data (e.g., `:u`, `:q`)
+- model: associated `Problem`
 
 Types:
 - `A`: Vector{Matrix{Float64}}
@@ -354,13 +351,13 @@ end
 """
     TensorField(A, a, t, numElem, nsteps, type, model)
 
-A structure containing the data of a tensor field (eg. stress field). 
-- A: vector of ElementNodeData type heat flux data (see gmsh.jl)
-- a: matrix of nodal data of scalar field
-- numElem: vector of tags of elements
-- nsteps: number of stress fields stored in `A` (for animations).
-- type: type of data (eg. stress `:s`)
-- model: the same as `Problem`
+Structure containing the data of a tensor field (e.g., stress or strain).
+- A: vector of element-wise tensor data
+- a: matrix of nodal values of the tensor field
+- numElem: vector of element tags
+- nsteps: number of time steps stored in `A` (for animations)
+- type: type of data (e.g., `:s`, `:e`)
+- model: associated `Problem`
 
 Types:
 - `A`: Vector{Matrix{Float64}}
@@ -495,13 +492,19 @@ end
     material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
 
 Returns a structure in which `name` is the name of a physical group,
-`type` is the name of the constitutive law (eg. `:Hooke`),
-`E` is the modulus of elasticity, `ν` Poisson's ratio and `ρ` is
-the mass density, `k` is the heat conductivity, `c` is the specific
-heat, `α` is the coefficient of heat expansion, `λ` and `μ` are the 
-Lamé parameters, `κ` is the Bulk modulus.
+`type` is the name of the constitutive law (e.g., `:Hooke`),
+`E` is the modulus of elasticity, `ν` is Poisson's ratio, and `ρ` is
+the mass density. `k` is the thermal conductivity, `c` is the specific
+heat, `α` is the coefficient of thermal expansion, `λ` and `μ` are the 
+Lamé parameters, and `κ` is the bulk modulus.
 
-Return: mat
+Returns: `mat`
+
+# Examples
+
+```julia
+mat = material("body", E=210e3, ν=0.3, ρ=7.85e-9)
+```
 
 Types:
 - `mat`: Material
@@ -643,12 +646,48 @@ end
 """
     displacementConstraint(name; ux=..., uy=..., uz=...)
 
-Gives the displacement constraints on `name` physical group. At least one `ux`, 
-`uy` or `uz` value have to be given (depending on the dimension of the problem).
-`ux`, `uy` or `uz` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); displacementConstraint("support1", ux=fn)`)
+Specifies displacement constraints on the physical group `name`. At least one of `ux`, `uy`,
+or `uz` must be provided (depending on the problem dimension). `ux`, `uy`, or `uz` can be a
+constant or a function of `x`, `y`, and `z`.
+(e.g., `fn(x,y,z) = 5*(5-x); displacementConstraint("support1", ux=fn)`)
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+
+# Examples
+
+```julia
+hc = heatConvection("outer", h=10.0, Tₐ=20.0)
+```
+
+# Examples
+
+```julia
+src = heatSource("body", h=1.0e6)
+```
+
+# Examples
+
+```julia
+q = heatFlux("out", qn=500.0)
+```
+
+# Examples
+
+```julia
+bcT = temperatureConstraint("hot_face", T=100.0)
+```
+
+# Examples
+
+```julia
+ld = load("load", fy=-1.0)
+```
+
+# Examples
+
+```julia
+bc = displacementConstraint("supp", ux=0, uy=0)
+```
 
 Types:
 - `name`: String
@@ -664,12 +703,12 @@ end
 """
     load(name; fx=..., fy=..., fz=...)
 
-Gives the intensity of distributed load on `name` physical group. At least one `fx`, 
-`fy` or `fz` value have to be given (depending on the dimension of the problem). `fx`, 
-`fy` or `fz` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); load("load1", fx=fn)`)
+Specifies a distributed load on the physical group `name`. At least one of `fx`, `fy`, or `fz`
+must be provided (depending on the problem dimension). `fx`, `fy`, or `fz` can be a constant
+or a function of `x`, `y`, and `z`.
+(e.g., `fn(x,y,z) = 5*(5-x); load("load1", fx=fn)`)
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
@@ -685,12 +724,12 @@ end
 """
     elasticSupport(name; kx=..., ky=..., kz=...)
 
-Gives the distributed stiffness of the elastic support on `name` physical group.
-`kx`, `ky` or `kz` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); elasticSupport("supp1", kx=fn)`)
+Specifies distributed stiffness for an elastic support on the physical group `name`.
+`kx`, `ky`, or `kz` can be a constant or a function of `x`, `y`, and `z`.
+(e.g., `fn(x,y,z) = 5*(5-x); elasticSupport("supp1", kx=fn)`)
 Default values are 1.
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
@@ -706,11 +745,11 @@ end
 """
     temperatureConstraint(name; T=...)
 
-Gives the temperature constraints on `name` physical group. 
-`T` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); temperatureConstraint("surf1", T=fn)`)
+Specifies temperature constraints on the physical group `name`.
+`T` can be a constant or a function of `x`, `y`, and `z`.
+(e.g., `fn(x,y,z) = 5*(5-x); temperatureConstraint("surf1", T=fn)`)
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
@@ -724,11 +763,11 @@ end
 """
     heatFlux(name; qn=...)
 
-Gives the heat flux normal to the surface of `name` physical group.
-`qn` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); load("flux1", qn=fn)`)
+Specifies the heat flux normal to the surface of the physical group `name`.
+`qn` can be a constant or a function of `x`, `y`, and `z`.
+(e.g., `fn(x,y,z) = 5*(5-x); load("flux1", qn=fn)`)
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
@@ -745,11 +784,11 @@ end
 """
     heatSource(name; h=...)
 
-Gives the body heat source in `name` physical group.
-`h` can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); load("source1", h=fn)`)
+Specifies the volumetric heat source in the physical group `name`.
+`h` can be a constant or a function of `x`, `y`, and `z`.
+(e.g., `fn(x,y,z) = 5*(5-x); load("source1", h=fn)`)
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
@@ -766,12 +805,11 @@ end
 """
     heatConvection(name; h=..., Tₐ=...)
 
-Gives the heat convection of the surface given with `name` physical group.
-`h` is the heat transfer coefficient of the surrounding media,
-`Tₐ` is the ambient temperature. The ambient temperature can be either
-a constant or a function of x, y and z.
+Specifies convective boundary conditions on the surface in the physical group `name`.
+`h` is the heat transfer coefficient of the surrounding medium; `Tₐ` is the ambient temperature.
+`Tₐ` can be either a constant or a function of `x`, `y`, and `z`.
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
 
 Types:
 - `name`: String
@@ -787,12 +825,9 @@ end
 """
     generateMesh(problem, surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
 
-Obsolate, use gmsh script (.geo) instead.
+Obsolete; use a Gmsh script (.geo) instead.
 
-Return: none
-
-Types:
-- ``: x
+Returns: nothing
 """
 
 function generateMesh(surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
@@ -815,12 +850,12 @@ end
 """
     field(name; f=..., fx=..., fy=..., fz=..., fxy=..., fyz=..., fzx=...)
 
-Gives the value of scalar, vector or tensor field on `name` physical group. At least one `fx`, 
-`fy` or `fz` etc. value have to be given (depending on the dimension of the problem). `fx`, 
-`fy` or `fz` etc. can be a constant value, or a function of `x`, `y` and `z`.
-(E.g. `fn(x,y,z)=5*(5-x)); field("surf1", fx=fn)`)
+Specifies the value of a scalar, vector, or tensor field on the physical group `name`.
+At least one of `fx`, `fy`, or `fz` etc. must be provided (depending on the problem dimension).
+Each component can be a constant or a function of `x`, `y`, and `z`.
+(e.g., `fn(x,y,z) = 5*(5-x); field("surf1", fx=fn)`)
 
-Return: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function,...x7}
+Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function, ... x7}
 
 Types:
 - `name`: String
@@ -909,7 +944,7 @@ end
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
-eg. `:u` or `:f`.
+e.g., `:u` or `:f`.
 
 Return: VectorField
 
@@ -996,7 +1031,7 @@ end
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
-eg. `:u` or `:f`.
+e.g., `:u` or `:f`.
 
 Return: TensorField
 
@@ -1370,10 +1405,10 @@ end
 """
     fieldError(F)
 
-Solves the deviation of field results `F` (stresses, strains, heat flux components) at nodes, where the field has jumps.
-The result can be displayed with the `showDoFResults` function.
+Computes the deviation of field results `F` (stresses, strains, heat flux components) at nodes
+where the field has jumps. The result can be displayed with the `showDoFResults` function.
 
-Return: `e`
+Returns: `e`
 
 Types:
 - `F`: VectorField or TensorField
@@ -1435,9 +1470,9 @@ end
 """
     resultant(problem, field, phName; grad=false, component=:x)
 
-Solves the resultant of `field` on `phName` physical group.
-Return the resultant(s) in `tuple`.
-Number of the members in `tuple` depends on the dimension of `problem`.
+Computes the resultant of `field` on the physical group `phName`.
+Returns the resultant(s) in a `tuple`. The number of elements in the tuple depends on the
+dimension of `problem`.
 It can solve the resultant of a load vector (sum of the elements of the vector),
 if `field` is a vector of floats. If `field` is a view (tag of a view in gmsh), then
 the integral of the field is solved. `field` must have only one component.
@@ -1727,15 +1762,15 @@ end
 """
     showDoFResults(q, comp; name=..., visible=...)
 
-Loads nodal results into a View in gmsh. `q` is the field to show, `comp` is
+Loads nodal results into a View in Gmsh. `q` is the field to show, `comp` is
 the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
 :szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar, :tensor),
-`name` is a title to display and `visible` is a true or false value to toggle on or off the 
-initial visibility in gmsh. If `q` has more columns, then a sequence of results
-will be shown (eg. as an animation). This function returns the tag of View.
+`name` is a title to display and `visible` is a Boolean to toggle the initial visibility in Gmsh on or off.
+If `q` has more columns, then a sequence of results will be shown (e.g., as an animation).
+This function returns the tag of the View.
 
-Return: `tag`
+Returns: `tag`
 
 Types:
 - `q`: ScalarField, VectorField or TensorField
@@ -1870,12 +1905,11 @@ end
 """
     showModalResults(Φ, name=..., visible=...)
 
-Loads modal results into a View in gmsh. `Φ` is a struct of Eigen. `name` is a
-title to display and `visible` is a true or false value to toggle on or off the 
-initial visibility in gmsh. Click on ▷| to change the results. This function 
-returns the tag of View.
+Loads modal results into a View in Gmsh. `Φ` is an `Eigen` struct. `name` is a title to display and
+`visible` is a Boolean to toggle the initial visibility in Gmsh on or off. Click on ▷| to change
+the results. This function returns the tag of the View.
 
-Return: `tag`
+Returns: `tag`
 
 Types:
 - `Φ`: Eigen
@@ -1890,12 +1924,11 @@ end
 """
     showBucklingResults(Φ, name=..., visible=...)
 
-Loads buckling results into a View in gmsh. `Φ` is a struct of Eigen. `name` is a
-title to display and `visible` is a true or false value to toggle on or off the 
-initial visibility in gmsh. Click on ▷| to change the results. This function 
-returns the tag of View.
+Loads buckling results into a View in Gmsh. `Φ` is an `Eigen` struct. `name` is a title to display and
+`visible` is a Boolean to toggle the initial visibility in Gmsh on or off. Click on ▷| to change
+the results. This function returns the tag of the View.
 
-Return: `tag`
+Returns: `tag`
 
 Types:
 - `Φ`: Eigen
@@ -1910,15 +1943,15 @@ end
 """
     showStrainResults(E, comp; name=..., visible=..., smooth=...)
 
-Loads strain results into a View in gmsh. `E` is a strain field to show, `comp` is
+Loads strain results into a View in Gmsh. `E` is a strain field to show, `comp` is
 the component of the field (:e, :ex, :ey, :ez, :exy, :eyz, :ezx),
-`name` is a title to display, `visible` is a true or false value to toggle on or
-off the initial visibility in gmsh and `smooth` is a true of false value to toggle
+`name` is a title to display, `visible` is a Boolean to toggle the initial visibility in Gmsh on or
+off and `smooth` is a Boolean to toggle
 smoothing the stress field on or off. If `E` contains more than one time steps, then a 
-sequence of results will be shown (eg. as an animation). This function returns
-the tag of View.
+sequence of results will be shown (e.g., as an animation). This function returns
+the tag of the View.
 
-Return: `tag`
+Returns: `tag`
 
 Types:
 - `E`: TensorField
@@ -2031,15 +2064,14 @@ end
 """
     showStressResults(S, comp; name=..., visible=..., smooth=...)
 
-Loads stress results into a View in gmsh. `S` is a stress field to show, `comp` is
+Loads stress results into a View in Gmsh. `S` is a stress field to show, `comp` is
 the component of the field (:s, :sx, :sy, :sz, :sxy, :syz, :szx, :seqv),
-`name` is a title to display, `visible` is a true or false value to toggle on or
-off the initial visibility in gmsh and `smooth` is a true of false value to toggle
-smoothing the stress field on or off. If `S` contains more than one time steps, then a 
-sequence of results will be shown (eg. as an animation). This function returns
-the tag of View.
+`name` is a title to display, `visible` is a Boolean to toggle the initial visibility in Gmsh on or
+off, and `smooth` is a Boolean to toggle smoothing the stress field on or off. If `S` contains more
+than one time step, a sequence of results will be shown (e.g., as an animation). This function returns
+the tag of the View.
 
-Return: `tag`
+Returns: `tag`
 
 Types:
 - `S`: TensorField
@@ -2142,15 +2174,13 @@ end
 """
     showHeatFluxResults(Q, comp; name=..., visible=..., smooth=...)
 
-Loads heat flux results into a View in gmsh. `Q` is a heat flux field to show, `comp` is
+Loads heat flux results into a View in Gmsh. `Q` is a heat flux field to show, `comp` is
 the component of the field (:qvec, :qx, :qy, :qz, :q),
-`name` is a title to display, `visible` is a true or false value to toggle on or
-off the initial visibility in gmsh and `smooth` is a true of false value to toggle
-smoothing the stress field on or off. If `Q` contains more than one time steps, then a 
-sequence of results will be shown (eg. as an animation). This function returns
-the tag of View.
+`name` is a title to display, `visible` is a Boolean to toggle the initial visibility in Gmsh on or
+off, and `smooth` is a Boolean to toggle smoothing on or off. If `Q` contains more than one time step,
+a sequence of results will be shown (e.g., as an animation). This function returns the tag of the View.
 
-Return: `tag`
+Returns: `tag`
 
 Types:
 - `S`: VectorField
@@ -2254,22 +2284,22 @@ end
 """
     plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
 
-Load a 2D plot on a path into a View in gmsh. `field` is the number of View in
-gmsh from which the data of a field is imported. `pathName` is the name of a
-physical group which contains a curve. The curve is devided into equal length
-intervals with number of `points` points. The field is shown at this points.
-`step` is the sequence number of displayed step. If no step is given, shows all 
-the aviable steps as an animation. If `plot` is true, additional return parameter, a tuple of
-vectors is given back, in which `x` is a vector of values in horizontal axis, `y` is a vector
-of values in vertical axis of a plot (see `Plots` package). `name` is the title of graph and
-`visible` is a true or false value to toggle on or off the initial visibility 
-in gmsh. This function returns the tag of View.
+Loads a 2D plot along a path into a View in Gmsh. `field` is the View id in
+Gmsh from which the field data is imported. `pathName` is the name of a
+physical group that contains a curve. The curve is divided into equal-length
+segments with `points` sampling points. The field is shown at these points.
+`step` is the sequence number of the displayed step. If no step is given, it shows all
+available steps as an animation. If `plot` is true, an additional return parameter (a tuple of
+vectors) is returned, where `x` is the horizontal axis and `y` is the vertical axis of the plot
+(see the `Plots` package). `name` is the title of the graph, and
+`visible` is a Boolean to toggle the initial visibility in Gmsh on or off.
+This function returns the tag of the View.
 
-Return: `tag`
+Returns: `tag`
 
 or
 
-Return: `tag`, `xy`
+Returns: `tag`, `xy`
 
 Types:
 - `problem`: Problem
@@ -2379,15 +2409,14 @@ end
 """
     showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
 
-Shows the values of a scalar field at a surface which has a physical name `phName`.
-`field` is the tag of a view in GMSH. The values of the field are calculated at the
-intersection with the surface. `grad` has a true or false value to toggle on or off
-the gradient of the field. `component` is the component of the gradient of `field`
-(:x, :y, :z) to be shown. `offsetX`, `offsetY`, `offsetZ` are the offsets in the
-x, y and z directions where the values are picked from. `name` is a title to display
-and `visible` is a true or false value to toggle on or off the initial visibility in gmsh.
+Shows the values of a scalar field on a surface with physical name `phName`.
+`field` is the tag of a View in Gmsh. The values of the field are calculated at the
+intersection with the surface. `grad` is a Boolean to toggle the gradient of the field on or off.
+`component` is the component of the gradient of `field` (:x, :y, :z) to be shown. `offsetX`, `offsetY`, `offsetZ`
+are the offsets in the x, y, and z directions where the values are sampled. `name` is a title to display,
+and `visible` is a Boolean to toggle the initial visibility in Gmsh on or off.
 
-Return: `tag`
+Returns: `tag`
 
 Types:
 - `field`: Integer
@@ -2481,9 +2510,9 @@ end
 """
     openPreProcessor(; openGL=...)
 
-Launches the GMSH preprocessor window with openGL disabled by default.
+Launches the Gmsh preprocessor window with OpenGL disabled by default.
 
-Return: none
+Returns: nothing
 
 Types:
 - `openGL`: Boolean
@@ -2500,9 +2529,9 @@ end
 """
     openPostProcessor(; model=...)
 
-Launches the GMSH postprocessor window with open postprocessor tree (of `model`).
+Launches the Gmsh postprocessor window with the postprocessor tree opened (of `model`).
 
-Return: none
+Returns: nothing
 
 Types:
 - `model`: Int64
@@ -2517,7 +2546,7 @@ end
 
 Defines a parameter `name` and sets its value to `value`. 
 
-Return: none
+Returns: nothing
 
 Types:
 - `name`: String
@@ -2530,9 +2559,9 @@ end
 """
     setParameters(name, value)
 
-Defines a parameter `name` and sets its value to `value`, which is a Vector{Float64}. 
+Defines a parameter `name` and sets its value to `value`, which is a `Vector{Float64}`. 
 
-Return: none
+Returns: nothing
 
 Types:
 - `name`: String
@@ -2545,9 +2574,9 @@ end
 """
     probe(A::Union{ScalarField,VectorField,TensorField}, x::Number, y::Number, z::Number; step=Int)
 
-Get a value of the field `A` in a point given with its coordinates `x`,`y`,`z` at time step `step`.
+Get the value of the field `A` at point coordinates `x`, `y`, `z` at time step `step`.
 
-Return: Float64 or Vector{Float64} or Matrix{Float64}
+Returns: Float64 or Vector{Float64} or Matrix{Float64}
 
 Types:
 
@@ -2621,9 +2650,9 @@ end
 """
     probe(A::Union{ScalarField,VectorField,TensorField}, s::String; step=Int)
 
-Get a value of the field `A` in a point given its physical name in GMSH at time step `step`.
+Get the value of the field `A` at a point given by its physical name in Gmsh at time step `step`.
 
-Return: Float64 or Vector{Float64} or Matrix{Float64}
+Returns: Float64 or Vector{Float64} or Matrix{Float64}
 
 Types:
 
@@ -2646,7 +2675,7 @@ end
 Saves `variable` of type ScalarField, VectorField, or TensorField to a file named `fileName`.
 The name of the file will be complemented with the string "-LLF-Data.jld2"
 
-Return: none
+Returns: nothing
 
 Types:
 
@@ -2662,7 +2691,7 @@ end
 
 Loads a ScalarField, VectorField, or TensorField from a file named `fileName` (without "-LLF-Data.jld2"). 
 
-Return: variabla
+Returns: variable
 
 Types:
 
@@ -2679,7 +2708,7 @@ end
 
 Checks whether a variable has been saved or not.
 
-Return: Boolean
+Returns: Boolean
 
 Types:
 

@@ -14,9 +14,9 @@ import Base.sqrt
 """
     *(A::ScalarField, B::ScalarField)
 
-Performs element-wise multiplication of two ScalarField objects on the same finite elements.
+Performs element-wise multiplication of two `ScalarField` objects on the same set of elements.
 
-Return: ScalarField
+Returns: `ScalarField`
 
 # Examples
 ```julia
@@ -74,9 +74,9 @@ end
 """
     /(A::ScalarField, B::ScalarField)
 
-Performs element-wise division of two ScalarField objects on the same finite elements.
+Performs element-wise division of two `ScalarField` objects on the same set of elements.
 
-Return: ScalarField
+Returns: `ScalarField`
 
 # Examples
 ```julia
@@ -134,9 +134,9 @@ end
 """
     +(A::ScalarField, B::ScalarField)
 
-Performs element-wise addition of two ScalarField objects on the same finite elements.
+Performs element-wise addition of two `ScalarField` objects on the same set of elements.
 
-Return: ScalarField
+Returns: `ScalarField`
 
 # Examples
 ```julia
@@ -213,9 +213,9 @@ end
 """
     -(A::ScalarField, B::ScalarField)
 
-Performs element-wise substruction of two ScalarField objects on the same finite elements.
+Performs element-wise subtraction of two `ScalarField` objects on the same set of elements.
 
-Return: ScalarField
+Returns: `ScalarField`
 
 # Examples
 ```julia
@@ -433,6 +433,18 @@ import Base.∘
 import LinearAlgebra.norm
 import LinearAlgebra.diagm
 
+"""
+    *(A::ScalarField, B::VectorField)
+
+Scales a `VectorField` by a `ScalarField` element-wise on matching elements.
+
+Returns: `VectorField`
+
+# Examples
+```julia
+v2 = s .* v  # equivalent to s * v
+```
+"""
 function *(AA::ScalarField, BB::VectorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -478,6 +490,13 @@ function *(AA::ScalarField, BB::VectorField)
     return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
 end
 
+"""
+    *(B::VectorField, A::ScalarField)
+
+Scales a `VectorField` by a `ScalarField` element-wise on matching elements.
+
+Returns: `VectorField`
+"""
 function *(BB::VectorField, AA::ScalarField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -523,6 +542,13 @@ function *(BB::VectorField, AA::ScalarField)
     return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
 end
 
+"""
+    /(B::VectorField, A::ScalarField)
+
+Divides a `VectorField` by a `ScalarField` element-wise on matching elements.
+
+Returns: `VectorField`
+"""
 function /(BB::VectorField, AA::ScalarField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -861,6 +887,18 @@ function ∘(AA::VectorField, BB::VectorField)
     end
 end
 
+"""
+    ×(a::VectorField, b::VectorField)
+
+Element-wise 3D vector cross product on matching elements.
+
+Returns: `VectorField`
+
+# Examples
+```julia
+w = u × v
+```
+"""
 function ×(aa::VectorField, bb::VectorField)
     if length(aa.A) == 0
         a = nodesToElements(aa)
@@ -896,6 +934,13 @@ function ×(aa::VectorField, bb::VectorField)
     end
 end
 
+"""
+    norm(A::VectorField)
+
+Element-wise Euclidean norm of a `VectorField`.
+
+Returns: `ScalarField`
+"""
 function norm(AA::VectorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -918,6 +963,14 @@ function norm(AA::VectorField)
     return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
+"""
+    diagm(A::VectorField)
+
+Creates a diagonal `TensorField` from a `VectorField` (dim=3), i.e., places vector
+components on the tensor diagonal for each node/element.
+
+Returns: `TensorField`
+"""
 function diagm(AA::VectorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -962,6 +1015,14 @@ export det
 export unitTensor
 export trace
 
+"""
+    *(A::TensorField, B::TensorField)
+
+Tensor contraction (matrix multiplication) for each element/node: reshapes 9×1 blocks
+into 3×3, multiplies, then flattens back.
+
+Returns: `TensorField`
+"""
 function *(AA::TensorField, BB::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -1007,6 +1068,14 @@ function *(AA::TensorField, BB::TensorField)
     end
 end
 
+"""
+    ⋅(A::TensorField, B::TensorField)
+
+Element-wise (Hadamard) product followed by summation of all components, yielding a
+scalar per tensor (i.e., Frobenius inner product).
+
+Returns: `ScalarField`
+"""
 function ⋅(AA::TensorField, BB::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -1482,6 +1551,13 @@ function /(BB::TensorField, AA::ScalarField)
     return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
 end
 
+"""
+    transpose(A::TensorField)
+
+Transposes each 3×3 tensor block.
+
+Returns: `TensorField`
+"""
 function transpose(A::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -1509,6 +1585,13 @@ function transpose(A::TensorField)
     end
 end
 
+"""
+    adjoint(A::TensorField)
+
+Adjoint (conjugate transpose) of each 3×3 tensor block.
+
+Returns: `TensorField`
+"""
 function adjoint(AA::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -1535,6 +1618,13 @@ function adjoint(AA::TensorField)
     end
 end
 
+"""
+    unitTensor(A::TensorField)
+
+Creates an identity tensor field (I) with the same element structure and time steps as `A`.
+
+Returns: `TensorField`
+"""
 function unitTensor(AA::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -1561,6 +1651,13 @@ function unitTensor(AA::TensorField)
     end
 end
 
+"""
+    trace(A::TensorField)
+
+Computes the trace of each 3×3 tensor block.
+
+Returns: `ScalarField`
+"""
 function trace(AA::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -1593,6 +1690,13 @@ function trace(AA::TensorField)
     end
 end
 
+"""
+    det(A::TensorField)
+
+Computes the determinant of each 3×3 tensor block.
+
+Returns: `ScalarField`
+"""
 function det(AA::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -1625,6 +1729,13 @@ function det(AA::TensorField)
     end
 end
 
+"""
+    inv(A::TensorField)
+
+Matrix inverse of each 3×3 tensor block.
+
+Returns: `TensorField`
+"""
 function inv(AA::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -2068,6 +2179,24 @@ end
 #                                                                             #
 ###############################################################################
 
+"""
+    ∘(A::Union{ScalarField,VectorField}, D::Function)
+
+Right application of differential operator `D` to field `A`.
+- If `D == ∇` and `A` is `ScalarField`: returns `grad(A)`.
+- If `D == ∇` and `A` is `VectorField`: returns `grad(A)`.
+
+Returns: `VectorField` or `TensorField`
+
+# Examples
+```julia
+# 3D (assumes `problem` and a "body" physical group are defined)
+S = scalarField(problem, [field("body", f=(x,y,z)->x*y)])
+G = S ∘ ∇      # grad of scalar field
+V = vectorField(problem, [field("body", fx=x->x, fy=y->y, fz=z->z)])
+H = V ∘ ∇      # grad of vector field (tensor)
+```
+"""
 function ∘(A::Union{ScalarField,VectorField}, D::Function)
     if D == ∇
         return grad(A)
@@ -2076,6 +2205,22 @@ function ∘(A::Union{ScalarField,VectorField}, D::Function)
     end
 end
 
+"""
+    ∘(D::Function, A::Union{ScalarField,VectorField})
+
+Left application of differential operator `D` to field `A`.
+- If `D == ∇` and `A` is `ScalarField`: returns `grad(A)`.
+- If `D == ∇` and `A` is `VectorField`: returns `grad(A)'` (transpose).
+
+Returns: `VectorField` or `TensorField`
+
+# Examples
+```julia
+# 3D (assumes `problem` and a "body" physical group are defined)
+V = vectorField(problem, [field("body", fx=x->x, fy=y->y, fz=z->z)])
+T = ∇ ∘ V      # equals grad(V)'
+```
+"""
 function ∘(D::Function, A::Union{ScalarField,VectorField})
     if D == ∇
         if A isa ScalarField
@@ -2088,6 +2233,22 @@ function ∘(D::Function, A::Union{ScalarField,VectorField})
     end
 end
 
+"""
+    ⋅(A::Union{VectorField,TensorField}, D::Function)
+
+Right contraction with the differential operator. With `D == ∇`:
+- If `A` is `VectorField`: returns `div(A)` (scalar field).
+- If `A` is `TensorField`: returns `div(A)` (vector field).
+
+Returns: `ScalarField` or `VectorField`
+
+# Examples
+```julia
+# 3D (assumes `problem` and a "body" physical group are defined)
+V = vectorField(problem, [field("body", fx=x->x, fy=y->y, fz=z->z)])
+divV = V ⋅ ∇   # ScalarField
+```
+"""
 function ⋅(A::Union{VectorField,TensorField}, D::Function)
     if D == ∇
         return div(A)
@@ -2096,6 +2257,22 @@ function ⋅(A::Union{VectorField,TensorField}, D::Function)
     end
 end
 
+"""
+    ⋅(D::Function, A::Union{VectorField,TensorField})
+
+Left contraction with the differential operator. With `D == ∇`:
+- If `A` is `VectorField`: returns `div(A)`.
+- If `A` is `TensorField`: returns `div(A')`.
+
+Returns: `ScalarField` or `VectorField`
+
+# Examples
+```julia
+# 3D (assumes `problem` and a "body" physical group are defined)
+T = tensorField(problem, [field("body", fz=z->z)])
+DV = ∇ ⋅ T     # VectorField (divergence of tensor)
+```
+"""
 function ⋅(D::Function, A::Union{VectorField,TensorField})
     if D == ∇
         if A isa VectorField
@@ -2108,6 +2285,20 @@ function ⋅(D::Function, A::Union{VectorField,TensorField})
     end
 end
 
+"""
+    ×(D::Function, A::VectorField)
+
+Left curl. With `D == ∇`, returns `curl(A)`.
+
+Returns: `VectorField`
+
+# Examples
+```julia
+# 3D (assumes `problem` and a "body" physical group are defined)
+V = vectorField(problem, [field("body", fx=x->0, fy=x->x, fz=z->0)])
+C = ∇ × V
+```
+"""
 function ×(D::Function, A::VectorField)
     if D == ∇
         return curl(A)
@@ -2116,6 +2307,20 @@ function ×(D::Function, A::VectorField)
     end
 end
 
+"""
+    ×(A::VectorField, D::Function)
+
+Right curl with sign convention. With `D == ∇`, returns `-curl(A)`.
+
+Returns: `VectorField`
+
+# Examples
+```julia
+# 3D (assumes `problem` and a "body" physical group are defined)
+V = vectorField(problem, [field("body", fx=x->0, fy=x->x, fz=z->0)])
+Cneg = V × ∇   # -curl(V)
+```
+"""
 function ×(A::VectorField, D::Function)
     if D == ∇
         return curl(A) * (-1)

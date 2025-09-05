@@ -6,6 +6,11 @@
 
 LowLevelFEM is a Julia package for finite element analysis with an engineering-first workflow. It exposes each phase of the workflow as simple functions (mesh → matrices → loads/BCs → solve → postprocess → visualize), so you can customize, combine, or inspect any step. Typical tasks such as strain energy or resultants are one-liners (for example, `U = q' * K * q / 2`).
 
+## Requirements
+
+- Julia 1.x
+- Gmsh C API is bundled via `gmsh_jll` and re-exported as `gmsh` from this package; no separate Gmsh.jl installation is required.
+
 ## Capabilities
 
 - Geometry and meshing: integrates with `gmsh` for 2D/3D geometry, meshing, and physical groups.
@@ -32,34 +37,60 @@ Pkg.add("LowLevelFEM")
 
 ```julia
 using LowLevelFEM
-import LowLevelFEM as FEM
 
+# `gmsh` is exported by LowLevelFEM
 gmsh.initialize()
 gmsh.open("your_model.geo")
 
-mat = FEM.material("body", E=2e5, ν=0.3)
-prob = FEM.Problem([mat], type=:PlaneStress)  # :Solid, :PlaneStrain, :AxiSymmetric, :HeatConduction, ...
+mat = material("body", E=2e5, ν=0.3)
+prob = Problem([mat], type=:PlaneStress)  # :Solid, :PlaneStrain, :AxiSymmetric, :HeatConduction, ...
 
-bc   = FEM.displacementConstraint("supp", ux=0, uy=0)
-load = FEM.load("load", fy=-1)
+bc   = displacementConstraint("supp", ux=0, uy=0)
+force = load("load", fy=-1)
 
-q = FEM.solveDisplacement(prob, [load], [bc])
-S = FEM.solveStress(prob, q)
+q = solveDisplacement(prob, [force], [bc])
+S = solveStress(q)
 
-FEM.showDoFResults(prob, q, :uvec)
-FEM.showStressResults(prob, S, :s, smooth=true)
+showDoFResults(q, :uvec)
+showStressResults(S, :s)
 
-gmsh.fltk.run()
+openPostProcessor()
 gmsh.finalize()
 ```
 
-More end-to-end examples are available under `examples/` and in the documentation.
+Note: physical group names in your geometry (created in Gmsh) must match the strings used above (e.g., `"body"`, `"supp"`, `"load"`).
+
+### An alternative solution (instead of `q = ...`, `S = ...`)
+
+```julia
+K = stiffnessMatrix(prob)
+f = loadVector(prob, [force])
+applyBoundaryConditions!(K, f, [bc])
+q = K \ f
+
+E = mat.E
+ν = mat.ν
+
+A = (u ∘ ∇ + ∇ ∘ u) / 2
+I = unitTensor(A)
+S = E / (1 + ν) * (A + ν / (1 - 2ν) * trace(A) * I)
+```
+More end-to-end examples are available under [examples](https://github.com/perebalazs/LowLevelFEM.jl/tree/main/examples) and in the [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stable/).
 
 ## Documentation
 
-- Latest docs: https://perebalazs.github.io/LowLevelFEM.jl/dev
-- Stable docs: https://perebalazs.github.io/LowLevelFEM.jl/stable
+- Latest docs: <https://perebalazs.github.io/LowLevelFEM.jl/dev>
+- Stable docs: <https://perebalazs.github.io/LowLevelFEM.jl/stable>
 
 ## Planned features
 
-To be completed by the maintainer.
+- Other material laws (incompressible Neo-Hooke, Mooney-Rivlin, etc.)
+- Truss, beam, shell elements
+- Contact problems (penalty, Lagrange multiplier)
+- Multithreading
+
+Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome. In case of any issue, please send a [bug report](https://github.com/perebalazs/LowLevelFEM.jl/issues).
+
+## License
+
+This project is licensed under the MIT License — see `LICENSE` for details.

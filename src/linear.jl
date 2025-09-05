@@ -15,11 +15,17 @@ export CMD, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
 
 Solves the stiffness matrix of the `problem`.
 
-Return: `stiffMat`
+Returns: `stiffMat`
 
 Types:
 - `problem`: Problem
 - `stiffMat`: SystemMatrix
+
+# Examples
+
+```julia
+K = stiffnessMatrix(problem)
+```
 """
 function stiffnessMatrix(problem; elements=[])
     if problem.type == :AxiSymmetric
@@ -443,10 +449,9 @@ end
 """
     nonLinearStiffnessMatrix(problem, q)
 
-Solves the nonlinear stiffness matrix of the `problem`. `q` is a
-displacement field.
+Solves the nonlinear stiffness matrix of the `problem`. `q` is a displacement field.
 
-Return: `stiffMat`
+Returns: `stiffMat`
 
 Types:
 - `problem`: Problem
@@ -730,14 +735,20 @@ end
 """
     massMatrix(problem; lumped=...)
 
-Solves the mass matrix of the `problem`. If `lumped` is true, solves lumped mass matrix.
+Solves the mass matrix of the `problem`. If `lumped` is true, computes the lumped mass matrix.
 
-Return: `massMat`
+Returns: `massMat`
 
 Types:
 - `problem`: Problem
 - `lumped`: Boolean
 - `massMat`: SystemMatrix
+
+# Examples
+
+```julia
+M = massMatrix(problem; lumped=true)
+```
 """
 function massMatrix(problem; elements=[], lumped=true)
     gmsh.model.setCurrent(problem.name)
@@ -864,25 +875,33 @@ end
 """
     dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=..., β=...)
 
-Generates the damping matrix for proportional damping case. **C**=α**M**+β**K**
-or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅. The latter corresponds 
-to the damping characteristic characterized by a power series consisting of powers
-of the natural frequencies with odd exponents. ξᵢ (`ξ` in the argument list) are the values ​​of the 
-individual members of the series corresponding to the ωₘₐₓ value. βᵢ (`β` in the argument list) are the 
-coefficients of the series. (see [^4]) Either `ξ` or `β` must be specified. `ξ` or `β` are scalars or 
-vectors. `K` is the stiffness matrix, `M` is the mass matrix and `ωₘₐₓ` is the 
+Generates the damping matrix for proportional damping. C = αM + βK, or
+C = αM + β₁K + β₂KM⁻¹K + β₃KM⁻¹KM⁻¹K + ⋯. The latter corresponds to a damping characteristic
+given by a power series in the natural frequencies with odd exponents. ξᵢ (`ξ` in the
+arguments) are the values of the individual terms of the series at ωₘₐₓ. βᵢ (`β` in the
+arguments) are the coefficients of the series. Either `ξ` or `β` must be specified; each may
+be a scalar or a vector. `K` is the stiffness matrix, `M` is the mass matrix, and `ωₘₐₓ` is the
 largest natural frequency.
 
-Return: `dampingMatrix`
+Returns: `dampingMatrix`
 
 Types:
 - `K`: SystemMatrix
 - `M`: SystemMatrix
 - `ωₘₐₓ`: Float64
 - `α`: Float64
-- `ξ`: Float64 of Vector{Float64}
-- `β`: Float64 of Vector{Float64}
+- `ξ`: Float64 or Vector{Float64}
+- `β`: Float64 or Vector{Float64}
 - `dampingMatrix`: SystemMatrix
+
+# Examples
+
+```julia
+K = stiffnessMatrix(problem)
+M = massMatrix(problem; lumped=true)
+ωmax = 2π * 1000
+C = dampingMatrix(K, M, ωmax; α=0.0, ξ=[0.02, 0.02])
+```
 """
 function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
     if K.model != M.model
@@ -1235,7 +1254,7 @@ Applies displacement boundary conditions `supports` on a stiffness matrix
 is a tuple of `name` of physical group and prescribed displacements `ux`, `uy`
 and `uz`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `stiffMat`: SystemMatrix 
@@ -1263,7 +1282,7 @@ Applies displacement boundary conditions `supports` on a stiffness matrix
 is a tuple of `name` of physical group and prescribed displacements `ux`, `uy`
 and `uz`. Creates a new stiffness matrix and load vector.
 
-Return: `stiffMat`, `loadVec`
+Returns: `stiffMat`, `loadVec`
 
 Types:
 - `stiffMat`: SystemMatrix 
@@ -1293,7 +1312,7 @@ Applies boundary conditions `supports` on a heat conduction matrix
 `heatCondMat`, heat capacity matrix `heatCapMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `supports`
 is a tuple of `name` of physical group and prescribed temperature `T`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `stiffMat`: SystemMatrix 
@@ -1316,7 +1335,7 @@ end
 
 Returns `tags` of elements of physical group `name`.
 
-Return: `tags`
+Returns: `tags`
 
 Types:
 - `name`: String
@@ -1342,7 +1361,7 @@ Applies displacement boundary conditions `supports` on a stiffness matrix
 Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
 prescribed displacements `ux`, `uy` and `uz`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `stiffMat`: SystemMatrix 
@@ -1511,7 +1530,7 @@ Applies displacement boundary conditions `supports` on a displacement vector
 `dispVec`. Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
 prescribed displacements `ux`, `uy` and `uz`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `problem`: Problem
@@ -1581,7 +1600,7 @@ Applies elastic support boundary conditions `elastSupp` on a stiffness matrix
 `stiffMat`. Mesh details are in `problem`. `elastSupp` is a tuple of `name`
 of physical group and prescribed `kx`, `ky` and `kz` stiffnesses.
 
-Return: none
+Returns: nothing
 
 Types:
 - `stiffMat`: SystemMatrix 
@@ -2478,7 +2497,7 @@ Changes the velocity values `vx`, `vy` and `vz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
 velocity vector `v0`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `name`: String 
@@ -2498,7 +2517,7 @@ Changes the force values `fx`, `fy` and `fz` (depending on the dimension of
 the problem) at nodes belonging to physical group `name`. Original values are in
 load vector `f0`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `name`: String 
@@ -2518,7 +2537,7 @@ Changes the acceleration values `ax`, `ay` and `az` (depending on the dimension 
 the `problem`) at nodes belonging to physical group `name`. Original values are in
 acceleration vector `a0`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `name`: String 
@@ -2971,4 +2990,3 @@ function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
     end
     return x, y
 end
-

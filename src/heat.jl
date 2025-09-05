@@ -12,11 +12,17 @@ export FDM
 
 Solves the heat conduction matrix of the `problem`.
 
-Return: `heatCondMat`
+Returns: `heatCondMat`
 
 Types:
 - `problem`: Problem
 - `heatCondMat`: SystemMatrix
+
+# Examples
+
+```julia
+Kth = heatConductionMatrix(problem)
+```
 """
 function heatConductionMatrix(problem; elements=[])
     if problem.type == :AxiSymmetricHeatConduction
@@ -915,7 +921,7 @@ is a tuple of `name` of physical group and prescribed heat transfer coefficient 
 and ambient temperature `Tₐ`. The ambient temperature can be either a constant or a 
 function of x, y and z coordinates.
 
-Return: none
+Returns: nothing
 
 Types:
 - `problem`: Problem
@@ -1258,7 +1264,7 @@ end
 Changes the tempetature value to `T` at nodes belonging to physical group `name`.
 Original values are in temperature vector `T0`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `name`: String 
@@ -1388,4 +1394,3 @@ function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type=:SR, n=100, ϑ=
     end
     return x, y
 end
-

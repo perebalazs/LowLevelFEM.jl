@@ -7,12 +7,11 @@ export solveDeformation, showDeformationResults
 """
     nodePositionVector(problem)
 
-Gives back the positiond vectors of all the nodes of the mesh as a VectorField. (Initial configuration)
+Returns the position vectors of all mesh nodes as a `VectorField` (initial configuration).
 
-Return: R
+Returns: `R`
 
 Types:
-
 - `problem`: Problem
 - `R`: VectorField
 """
@@ -43,18 +42,58 @@ end
 """
     ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
 
-Solves the deriavatives of `rr`.
-- If `rr` is a ScalarField, `nabla` is :grad, it solves the gradient of `rr`, which is a VectorField.
-- If `rr` is a VectorField, `nabla` is :grad, it solves the gradient of `rr`, which is a TensorField.
-- If `rr` is a VectorField, `nabla` is :curl, it solves the rotation of `rr`, which is a VectorField.
-- If `rr` is a VectorField, `nabla` is :div, it solves the divergence of `rr`, which is a ScalarField.
-- If `rr` is a TensorField, `nabla` is :div, it solves the divergence of `rr`, which is a VectorField.
+Computes derivatives of `rr`.
+- If `rr` is a `ScalarField` and `nabla == :grad`, returns the gradient (a `VectorField`).
+- If `rr` is a `VectorField` and `nabla == :grad`, returns the gradient (a `TensorField`).
+- If `rr` is a `VectorField` and `nabla == :curl`, returns the curl (a `VectorField`).
+- If `rr` is a `VectorField` and `nabla == :div`, returns the divergence (a `ScalarField`).
+- If `rr` is a `TensorField` and `nabla == :div`, returns the divergence (a `VectorField`).
 
-Return: ScalarField, VectorField or TensorField
+Returns: `ScalarField`, `VectorField`, or `TensorField`
 
 Types:
-- `rr`: ScalarField, VectorField or TensorField
+- `rr`: `ScalarField`, `VectorField`, or `TensorField`
 - `nabla`: Symbol
+
+# 3D Examples (assumes `problem` is set as in the ∇ doc setup)
+
+```julia
+# One-time 3D setup (assumes examples/Fields/cube.geo exists with physical group "body")
+using LowLevelFEM
+gmsh.initialize()
+gmsh.open("examples/Fields/cube.geo")
+mat = material("body", E=210e3, ν=0.3, ρ=7.85e-9)
+problem = Problem([mat], type=:Solid)
+
+# 1) Gradient of a 3D scalar field: ∇f → VectorField
+f(X,Y,Z) = X^2 + Y*Z
+S = scalarField(problem, [field("body", f=f)])
+G = ∇(S)  # VectorField with 3 components
+
+# 2) Curl of a 3D vector field: ∇ × v → VectorField
+vx(X,Y,Z) = 0
+vy(X,Y,Z) = X
+vz(X,Y,Z) = 0
+V = vectorField(problem, [field("body", fx=vx, fy=vy, fz=vz)])
+C = ∇(V, nabla=:curl)  # approx (0, 0, 1) everywhere
+
+# 3) Divergence of a 3D vector field: ∇ ⋅ v → ScalarField
+v1(X,Y,Z) = X
+v2(X,Y,Z) = Y
+v3(X,Y,Z) = Z
+V2 = vectorField(problem, [field("body", fx=v1, fy=v2, fz=v3)])
+D = ∇(V2, nabla=:div)  # ≈ 3
+
+# 4) Divergence of a 3D tensor field: ∇ · T → VectorField (if T is TensorField)
+# For example, a diagonal tensor T with only Tzz = g(Z): div(T) = (0, 0, ∂g/∂Z)
+g(Z) = 10 - Z
+T = tensorField(problem, [field("body", fz=g)])
+DV = ∇(T, nabla=:div)  # VectorField
+
+# Symmetric displacement gradient via operators
+# A = (u ∘ ∇ + ∇ ∘ u) / 2
+gmsh.finalize()
+```
 """
 function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
@@ -325,17 +364,16 @@ Return: VectorField
 Types:
 - `r`: VectorField
 
-# Examples
+# 3D Example (assumes `problem` is set as in the ∇ doc setup)
 
 ```julia
-x(X, Y, Z) = 2X + 3Y
-y(X, Y, Z) = Y
-z(X, Y, Z) = Z
-fld = field("body", fx=x, fy=y, fz=z)
-v = vectorField(problem, [fld])
+# Assumes a 3D mesh with physical group "body".
+vx(X, Y, Z) = 0
+vy(X, Y, Z) = X
+vz(X, Y, Z) = 0
+v = vectorField(problem, [field("body", fx=vx, fy=vy, fz=vz)])
 D1 = curl(v)
 D2 = ∇ × v
-println(D1 == D2)
 ```
 """
 function curl(r::VectorField)
@@ -371,24 +409,24 @@ Types:
 
 - `r`: VectorField or TensorField
 
-# Examples
+# 3D Examples (assumes `problem` is set as in the ∇ doc setup)
 
 ```julia
-x(X, Y, Z) = 2X + 3Y
-y(X, Y, Z) = Y
-z(X, Y, Z) = Z
-fld = field("body", fx=x, fy=y, fz=z)
-v = vectorField(problem, [fld])
+# Assumes a 3D mesh with physical group "body".
+
+# 1) Divergence of a 3D vector field → ScalarField
+v1(X,Y,Z) = X
+v2(X,Y,Z) = Y
+v3(X,Y,Z) = Z
+v = vectorField(problem, [field("body", fx=v1, fy=v2, fz=v3)])
 D1 = div(v)
 D2 = ∇ ⋅ v
-println(D1 == D2)
 
+# 2) Divergence of a 3D tensor field → VectorField
 fsz(X, Y, Z) = 10 - Z
-s0 = field("body", fz=fsz)
-S = tensorField(problem, [s0])
+S = tensorField(problem, [field("body", fz=fsz)])
 b1 = -div(S)
 b2 = -S ⋅ ∇
-println(b1 == b2)
 ```
 """
 function div(r::Union{VectorField,TensorField})
@@ -407,17 +445,24 @@ Types:
 
 - `r`: ScalarField or VectorField
 
-# Examples
+# 3D Examples
 
 ```julia
-x(X, Y, Z) = 2X + 3Y
-y(X, Y, Z) = Y
-z(X, Y, Z) = Z
-fld = field("body", fx=x, fy=y, fz=z)
-v = vectorField(problem, [fld])
-D1 = grad(v)
-D2 = v ∘ ∇
-println(D1 == D2)
+# Assumes a 3D mesh with physical group "body".
+
+# 1) Gradient of a 3D scalar field → VectorField
+f(X,Y,Z) = X^2 + Y*Z
+S = scalarField(problem, [field("body", f=f)])
+G1 = grad(S)
+G2 = ∇(S)
+
+# 2) Gradient of a 3D vector field → TensorField
+vx(X,Y,Z) = X
+vy(X,Y,Z) = Y
+vz(X,Y,Z) = Z
+V = vectorField(problem, [field("body", fx=vx, fy=vy, fz=vz)])
+T1 = grad(V)
+T2 = V ∘ ∇
 ```
 """
 function grad(r::Union{VectorField,ScalarField})
@@ -1129,7 +1174,7 @@ Applies displacement boundary conditions `supports` on deformation vector `defor
 Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
 prescribed displacements `ux`, `uy` and `uz`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `deformVec`: VectorField
@@ -1215,7 +1260,7 @@ so that it is only necessary to consider them once during iteration.
 `supports` is a tuple of `name` of physical group and
 prescribed displacements `ux`, `uy` and `uz`.
 
-Return: none
+Returns: nothing
 
 Types:
 - `stiffMat`: SystemMatrix 

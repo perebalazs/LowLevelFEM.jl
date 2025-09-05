@@ -1,83 +1,92 @@
 # LowLevelFEM
 
-Solution of a problem in linear elasticity using Finite Element Method consists of solution of the stiffness matrix **K** and load vector **f**, modifying them according to the boundary conditions (getting **K**' and **f**'), solving the displacement field **q**' as the result of the system of equations **K**'**q**=**f**', solving the stress field from **q** and visualize them.
-The above described steps can be easily performed using the LowLevelFEM package. Each step means a function with the appropriate parameters, while at any step it is possible to perform an arbitrary operation with the quantities calculated in the meantime. For example the strain energy can be solved as U=1/2**q**^T^**Kq**, for which the code is simply ```U=q'*K*q/2.```(see Examples)
+LowLevelFEM is a Julia package for finite element analysis with an engineering-first workflow. It exposes each phase of the workflow as simple functions (mesh → matrices → loads/BCs → solve → postprocess → visualize), so you can customize, combine, or inspect any step. Typical tasks such as strain energy or resultants are one-liners (for example, `U = q' * K * q / 2`).
 
-## Features
+## Requirements
 
-- Sketching the geometry, making the FE mesh with [GMSH](https://gmsh.info).
-- Solving problems from linear elasticity,
-  
-  - 2D problems,
-    - Plane stress,
-    - Plane strain,
-    - Axisymmetric,
-  - 3D problem (solid body),
-- which means the creation of the stiffness matrix **K** and the mass matrix **M** of the problem using arbitrary
-  
-  - element types (line, triangle, rectangle, tetrahedron, hexahedron, pyramid, wedge)
-  - approximation order (up to ten, Lagrange polynomials)
-- Applying
-  
-  - distributed forces on arbitrary *physical groups* (see [GMSH](https://gmsh.info)),
-    
-    - Lines (in 2D: surface force, in 3D: edge force),
-    - Surfaces (in 2D: body force, in 3D: traction),
-    - Volumes (in 3D: body force),
-  - concentrated forces on nodes,
-    
-    which means the calculation of the load vector **f**.
-- Constraints on physical groups (nodes on points, edges, surfaces and volumes).
-- Elastic support
-- Giving loads as functions
-- Giving displacement constraints as functions
-- Different materials on each physical group
-- Solves stress, stain and heat flux field as element result (possibly jumps at the element boundaries) or as nodal results.
-- Resultant of scalar or vector type quantities on arbitrary physical group (in [GMSH](https://gmsh.info)). The resultant can be the sum of elements in a load vector, or an integral of a distributed quantity.
-- Applying initial conditions (displacement and velocity) on arbitrary points, edges, surfaces, volumes and on combinations of them.
-- Solution of static and dynamic (transient with central difference method, Newmark and HHT-α) problems,
-- Displaying the results (scalar or vector displacements, scalar or tensor stresses and strains) with [GMSH](https://gmsh.info).
-  
-  - When dynamic problems are solved animations are also possible (click on $\triangleright$).
-- Rotation of nodal coordinate systems using transformation matrix. Transformation matrix can be given with constant direction vectors or with functions. (With this arbitrary coordinate systems can be defined.)
-- Plotting arbitrary results on paths.
-- Solves the damping matrix of structures in case of proportional damping
-  
-  - using Rayleigh-damping (**C**=α**M**+β**K**) or
-  - using Caughey-damping (**C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅).
-- Solves the stability analysis transient problems (spectral radius, period error, physical damping ratio, algorithmic damping ratio)
-- Buckling of structures in 3D.
-- Heat conduction problems
-  
-  - Conductivity and heat capacity matrices,
-  - Temperature boundary conditions (also with functions)
-  - Loads:
-    * Heat flux on boundaries (also with functions)
-    * Heat source inside the bodies (also with functions)
-    * Heat convection
-  - Stady state and transient problems in heat conduction.
-  - Heat expansion
-  - Thermal loading in stress analysis (thermal stresses)
-  - Generated heat (and temperature change) due to elastic deformations.
-- Modal analysis (eigenfrequencies, modal shapes), even if the structure is prestressed.
+- Julia 1.x
+- Gmsh C API is bundled via `gmsh_jll` and re-exported as `gmsh` from this package; no separate Gmsh.jl installation is required.
+
+## Capabilities
+
+- Geometry and meshing: integrates with `gmsh` for 2D/3D geometry, meshing, and physical groups.
+- Problem types: 3D solids, 2D plane stress/plane strain, axisymmetric; 3D/2D heat conduction and axisymmetric heat conduction.
+- Elements and order: standard line/triangle/quad/tetra/hex/pyramid/wedge with Lagrange order up to 10.
+- Materials: linear elastic (Hooke) and large deformation laws (St. Venant–Kirchhoff, compressible Neo-Hooke).
+- Matrices: stiffness `K`, mass `M` (lumped or consistent), proportional damping `C` (Rayleigh/Caughey), heat conduction/capacity, latent heat, and convection matrices/vectors.
+- Loads and constraints: nodal and distributed loads on physical groups; function-based loads and temperature BCs; elastic supports; initial displacement/velocity/temperature.
+- Thermal–structural coupling: thermal expansion, thermal stresses, and heat generated by elastic deformation.
+- Solvers: static and transient dynamics (central difference and HHT-α from the Newmark family).
+- Eigenproblems: modal analysis (frequencies and mode shapes, optionally prestressed) and linear buckling (critical factors and modes).
+- Field operators and results: gradient/divergence/curl; stress/strain and heat flux as element or nodal fields; smoothing at nodes with field jumps; user-defined scalar/vector/tensor FE fields.
+- Visualization and plots: Gmsh-based views for displacements, stresses, strains, heat flux, with animation for dynamics; plot results along user-defined paths; show results on surfaces.
+- Coordinate systems: rotate nodal DOFs with constant or function-defined local coordinate systems (incl. curvilinear).
+
+## Installation
+
+```julia
+using Pkg
+Pkg.add("LowLevelFEM")
+```
+
+## Quick Start
+
+```julia
+using LowLevelFEM
+
+# `gmsh` is exported by LowLevelFEM
+gmsh.initialize()
+gmsh.open("your_model.geo")
+
+mat = material("body", E=2e5, ν=0.3)
+prob = Problem([mat], type=:PlaneStress)  # :Solid, :PlaneStrain, :AxiSymmetric, :HeatConduction, ...
+
+bc   = displacementConstraint("supp", ux=0, uy=0)
+force = load("load", fy=-1)
+
+q = solveDisplacement(prob, [force], [bc])
+S = solveStress(q)
+
+showDoFResults(q, :uvec)
+showStressResults(S, :s)
+
+openPostProcessor()
+gmsh.finalize()
+```
+
+Note: physical group names in your geometry (created in Gmsh) must match the strings used above (e.g., `"body"`, `"supp"`, `"load"`).
+
+### An alternative solution (instead of `q = ...`, `S = ...`)
+
+```julia
+K = stiffnessMatrix(prob)
+f = loadVector(prob, [force])
+applyBoundaryConditions!(K, f, [bc])
+q = K \ f
+
+E = mat.E
+ν = mat.ν
+
+A = (u ∘ ∇ + ∇ ∘ u) / 2
+I = unitTensor(A)
+S = E / (1 + ν) * (A + ν / (1 - 2ν) * trace(A) * I)
+```
+More end-to-end examples are available under [examples](https://github.com/perebalazs/LowLevelFEM.jl/tree/main/examples) and in the [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stable/).
+
+## Documentation
+
+- Latest docs: <https://perebalazs.github.io/LowLevelFEM.jl/dev>
+- Stable docs: <https://perebalazs.github.io/LowLevelFEM.jl/stable>
 
 ## Planned features
 
-- [ ] 3D (and  2D) truss structures
-- [ ] 3D (and 2D) beam structures
-- [ ] Shells
-- [ ] MultiPoint Constraint (like MPC184 in Ansys)
-- [ ] Contact problems,
-  
-  - [ ] in 2D,
-  - [ ] in 3D,
-  - [ ] with penalty method
-  - [ ] with Lagrange multiplier method.
-- [x] Defining displacement initial condition as a function of x, y and z.
-- [x] Defining velocity initial condition as a function of x, y and z.
-- [ ] Finite rotations.
-- [ ] Plastic deformation (within small strain theory).
-- [ ] Solver for arbitrary weak forms.
+- Other material laws (incompressible Neo-Hooke, Mooney-Rivlin, etc.)
+- Truss, beam, shell elements
+- Contact problems (penalty, Lagrange multiplier)
+- Multithreading
 
-Any suggestions are welcome.
+Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome. In case of any issue, please send a [bug report](https://github.com/perebalazs/LowLevelFEM.jl/issues).
 
+## License
+
+This project is licensed under the MIT License — see `LICENSE` for details.
