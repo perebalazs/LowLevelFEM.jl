@@ -323,30 +323,6 @@ gmsh.finalize()</code></pre><p>For more examples see <a href="https://github.com
 
 gmsh.initialize()
 
-# Geometry: rectangle base×height with left/right edges named
-base = 100.0
-height = 20.0
-elemSize = 2.5
-
-gmsh.model.add(&quot;plate&quot;)
-p1 = gmsh.model.occ.addPoint(0, 0, 0)
-p2 = gmsh.model.occ.addPoint(base, 0, 0)
-p3 = gmsh.model.occ.addPoint(base, height, 0)
-p4 = gmsh.model.occ.addPoint(0, height, 0)
-l1 = gmsh.model.occ.addLine(p1, p2)
-l2 = gmsh.model.occ.addLine(p2, p3)
-l3 = gmsh.model.occ.addLine(p3, p4)
-l4 = gmsh.model.occ.addLine(p4, p1)
-cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-sf = gmsh.model.occ.addPlaneSurface([cl])
-gmsh.model.occ.synchronize()
-
-ph_hot = gmsh.model.addPhysicalGroup(1, [l4]); gmsh.model.setPhysicalName(1, ph_hot, &quot;hot&quot;)
-ph_cold = gmsh.model.addPhysicalGroup(1, [l2]); gmsh.model.setPhysicalName(1, ph_cold, &quot;cold&quot;)
-ph_body = gmsh.model.addPhysicalGroup(2, [sf]); gmsh.model.setPhysicalName(2, ph_body, &quot;body&quot;)
-
-generateMesh(sf, elemSize, approxOrder=2, algorithm=6, quadrangle=true, internalNodes=true)
-
 # Problem and BCs
 mat = material(&quot;body&quot;, k=45.0)
 problem = Problem([mat], type=:PlaneHeatConduction, thickness=1.0)
@@ -357,8 +333,7 @@ bc_cold = temperatureConstraint(&quot;cold&quot;, T=0.0)
 # Assemble and solve K*T = q with Dirichlet BCs
 Kth = heatConductionMatrix(problem)
 qth = heatFluxVector(problem, [])
-Cth = heatCapacityMatrix(problem)  # required by API to apply temperature BCs
-applyBoundaryConditions!(Kth, Cth, qth, [bc_hot, bc_cold])
+applyBoundaryConditions!(Kth, qth, [bc_hot, bc_cold])
 T = solveTemperature(Kth, qth)
 
 # Postprocess: temperature and heat flux
@@ -366,28 +341,10 @@ showDoFResults(T, :T, name=&quot;T&quot;, visible=true)
 qflux = solveHeatFlux(T)
 showHeatFluxResults(qflux, :qvec, name=&quot;q&quot;, visible=false, smooth=true)
 
-gmsh.fltk.run()
+openPostProcessor()
 gmsh.finalize()</code></pre><h2 id="2D-Heat-Conduction-with-Convection"><a class="docs-heading-anchor" href="#2D-Heat-Conduction-with-Convection">2D Heat Conduction with Convection</a><a id="2D-Heat-Conduction-with-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#2D-Heat-Conduction-with-Convection" title="Permalink"></a></h2><pre><code class="language-Julia hljs">using LowLevelFEM
 
 gmsh.initialize()
-
-# Geometry: rectangle base×height
-base = 100.0; height = 20.0; elemSize = 2.5
-gmsh.model.add(&quot;plate-conv&quot;)
-p1 = gmsh.model.occ.addPoint(0, 0, 0);   p2 = gmsh.model.occ.addPoint(base, 0, 0)
-p3 = gmsh.model.occ.addPoint(base, height, 0); p4 = gmsh.model.occ.addPoint(0, height, 0)
-l1 = gmsh.model.occ.addLine(p1, p2); l2 = gmsh.model.occ.addLine(p2, p3)
-l3 = gmsh.model.occ.addLine(p3, p4); l4 = gmsh.model.occ.addLine(p4, p1)
-cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-sf = gmsh.model.occ.addPlaneSurface([cl])
-gmsh.model.occ.synchronize()
-
-# Physical groups: left (hot), right (conv), body
-ph_hot = gmsh.model.addPhysicalGroup(1, [l4]); gmsh.model.setPhysicalName(1, ph_hot, &quot;hot&quot;)
-ph_conv = gmsh.model.addPhysicalGroup(1, [l2]); gmsh.model.setPhysicalName(1, ph_conv, &quot;conv&quot;)
-ph_body = gmsh.model.addPhysicalGroup(2, [sf]); gmsh.model.setPhysicalName(2, ph_body, &quot;body&quot;)
-
-generateMesh(sf, elemSize, approxOrder=2, algorithm=6, quadrangle=true, internalNodes=true)
 
 # Heat problem and BCs
 matT = material(&quot;body&quot;, k=45.0)
@@ -398,36 +355,18 @@ hcv = heatConvection(&quot;conv&quot;, h=15.0, Tₐ=20.0)
 
 Kth = heatConductionMatrix(probT)
 qth = heatFluxVector(probT, [])
-Cth = heatCapacityMatrix(probT)
 applyHeatConvection!(Kth, qth, [hcv])
-applyBoundaryConditions!(Kth, Cth, qth, [bc_hot])
+applyBoundaryConditions!(Kth, qth, [bc_hot])
 T = solveTemperature(Kth, qth)
 
 showDoFResults(T, :T, name=&quot;T&quot;, visible=true)
 qflux = solveHeatFlux(T)
 showHeatFluxResults(qflux, :qvec, name=&quot;q&quot;, visible=false, smooth=true)
 
-gmsh.fltk.run()
+openPostProcessor()
 gmsh.finalize()</code></pre><h2 id="Thermo‑Mechanical-Coupling-(Plane-Stress)"><a class="docs-heading-anchor" href="#Thermo‑Mechanical-Coupling-(Plane-Stress)">Thermo‑Mechanical Coupling (Plane Stress)</a><a id="Thermo‑Mechanical-Coupling-(Plane-Stress)-1"></a><a class="docs-heading-anchor-permalink" href="#Thermo‑Mechanical-Coupling-(Plane-Stress)" title="Permalink"></a></h2><pre><code class="language-Julia hljs">using LowLevelFEM
 
 gmsh.initialize()
-
-# Reuse a rectangle; hot left edge, conv right edge
-base = 100.0; height = 20.0; elemSize = 2.5
-gmsh.model.add(&quot;thermo-elastic&quot;)
-p1 = gmsh.model.occ.addPoint(0, 0, 0);   p2 = gmsh.model.occ.addPoint(base, 0, 0)
-p3 = gmsh.model.occ.addPoint(base, height, 0); p4 = gmsh.model.occ.addPoint(0, height, 0)
-l1 = gmsh.model.occ.addLine(p1, p2); l2 = gmsh.model.occ.addLine(p2, p3)
-l3 = gmsh.model.occ.addLine(p3, p4); l4 = gmsh.model.occ.addLine(p4, p1)
-cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-sf = gmsh.model.occ.addPlaneSurface([cl])
-gmsh.model.occ.synchronize()
-
-ph_hot = gmsh.model.addPhysicalGroup(1, [l4]); gmsh.model.setPhysicalName(1, ph_hot, &quot;hot&quot;)
-ph_conv = gmsh.model.addPhysicalGroup(1, [l2]); gmsh.model.setPhysicalName(1, ph_conv, &quot;conv&quot;)
-ph_body = gmsh.model.addPhysicalGroup(2, [sf]); gmsh.model.setPhysicalName(2, ph_body, &quot;body&quot;)
-
-generateMesh(sf, elemSize, approxOrder=2, algorithm=6, quadrangle=true, internalNodes=true)
 
 # 1) Heat problem to compute T(x)
 matT = material(&quot;body&quot;, k=45.0)
@@ -454,5 +393,5 @@ S = solveStress(q)
 showDoFResults(q, :uvec, name=&quot;u&quot;, visible=false)
 showStressResults(S, :s, name=&quot;σ&quot;, visible=true, smooth=true)
 
-gmsh.fltk.run()
-gmsh.finalize()</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../Operators/">« Operators</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Friday 5 September 2025 12:58">Friday 5 September 2025</span>. Using Julia version 1.11.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+openPostProcessor()
+gmsh.finalize()</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../Operators/">« Operators</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Friday 5 September 2025 20:09">Friday 5 September 2025</span>. Using Julia version 1.11.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
