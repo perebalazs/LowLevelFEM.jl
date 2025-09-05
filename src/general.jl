@@ -604,7 +604,7 @@ Types:
 ```julia
 using LinearAlgebra
 λ, Q = eigen(S)
-λ1, λ2, λ2 = getEigenVectors(λ)
+λ1, λ2, λ2 = getEigenValues(λ)
 ```
 """
 function getEigenValues(A::VectorField)
@@ -873,7 +873,7 @@ Types:
 f1(x, y, z) = y
 f2 = field("face1", f=f1)
 qq = scalarField(problem, [f2])
-qqq = showDoFResults(problem, qq, :scalar)
+qqq = showDoFResults(qq, :scalar)
 ```
 """
 function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, fzy=:no, fzx=:no, fxz=:no)
@@ -901,7 +901,7 @@ Types:
 ```julia
 f2 = field("face1", f=1)
 qq = scalarField(problem, [f2])
-qqq = showDoFResults(problem, qq, :scalar)
+qqq = showDoFResults(qq, :scalar)
 ```
 
 Here ScalarField is defined in nodes.
@@ -960,7 +960,7 @@ f2(x, y, z) = 5y
 ff1 = field("face1", fx=f1, fy=f2, fz=0)
 ff2 = field("face2", fx=f2, fy=f1, fz=1)
 qq = vectorField(problem, [ff1, ff2])
-qq0 = showDoFResults(problem, qq, :vector)
+qq0 = showDoFResults(qq, :vector)
 ```
 
 Here VectorField is defined in nodes.
@@ -1047,7 +1047,7 @@ f2(x, y, z) = 5y
 ff1 = field("face1", fx=f1, fy=f2, fz=0, fxy=1, fyz=1, fzx=f2)
 ff2 = field("face2", fx=f2, fy=f1, fz=1, fxy=1, fyz=f1, fzx=1)
 qq = tensorField(problem, [ff1, ff2])
-qq0 = showDoFResults(problem, qq, :tensor)
+qq0 = showDoFResults(qq, :tensor)
 ```
 
 Here TensorField is defined in nodes.

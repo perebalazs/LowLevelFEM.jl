@@ -2306,7 +2306,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         nn = length(mod.f)
         ϕ1 = zeros(dof, nn)
         ϕ1[fdof,:] .= mod.ϕ
-        applyBoundaryConditions!(problem, ϕ1, constraints)
+        applyBoundaryConditions!(ϕ1, constraints)
         return Eigen(mod.f, ϕ1, problem)
     else
         fdof = freeDoFs(problem, constraints)

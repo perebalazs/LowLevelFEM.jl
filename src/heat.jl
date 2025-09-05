@@ -999,7 +999,7 @@ Types:
 function solveTemperature(problem, flux, temp, heatconv)
     K = heatConductionMatrix(problem)
     q = heatFluxVector(problem, flux)
-    applyHeatConvection!(problem, K, q, heatconv)
+    applyHeatConvection!(K, q, heatconv)
     applyBoundaryConditions!(K, q, temp)
     return K \ q
 end

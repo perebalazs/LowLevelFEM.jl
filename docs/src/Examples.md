@@ -397,30 +397,6 @@ using LowLevelFEM
 
 gmsh.initialize()
 
-# Geometry: rectangle base×height with left/right edges named
-base = 100.0
-height = 20.0
-elemSize = 2.5
-
-gmsh.model.add("plate")
-p1 = gmsh.model.occ.addPoint(0, 0, 0)
-p2 = gmsh.model.occ.addPoint(base, 0, 0)
-p3 = gmsh.model.occ.addPoint(base, height, 0)
-p4 = gmsh.model.occ.addPoint(0, height, 0)
-l1 = gmsh.model.occ.addLine(p1, p2)
-l2 = gmsh.model.occ.addLine(p2, p3)
-l3 = gmsh.model.occ.addLine(p3, p4)
-l4 = gmsh.model.occ.addLine(p4, p1)
-cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-sf = gmsh.model.occ.addPlaneSurface([cl])
-gmsh.model.occ.synchronize()
-
-ph_hot = gmsh.model.addPhysicalGroup(1, [l4]); gmsh.model.setPhysicalName(1, ph_hot, "hot")
-ph_cold = gmsh.model.addPhysicalGroup(1, [l2]); gmsh.model.setPhysicalName(1, ph_cold, "cold")
-ph_body = gmsh.model.addPhysicalGroup(2, [sf]); gmsh.model.setPhysicalName(2, ph_body, "body")
-
-generateMesh(sf, elemSize, approxOrder=2, algorithm=6, quadrangle=true, internalNodes=true)
-
 # Problem and BCs
 mat = material("body", k=45.0)
 problem = Problem([mat], type=:PlaneHeatConduction, thickness=1.0)
@@ -431,8 +407,7 @@ bc_cold = temperatureConstraint("cold", T=0.0)
 # Assemble and solve K*T = q with Dirichlet BCs
 Kth = heatConductionMatrix(problem)
 qth = heatFluxVector(problem, [])
-Cth = heatCapacityMatrix(problem)  # required by API to apply temperature BCs
-applyBoundaryConditions!(Kth, Cth, qth, [bc_hot, bc_cold])
+applyBoundaryConditions!(Kth, qth, [bc_hot, bc_cold])
 T = solveTemperature(Kth, qth)
 
 # Postprocess: temperature and heat flux
@@ -440,7 +415,7 @@ showDoFResults(T, :T, name="T", visible=true)
 qflux = solveHeatFlux(T)
 showHeatFluxResults(qflux, :qvec, name="q", visible=false, smooth=true)
 
-gmsh.fltk.run()
+openPostProcessor()
 gmsh.finalize()
 ```
 
@@ -451,24 +426,6 @@ using LowLevelFEM
 
 gmsh.initialize()
 
-# Geometry: rectangle base×height
-base = 100.0; height = 20.0; elemSize = 2.5
-gmsh.model.add("plate-conv")
-p1 = gmsh.model.occ.addPoint(0, 0, 0);   p2 = gmsh.model.occ.addPoint(base, 0, 0)
-p3 = gmsh.model.occ.addPoint(base, height, 0); p4 = gmsh.model.occ.addPoint(0, height, 0)
-l1 = gmsh.model.occ.addLine(p1, p2); l2 = gmsh.model.occ.addLine(p2, p3)
-l3 = gmsh.model.occ.addLine(p3, p4); l4 = gmsh.model.occ.addLine(p4, p1)
-cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-sf = gmsh.model.occ.addPlaneSurface([cl])
-gmsh.model.occ.synchronize()
-
-# Physical groups: left (hot), right (conv), body
-ph_hot = gmsh.model.addPhysicalGroup(1, [l4]); gmsh.model.setPhysicalName(1, ph_hot, "hot")
-ph_conv = gmsh.model.addPhysicalGroup(1, [l2]); gmsh.model.setPhysicalName(1, ph_conv, "conv")
-ph_body = gmsh.model.addPhysicalGroup(2, [sf]); gmsh.model.setPhysicalName(2, ph_body, "body")
-
-generateMesh(sf, elemSize, approxOrder=2, algorithm=6, quadrangle=true, internalNodes=true)
-
 # Heat problem and BCs
 matT = material("body", k=45.0)
 probT = Problem([matT], type=:PlaneHeatConduction, thickness=1.0)
@@ -478,16 +435,15 @@ hcv = heatConvection("conv", h=15.0, Tₐ=20.0)
 
 Kth = heatConductionMatrix(probT)
 qth = heatFluxVector(probT, [])
-Cth = heatCapacityMatrix(probT)
 applyHeatConvection!(Kth, qth, [hcv])
-applyBoundaryConditions!(Kth, Cth, qth, [bc_hot])
+applyBoundaryConditions!(Kth, qth, [bc_hot])
 T = solveTemperature(Kth, qth)
 
 showDoFResults(T, :T, name="T", visible=true)
 qflux = solveHeatFlux(T)
 showHeatFluxResults(qflux, :qvec, name="q", visible=false, smooth=true)
 
-gmsh.fltk.run()
+openPostProcessor()
 gmsh.finalize()
 ```
 
@@ -497,23 +453,6 @@ gmsh.finalize()
 using LowLevelFEM
 
 gmsh.initialize()
-
-# Reuse a rectangle; hot left edge, conv right edge
-base = 100.0; height = 20.0; elemSize = 2.5
-gmsh.model.add("thermo-elastic")
-p1 = gmsh.model.occ.addPoint(0, 0, 0);   p2 = gmsh.model.occ.addPoint(base, 0, 0)
-p3 = gmsh.model.occ.addPoint(base, height, 0); p4 = gmsh.model.occ.addPoint(0, height, 0)
-l1 = gmsh.model.occ.addLine(p1, p2); l2 = gmsh.model.occ.addLine(p2, p3)
-l3 = gmsh.model.occ.addLine(p3, p4); l4 = gmsh.model.occ.addLine(p4, p1)
-cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-sf = gmsh.model.occ.addPlaneSurface([cl])
-gmsh.model.occ.synchronize()
-
-ph_hot = gmsh.model.addPhysicalGroup(1, [l4]); gmsh.model.setPhysicalName(1, ph_hot, "hot")
-ph_conv = gmsh.model.addPhysicalGroup(1, [l2]); gmsh.model.setPhysicalName(1, ph_conv, "conv")
-ph_body = gmsh.model.addPhysicalGroup(2, [sf]); gmsh.model.setPhysicalName(2, ph_body, "body")
-
-generateMesh(sf, elemSize, approxOrder=2, algorithm=6, quadrangle=true, internalNodes=true)
 
 # 1) Heat problem to compute T(x)
 matT = material("body", k=45.0)
@@ -540,6 +479,6 @@ S = solveStress(q)
 showDoFResults(q, :uvec, name="u", visible=false)
 showStressResults(S, :s, name="σ", visible=true, smooth=true)
 
-gmsh.fltk.run()
+openPostProcessor()
 gmsh.finalize()
 ```
