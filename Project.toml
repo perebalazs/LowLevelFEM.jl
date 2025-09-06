@@ -14,7 +14,7 @@ gmsh_jll = "630162c2-fc9b-58b3-9910-8442a8a132e6"
 
 [compat]
 Arpack = "v0.5"
-JLD2 = "0.5.15"
+JLD2 = "0.5.15, 0.6"
 LinearAlgebra = "1.11.0"
 Polyester = "0.7.18"
 SparseArrays = "1.11.0"
