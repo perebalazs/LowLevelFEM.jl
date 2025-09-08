@@ -54,9 +54,10 @@ struct Material
     λ::Float64
     μ::Float64
     κ::Float64
+    A::Float64
     Material() = new()
-    Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ)
+    Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, A) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ, A)
 end
 
 
@@ -117,6 +118,9 @@ struct Problem
         elseif type == :AxiSymmetricHeatConduction
             dim = 2
             pdim = 1
+        elseif type == :Truss
+            dim = 3
+            pdim = 3
         else
             error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`.
             Now problem type = $type ????")
@@ -137,7 +141,7 @@ struct Problem
                 dimTag = dimTags[idm]
                 edim = dimTag[1]
                 etag = dimTag[2]
-                if edim != dim
+                if edim != dim && (type != :Truss || edim != 1)
                     error("Problem: dimension of the problem ($dim) is different than the dimension of finite elements ($edim).")
                 end
                 elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
@@ -520,13 +524,13 @@ Types:
 - `μ`: Float64
 - `κ`: Float64
 """
-function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3)
+function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3, A=1)
     if type != :Hooke &&
         type != :StVenantKirchhoff &&
         type != :NeoHookeCompressible
         error("material: type can be :Hooke, :StVenantKirchhoff or :NeoHookeCompressible. Now type is $type.")
     end
-    return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ)
+    return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, A)
 end
 
 """
@@ -1791,9 +1795,12 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     if q.a == [;;]
         error("showDoFResults: No data")
     end
-    dim = problem.dim
+    edim = problem.dim
+    if problem.type == :Truss
+        edim = 1
+    end
     pdim = problem.pdim
-    pdim = div(size(q.a,1), problem.non) 
+    pdim = div(size(q.a,1), problem.non)
     nodeTags = []
     ##############################################################################
     #if problem.type == :Reynolds || problem.type == :NavierStokes
@@ -1806,7 +1813,7 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
         for ipg in 1:length(problem.material)
             phName = problem.material[ipg].phName
             tag = getTagForPhysicalName(phName)
-            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
+            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
             append!(nodeTags, nT)
         end
     #end #########################################################################
