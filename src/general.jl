@@ -2056,13 +2056,15 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showElementResults(F, comp; name=comp, visible=false, smooth=true, factor=0)
+function showElementResults(F, comp; name=comp, visible=false, smooth=false, factor=0)
     if F.type == :e
         return showStrainResults(F, comp, name=name, visible=visible, smooth=smooth)
     elseif F.type == :s
         return showStressResults(F, comp, name=name, visible=visible, smooth=smooth)
     elseif F isa VectorField && F.A != []
         return showHeatFluxResults(F, comp, name=name, visible=visible, smooth=smooth, factor=factor)
+    elseif F isa ScalarField && F.A != []
+        return showScalarResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
     else
         error("showElementResults: type is '$(F.type)'")
     end
@@ -2265,6 +2267,60 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, fac
                 push!(σcomp, ss)
             end
         end
+        gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
+    end
+
+    if smooth == true
+        gmsh.plugin.setNumber("Smooth", "View", -1)
+        gmsh.plugin.run("Smooth")
+    end
+
+    gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 0)
+    gmsh.view.option.setNumber(SS, "TargetError", -1e-4)
+    gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
+    if visible == false
+        gmsh.view.option.setNumber(SS, "Visible", 0)
+    end
+    gmsh.view.option.setNumber(SS, "ShowTime", 0)
+    if length(t) > 1
+        gmsh.view.option.setNumber(SS, "ShowTime", 1)
+    end
+    gmsh.view.option.setNumber(SS, "DisplacementFactor", factor)
+    #display("$comp..ok")
+    return SS
+end
+
+function showScalarResults(S; name="scalar", visible=false, smooth=false, factor=0)
+    problem = S.model
+    #gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    gmsh.model.setCurrent(problem.name)
+    gmsh.option.setNumber("Mesh.VolumeEdges", 0)
+    dim = problem.dim
+    dim = 1
+    t = S.t
+    #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
+    #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
+    if S.nsteps != length(t)
+        error("showStressResults: number of time steps missmatch ($(S.nsteps) <==> $(length(t))).")
+    end
+    SS = gmsh.view.add(name)
+    if S.A == []
+        error("showHeatFluxResults: No data")
+    end
+    σ = S.A
+    numElem = S.numElem
+    for jj in 1:length(t)
+
+            nc = 1
+            σcomp = []
+            sizehint!(σcomp, length(numElem))
+            for i in 1:length(S.numElem)
+                sc = zeros(div(size(σ[i], 1), dim))
+                for j in 1:(div(size(σ[i], 1), dim))
+                    sc[j] = σ[i][j, jj]
+                end
+                push!(σcomp, sc)
+            end
         gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
     end
 

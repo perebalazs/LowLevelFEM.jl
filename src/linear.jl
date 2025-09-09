@@ -2,7 +2,7 @@ export stiffnessMatrix, nonLinearStiffnessMatrix, massMatrix, dampingMatrix
 export elasticSupportMatrix
 export loadVector
 export applyBoundaryConditions, applyBoundaryConditions!, applyElasticSupport!
-export solveDisplacement, solveStrain, solveStress
+export solveDisplacement, solveStrain, solveStress, solveAxialForce
 export solveEigenModes, solveBucklingModes
 export solveModalAnalysis, solveBuckling
 export initialDisplacement, initialDisplacement!, initialVelocity, initialVelocity!
@@ -30,6 +30,8 @@ K = stiffnessMatrix(problem)
 function stiffnessMatrix(problem; elements=[])
     if problem.type == :AxiSymmetric
         return stiffnessMatrixAXI(problem, elements=elements)
+    elseif problem.type == :Truss
+        return stiffnessMatrixTruss(problem, elements=elements)
     else
         return stiffnessMatrixSolid(problem, elements=elements)
     end
@@ -2318,6 +2320,182 @@ function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=Sc
         sigma = TensorField(σ, [;;], q.t, numElem, nsteps, type, problem)
         return sigma
     end
+end
+
+function solveAxialForce(q::VectorField)
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+    
+    if q.type != :u3D && q.type != :u2D
+        error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStress: q.A != []")
+    end
+
+    type = :i
+    nsteps = q.nsteps
+    σ = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    #if T₀ == 1im
+    #    T₀ = zeros(problem.non)
+    #end
+    #if DoFResults == true
+    #    S1 = zeros(non * 9, nsteps)
+    #    pcs = zeros(Int64, non * dim)
+    #end
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        A = problem.material[ipg].A
+        #α = problem.material[ipg].α
+        #ακ = α * E / ν / (1 - 2ν)
+        dim = 0
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            if edim ≠ 1
+                error("stiffnessMatrixTruss: not 1D elements.")
+            end
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, -1, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                #s0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                #comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                #∇h = reshape(dfun, :, numNodes)
+                #comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                #h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                #pdimT = 1
+                #H = zeros(pdimT * numNodes, pdimT * numNodes)
+                #for j in 1:numNodes
+                #    for k in 1:numNodes
+                #        for l in 1:pdimT
+                #            H[j*pdimT-(pdimT-l), k*pdimT-(pdimT-l)] = h[k, j]
+                #        end
+                #    end
+                #end
+                #invJac = zeros(3, 3numNodes)
+                #∂h = zeros(3, numNodes * numNodes)
+                #B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                #nn1 = zeros(Int, pdimT * numNodes)
+                #r = zeros(numNodes)
+                B1 = [-1 1]
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    #Jac = reshape(jac, 3, :)
+                    #for k in 1:numNodes
+                    #    invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                    #    r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    #end
+                    #∂h .*= 0
+                    #for k in 1:numNodes, l in 1:numNodes
+                    #    ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    #end
+                    #B .*= 0
+                    #if pdim == 2 && rowsOfB == 3
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #    end
+                    #elseif pdim == 3 && rowsOfB == 6
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                    #    end
+                    #elseif pdim == 2 && rowsOfB == 4
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l, k] / r[k]
+                    #    end
+                    #else
+                    #    error("solveStress: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    #end
+                    push!(numElem, elem)
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    #for k in 1:pdimT
+                    #    nn1[k:pdimT:pdimT*numNodes] = pdimT * nnet[j, 1:numNodes] .- (pdimT - k)
+                    #end
+                    s = zeros(numNodes, nsteps) # tensors have nine elements
+                    x1 = ncoord2[nnet[j, 1] * 3 .- 2]
+                    y1 = ncoord2[nnet[j, 1] * 3 .- 1]
+                    z1 = ncoord2[nnet[j, 1] * 3 .- 0]
+                    x2 = ncoord2[nnet[j, 2] * 3 .- 2]
+                    y2 = ncoord2[nnet[j, 2] * 3 .- 1]
+                    z2 = ncoord2[nnet[j, 2] * 3 .- 0]
+                    L = √((x2 - x1)^2 + (y2 - y1)^2 + (z2 - z1)^2)
+                    c1 = (x2 - x1) / L
+                    c2 = (y2 - y1) / L
+                    c3 = (z2 - z1) / L
+                    T = [c1 c2 c3 0 0 0; 0 0 0 c1 c2 c3]
+                    k1 = A * E / L
+                    for k in 1:numNodes
+                        #if rowsOfB == 6 && pdim == 3 && problem.type == :Solid
+                            #H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                            #B1 = B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = k1 * B1 * T * q.a[nn2, kk]
+                                #if T.type != :null
+                                #    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                #end
+                                #if DoFResults == false
+                                    s[k, kk] = s0[1]
+                                #end
+                                #if DoFResults == true
+                                #    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
+                                #end
+                            end
+                    end
+                    #if DoFResults == true
+                    #    pcs[nnet[j,1:numNodes]] .+= 1
+                    #end
+                    #if DoFResults == false
+                        push!(σ, s)
+                    #end
+                end
+            end
+        end
+    end
+    #if DoFResults == true
+    #    for k in 1:9
+    #        for l in 1:non
+    #            S1[k + 9 * l - 9, :] ./= pcs[l]
+    #        end
+    #    end
+    #end
+    #if DoFResults == true
+    #    sigma = TensorField([], S1, q.t, [], nsteps, type, problem)
+    #    return sigma
+    #else
+        sigma = ScalarField(σ, [;;], q.t, numElem, nsteps, type, problem)
+        return sigma
+    #end
 end
 
 """
