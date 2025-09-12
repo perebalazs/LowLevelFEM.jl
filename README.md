@@ -75,6 +75,7 @@ A = (u ∘ ∇ + ∇ ∘ u) / 2
 I = unitTensor(A)
 S = E / (1 + ν) * (A + ν / (1 - 2ν) * trace(A) * I)
 ```
+
 More end-to-end examples are available under [examples](https://github.com/perebalazs/LowLevelFEM.jl/tree/main/examples) and in the [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stable/).
 
 ## Documentation

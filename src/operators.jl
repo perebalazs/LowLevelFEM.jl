@@ -487,7 +487,7 @@ function *(AA::ScalarField, BB::VectorField)
         push!(C, D)
     end
     a = [;;]
-    return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
+    return VectorField(C, a, B.t, num, B.nsteps, BB.type, B.model)
 end
 
 """
@@ -539,7 +539,7 @@ function *(BB::VectorField, AA::ScalarField)
         push!(C, D)
     end
     a = [;;]
-    return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
+    return VectorField(C, a, B.t, num, B.nsteps, BB.type, B.model)
 end
 
 """
@@ -591,7 +591,7 @@ function /(BB::VectorField, AA::ScalarField)
         push!(C, D)
     end
     a = [;;]
-    return VectorField(C, a, B.t, num, B.nsteps, :vector, B.model)
+    return VectorField(C, a, B.t, num, B.nsteps, BB.type, B.model)
 end
 
 function +(A::VectorField, B::VectorField)
@@ -1780,8 +1780,11 @@ function eigen(AA::TensorField)
                 for k in 1:nsteps
                     E = reshape(A.A[i][9j-8:9j, k], 3, 3)
                     f, G = eigen(E, sortby=-)
-                    GG = mapslices(v -> v ./ norm(v), G, dims=1)
-                    D[9j-8:9j, k] = reshape(GG, 9, 1)
+                    #GG = mapslices(v -> v ./ norm(v), G, dims=1)
+                    G[:,1] ./= norm(G[:,1]) > 1e-8 ? norm(G[:,1]) : 1
+                    G[:,2] ./= norm(G[:,2]) > 1e-8 ? norm(G[:,2]) : 1
+                    G[:,3] ./= norm(G[:,3]) > 1e-8 ? norm(G[:,3]) : 1
+                    D[9j-8:9j, k] = reshape(G, 9, 1)
                     h[3j-2:3j, k] = reshape(f, 3, 1)
                 end
             end

@@ -1271,7 +1271,7 @@ function elementsToNodes(S)
     non = problem.non
     if S isa TensorField
         epn = 9
-    elseif S.model.dim == 3 && S isa VectorField
+    elseif (S.model.dim == 3 || S.type == :e3D) && S isa VectorField
         epn = 3
     elseif S.model.dim == 2 && S isa VectorField
         epn = 2

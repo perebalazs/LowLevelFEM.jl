@@ -1,0 +1,86 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <link rel="stylesheet" type="text/css" href="statprofiler.css">
+    <title>StatProfilerHTML.jl: main report</title>
+  </head>
+  <body>
+<div class="report-header">
+  <div class="backlink"><a href="index.html">Report index</a></div>
+  <div class="report-title">StatProfilerHTML.jl report</div>
+  <div class="generated-on">Generated on 2025. szept. 12., péntek, 18:30:18 CEST</div>
+</div>
+
+    <div id="body-content">
+      <object data="clickable_stacks_by_time.svg" width="90%" type="image/svg+xml" style="display: block" id="zoomable_flamegraph">
+        SVG not supported
+      </object>
+      <object data="zoomable_stacks_by_time.svg" width="90%" type="image/svg+xml" style="display: none" id="clickable_flamegraph">
+        SVG not supported
+      </object>
+      <div><a href="#" onclick="switch_flamegraph()">Switch flamegraph</a></div>
+      <br /><br />
+      <table>
+        <caption>Subroutines, sorted by exclusive sample count</caption>
+        <tr>
+          <th>Exclusive</th>
+          <th>Inclusive</th>
+          <th>Subroutine</th>
+        </tr>
+
+        <tr>
+          <td>1 (100.00%)</td>
+          <td>1 (100.00%)</td>
+          <td>
+            <a href="task-jl-ce5dc5fd00a92f85f528-line.html#S-home-perebal-julia-juliaup-julia-1-11-6-0-x64-linux-gnu-share-julia-base-task-jl-poptask-1008">poptask</a>
+          </td>
+        </tr>
+
+        <tr>
+          <td>0</td>
+          <td>1 (100.00%)</td>
+          <td>
+            <a href="task-jl-ce5dc5fd00a92f85f528-line.html#S-home-perebal-julia-juliaup-julia-1-11-6-0-x64-linux-gnu-share-julia-base-task-jl-wait-1017">wait</a>
+          </td>
+        </tr>
+
+        <tr>
+          <td>0</td>
+          <td>1 (100.00%)</td>
+          <td>
+            <a href="task-jl-ce5dc5fd00a92f85f528-line.html#S-home-perebal-julia-juliaup-julia-1-11-6-0-x64-linux-gnu-share-julia-base-task-jl-task_done_hook-664">task_done_hook</a>
+          </td>
+        </tr>
+      </table>
+      <a href="subs.html">All subroutines</a>
+      <br /><br />
+      <table>
+        <caption>Files, sorted by exclusive sample count</caption>
+        <tr>
+          <th>Exclusive</th>
+          <th>Report</th>
+        </tr>
+
+        <tr>
+          <td>1 (100.00%)</td>
+          <td><a href="task-jl-ce5dc5fd00a92f85f528-line.html">/home/perebal/.julia/juliaup/julia-1.11.6+0.x64.linux.gnu/share/julia/base/task.jl</a></td>
+        </tr>
+      </table>
+      <a href="files.html">All files</a>
+    </div>
+    <script>
+function switch_flamegraph() {
+    var clickable = document.getElementById("clickable_flamegraph");
+    var zoomable = document.getElementById("zoomable_flamegraph");
+
+    var t = clickable.style.display;
+    clickable.style.display = zoomable.style.display;
+    zoomable.style.display = t;
+
+    return 0;
+}
+    </script>
+  </body>
+</html>
