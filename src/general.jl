@@ -1406,6 +1406,11 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
     return T(ε, [;;], r.t, numElem, nsteps, type, problem)
 end
 
+function planeToSpace(a::VectorField)
+    if a.type != :v2D
+    end
+end
+
 """
     fieldError(F)
 

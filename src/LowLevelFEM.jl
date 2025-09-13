@@ -17,4 +17,8 @@ include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
 
+if Sys.CPU_THREADS != Threads.nthreads()
+    @warn "Number of threads ≠ logical threads in CPU"
+end
+
 end #module
