@@ -68,7 +68,7 @@ function *(AA::ScalarField, BB::ScalarField)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, num, A.nsteps, :e, A.model)
+    return ScalarField(C, a, A.t, num, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -128,7 +128,7 @@ function /(AA::ScalarField, BB::ScalarField)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, num, A.nsteps, :e, A.model)
+    return ScalarField(C, a, A.t, num, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -317,7 +317,7 @@ function *(AA::ScalarField, b::Number)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
+    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -344,7 +344,7 @@ function *(b::Number, AA::ScalarField)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
+    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 function /(AA::ScalarField, b::Number)
@@ -359,7 +359,7 @@ function /(AA::ScalarField, b::Number)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
+    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 function /(b::Number, AA::ScalarField)
@@ -374,7 +374,7 @@ function /(b::Number, AA::ScalarField)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
+    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 function log(AA::ScalarField)
@@ -396,7 +396,7 @@ function log(AA::ScalarField)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 function sqrt(AA::ScalarField)
@@ -656,7 +656,7 @@ function +(A::VectorField, B::VectorField)
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
-        if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
+        if (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D) || (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D)
             return VectorField([], A.a + B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
@@ -724,7 +724,7 @@ function -(A::VectorField, B::VectorField)
             error("-(A::VectorField, B::VectorField): Operation with type ($(A.type) and $(B.type)) is not supported.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
-        if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
+        if (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D) || (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D)
             return VectorField([], A.a - B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
@@ -740,7 +740,7 @@ end
 
 function *(A::VectorField, b::Number)
     if length(A.A) != 0
-        if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D || true
+        if A.type == :v3D || A.type == :v2D || A.type == :v3D || A.type == :v2D || true
             nsteps = A.nsteps
             C = []
             for i in 1:length(A.A)
@@ -836,7 +836,7 @@ function ⋅(AA::VectorField, BB::VectorField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
     else
         error("*(A::VectorField, B::VectorField): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
     end
@@ -928,7 +928,7 @@ function ×(aa::VectorField, bb::VectorField)
             push!(C, H)
         end
         aa = [;;]
-        return VectorField(C, aa, a.t, a.numElem, a.nsteps, :vector, a.model)
+        return VectorField(C, aa, a.t, a.numElem, a.nsteps, :v3D, a.model)
     else
         error("×(a::VectorField, b::VectorField): a and b are not VectorField(s).")
     end
@@ -960,7 +960,7 @@ function norm(AA::VectorField)
         push!(C, D)
     end
     a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -1116,7 +1116,7 @@ function ⋅(AA::TensorField, BB::TensorField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
     else
         error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
     end
@@ -1363,7 +1363,7 @@ function *(AA::TensorField, b::Number)
     else
         A = AA
     end
-    if A.type == :s || A.type == :e || A.type == :F || true
+    if A.type == :s || A.type == :e || true
         nsteps = A.nsteps
         C = []
         for i in 1:length(A.A)
@@ -1383,7 +1383,7 @@ function *(b::Number, AA::TensorField)
     else
         A = AA
     end
-    if A.type == :s || A.type == :e || A.type == :F || true
+    if A.type == :s || A.type == :e || true
         nsteps = A.nsteps
         C = []
         for i in 1:length(A.A)
@@ -1403,7 +1403,7 @@ function /(AA::TensorField, b::Number)
     else
         A = AA
     end
-    if A.type == :s || A.type == :e || A.type == :F || true
+    if A.type == :s || A.type == :e || true
         C = []
         for i in 1:length(A.A)
             D = A.A[i] / b
@@ -1684,7 +1684,7 @@ function trace(AA::TensorField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
     else
         error("trace(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
     end
@@ -1723,7 +1723,7 @@ function det(AA::TensorField)
             push!(C, D)
         end
         a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :sc, A.model)
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
     else
         error("det(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
     end
@@ -1792,7 +1792,7 @@ function eigen(AA::TensorField)
             push!(c, h)
         end
         a = [;;]
-        return VectorField(c, a, A.t, A.numElem, A.nsteps, :e3D, A.model), TensorField(C, a, A.t, A.numElem, A.nsteps, :Q, A.model)
+        return VectorField(c, a, A.t, A.numElem, A.nsteps, :v3D, A.model), TensorField(C, a, A.t, A.numElem, A.nsteps, :tensor, A.model)
     else
         error("eigen(A::TensorField): A is not a TensorField.")
     end
@@ -1830,7 +1830,7 @@ function log(AA::TensorField)
     else
         A = AA
     end
-    if A.type == :s || A.type == :e || A.type == :F
+    if A.type == :s || A.type == :e
         nsteps = A.nsteps
         C = []
         for i in 1:length(A.A)
@@ -1864,10 +1864,10 @@ function *(A::Union{SystemMatrix,Matrix}, BB::VectorField)
     end
     type = :none
     if B.a != [;;] && B.nsteps == 1
-        if B.type == :u2D
-            type = :f2D
-        elseif B.type == :u3D
-            type = :f3D
+        if B.type == :v2D
+            type = :v2D
+        elseif B.type == :v3D
+            type = :v3D
         elseif B.type == :other
             type = :other
         else
@@ -1888,13 +1888,7 @@ function *(A::Union{SystemMatrix,Matrix}, BB::ScalarField)
     end
     type = :none
     if B.a != [;;] && B.nsteps == 1
-        if B.type == :T
-            type = :qn
-        elseif B.type == :other
-            type = :other
-        else
-            error("*(A::SystemMatrix, B::ScalarField): ")
-        end
+        type = :scalar
         C = A isa Matrix ? A * B.a : A.A * B.a
         return ScalarField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
     else
@@ -1911,13 +1905,7 @@ function \(A::Union{SystemMatrix,Matrix}, BB::ScalarField)
     end
     type = :none
     if B.a != [;;] && B.nsteps == 1
-        if B.type == :qn
-            type = :T
-        elseif B.type == :other
-            type = :other
-        else
-            error("\\(A::SystemMatrix, B::ScalarField): type = $(B.type)")
-        end
+        type = :scalar
         C = A isa Matrix ? A \ B.a : A.A \ B.a
         return ScalarField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
     else
@@ -1933,10 +1921,10 @@ function \(A::Union{SystemMatrix,Matrix}, BB::VectorField)
     end
     type = :none
     if B.a != [;;] && B.nsteps == 1
-        if B.type == :f2D
-            type = :u2D
-        elseif B.type == :f3D
-            type = :u3D
+        if B.type == :v2D
+            type = :v2D
+        elseif B.type == :v3D
+            type = :v3D
         elseif B.type == :other
             type = :other
         else

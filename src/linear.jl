@@ -1517,8 +1517,10 @@ M = massMatrix(problem; lumped=true)
 function massMatrix(problem; lumped=true)
     if problem.type == :Truss
         return massMatrixTruss(problem, lumped=lumped)
-    else
+    elseif Threads.nthreads() == 1 || problem.non < 1e4
         return massMatrixSolid(problem, lumped=lumped)
+    elseif Threads.nthreads() > 1
+        return massMatrixSolidParallel(problem, lumped=lumped)
     end
 end
 
@@ -2489,17 +2491,17 @@ function loadVector(problem, loads)
     end
     type = :null
     if pdim == 3
-        type = :f3D
+        type = :v3D
     elseif pdim == 2
-        type = :f2D
+        type = :v2D
     elseif pdim == 1
-        type = :qn
+        type = :scalar
     else
         error("loadVector: wrong pdim ($pdim).")
     end
-    if type == :f3D || type == :f2D
+    if type == :v3D || type == :v2D
         return VectorField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
-    elseif type == :qn
+    elseif type == :scalar
         return ScalarField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
     end
 end
@@ -2888,10 +2890,10 @@ Types:
 """
 function solveDisplacement(K, f)
     type = :null
-    if f.type == :f3D
-        type = :u3D
-    elseif f.type == :f2D
-        type = :u2D
+    if f.type == :v3D
+        type = :v3D
+    elseif f.type == :v2D
+        type = :v2D
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
@@ -2917,10 +2919,10 @@ function solveDisplacement(problem, load, supp)
     f = loadVector(problem, load)
     applyBoundaryConditions!(K, f, supp)
     type = :null
-    if f.type == :f3D
-        type = :u3D
-    elseif f.type == :f2D
-        type = :u2D
+    if f.type == :v3D
+        type = :v3D
+    elseif f.type == :v2D
+        type = :v2D
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
@@ -2947,10 +2949,10 @@ function solveDisplacement(problem, load, supp, elsupp)
     applyElasticSupport!(K, elsupp)
     applyBoundaryConditions!(K, f, supp)
     type = :null
-    if f.type == :f3D
-        type = :u3D
-    elseif f.type == :f2D
-        type = :u2D
+    if f.type == :v3D
+        type = :v3D
+    elseif f.type == :v2D
+        type = :v2D
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
@@ -2979,7 +2981,7 @@ function solveStrain(q; DoFResults=false)
     if !isa(q, VectorField) 
         error("solveStrain:argument must be a VectorField. Now it is '$(typeof(q))'.")
     end
-    if q.type != :u3D && q.type != :u2D
+    if q.type != :v3D && q.type != :v2D
         error("solveStrain: argument must be a displacement vector. Now it is '$(q.type)'.")
     end
     if q.A != []
@@ -3193,14 +3195,14 @@ Types:
 - `T₀`: ScalarField
 - `S`: TensorField
 """
-function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:T,q.model), DoFResults=false)
+function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model), DoFResults=false)
     problem = q.model
     gmsh.model.setCurrent(problem.name)
     
     if !isa(q, VectorField) 
         error("solveStress:argument must be a VectorField. Now it is '$(typeof(q))'.")
     end
-    if q.type != :u3D && q.type != :u2D
+    if q.type != :v3D && q.type != :v2D
         error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'.")
     end
     if q.A != []
@@ -3457,14 +3459,14 @@ function solveAxialForce(q::VectorField)
     problem = q.model
     gmsh.model.setCurrent(problem.name)
     
-    if q.type != :u3D && q.type != :u2D
+    if q.type != :v3D && q.type != :v2D
         error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'.")
     end
     if q.A != []
         error("solveStress: q.A != []")
     end
 
-    type = :i
+    type = :scalar
     nsteps = q.nsteps
     σ = []
     numElem = Int[]
@@ -3833,7 +3835,7 @@ Types:
 - `uy`: Float64 
 - `uz`: Float64 
 """
-function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im, type=:u)
+function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im)
     pdim = problem.pdim
     dim = problem.dim
     u0 = zeros(problem.non * problem.dim)
@@ -3855,9 +3857,9 @@ function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im, type=:u)
         end
     end
     if pdim == 3
-        type = Symbol(String(type) * "3D")
+        type = :v3D #Symbol(String(type) * "3D")
     elseif pdim == 2
-        type = Symbol(String(type) * "2D")
+        type = :v2D #Symbol(String(type) * "2D")
     else
         error("initialDisplacement: wrong pdim=$pdim")
     end

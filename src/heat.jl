@@ -656,7 +656,7 @@ Types:
 - `thermLoadVec`: VectorField
 """
 #function thermalLoadVector(problem, T; T₀=1im)
-function thermalLoadVector(problem, T; T₀=ScalarField([], zeros(problem.non, 1), [0], [], 1, :T, problem))
+function thermalLoadVector(problem, T; T₀=ScalarField([], zeros(problem.non, 1), [0], [], 1, :scalar, problem))
     if problem.type == :AxiSymmetric
         return thermalLoadVectorAXI(problem, T, T₀)
     else
@@ -791,9 +791,9 @@ function thermalLoadVectorSolid(problem, T, T₀)
         end
     end
     if pdim == 3
-        type = :f3D
+        type = :v3D
     elseif pdim == 2
-        type = :f2D
+        type = :v2D
     end
     return VectorField([], reshape(fT, :, 1), [0], [], 1, type, problem)
 end
@@ -909,7 +909,7 @@ function thermalLoadVectorAXI(problem, T, T₀)
             end
         end
     end
-    return VectorField([], reshape(fT, :, 1), [0], [], 1, :f2D, problem)
+    return VectorField([], reshape(fT, :, 1), [0], [], 1, :v2D, problem)
 end
 
 """
@@ -1064,7 +1064,6 @@ function solveHeatFlux(T; DoFResults=false)
         error("solveStrain: T.A != []")
     end
     nsteps = T.nsteps
-    type = :q
     σ = []
     numElem = Int[]
     dim = problem.dim
@@ -1219,9 +1218,9 @@ function solveHeatFlux(T; DoFResults=false)
         end
     end
     if dim == 3
-        type = Symbol(String(type) * "3D")
+        type = :v3D #Symbol(String(type) * "3D")
     elseif dim == 2
-        type = Symbol(String(type) * "2D")
+        type = :v2D #Symbol(String(type) * "2D")
     end
     if DoFResults == true
         return VectorField([], q1, T.t, [], nsteps, type, problem)
@@ -1255,7 +1254,7 @@ function initialTemperature(problem, name; T=1im)
             T0[nodeTags[i]*dim-(dim-1)] = T
         end
     end
-    return ScalarField([], reshape(T0, :,1), [0], [], 1, :T, problem)
+    return ScalarField([], reshape(T0, :,1), [0], [], 1, :scalar, problem)
 end
 
 """
@@ -1345,7 +1344,7 @@ function FDM(K, C, q, TT0, tₘₐₓ, Δt; ϑ=0.5)
         end
     end
 
-    return ScalarField([], T, t, [], length(t), :T, q.model)
+    return ScalarField([], T, t, [], length(t), :scalar, q.model)
 end
 
 """

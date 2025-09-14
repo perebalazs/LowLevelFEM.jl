@@ -3,7 +3,7 @@ export displacementConstraint, load, elasticSupport
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField
 export constrainedDoFs, freeDoFs
-export elementsToNodes, nodesToElements
+export elementsToNodes, nodesToElements, spaceToPlane, planeToSpace
 export fieldError, resultant
 export rotateNodes
 export showDoFResults, showModalResults, showBucklingResults
@@ -66,7 +66,8 @@ end
 
 Structure containing key data for a problem.
 - Parts of the model with their material constants. Multiple materials can be provided (see `material`).
-- Problem type: `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`, `:HeatConduction`, `:PlaneHeatConduction`, `:AxiSymmetricHeatConduction`.
+- Problem type: `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`, `:HeatConduction`, `:PlaneHeatConduction`, 
+`:AxiSymmetricHeatConduction`, `:Truss`.
   For `:AxiSymmetric`, the symmetry axis is `y`, and the geometry must be drawn in the positive `x` half-plane.
 - Bandwidth optimization using Gmsh's built-in reordering. Options: `:RCMK`, `:Hilbert`, `:Metis`, or `:none` (default).
 - Dimension of the problem, determined by `type`.
@@ -75,6 +76,7 @@ Structure containing key data for a problem.
 - Number of nodes (`non`).
 - Geometry dimension.
 - Problem dimension (e.g., a 3D heat conduction problem is a 1D problem).
+- In case of 2D truss displacements have to be fixed in the third direction.
 
 Types:
 - `materials`: Material
@@ -97,6 +99,11 @@ struct Problem
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non) = new(name, type, dim, pdim, material, thickness, non)
     function Problem(mat; thickness=1, type=:Solid, bandwidth=:none)
+
+        if Sys.CPU_THREADS != Threads.nthreads()
+            @warn "Number of threads ≠ logical threads in CPU."
+        end
+
         if type == :Solid
             dim = 3
             pdim = 3
@@ -579,9 +586,9 @@ function getEigenVectors(A::TensorField)
                 push!(c3, h3)
             end
             a = [;;]
-            return VectorField(c1, a, A.t, A.numElem, A.nsteps, :e3D, A.model), 
-                   VectorField(c2, a, A.t, A.numElem, A.nsteps, :e3D, A.model), 
-                   VectorField(c3, a, A.t, A.numElem, A.nsteps, :e3D, A.model)
+            return VectorField(c1, a, A.t, A.numElem, A.nsteps, :v3D, A.model), 
+                   VectorField(c2, a, A.t, A.numElem, A.nsteps, :v3D, A.model), 
+                   VectorField(c3, a, A.t, A.numElem, A.nsteps, :v3D, A.model)
         else
             error("getEigenVectors(A::TensorField): A is not a TensorField.")
         end
@@ -940,7 +947,7 @@ function scalarField(problem, dataField)
             end
         end
     end
-    return ScalarField([], reshape(field, :, 1), [0], [], 1, :scalarInNodes, problem)
+    return ScalarField([], reshape(field, :, 1), [0], [], 1, :scalar, problem)
 end
 
 """
@@ -969,7 +976,7 @@ qq0 = showDoFResults(qq, :vector)
 
 Here VectorField is defined in nodes.
 """
-function vectorField(problem, dataField; type=:u)
+function vectorField(problem, dataField)
     if !isa(dataField, Vector)
         error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
     end
@@ -1021,9 +1028,9 @@ function vectorField(problem, dataField; type=:u)
         end
     end
     if pdim == 3
-        type = Symbol(String(type) * "3D")
+        type = :v3D #Symbol(String(type) * "3D")
     elseif pdim == 2
-        type = Symbol(String(type) * "2D")
+        type = :v2D #Symbol(String(type) * "2D")
     else
         error("vectorField: dimension is $pdim")
     end
@@ -1271,9 +1278,9 @@ function elementsToNodes(S)
     non = problem.non
     if S isa TensorField
         epn = 9
-    elseif (S.model.dim == 3 || S.type == :e3D) && S isa VectorField
+    elseif (S.type == :v3D || S.model.dim == 3) && S isa VectorField
         epn = 3
-    elseif S.model.dim == 2 && S isa VectorField
+    elseif (S.type ==:v2D || S.model.dim == 2) && S isa VectorField
         epn = 2
     elseif S isa ScalarField #type == :scalar
         epn = 1
@@ -1282,11 +1289,16 @@ function elementsToNodes(S)
     end
     s = zeros(non * epn, nsteps)
     pcs = zeros(Int64, non)
+    display("epn = $epn")
+    display("size of s = $(size(s))")
 
     for e in 1:length(numElem)
+        display("e=$e")
         elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
         for i in 1:length(nodeTags)
-            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][(i-1)*epn+1:i*epn, :]
+            display("size of σ[$(e)] = $(size(σ[e]))")
+            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= 
+            σ[e][(i-1)*epn+1:i*epn, :]
             pcs[nodeTags[i]] += 1
         end
     end
@@ -1407,8 +1419,51 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
 end
 
 function planeToSpace(a::VectorField)
+    problem = a.model
     if a.type != :v2D
+        error("planeToSpace: argument must be a 2D VectorField.")
     end
+    isnodal = true
+    if a.a == [;;]
+        A = elementsToNodes(a)
+        isnodal = false
+    else
+        A = a
+    end
+    non = problem.non
+    nsteps = a.nsteps
+    b = zeros(3non, nsteps)
+    b[1:3:3non, :] = a.a[1:2:2non, :]
+    b[2:3:3non, :] = a.a[2:2:2non, :]
+    c = VectorField([], b, a.t, [], nsteps, :v3D, a.model)
+    if !isnodal
+        c = nodesToElements(c)
+    end
+    return c
+end
+
+function spaceToPlane(a::VectorField)
+    problem = a.model
+    if a.type != :v3D
+        error("planeToSpace: argument must be a 3D VectorField.")
+    end
+    isnodal = true
+    if a.a == [;;]
+        A = elementsToNodes(a)
+        isnodal = false
+    else
+        A = a
+    end
+    non = problem.non
+    nsteps = a.nsteps
+    b = zeros(2non, nsteps)
+    b[1:2:2non, :] = a.a[1:3:3non, :]
+    b[2:2:2non, :] = a.a[2:3:3non, :]
+    c = VectorField([], b, a.t, [], nsteps, :v2D, a.model)
+    if !isnodal
+        c = nodesToElements(c)
+    end
+    return c
 end
 
 """
@@ -1434,9 +1489,9 @@ function fieldError(S)
     non = problem.non
     if type == :s || type == :e
         epn = 9
-    elseif type == :q3D
+    elseif type == :v3D
         epn = 3
-    elseif type == :q2D
+    elseif type == :v2D
         epn = 2
     else
         error("fieldError: type is $type .")
@@ -1467,7 +1522,7 @@ function fieldError(S)
         res[epn * (l - 1) + 1: epn * l, :] /= pcs[l]
         res[epn * (l - 1) + 1: epn * l, :] .= sqrt.(res[epn * (l - 1) + 1: epn * l, :]) # ./ m
     end
-    if type == :q3D || type == :q2D
+    if type == :v3D || type == :v2D
         return VectorField([], res, S.t, [], S.nsteps, type, problem)
     elseif type == :e || type == :s
         return TensorField([], res, S.t, [], S.nsteps, type, problem)
@@ -1930,7 +1985,7 @@ Types:
 - `tag`: Integer
 """
 function showModalResults(Φ::Eigen; name=:modal, visible=false, ff=1)
-    return showDoFResults(VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, Φ.model), :uvec, name=name, visible=visible, ff=ff)
+    return showDoFResults(VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :v3D, Φ.model), :uvec, name=name, visible=visible, ff=ff)
 end
 
 """
@@ -1949,7 +2004,7 @@ Types:
 - `tag`: Integer
 """
 function showBucklingResults(Φ::Eigen; name="buckling", visible=false, ff=2)
-    return showDoFResults(VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :u3D, Φ.model), :uvec, name=name, visible=visible, ff=ff)
+    return showDoFResults(VectorField([], Φ.ϕ, Φ.f, [], length(Φ.f), :v3D, Φ.model), :uvec, name=name, visible=visible, ff=ff)
 end
 
 """

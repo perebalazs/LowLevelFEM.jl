@@ -36,7 +36,7 @@ function nodePositionVector(problem)
             r[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
         end
     end
-    return VectorField([], reshape(r, :,1), [0], [], 1, :u3D, problem)
+    return VectorField([], reshape(r, :,1), [0], [], 1, :v3D, problem)
 end
 
 """
@@ -104,7 +104,6 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
         r = rr
     end
     DoFResults=false
-    type = :F
     
     nsteps = r.nsteps
     ε = []
@@ -323,15 +322,15 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     end
     if DoFResults == true
         if r isa VectorField && nabla == :grad
-            return TensorField([], E1, r.t, [], nsteps, type, problem)
+            return TensorField([], E1, r.t, [], nsteps, :e, problem)
         elseif r isa VectorField && nabla == :div
-            return ScalarField([], E1, r.t, [], nsteps, type, problem)
+            return ScalarField([], E1, r.t, [], nsteps, :scalar, problem)
         elseif r isa VectorField && nabla == :curl
-            return VectorField([], E1, r.t, [], nsteps, type, problem)
+            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
         elseif r isa ScalarField
-            return VectorField([], E1, r.t, [], nsteps, type, problem)
+            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
         elseif r isa TensorField && nabla == :div
-            return VectorField([], E1, r.t, [], nsteps, type, problem)
+            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
         end
     else
         if r isa VectorField && nabla == :grad
@@ -341,13 +340,13 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
             type = :scalar
             return ScalarField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa VectorField && nabla == :curl
-            type = :vector
+            type = :v3D
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa ScalarField
-            type = :vector
+            type = :v3D
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         elseif r isa TensorField && nabla == :div
-            type = :vector
+            type = :v3D
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
         end
     end
@@ -1002,7 +1001,7 @@ function equivalentNodalForce(r::VectorField)
             end
         end
     end
-    return VectorField([], reshape(f, :,1), [0], [], 1, :f3D, problem)
+    return VectorField([], reshape(f, :,1), [0], [], 1, :v3D, problem)
 end
 
 """
@@ -1164,7 +1163,7 @@ function nonFollowerLoadVector(r::VectorField, loads)
             end
         end
     end
-    return VectorField([], reshape(fp, :,1), [0], [], 1, :f3D, problem)
+    return VectorField([], reshape(fp, :,1), [0], [], 1, :v3D, problem)
 end
 
 """
@@ -1533,7 +1532,7 @@ function solveDeformation(problem, load, supp;
         r1 = zeros(length(r0.a), 1)
         r1[:,1] = r[:,n]
     end
-    r1 = VectorField([], r1, 1:size(r1, 2), [], size(r1, 2), :u3D, problem)
+    r1 = VectorField([], r1, 1:size(r1, 2), [], size(r1, 2), :v3D, problem)
     if plotConvergence == true
         return r1, e
     else
