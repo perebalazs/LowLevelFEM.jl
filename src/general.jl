@@ -101,7 +101,7 @@ struct Problem
     function Problem(mat; thickness=1, type=:Solid, bandwidth=:none)
 
         if Sys.CPU_THREADS != Threads.nthreads()
-            @warn "Number of threads ≠ logical threads in CPU."
+            @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
         end
 
         if type == :Solid

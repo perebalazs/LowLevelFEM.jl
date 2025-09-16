@@ -10,6 +10,25 @@ export nodalForce!, nodalAcceleration!
 export largestPeriodTime, smallestPeriodTime, largestEigenValue, smallestEigenValue
 export CMD, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
 
+# linear.jl tetején
+mutable struct SolidWS
+    dH::Matrix{Float64}
+    B::Matrix{Float64}
+    nnet::Vector{Int}
+    K1::Matrix{Float64}
+    nn2::Vector{Int}
+end
+
+function make_ws(dim::Int, numNodes::Int, numIntPoints::Int, rowsOfB::Int, dof_elem::Int)
+    SolidWS(
+        zeros(dim, numNodes*numIntPoints),
+        zeros(rowsOfB*numIntPoints, dof_elem),
+        zeros(Int, numNodes),
+        zeros(dof_elem, dof_elem),
+        zeros(Int, dof_elem)
+    )
+end
+
 """
     stiffnessMatrix(problem)
 
@@ -31,13 +50,15 @@ function stiffnessMatrix(problem; elements=[])
     if problem.type == :AxiSymmetric && Threads.nthreads() == 1
         return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :AxiSymmetric && Threads.nthreads() > 1
-        return stiffnessMatrixAXIParallel(problem, elements=elements)
+        #return stiffnessMatrixAXIParallel(problem, elements=elements)
+        return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :Truss
         return stiffnessMatrixTruss(problem, elements=elements)
     elseif (problem.type != :AxiSymmetric || problem.type != :Truss) && Threads.nthreads() == 1
         return stiffnessMatrixSolid(problem, elements=elements)
     elseif (problem.type != :AxiSymmetric || problem.type != :Truss) && Threads.nthreads() > 1
         return stiffnessMatrixSolidParallel(problem, elements=elements)
+        #return stiffnessMatrixSolid(problem, elements=elements)
     end
 end
 
@@ -77,6 +98,182 @@ end
 end
 
 function stiffnessMatrixSolid(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+
+    # --- előszámítás ---
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+        gmsh.model.mesh.getElements(problem.dim, -1)
+
+    lengthOfIJV = sum([
+        (div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
+        length(elemTags_all[i]) for i in 1:length(elemTags_all)
+    ])
+
+    nn = Vector{Any}()
+    I  = Int[]
+    J  = Int[]
+    V  = Float64[]
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+
+    # --- anyagcsoportonként ---
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim, pdim = problem.dim, problem.pdim
+
+        # anyagmátrix D
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+                1-ν  ν    ν    0            0            0;
+                ν    1-ν  ν    0            0            0;
+                ν    ν    1-ν  0            0            0;
+                0    0    0    (1-2ν)/2     0            0;
+                0    0    0    0            (1-2ν)/2     0;
+                0    0    0    0            0            (1-2ν)/2
+            ]
+            rowsOfB, b = 6, 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * @SMatrix [
+                1   ν   0;
+                ν   1   0;
+                0   0  (1-ν)/2
+            ]
+            rowsOfB, b = 3, problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+                1-ν   ν    0;
+                ν    1-ν   0;
+                0     0   (1-2ν)/2
+            ]
+            rowsOfB, b = 3, 1
+        else
+            error("stiffnessMatrixSolid: dimension=$(problem.dim), type=$(problem.type)")
+        end
+
+        # --- fizikai csoport entitásai ---
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        # --- érintett elemtípusok ---
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x -> push!(types_in_group, x), t)
+        end
+
+        # --- típusonként ---
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
+                gmsh.model.mesh.getElementProperties(et)
+
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order+1))
+            numIntPoints = length(intWeights)
+
+            comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numIntPoints)
+
+            elemTags_global, elemNodeTags_global = gmsh.model.mesh.getElementsByType(et)
+
+            jac_all, det_all, coords_all = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+
+            # tag → globális index map
+            idxmap = Dict{Int,Int}()
+            sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+
+            # --- csoportonként ---
+            for (edim, etag) in dimTags
+                if edim != problem.dim; continue; end
+                elemTags_local, elemNodeTags_local = gmsh.model.mesh.getElementsByType(et, etag)
+                if isempty(elemTags_local); continue; end
+
+                nloc = length(elemTags_local)
+                nnet = zeros(Int, nloc, numNodes)
+
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B  = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                K1 = zeros(pdim*numNodes, pdim*numNodes)
+                nn2 = zeros(Int, pdim*numNodes)
+
+                Iidx = [l for k in 1:pdim*numNodes, l in 1:pdim*numNodes]
+                Jidx = [k for k in 1:pdim*numNodes, l in 1:pdim*numNodes]
+
+                @inbounds for j in 1:nloc
+                    # node-tag-ek
+                    for k in 1:numNodes
+                        nnet[j,k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+
+                    gidx = idxmap[elemTags_local[j]]
+                    jac_slice = view(jac_all, gidx*9*nip + 1 : (gidx+1)*9*nip)
+                    det_slice = view(det_all, gidx*nip + 1   : (gidx+1)*nip)
+
+                    fill!(∂h, 0.0)
+
+                    @inbounds for k in 1:numIntPoints
+                        Jk = SMatrix{3,3}(jac_slice[(k-1)*9+1 : k*9])
+                        invJT = inv(Jk)'
+
+                        for l in 1:numNodes
+                            ∂h[1:dim, (k-1)*numNodes+l] =
+                                invJT[1:dim,1:dim] * ∇h_ref[l*3-2 : l*3-(3-dim), k]
+                        end
+                    end
+
+                    fill!(B, 0.0)
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-2] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = ∂h[3,(k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-1] = ∂h[3,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-2] = ∂h[3,(k-1)*numNodes+l]
+                        end
+                    end
+
+                    fill!(K1, 0.0)
+                    @inbounds for k in 1:numIntPoints
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 .+= B1' * D * B1 * b * det_slice[k] * intWeights[k]
+                    end
+
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] =
+                            pdim * nnet[j,1:numNodes] .- (pdim - k)
+                    end
+
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixSolid0(problem; elements=[])
     gmsh.model.setCurrent(problem.name)
 
     # Előszámítás: felső becslés I,J,V hosszára
@@ -245,10 +442,13 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
 
     gmsh.model.setCurrent(problem.name)
 
+    # Előszámítás I,J,V méretére
     elemTypes_all, elemTags_all, elemNodeTags_all =
         gmsh.model.mesh.getElements(problem.dim, -1)
-    lengthOfIJV = sum([(div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
-                       length(elemTags_all[i]) for i in 1:length(elemTags_all)])
+    lengthOfIJV = sum([
+        (div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
+        length(elemTags_all[i]) for i in 1:length(elemTags_all)
+    ])
 
     I  = Int[]
     J  = Int[]
@@ -257,16 +457,16 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
     sizehint!(J, lengthOfIJV)
     sizehint!(V, lengthOfIJV)
 
+    # Anyagcsoportonként
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
         E = problem.material[ipg].E
         ν = problem.material[ipg].ν
-        dim  = problem.dim
-        pdim = problem.pdim
+        dim, pdim = problem.dim, problem.pdim
 
         # anyagmátrix
         if problem.dim == 3 && problem.type == :Solid
-            D = (E / ((1+ν)*(1-2ν))) * @SMatrix [
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
                 1-ν  ν    ν    0            0            0;
                 ν    1-ν  ν    0            0            0;
                 ν    ν    1-ν  0            0            0;
@@ -274,26 +474,23 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
                 0    0    0    0            (1-2ν)/2     0;
                 0    0    0    0            0            (1-2ν)/2
             ]
-            rowsOfB = 6
-            b = 1
+            rowsOfB, b = 6, 1
         elseif problem.dim == 2 && problem.type == :PlaneStress
-            D = (E / (1-ν^2)) * @SMatrix [
+            D = E / (1 - ν^2) * @SMatrix [
                 1   ν   0;
                 ν   1   0;
                 0   0  (1-ν)/2
             ]
-            rowsOfB = 3
-            b = problem.thickness
+            rowsOfB, b = 3, problem.thickness
         elseif problem.dim == 2 && problem.type == :PlaneStrain
-            D = (E / ((1+ν)*(1-2ν))) * @SMatrix [
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
                 1-ν   ν    0;
                 ν    1-ν   0;
                 0     0   (1-2ν)/2
             ]
-            rowsOfB = 3
-            b = 1
+            rowsOfB, b = 3, 1
         else
-            error("stiffnessMatrixSolid: dimension=$(problem.dim), type=$(problem.type)")
+            error("stiffnessMatrixSolidParallel: dimension=$(problem.dim), type=$(problem.type)")
         end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
@@ -302,7 +499,7 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
         types_in_group = Set{Int}()
         for (edim, etag) in dimTags
             t, _, _ = gmsh.model.mesh.getElements(edim, etag)
-            foreach(x->push!(types_in_group, x), t)
+            foreach(x -> push!(types_in_group, x), t)
         end
 
         for et in types_in_group
@@ -317,15 +514,20 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
                 gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
             ∇h_ref = reshape(dfun, :, numIntPoints)
 
-            elemTags_global, elemNodeTags_global = gmsh.model.mesh.getElementsByType(et)
-            jac_all, det_all, coords_all = gmsh.model.mesh.getJacobians(et, intPoints)
+            elemTags_global, elemNodeTags_global =
+                gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, coords_all =
+                gmsh.model.mesh.getJacobians(et, intPoints)
             nip = length(det_all) ÷ length(elemTags_global)
 
+            # gyors tag→index map
             idxmap = Dict{Int,Int}()
-            for (gi, gtag) in enumerate(elemTags_global)
-                idxmap[gtag] = gi-1
+            sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
             end
 
+            # csoportonként
             for (edim, etag) in dimTags
                 if edim != problem.dim; continue; end
                 elemTags_local, elemNodeTags_local =
@@ -333,9 +535,9 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
                 if isempty(elemTags_local); continue; end
 
                 nloc     = length(elemTags_local)
-                dof_elem = pdim*numNodes
+                dof_elem = pdim * numNodes
 
-                # szálankénti pufferek
+                # szálankénti puffer
                 nt  = Threads.nthreads()
                 Is  = [Int[] for _ in 1:nt]
                 Js  = [Int[] for _ in 1:nt]
@@ -349,41 +551,31 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
                 Iidx = [l for k in 1:dof_elem, l in 1:dof_elem]
                 Jidx = [k for k in 1:dof_elem, l in 1:dof_elem]
 
-                # workspace: NamedTuple, benne mutable mezők
-                function make_workspace()
-                    (
-                        dH  = zeros(dim, numNodes*numIntPoints),
-                        B   = zeros(rowsOfB*numIntPoints, dof_elem),
-                        nnet= zeros(Int, numNodes),
-                        K1  = MMatrix{dof_elem,dof_elem,Float64}(undef),
-                        nn2 = MVector{dof_elem,Int}(undef),
-                    )
-                end
-                W = [make_workspace() for _ in 1:nt]
+                # workspace-ek létrehozása
+                W = [make_ws(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
 
                 @batch per=thread for j in 1:nloc
                     tid = Threads.threadid()
                     w   = W[tid]
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
 
-                    # kinullázás minden elem előtt
                     fill!(w.K1, 0.0)
                     fill!(w.nn2, 0)
 
                     # node-tag-ek
-                    @inbounds for k in 1:numNodes
+                    for k in 1:numNodes
                         w.nnet[k] = elemNodeTags_local[(j-1)*numNodes+k]
                     end
 
                     # globális index + jac szelet
                     gidx      = idxmap[elemTags_local[j]]
-                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
-                    det_slice = @view det_all[gidx*nip + 1   : (gidx+1)*nip]
+                    jac_slice = view(jac_all, gidx*9*nip + 1 : (gidx+1)*9*nip)
+                    det_slice = view(det_all, gidx*nip + 1   : (gidx+1)*nip)
 
                     fill!(w.dH, 0.0)
-                    @inbounds for k in 1:numIntPoints
+                    for k in 1:numIntPoints
                         Jk    = SMatrix{3,3,Float64}(jac_slice[(k-1)*9+1 : k*9])
-                        invJT = inv(Jk)'   # vagy inv3x3_fast(Jk)'
+                        invJT = inv(Jk)'
 
                         for l in 1:numNodes
                             w.dH[1:dim, (k-1)*numNodes+l] =
@@ -393,14 +585,14 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
 
                     fill!(w.B, 0.0)
                     if dim == 2 && rowsOfB == 3
-                        @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                        for k in 1:numIntPoints, l in 1:numNodes
                             w.B[k*rowsOfB-0, l*pdim-0] = w.dH[1,(k-1)*numNodes+l]
                             w.B[k*rowsOfB-2, l*pdim-1] = w.dH[1,(k-1)*numNodes+l]
                             w.B[k*rowsOfB-0, l*pdim-1] = w.dH[2,(k-1)*numNodes+l]
                             w.B[k*rowsOfB-1, l*pdim-0] = w.dH[2,(k-1)*numNodes+l]
                         end
                     elseif dim == 3 && rowsOfB == 6
-                        @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                        for k in 1:numIntPoints, l in 1:numNodes
                             w.B[k*rowsOfB-5, l*pdim-2] = w.dH[1,(k-1)*numNodes+l]
                             w.B[k*rowsOfB-2, l*pdim-1] = w.dH[1,(k-1)*numNodes+l]
                             w.B[k*rowsOfB-0, l*pdim-0] = w.dH[1,(k-1)*numNodes+l]
@@ -411,24 +603,21 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
                             w.B[k*rowsOfB-1, l*pdim-1] = w.dH[3,(k-1)*numNodes+l]
                             w.B[k*rowsOfB-0, l*pdim-2] = w.dH[3,(k-1)*numNodes+l]
                         end
-                    else
-                        error("rowsOfB=$rowsOfB, dim=$dim nem támogatott")
                     end
 
-                    @inbounds for k in 1:numIntPoints
-                        B1 = SMatrix{rowsOfB,dof_elem,Float64}(w.B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dof_elem])
-                        G = B1' * D * B1 * b * det_slice[k] * intWeights[k]
-                        w.K1 .+= G
+                    for k in 1:numIntPoints
+                        B1 = view(w.B, k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dof_elem)
+                        w.K1 .+= B1' * D * B1 * b * det_slice[k] * intWeights[k]
                     end
 
-                    @inbounds for c in 1:pdim
+                    for c in 1:pdim
                         w.nn2[c:pdim:dof_elem] = pdim .* w.nnet .- (pdim - c)
                     end
 
                     append!(Iᵗ, w.nn2[Iidx[:]])
                     append!(Jᵗ, w.nn2[Jidx[:]])
                     append!(Vᵗ, w.K1[:])
-                end # @batch
+                end
 
                 append!(I, vcat(Is...))
                 append!(J, vcat(Js...))
@@ -1520,7 +1709,8 @@ function massMatrix(problem; lumped=true)
     elseif Threads.nthreads() == 1 || problem.non < 1e4
         return massMatrixSolid(problem, lumped=lumped)
     elseif Threads.nthreads() > 1
-        return massMatrixSolidParallel(problem, lumped=lumped)
+        #return massMatrixSolidParallel(problem, lumped=lumped)
+        return massMatrixSolid(problem, lumped=lumped)
     end
 end
 
