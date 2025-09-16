@@ -1289,14 +1289,14 @@ function elementsToNodes(S)
     end
     s = zeros(non * epn, nsteps)
     pcs = zeros(Int64, non)
-    display("epn = $epn")
-    display("size of s = $(size(s))")
+    #display("epn = $epn")
+    #display("size of s = $(size(s))")
 
     for e in 1:length(numElem)
-        display("e=$e")
+        #display("e=$e")
         elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
         for i in 1:length(nodeTags)
-            display("size of σ[$(e)] = $(size(σ[e]))")
+            #display("size of σ[$(e)] = $(size(σ[e]))")
             s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= 
             σ[e][(i-1)*epn+1:i*epn, :]
             pcs[nodeTags[i]] += 1
@@ -1447,23 +1447,24 @@ function spaceToPlane(a::VectorField)
     if a.type != :v3D
         error("planeToSpace: argument must be a 3D VectorField.")
     end
-    isnodal = true
+    #isnodal = true
     if a.a == [;;]
-        A = elementsToNodes(a)
-        isnodal = false
+        b = []
+        for i in 1:length(a.numElem)
+            B = zeros(length(a.A[i]) ÷ 3 * 2, a.nsteps)
+            B[1:2:length(B), :] .= a.A[i][1:3:length(a.A[i]), :]
+            B[2:2:length(B), :] .= a.A[i][2:3:length(a.A[i]), :]
+            push!(b, B)
+        end
+        return VectorField(b, [;;], a.t, a.numElem, a.nsteps, :v2D, a.model)
     else
-        A = a
+        non = problem.non
+        nsteps = a.nsteps
+        b = zeros(2non, nsteps)
+        b[1:2:2non, :] = a.a[1:3:3non, :]
+        b[2:2:2non, :] = a.a[2:3:3non, :]
+        return VectorField([], b, a.t, [], nsteps, :v2D, a.model)
     end
-    non = problem.non
-    nsteps = a.nsteps
-    b = zeros(2non, nsteps)
-    b[1:2:2non, :] = a.a[1:3:3non, :]
-    b[2:2:2non, :] = a.a[2:3:3non, :]
-    c = VectorField([], b, a.t, [], nsteps, :v2D, a.model)
-    if !isnodal
-        c = nodesToElements(c)
-    end
-    return c
 end
 
 """
