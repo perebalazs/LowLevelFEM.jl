@@ -1477,6 +1477,7 @@ return: VectorField
 # Examples
 ```julia
 V3D = expandTo3D(V2D)
+```
 """
 function expandTo3D(a::VectorField)
     problem = a.model
@@ -1512,6 +1513,7 @@ return: VectorField
 # Examples
 ```julia
 V2D = expandTo3D(V3D)
+```
 """
 function projectTo2D(a::VectorField)
     problem = a.model

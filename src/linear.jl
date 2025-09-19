@@ -4074,6 +4074,7 @@ the axial force in a truss element.
 ```julia
 u = solveDisplacement(problem, [loads], [supports])  # VectorField of nodal displacements
 N = solveAxialForce(u)                               # ScalarField of axial element forces
+```
 """
 function solveAxialForce(q::VectorField)
     problem = q.model
