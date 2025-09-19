@@ -1,7 +1,7 @@
 export Problem, material, getEigenVectors, getEigenValues
 export displacementConstraint, load, elasticSupport
 export temperatureConstraint, heatFlux, heatSource, heatConvection
-export field, scalarField, vectorField, tensorField
+export field, scalarField, vectorField, tensorField, ScalarField
 export constrainedDoFs, freeDoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant
@@ -283,7 +283,7 @@ struct ScalarField <: AbstractField
         end
         gmsh.model.setCurrent(problem.name)
         
-        type = :scalarInElements
+        type = :scalar
         nsteps = 1
         A = []
         numElem = Int[]
@@ -315,7 +315,7 @@ struct ScalarField <: AbstractField
                                 else
                                     ff = f
                                 end
-                                sc1[k, 1] = f
+                                sc1[k, 1] = ff
                             end
                         end
                         push!(A, sc1)
@@ -324,7 +324,7 @@ struct ScalarField <: AbstractField
             end
         end
         a = [;;]
-        t = []
+        t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
     end
 end
@@ -400,6 +400,19 @@ function copy(A::AbstractField)
     f = A.type
     g = A.model
     return T(a, b, c, d, e, f, g)
+end
+
+"""
+    Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
+
+Internal function to display `ScalarField`, `VectorField` and `TensorField` as a `Matrix{Float64}` or `Vector{Matrix{Float64}}`.
+"""
+function Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
+    if isNodal(M)
+        display(M.a)
+    else
+        display(M.A)
+    end
 end
 
 """
@@ -1506,7 +1519,7 @@ end
 """
     projectTo2D(v3D::VectorField)
 
-Project a 3D vector field into 2D by adding a zero z-component.
+Project a 3D vector field onto the xy-plane by discarding the z-component.
 
 return: VectorField
 
@@ -2043,6 +2056,18 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     return uvec
 end
 
+function showDoFResults(q; name=q.type, visible=false, ff = 0, factor=0)
+    if q isa ScalarField
+        showDoFResults(q, :scalar, name=name, visible=visible, factor=factor)
+    elseif q isa VectorField
+        showDoFResults(q, :vector, name=name, visible=visible, factor=factor)
+    elseif q isa TensorField
+        showDoFResults(q, :tensor, name=name, visible=visible, factor=factor)
+    else
+        error("showDoFResults: argument must be a ScalarField, VectorField or TensorField.")
+    end
+end
+
 """
     showModalResults(Φ, name=..., visible=...)
 
@@ -2197,10 +2222,40 @@ function showElementResults(F, comp; name=comp, visible=false, smooth=false, fac
         return showStressResults(F, comp, name=name, visible=visible, smooth=smooth)
     elseif F isa VectorField && F.A != []
         return showHeatFluxResults(F, comp, name=name, visible=visible, smooth=smooth, factor=factor)
-    elseif F isa ScalarField && F.A != []
+    elseif F isa ScalarField && isElementwise(F)
         return showScalarResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
+    elseif F isa ScalarField && isNodal(F)
+        return showDoFResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
     else
         error("showElementResults: type is '$(F.type)'")
+    end
+end
+
+function showElementResults(q; name=q.type, visible=false, smooth=false, ff = 0, factor=0)
+    if q isa ScalarField
+        showElementResults(q, :scalar, name=name, visible=visible, smooth=smooth)
+    elseif q isa VectorField
+        showElementResults(q, :vector, name=name, visible=visible, smooth=smooth, factor=factor)
+    elseif q isa TensorField
+        showElementResults(q, :tensor, name=name, visible=visible, smooth=smooth)
+    else
+        error("showElementResults: argument must be a ScalarField, VectorField or TensorField.")
+    end
+end
+
+function showStressResults(q; name=q.type, visible=false, ff = 0, factor=0)
+    if q isa TensorField
+        showStressResults(q, :s, name=name, visible=visible, smooth=smooth)
+    else
+        error("showStressResults: argument must be a TensorField.")
+    end
+end
+
+function showStrainResults(q; name=q.type, visible=false, ff = 0, factor=0)
+    if q isa TensorField
+        showStrainResults(q, :e, name=name, visible=visible, smooth=smooth)
+    else
+        error("showStrainResults: argument must be a TensorField.")
     end
 end
 
