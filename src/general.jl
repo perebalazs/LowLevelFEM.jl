@@ -287,6 +287,7 @@ struct ScalarField <: AbstractField
         nsteps = 1
         A = []
         numElem = Int[]
+        ff = 0
         pdim = 1
         for i in 1:length(dataField)
             phName, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
@@ -299,8 +300,8 @@ struct ScalarField <: AbstractField
                 for i in 1:length(elemTypes)
                     et = elemTypes[i]
                     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                    sc1 = zeros(numNodes, nsteps)
                     for j in 1:length(elemTags[i])
+                        sc1 = zeros(numNodes, nsteps)
                         elem = elemTags[i][j]
                         push!(numElem, elem)
                         for k in 1:numNodes
@@ -1311,13 +1312,12 @@ function elementsToNodes(S)
         #display("nodeTags = $nodeTags")
         for i in 1:length(nodeTags)
             #display("size of σ[$(e)] = $(size(σ[e]))")
-            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= 
-            σ[e][(i-1)*epn+1:i*epn, :]
+            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][(i-1)*epn+1:i*epn, :]
             pcs[nodeTags[i]] += 1
         end
     end
     for l in 1:non
-        s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l]
+        s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l] == 0 ? 1 : pcs[l]
     end
     return T([], s, S.t, [], S.nsteps, type, problem)
 end
@@ -1366,6 +1366,9 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
         if problem.dim == 3 && problem.type == :Solid
             dim = 3
             rowsOfH = 3
+        elseif problem.dim == 3 && problem.type == :Truss
+            dim = 3
+            #rowsOfH = 3
         elseif problem.dim == 2 && problem.type == :PlaneStress
             dim = 2
             rowsOfH = 2
@@ -1452,7 +1455,7 @@ function isNodal(a::Union{ScalarField,VectorField,TensorField})
     elseif a.a == [;;] && a.A != []
         return false
     else
-        error("isNodal: internal error.")
+        error("isNodal: Scalar field is empty.")
     end
 end
 

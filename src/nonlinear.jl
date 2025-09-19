@@ -30,7 +30,7 @@ function nodePositionVector(problem)
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, -1, true, false)
             r[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             r[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             r[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]

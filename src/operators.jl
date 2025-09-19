@@ -55,8 +55,9 @@ function *(AA::ScalarField, BB::ScalarField)
     D = []
     for i in eachindex(sec)
         n = length(B.A[i])
+        D = zeros(n, nsteps)
         if n != sz
-            D = zeros(n, nsteps)
+            #D = zeros(n, nsteps)
             sz = n
         end
         for j in 1:n
