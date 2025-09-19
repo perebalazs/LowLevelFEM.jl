@@ -3,7 +3,7 @@ export displacementConstraint, load, elasticSupport
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField
 export constrainedDoFs, freeDoFs
-export elementsToNodes, nodesToElements, spaceToPlane, planeToSpace
+export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant
 export rotateNodes
 export showDoFResults, showModalResults, showBucklingResults
@@ -99,11 +99,11 @@ struct Problem
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non) = new(name, type, dim, pdim, material, thickness, non)
     function Problem(mat; thickness=1, type=:Solid, bandwidth=:none)
-
+        
         if Sys.CPU_THREADS != Threads.nthreads()
             @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
         end
-
+        
         if type == :Solid
             dim = 3
             pdim = 3
@@ -138,7 +138,7 @@ struct Problem
         name = gmsh.model.getCurrent()
         gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
         gmsh.option.setString("View.Format", "%.6g")
-
+        
         material = mat
         elemTags = []
         for ipg in 1:length(material)
@@ -153,20 +153,20 @@ struct Problem
                 end
                 elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
                 for i in 1:length(elementTags)
-		    if length(elementTags[i]) == 0
-		        error("Problem: No mesh in model '$name'.")
-		    end
+                    if length(elementTags[i]) == 0
+                        error("Problem: No mesh in model '$name'.")
+                    end
                     for j in 1:length(elementTags[i])
                         push!(elemTags, elementTags[i][j])
                     end
                 end
             end
         end
-
+        
         if bandwidth != :RCMK && bandwidth != :Hilbert && bandwidth != :Metis && bandwidth != :none
             error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
         end
-
+        
         method = bandwidth == :none ? :RCMK : bandwidth
         oldTags, newTags = gmsh.model.mesh.computeRenumbering(method, elemTags)
         if bandwidth == :none
@@ -175,7 +175,7 @@ struct Problem
             newTags[permOldTags] = sortNewTags
         end
         gmsh.model.mesh.renumberNodes(oldTags, newTags)
-
+        
         non = length(oldTags)
         return new(name, type, dim, pdim, material, thickness, non)
     end
@@ -282,7 +282,7 @@ struct ScalarField <: AbstractField
             error("ScalarField: dataField are not arranged in a vector. Put them in [...]")
         end
         gmsh.model.setCurrent(problem.name)
-
+        
         type = :scalarInElements
         nsteps = 1
         A = []
@@ -391,7 +391,7 @@ end
 
 function copy(A::AbstractField)
     T = typeof(A)
-
+    
     a = copy(A.A)
     b = copy(A.a)
     c = copy(A.t)
@@ -587,8 +587,8 @@ function getEigenVectors(A::TensorField)
             end
             a = [;;]
             return VectorField(c1, a, A.t, A.numElem, A.nsteps, :v3D, A.model), 
-                   VectorField(c2, a, A.t, A.numElem, A.nsteps, :v3D, A.model), 
-                   VectorField(c3, a, A.t, A.numElem, A.nsteps, :v3D, A.model)
+            VectorField(c2, a, A.t, A.numElem, A.nsteps, :v3D, A.model), 
+            VectorField(c3, a, A.t, A.numElem, A.nsteps, :v3D, A.model)
         else
             error("getEigenVectors(A::TensorField): A is not a TensorField.")
         end
@@ -644,8 +644,8 @@ function getEigenValues(A::VectorField)
             end
             a = [;;]
             return ScalarField(c1, a, A.t, A.numElem, A.nsteps, :scalar, A.model), 
-                   ScalarField(c2, a, A.t, A.numElem, A.nsteps, :scalar, A.model), 
-                   ScalarField(c3, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
+            ScalarField(c2, a, A.t, A.numElem, A.nsteps, :scalar, A.model), 
+            ScalarField(c3, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
         else
             error("getEigenValues(A::VectorField): A is not a VectorField.")
         end
@@ -925,7 +925,7 @@ function scalarField(problem, dataField)
     pdim = 1
     non = problem.non
     field = zeros(non)
-
+    
     for i in 1:length(dataField)
         name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
         phg = getTagForPhysicalName(name)
@@ -984,7 +984,7 @@ function vectorField(problem, dataField)
     pdim = problem.dim
     non = problem.non
     field = zeros(non * pdim)
-
+    
     for i in 1:length(dataField)
         name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
         phg = getTagForPhysicalName(name)
@@ -1071,7 +1071,7 @@ function tensorField(problem, dataField; type=:e)
     pdim = 9
     non = problem.non
     field = zeros(non * pdim)
-
+    
     for i in 1:length(dataField)
         name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
         phg = getTagForPhysicalName(name)
@@ -1204,7 +1204,7 @@ function constrainedDoFs(problem, supports)
     pdim = problem.pdim
     #dof = non * pdim
     cdofs = []
-
+    
     for i in 1:length(supports)
         name, ux, uy, uz = supports[i]
         phg = getTagForPhysicalName(name)
@@ -1228,7 +1228,7 @@ function constrainedDoFs(problem, supports)
         end
         cdofs = cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ
     end
-
+    
     return cdofs
 end
 
@@ -1266,7 +1266,7 @@ Types:
 function elementsToNodes(S)
     problem = S.model
     gmsh.model.setCurrent(problem.name)
-
+    
     if S.a != [;;]
         return S
     end
@@ -1291,10 +1291,11 @@ function elementsToNodes(S)
     pcs = zeros(Int64, non)
     #display("epn = $epn")
     #display("size of s = $(size(s))")
-
+    
     for e in 1:length(numElem)
         #display("e=$e")
         elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
+        #display("nodeTags = $nodeTags")
         for i in 1:length(nodeTags)
             #display("size of σ[$(e)] = $(size(σ[e]))")
             s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= 
@@ -1323,7 +1324,7 @@ Types:
 function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
     problem = r.model
     gmsh.model.setCurrent(problem.name)
-
+    
     if r.A != []
         return r
     end
@@ -1344,7 +1345,7 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
     dim = problem.dim
     pdim = problem.pdim
     non = problem.non
-
+    
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
         #ν = problem.material[ipg].ν
@@ -1364,7 +1365,7 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
         else
             error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type).")
         end
-
+        
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
         for idm in 1:length(dimTags)
             dimTag = dimTags[idm]
@@ -1418,36 +1419,105 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
     return T(ε, [;;], r.t, numElem, nsteps, type, problem)
 end
 
-function planeToSpace(a::VectorField)
+"""
+    isNodal(field)
+
+Check if a given field is defined at nodes (nodal quantity).
+
+Nodal quantities are associated with mesh nodes, for example
+displacements, nodal forces, or nodal temperatures.
+
+# Examples
+```julia
+isNodal(displacement_field)   # returns true
+isNodal(strain_field)         # returns false
+```
+"""
+function isNodal(a::Union{ScalarField,VectorField,TensorField})
+    if a.a != [;;] && a.A == []
+        return true
+    elseif a.a == [;;] && a.A != []
+        return false
+    else
+        error("isNodal: internal error.")
+    end
+end
+
+"""
+isElementwise(field)
+
+Check if a given field is defined per element (elementwise quantity).
+
+Elementwise quantities are associated with finite elements as a whole,
+for example stresses, strains, or energy densities evaluated inside elements.
+
+Examples
+```julia
+isElementwise(displacement_field)   # returns false
+isElementwise(strain_field)         # returns true
+```
+"""
+function isElementwise(a::Union{ScalarField,VectorField,TensorField})
+    if a.a == [;;] && a.A != []
+        return true
+    elseif a.a != [;;] && a.A == []
+        return false
+    else
+        error("isElementwise: internal error.")
+    end
+end
+
+"""
+    expandTo3D(v2D::VectorField)
+
+Expand a 2D vector field into 3D by adding a zero z-component.
+
+return: VectorField
+
+# Examples
+```julia
+V3D = expandTo3D(V2D)
+"""
+function expandTo3D(a::VectorField)
     problem = a.model
     if a.type != :v2D
         error("planeToSpace: argument must be a 2D VectorField.")
     end
-    isnodal = true
     if a.a == [;;]
-        A = elementsToNodes(a)
-        isnodal = false
+        b = []
+        for i in 1:length(a.numElem)
+            B = zeros(length(a.A[i]) ÷ 2 * 3, a.nsteps)
+            B[1:3:length(B), :] .= a.A[i][1:2:length(a.A[i]), :]
+            B[2:3:length(B), :] .= a.A[i][2:2:length(a.A[i]), :]
+            push!(b, B)
+        end
+        return VectorField(b, [;;], a.t, a.numElem, a.nsteps, :v3D, a.model)
     else
-        A = a
+        non = problem.non
+        nsteps = a.nsteps
+        b = zeros(3non, nsteps)
+        b[1:3:3non, :] = a.a[1:2:2non, :]
+        b[2:3:3non, :] = a.a[2:2:2non, :]
+        return VectorField([], b, a.t, [], nsteps, :v3D, a.model)
     end
-    non = problem.non
-    nsteps = a.nsteps
-    b = zeros(3non, nsteps)
-    b[1:3:3non, :] = a.a[1:2:2non, :]
-    b[2:3:3non, :] = a.a[2:2:2non, :]
-    c = VectorField([], b, a.t, [], nsteps, :v3D, a.model)
-    if !isnodal
-        c = nodesToElements(c)
-    end
-    return c
 end
 
-function spaceToPlane(a::VectorField)
+"""
+    projectTo2D(v3D::VectorField)
+
+Project a 3D vector field into 2D by adding a zero z-component.
+
+return: VectorField
+
+# Examples
+```julia
+V2D = expandTo3D(V3D)
+"""
+function projectTo2D(a::VectorField)
     problem = a.model
     if a.type != :v3D
         error("planeToSpace: argument must be a 3D VectorField.")
     end
-    #isnodal = true
     if a.a == [;;]
         b = []
         for i in 1:length(a.numElem)
@@ -1482,7 +1552,7 @@ Types:
 function fieldError(S)
     problem = S.model
     gmsh.model.setCurrent(problem.name)
-
+    
     type = S.type
     nsteps = S.nsteps
     numElem = S.numElem
@@ -1501,7 +1571,7 @@ function fieldError(S)
     res = zeros(non * epn, nsteps)
     #m = zeros(nsteps)
     pcs = zeros(Int64, non)
-
+    
     for e in 1:length(numElem)
         elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
         for i in 1:length(nodeTags)
@@ -1570,7 +1640,7 @@ function resultant(problem, field, phName; grad=false, component=:x, offsetX=0, 
     if problem.type == :NavierStokes
         dim = problem.pdim + 1
     else
-	dim = problem.pdim
+        dim = problem.pdim
     end
     axiSymmetric = false
     if problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction
@@ -1673,7 +1743,7 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
                         Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
                     elseif DIM == 3 && dim == 0
                         Ja = 1
-                    ############ 2D #######################################################
+                        ############ 2D #######################################################
                     elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
                         Ja = jacDet[j] * b
                     elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
@@ -1684,7 +1754,7 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
                         Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
                     elseif DIM == 2 && dim == 0
                         Ja = 1
-                    ############ 1D #######################################################
+                        ############ 1D #######################################################
                     elseif DIM == 1 && dim == 1
                         Ja = (Jac[1, 3*j-2]) * b
                     else
@@ -1752,7 +1822,7 @@ function rotateNodes(problem, phName, CoordSys)
         e2 ./= √(dot(e2, e2))
         e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
         T1 = [e1 e2 e3]
-
+        
         if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1 || CoordSys.i1[3] == 1 || CoordSys.i2[1] == 1 || CoordSys.i2[2] == 1 || CoordSys.i2[3] == 1
             for i in 1:length(nodeTags)
                 x = coord[i * 3 - 2]
@@ -1791,7 +1861,7 @@ function rotateNodes(problem, phName, CoordSys)
         e1 ./= √(dot(e1, e1))
         e2 = [-e1[2], e1[1]]
         T1 = [e1 e2]
-
+        
         if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1
             for i in 1:length(nodeTags)
                 x = coord[i * 3 - 2]
@@ -1850,6 +1920,7 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     t = q.t
+    #display(q)
     if q.a == [;;]
         q = elementsToNodes(q)
     end
@@ -1871,14 +1942,14 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     #    append!(nodeTags, nT)
     ##############################################################################
     #else #########################################################################
-        for ipg in 1:length(problem.material)
-            phName = problem.material[ipg].phName
-            tag = getTagForPhysicalName(phName)
-            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
-            append!(nodeTags, nT)
-        end
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        tag = getTagForPhysicalName(phName)
+        nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
+        append!(nodeTags, nT)
+    end
     #end #########################################################################
-
+    
     #nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
     non = length(nodeTags)
     uvec = gmsh.view.add(name)
@@ -1945,7 +2016,7 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
         end
         gmsh.view.addHomogeneousModelData(uvec, j-1, problem.name, "NodeData", nodeTags, u, t[j], nc)
     end
-
+    
     gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
     if ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 1)
@@ -2048,7 +2119,7 @@ function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
     ε = E.A
     numElem = E.numElem
     for jj in 1:length(t)
-
+        
         k = 1im
         if comp == :e
             εcomp = [ε[i][:,jj] for i in 1:length(E.numElem)]
@@ -2082,12 +2153,12 @@ function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
         end
         gmsh.view.addModelData(EE, jj-1, problem.name, "ElementNodeData", numElem, εcomp, t[jj], nc)
     end
-
+    
     if smooth == true
         gmsh.plugin.setNumber("Smooth", "View", -1)
         gmsh.plugin.run("Smooth")
     end
-
+    
     gmsh.view.option.setNumber(EE, "AdaptVisualizationGrid", 0)
     gmsh.view.option.setNumber(EE, "TargetError", -1e-4)
     gmsh.view.option.setNumber(EE, "MaxRecursionLevel", 1)
@@ -2170,7 +2241,7 @@ function showStressResults(S, comp; name=comp, visible=false, smooth=true)
     σ = S.A
     numElem = S.numElem
     for jj in 1:length(t)
-
+        
         k = 1im
         if comp == :s
             σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
@@ -2221,12 +2292,12 @@ function showStressResults(S, comp; name=comp, visible=false, smooth=true)
         end
         gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
     end
-
+    
     if smooth == true
         gmsh.plugin.setNumber("Smooth", "View", -1)
         gmsh.plugin.run("Smooth")
     end
-
+    
     gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 0)
     gmsh.view.option.setNumber(SS, "TargetError", -1e-4)
     gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
@@ -2279,7 +2350,7 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, fac
     σ = S.A
     numElem = S.numElem
     for jj in 1:length(t)
-
+        
         k = 1im
         if comp == :qvec || comp == :vector
             σcomp = []
@@ -2330,12 +2401,12 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, fac
         end
         gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
     end
-
+    
     if smooth == true
         gmsh.plugin.setNumber("Smooth", "View", -1)
         gmsh.plugin.run("Smooth")
     end
-
+    
     gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 0)
     gmsh.view.option.setNumber(SS, "TargetError", -1e-4)
     gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
@@ -2371,25 +2442,25 @@ function showScalarResults(S; name="scalar", visible=false, smooth=false, factor
     σ = S.A
     numElem = S.numElem
     for jj in 1:length(t)
-
-            nc = 1
-            σcomp = []
-            sizehint!(σcomp, length(numElem))
-            for i in 1:length(S.numElem)
-                sc = zeros(div(size(σ[i], 1), dim))
-                for j in 1:(div(size(σ[i], 1), dim))
-                    sc[j] = σ[i][j, jj]
-                end
-                push!(σcomp, sc)
+        
+        nc = 1
+        σcomp = []
+        sizehint!(σcomp, length(numElem))
+        for i in 1:length(S.numElem)
+            sc = zeros(div(size(σ[i], 1), dim))
+            for j in 1:(div(size(σ[i], 1), dim))
+                sc[j] = σ[i][j, jj]
             end
+            push!(σcomp, sc)
+        end
         gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
     end
-
+    
     if smooth == true
         gmsh.plugin.setNumber("Smooth", "View", -1)
         gmsh.plugin.run("Smooth")
     end
-
+    
     gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 0)
     gmsh.view.option.setNumber(SS, "TargetError", -1e-4)
     gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
@@ -2496,15 +2567,15 @@ function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="fie
     end
     pathView = gmsh.view.add(name)
     gmsh.view.addListData(pathView, "SP", points * length(dimTags), CoordValue)
-
+    
     gmsh.view.option.setNumber(pathView, "Type", 2)
     gmsh.view.option.setNumber(pathView, "Axes", 1)
     gmsh.view.option.setNumber(pathView, "AdaptVisualizationGrid", 0)
-
+    
     if visible == false
         gmsh.view.option.setNumber(pathView, "Visible", 0)
     end
-
+    
     if plot == true
         step = 0
         x = zeros(points * length(dimTags))
@@ -2595,11 +2666,11 @@ function showOnSurface(phName, field; grad=false, component=:x, offsetX=0, offse
                         nn[k*numPrimaryNodes-numPrimaryNodes + l] = x[k]
                     end
                     k = 4
-		    f, d = gmsh.view.probe(field, x[1]+offsetX, x[2]+offsetY, x[3]+offsetZ, -1, -1, grad, -1)
+                    f, d = gmsh.view.probe(field, x[1]+offsetX, x[2]+offsetY, x[3]+offsetZ, -1, -1, grad, -1)
                     nn[4*numPrimaryNodes-numPrimaryNodes + l] = f[comp0]
                 end
                 if numPrimaryNodes == 3
-                append!(ret3,nn)
+                    append!(ret3,nn)
                 elseif numPrimaryNodes == 4
                     append!(ret4,nn)
                 elseif numPrimaryNodes == 2

@@ -2840,7 +2840,7 @@ Types:
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
 function applyBoundaryConditions(stiffMat0, loadVec0, supports)
-    problem = stiffMat.model
+    problem = stiffMat0.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
     end
@@ -4054,6 +4054,27 @@ function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=Sc
     end
 end
 
+"""
+    solveAxialForce(u::VectorField)
+
+Compute axial (bar/truss) forces from a displacement field.
+
+The input displacement field `u` must be nodal (VectorField), typically
+containing the nodal displacements of a truss or bar structure.  
+The output is a scalar field (ScalarField), where each value represents 
+the axial force in a truss element.
+
+# Arguments
+- `u::VectorField`: nodal displacement field.
+
+# Returns
+- `ScalarField`: axial forces defined per element.
+
+# Examples
+```julia
+u = solveDisplacement(problem, [loads], [supports])  # VectorField of nodal displacements
+N = solveAxialForce(u)                               # ScalarField of axial element forces
+"""
 function solveAxialForce(q::VectorField)
     problem = q.model
     gmsh.model.setCurrent(problem.name)

@@ -1742,7 +1742,7 @@ function inv(AA::TensorField)
     else
         A = AA
     end
-    if A.type == :s || A.type == :e || A.type == :F
+    if A isa TensorField
         nsteps = A.nsteps
         C = []
         for i in 1:length(A.A)
