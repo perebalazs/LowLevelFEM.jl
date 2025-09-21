@@ -24,12 +24,12 @@ C = A * B
 ```
 """
 function *(AA::ScalarField, BB::ScalarField)
-    if AA.A == []
+    if isNodal(AA)
         A = nodesToElements(AA)
     else
         A = AA
     end
-    if BB.A == []
+    if isNodal(BB)
         B = nodesToElements(BB)
     else
         B = BB
@@ -85,12 +85,12 @@ C = A / B
 ```
 """
 function /(AA::ScalarField, BB::ScalarField)
-    if AA.A == []
+    if isNodal(AA)
         A = nodesToElements(AA)
     else
         A = AA
     end
-    if BB.A == []
+    if isNodal(BB)
         B = nodesToElements(BB)
     else
         B = BB
@@ -116,8 +116,9 @@ function /(AA::ScalarField, BB::ScalarField)
     D = []
     for i in eachindex(sec)
         n = length(B.A[i])
+        D = zeros(n, nsteps)
         if n != sz
-            D = zeros(n, nsteps)
+            #D = zeros(n, nsteps)
             sz = n
         end
         for j in 1:n
@@ -145,11 +146,11 @@ C = A + B
 ```
 """
 function +(A::ScalarField, B::ScalarField)
-    if length(A.A) != 0 && length(B.A) != 0
+    if isElementwise(A) && isElementwise(B)
         if A.type == B.type
-            if length(A.A) != length(B.A)
-                error("+(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-            end
+            #if length(A.A) != length(B.A)
+            #    error("+(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            #end
             nsteps = A.nsteps
             nsteps2 = B.nsteps
             if nsteps != nsteps2
@@ -180,19 +181,31 @@ function +(A::ScalarField, B::ScalarField)
             num = []
             sizehint!(C, length(sec) + length(dif1) + length(dif2))
             sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            for i in eachindex(sec)
-                D = A.A[i] + B.A[i]
-                append!(num, sec[i])
+            idx01 = findall(j -> j in sec, A.numElem)
+            idx02 = findall(j -> j in sec, B.numElem)
+            for i in eachindex(idx01)
+                #display("sec = $sec")
+                D = A.A[idx01[i]] + B.A[idx02[i]]
+                #display("D = $D")
+                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
+                #display("num = $num")
                 push!(C, D)
             end
-            for i in eachindex(dif1)
+            idx1 = findall(j -> j in dif1, A.numElem)
+            for i in idx1 #eachindex(dif1)
+                #display("dif1 = $dif1")
                 D = A.A[i]
-                append!(num, dif1[i])
+                #display("D = $D")
+                append!(num, A.numElem[i] #=dif1[i]=#)
                 push!(C, D)
             end
-            for i in eachindex(dif2)
+            idx2 = findall(j -> j in dif2, B.numElem)
+            for i in idx2 #eachindex(dif2)
+                #display("dif2 = $dif2")
+                #display("idx2 = $idx2")
                 D = B.A[i]
-                append!(num, dif2[i])
+                #display("D = $D")
+                append!(num, B.numElem[i] #=dif2[i]=#)
                 push!(C, D)
             end
             a = [;;]
@@ -224,11 +237,11 @@ C = A - B
 ```
 """
 function -(A::ScalarField, B::ScalarField)
-    if length(A.A) != 0 && length(B.A) != 0
+    if isElementwise(A) && isElementwise(B)
         if A.type == B.type
-            if length(A.A) != length(B.A)
-                error("-(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-            end
+            #if length(A.A) != length(B.A)
+            #    error("+(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            #end
             nsteps = A.nsteps
             nsteps2 = B.nsteps
             if nsteps != nsteps2
@@ -259,34 +272,46 @@ function -(A::ScalarField, B::ScalarField)
             num = []
             sizehint!(C, length(sec) + length(dif1) + length(dif2))
             sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            for i in eachindex(sec)
-                D = A.A[i] - B.A[i]
-                append!(num, sec[i])
+            idx01 = findall(j -> j in sec, A.numElem)
+            idx02 = findall(j -> j in sec, B.numElem)
+            for i in eachindex(idx01)
+                #display("sec = $sec")
+                D = A.A[idx01[i]] - B.A[idx02[i]]
+                #display("D = $D")
+                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
+                #display("num = $num")
                 push!(C, D)
             end
-            for i in eachindex(dif1)
+            idx1 = findall(j -> j in dif1, A.numElem)
+            for i in idx1 #eachindex(dif1)
+                #display("dif1 = $dif1")
                 D = A.A[i]
-                append!(num, dif1[i])
+                #display("D = $D")
+                append!(num, A.numElem[i] #=dif1[i]=#)
                 push!(C, D)
             end
-            for i in eachindex(dif2)
+            idx2 = findall(j -> j in dif2, B.numElem)
+            for i in idx2 #eachindex(dif2)
+                #display("dif2 = $dif2")
+                #display("idx2 = $idx2")
                 D = -B.A[i]
-                append!(num, dif2[i])
+                #display("D = $D")
+                append!(num, B.numElem[i] #=dif2[i]=#)
                 push!(C, D)
             end
             a = [;;]
             return ScalarField(C, a, A.t, num, A.nsteps, A.type, A.model)
         else
-            error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
+            error("-(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
         if A.type == B.type
             return ScalarField([], A.a - B.a, A.t, [], A.nsteps, A.type, A.model)
         else
-            error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
+            error("-(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     else
-        error("+(ScalarField, ScalarField): internal error")
+        error("-(ScalarField, ScalarField): internal error")
     end
 end
 

@@ -1479,7 +1479,7 @@ function isElementwise(a::Union{ScalarField,VectorField,TensorField})
     elseif a.a != [;;] && a.A == []
         return false
     else
-        error("isElementwise: internal error.")
+        error("isElementwise: Scalar field is empty.")
     end
 end
 
