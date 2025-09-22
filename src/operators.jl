@@ -979,7 +979,7 @@ function ∘(AA::VectorField, BB::VectorField)
             #D = zeros(n, nsteps)
             sz = n
         end
-        for j in 1:3n
+        for j in 1:(n ÷ 3)
             for k in 1:nsteps
                 ax = A.A[indS[i]][3j-2, k]
                 ay = A.A[indS[i]][3j-1, k]
@@ -989,17 +989,17 @@ function ∘(AA::VectorField, BB::VectorField)
                 by = B.A[indT[i]][3j-1, k]
                 bz = B.A[indT[i]][3j,   k]
 
-                D[9j-8,k] = ax*bx
-                D[9j-7,k] = ay*bx
-                D[9j-6,k] = az*bx
+                D[9j-8,k] = ax * bx
+                D[9j-7,k] = ay * bx
+                D[9j-6,k] = az * bx
 
-                D[9j-5,k] = ax*by
-                D[9j-4,k] = ay*by
-                D[9j-3,k] = az*by
+                D[9j-5,k] = ax * by
+                D[9j-4,k] = ay * by
+                D[9j-3,k] = az * by
 
-                D[9j-2,k] = ax*bz
-                D[9j-1,k] = ay*bz
-                D[9j  ,k] = az*bz
+                D[9j-2,k] = ax * bz
+                D[9j-1,k] = ay * bz
+                D[9j  ,k] = az * bz
                 #D[j, k] = A.A[indS[i]][3j-2, k] * B.A[indT[i]][3j-2, k] +
                 #        A.A[indS[i]][3j-1, k] * B.A[indT[i]][3j-1, k] +
                 #        A.A[indS[i]][3j,   k] * B.A[indT[i]][3j,   k]
@@ -1010,7 +1010,7 @@ function ∘(AA::VectorField, BB::VectorField)
         push!(C, D)
     end
     a = [;;]
-    return TensorField(C, a, A.t, num, A.nsteps, :scalar, A.model)
+    return TensorField(C, a, A.t, num, A.nsteps, :e, A.model)
 end
 
 #=

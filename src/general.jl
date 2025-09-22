@@ -2151,7 +2151,7 @@ function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
     for jj in 1:length(t)
         
         k = 1im
-        if comp == :e
+        if comp == :e || comp == :tensor
             εcomp = [ε[i][:,jj] for i in 1:length(E.numElem)]
             nc = 9
         else
@@ -2219,7 +2219,7 @@ Types:
 - `tag`: Integer
 """
 function showElementResults(F, comp; name=comp, visible=false, smooth=false, factor=0)
-    if F.type == :e
+    if F.type == :e || F.type == :tensor
         return showStrainResults(F, comp, name=name, visible=visible, smooth=smooth)
     elseif F.type == :s
         return showStressResults(F, comp, name=name, visible=visible, smooth=smooth)

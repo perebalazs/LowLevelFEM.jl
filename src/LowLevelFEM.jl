@@ -12,15 +12,16 @@ include(gmsh_jll.gmsh_api)
 import .gmsh
 export gmsh
 
+macro disp(expr)
+    s = string(expr)
+    return :(display($s * " = " * string($(esc(expr)))))
+end
+
 include("general.jl")
 include("operators.jl")
 include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
-
-macro disp(expr)
-    return :(display("$(string(expr)) = $($expr)"))
-end
 
 #=
 # --- PRECOMPILE BLOKK ---
