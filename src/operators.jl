@@ -184,27 +184,19 @@ function +(A::ScalarField, B::ScalarField)
             idx01 = findall(j -> j in sec, A.numElem)
             idx02 = findall(j -> j in sec, B.numElem)
             for i in eachindex(idx01)
-                #display("sec = $sec")
                 D = A.A[idx01[i]] + B.A[idx02[i]]
-                #display("D = $D")
                 append!(num, A.numElem[idx01[i]] #=sec[i]=#)
-                #display("num = $num")
                 push!(C, D)
             end
             idx1 = findall(j -> j in dif1, A.numElem)
             for i in idx1 #eachindex(dif1)
-                #display("dif1 = $dif1")
                 D = A.A[i]
-                #display("D = $D")
                 append!(num, A.numElem[i] #=dif1[i]=#)
                 push!(C, D)
             end
             idx2 = findall(j -> j in dif2, B.numElem)
             for i in idx2 #eachindex(dif2)
-                #display("dif2 = $dif2")
-                #display("idx2 = $idx2")
                 D = B.A[i]
-                #display("D = $D")
                 append!(num, B.numElem[i] #=dif2[i]=#)
                 push!(C, D)
             end
@@ -275,27 +267,20 @@ function -(A::ScalarField, B::ScalarField)
             idx01 = findall(j -> j in sec, A.numElem)
             idx02 = findall(j -> j in sec, B.numElem)
             for i in eachindex(idx01)
-                #display("sec = $sec")
                 D = A.A[idx01[i]] - B.A[idx02[i]]
-                #display("D = $D")
                 append!(num, A.numElem[idx01[i]] #=sec[i]=#)
-                #display("num = $num")
                 push!(C, D)
             end
             idx1 = findall(j -> j in dif1, A.numElem)
             for i in idx1 #eachindex(dif1)
                 #display("dif1 = $dif1")
                 D = A.A[i]
-                #display("D = $D")
                 append!(num, A.numElem[i] #=dif1[i]=#)
                 push!(C, D)
             end
             idx2 = findall(j -> j in dif2, B.numElem)
             for i in idx2 #eachindex(dif2)
-                #display("dif2 = $dif2")
-                #display("idx2 = $idx2")
                 D = -B.A[i]
-                #display("D = $D")
                 append!(num, B.numElem[i] #=dif2[i]=#)
                 push!(C, D)
             end
@@ -453,6 +438,8 @@ end
 #                                                                             #
 ###############################################################################
 
+#import LinearAlgebra: dot
+import LinearAlgebra.dot
 import LinearAlgebra.⋅
 import LinearAlgebra.×
 import Base.∘
@@ -472,17 +459,23 @@ v2 = s .* v  # equivalent to s * v
 ```
 """
 function *(AA::ScalarField, BB::VectorField)
-    if AA.A == []
+    if isNodal(AA)
         A = nodesToElements(AA)
     else
         A = AA
     end
-    if BB.A == []
+    if isNodal(BB)
         B = nodesToElements(BB)
     else
         B = BB
     end
     sz = 0
+    if BB.type != :v3D
+        error("*(AA::ScalarField, BB::VectorField): Vector field must be 3 dimansional.")
+    end
+    if A.nsteps != B.nsteps || A.nsteps != 1
+        error("*(AA::ScalarField, BB::VectorField): Number of nsteps in AA must be one or equal to BB.nsteps.")
+    end
     nsteps = B.nsteps
     sec = intersect(B.numElem, A.numElem)
     indS = []
@@ -500,13 +493,14 @@ function *(AA::ScalarField, BB::VectorField)
     D = []
     for i in eachindex(sec)
         n = length(B.A[i]) ÷ 3
+        D = zeros(3n, nsteps)
         if n != sz
-            D = zeros(3n, nsteps)
             sz = n
         end
         for j in 1:n
             for k in 1:nsteps
-                D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, k]
+                kk = AA.nsteps > 1 ? k : 1
+                D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, kk]
             end
         end
         append!(num, sec[i])
@@ -524,17 +518,23 @@ Scales a `VectorField` by a `ScalarField` element-wise on matching elements.
 Returns: `VectorField`
 """
 function *(BB::VectorField, AA::ScalarField)
-    if AA.A == []
+    if isNodal(AA)
         A = nodesToElements(AA)
     else
         A = AA
     end
-    if BB.A == []
+    if isNodal(BB)
         B = nodesToElements(BB)
     else
         B = BB
     end
     sz = 0
+    if BB.type != :v3D
+        error("*(BB::VectorField, AA::ScalarField): Vector field must be 3 dimansional.")
+    end
+    if A.nsteps != B.nsteps || A.nsteps != 1
+        error("*(BB::VectorField, AA::ScalarField): Number of nsteps in AA must be one or equal to BB.nsteps.")
+    end
     nsteps = B.nsteps
     sec = intersect(B.numElem, A.numElem)
     indS = []
@@ -552,13 +552,14 @@ function *(BB::VectorField, AA::ScalarField)
     D = []
     for i in eachindex(sec)
         n = length(B.A[i]) ÷ 3
+        D = zeros(3n, nsteps)
         if n != sz
-            D = zeros(3n, nsteps)
             sz = n
         end
         for j in 1:n
             for k in 1:nsteps
-                D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, k]
+                kk = AA.nsteps > 1 ? k : 1
+                D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, kk]
             end
         end
         append!(num, sec[i])
@@ -576,17 +577,23 @@ Divides a `VectorField` by a `ScalarField` element-wise on matching elements.
 Returns: `VectorField`
 """
 function /(BB::VectorField, AA::ScalarField)
-    if AA.A == []
+    if isNodal(AA)
         A = nodesToElements(AA)
     else
         A = AA
     end
-    if BB.A == []
+    if isNodal(BB)
         B = nodesToElements(BB)
     else
         B = BB
     end
     sz = 0
+    if BB.type != :v3D
+        error("/(BB::VectorField, AA::ScalarField): Vector field must be 3 dimansional.")
+    end
+    if A.nsteps != B.nsteps || A.nsteps != 1
+        error("/(BB::VectorField, AA::ScalarField): Number of nsteps in AA must be one or equal to BB.nsteps.")
+    end
     nsteps = B.nsteps
     sec = intersect(B.numElem, A.numElem)
     indS = []
@@ -604,13 +611,14 @@ function /(BB::VectorField, AA::ScalarField)
     D = []
     for i in eachindex(sec)
         n = length(B.A[i]) ÷ 3
+        D = zeros(3n, nsteps)
         if n != sz
-            D = zeros(3n, nsteps)
             sz = n
         end
         for j in 1:n
             for k in 1:nsteps
-                D[3j-2:3j, k] = B.A[indT[i]][3j-2:3j, k] / A.A[indS[i]][j, k]
+                kk = AA.nsteps > 1 ? k : 1
+                D[3j-2:3j, k] = A.A[indS[i]][j, k] / B.A[indT[i]][3j-2:3j, kk]
             end
         end
         append!(num, sec[i])
@@ -621,11 +629,11 @@ function /(BB::VectorField, AA::ScalarField)
 end
 
 function +(A::VectorField, B::VectorField)
-    if length(A.A) != 0 && length(B.A) != 0
-        if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
-            if length(A.A) != length(B.A)
-                error("+(A::VectorField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-            end
+    if isElementwise(A) && isElementwise(B)
+        if A.type == B.type
+            #if length(A.A) != length(B.A)
+            #    error("+(A::VectorField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            #end
             nsteps = A.nsteps
             nsteps2 = B.nsteps
             if nsteps != nsteps2
@@ -656,24 +664,23 @@ function +(A::VectorField, B::VectorField)
             num = []
             sizehint!(C, length(sec) + length(dif1) + length(dif2))
             sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            for i in eachindex(sec)
-                #n = length(A.A[i]) ÷ 9
-                #m = length(B.A[i]) ÷ 9
-                #if n != m
-                #    error("+(A::VectorField, B::VectorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
-                #end
-                D = A.A[i] + B.A[i]
-                append!(num, sec[i])
+            idx01 = findall(j -> j in sec, A.numElem)
+            idx02 = findall(j -> j in sec, B.numElem)
+            for i in eachindex(idx01)
+                D = A.A[idx01[i]] + B.A[idx02[i]]
+                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
                 push!(C, D)
             end
-            for i in eachindex(dif1)
+            idx1 = findall(j -> j in dif1, A.numElem)
+            for i in idx1 #eachindex(dif1)
                 D = A.A[i]
-                append!(num, dif1[i])
+                append!(num, A.numElem[i] #=dif1[i]=#)
                 push!(C, D)
             end
-            for i in eachindex(dif2)
+            idx2 = findall(j -> j in dif2, B.numElem)
+            for i in idx2 #eachindex(dif2)
                 D = B.A[i]
-                append!(num, dif2[i])
+                append!(num, B.numElem[i] #=dif2[i]=#)
                 push!(C, D)
             end
             a = [;;]
@@ -682,7 +689,7 @@ function +(A::VectorField, B::VectorField)
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
-        if (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D) || (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D)
+        if A.type == B.type
             return VectorField([], A.a + B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
@@ -693,12 +700,11 @@ function +(A::VectorField, B::VectorField)
 end
 
 function -(A::VectorField, B::VectorField)
-    if length(A.A) != 0 && length(B.A) != 0
-        #if (A.type == :u3D && B.type == :u3D) || (A.type == :u2D && B.type == :u2D) || (A.type == :f3D && B.type == :f3D) || (A.type == :f2D && B.type == :f2D)
+    if isElementwise(A) && isElementwise(B)
         if A.type == B.type
-            if length(A.A) != length(B.A)
-                error("-(A::VectorField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-            end
+            #if length(A.A) != length(B.A)
+            #    error("+(A::VectorField, B::VectorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
+            #end
             nsteps = A.nsteps
             nsteps2 = B.nsteps
             if nsteps != nsteps2
@@ -729,29 +735,33 @@ function -(A::VectorField, B::VectorField)
             num = []
             sizehint!(C, length(sec) + length(dif1) + length(dif2))
             sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            for i in eachindex(sec)
-                D = A.A[i] - B.A[i]
-                append!(num, sec[i])
+            idx01 = findall(j -> j in sec, A.numElem)
+            idx02 = findall(j -> j in sec, B.numElem)
+            for i in eachindex(idx01)
+                D = A.A[idx01[i]] - B.A[idx02[i]]
+                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
                 push!(C, D)
             end
-            for i in eachindex(dif1)
+            idx1 = findall(j -> j in dif1, A.numElem)
+            for i in idx1 #eachindex(dif1)
                 D = A.A[i]
-                append!(num, dif1[i])
+                append!(num, A.numElem[i] #=dif1[i]=#)
                 push!(C, D)
             end
-            for i in eachindex(dif2)
+            idx2 = findall(j -> j in dif2, B.numElem)
+            for i in idx2 #eachindex(dif2)
                 D = -B.A[i]
-                append!(num, dif2[i])
+                append!(num, B.numElem[i] #=dif2[i]=#)
                 push!(C, D)
             end
             a = [;;]
             return VectorField(C, a, A.t, num, A.nsteps, A.type, A.model)
         else
-            error("-(A::VectorField, B::VectorField): Operation with type ($(A.type) and $(B.type)) is not supported.")
+            error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     elseif length(A.a) != 0 && length(B.a) != 0
-        if (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D) || (A.type == :v3D && B.type == :v3D) || (A.type == :v2D && B.type == :v2D)
-            return VectorField([], A.a - B.a, A.t, [], A.nsteps, A.type, A.model)
+        if A.type == B.type
+            return VectorField([], A.a + B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -823,6 +833,62 @@ function /(A::VectorField, b::Number)
     end
 end
 
+function dot(AA::VectorField, BB::VectorField)
+    if isNodal(AA)
+        A = nodesToElements(AA)
+    else
+        A = AA
+    end
+    if isNodal(BB)
+        B = nodesToElements(BB)
+    else
+        B = BB
+    end
+    sz = 0
+    if A.nsteps != B.nsteps
+        error("*(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
+    end
+    if A.type != :v3D && B.type != :v3D
+        error("*(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
+    end
+    nsteps = B.nsteps
+    sec = intersect(B.numElem, A.numElem)
+    indS = []
+    indT = []
+    sizehint!(indS, length(sec))
+    sizehint!(indT, length(sec))
+    for i in sec
+        append!(indS, findall(j -> j == i, A.numElem))
+        append!(indT, findall(j -> j == i, B.numElem))
+    end
+    C = []
+    num = []
+    sizehint!(C, length(sec))
+    sizehint!(num, length(sec))
+    D = []
+    for i in eachindex(sec)
+        n = length(B.A[i])
+        D = zeros(n ÷ 3, nsteps)
+        if n != sz
+            #D = zeros(n, nsteps)
+            sz = n
+        end
+        for j in 1:n ÷ 3
+            for k in 1:nsteps
+                D[j, k] = A.A[indS[i]][3j-2, k] * B.A[indT[i]][3j-2, k] +
+                        A.A[indS[i]][3j-1, k] * B.A[indT[i]][3j-1, k] +
+                        A.A[indS[i]][3j,   k] * B.A[indT[i]][3j,   k]
+                 #A.A[indS[i]][j, k] * B.A[indT[i]][j, k]
+            end
+        end
+        append!(num, sec[i])
+        push!(C, D)
+    end
+    a = [;;]
+    return ScalarField(C, a, A.t, num, A.nsteps, :scalar, A.model)
+end
+
+#=
 function ⋅(AA::VectorField, BB::VectorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -867,11 +933,87 @@ function ⋅(AA::VectorField, BB::VectorField)
         error("*(A::VectorField, B::VectorField): VectorField type ($(A.type) or $(B.type)) is not yet implemented.")
     end
 end
+=#
 
 function *(A::VectorField, B::VectorField)
-    return A ⋅ B
+    return dot(A, B)
 end
 
+function ∘(AA::VectorField, BB::VectorField)
+    if isNodal(AA)
+        A = nodesToElements(AA)
+    else
+        A = AA
+    end
+    if isNodal(BB)
+        B = nodesToElements(BB)
+    else
+        B = BB
+    end
+    sz = 0
+    if A.nsteps != B.nsteps
+        error("∘(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
+    end
+    if A.type != :v3D && B.type != :v3D
+        error("∘(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
+    end
+    nsteps = B.nsteps
+    sec = intersect(B.numElem, A.numElem)
+    indS = []
+    indT = []
+    sizehint!(indS, length(sec))
+    sizehint!(indT, length(sec))
+    for i in sec
+        append!(indS, findall(j -> j == i, A.numElem))
+        append!(indT, findall(j -> j == i, B.numElem))
+    end
+    C = []
+    num = []
+    sizehint!(C, length(sec))
+    sizehint!(num, length(sec))
+    D = []
+    for i in eachindex(sec)
+        n = length(B.A[i])
+        D = zeros(3n, nsteps)
+        if n != sz
+            #D = zeros(n, nsteps)
+            sz = n
+        end
+        for j in 1:3n
+            for k in 1:nsteps
+                ax = A.A[indS[i]][3j-2, k]
+                ay = A.A[indS[i]][3j-1, k]
+                az = A.A[indS[i]][3j,   k]
+
+                bx = B.A[indT[i]][3j-2, k]
+                by = B.A[indT[i]][3j-1, k]
+                bz = B.A[indT[i]][3j,   k]
+
+                D[9j-8,k] = ax*bx
+                D[9j-7,k] = ay*bx
+                D[9j-6,k] = az*bx
+
+                D[9j-5,k] = ax*by
+                D[9j-4,k] = ay*by
+                D[9j-3,k] = az*by
+
+                D[9j-2,k] = ax*bz
+                D[9j-1,k] = ay*bz
+                D[9j  ,k] = az*bz
+                #D[j, k] = A.A[indS[i]][3j-2, k] * B.A[indT[i]][3j-2, k] +
+                #        A.A[indS[i]][3j-1, k] * B.A[indT[i]][3j-1, k] +
+                #        A.A[indS[i]][3j,   k] * B.A[indT[i]][3j,   k]
+                 #A.A[indS[i]][j, k] * B.A[indT[i]][j, k]
+            end
+        end
+        append!(num, sec[i])
+        push!(C, D)
+    end
+    a = [;;]
+    return TensorField(C, a, A.t, num, A.nsteps, :scalar, A.model)
+end
+
+#=
 function ∘(AA::VectorField, BB::VectorField)
     if AA.A == []
         a = nodesToElements(AA)
@@ -912,6 +1054,7 @@ function ∘(AA::VectorField, BB::VectorField)
         error("∘(a::VectorField, b::VectorField): data at nodes is not yet implemented.")
     end
 end
+=#
 
 """
     ×(a::VectorField, b::VectorField)
@@ -1024,6 +1167,8 @@ function diagm(AA::VectorField)
         error("diagm(A::VectorField): A is not a VectorField or dim != 3.")
     end
 end
+
+export ⋅
 
 ###############################################################################
 #                                                                             #

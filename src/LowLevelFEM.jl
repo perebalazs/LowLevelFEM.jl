@@ -18,6 +18,10 @@ include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
 
+macro disp(expr)
+    return :(display("$(string(expr)) = $($expr)"))
+end
+
 #=
 # --- PRECOMPILE BLOKK ---
 @compile_workload begin
