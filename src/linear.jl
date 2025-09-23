@@ -2671,6 +2671,7 @@ function loadVector(problem, loads)
     dof = pdim * non
     fp = zeros(dof)
     ncoord2 = zeros(3 * problem.non)
+    f = [.0]
     for n in 1:length(loads)
         name, fx, fy, fz = loads[n]
         if pdim == 3
@@ -2732,22 +2733,40 @@ function loadVector(problem, loads)
                             end
                             f[1] = isa(fy, Function) ? fx * fy(x, y, z) : fx * fy
                         else
-                            if fx isa Function
+                            if fx isa Number
+                                f[1] = fx
+                            elseif fx isa Function
                                 f[1] = fx(x, y, z)
                             elseif fx isa ScalarField
                                 f[1] = h[:, j]' * fx.a[nnet[l, :]]
-                            elseif fx isa Number
-                                f[1] = fx
                             else
                                 error("loadVector: internal error.")
                             end
                             #f[1] = isa(fx, Function) ? fx(x, y, z) : fx
                         end
                         if pdim > 1
-                            f[2] = isa(fy, Function) ? fy(x, y, z) : fy
+                            if fy isa Number
+                                f[2] = fy
+                            elseif fy isa Function
+                                f[2] = fy(x, y, z)
+                            elseif fy isa ScalarField
+                                f[2] = h[:, j]' * fy.a[nnet[l, :]]
+                            else
+                                error("loadVector: internal error.")
+                            end
+                            #f[2] = isa(fy, Function) ? fy(x, y, z) : fy
                         end
                         if pdim == 3
-                            f[3] = isa(fz, Function) ? fz(x, y, z) : fz
+                            if fz isa Number
+                                f[3] = fz
+                            elseif fz isa Function
+                                f[3] = fz(x, y, z)
+                            elseif fz isa ScalarField
+                                f[3] = h[:, j]' * fz.a[nnet[l, :]]
+                            else
+                                error("loadVector: internal error.")
+                            end
+                            #f[3] = isa(fz, Function) ? fz(x, y, z) : fz
                         end
                         r = x
                         H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????

@@ -4,7 +4,7 @@ export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField
 export constrainedDoFs, freeDoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
-export fieldError, resultant
+export fieldError, resultant, integrate
 export rotateNodes
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
@@ -730,7 +730,7 @@ end
 
 Specifies a distributed load on the physical group `name`. At least one of `fx`, `fy`, or `fz`
 must be provided (depending on the problem dimension). `fx`, `fy`, or `fz` can be a constant
-or a function of `x`, `y`, and `z`.
+or a function of `x`, `y`, and `z` or `ScalarField`.
 (e.g., `fn(x,y,z) = 5*(5-x); load("load1", fx=fn)`)
 
 Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
@@ -741,7 +741,22 @@ Types:
 - `fy`: Float64 or Function
 - `fz`: Float64 or Function
 """
-function load(name; fx=0, fy=0, fz=0)
+function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number, Function, ScalarField}=0, fz::Union{Number, Function, ScalarField}=0)
+    if fx isa ScalarField
+        if isElementwise(fx)
+            fx = elementsToNodes(fx)
+        end
+    end
+    if fy isa ScalarField
+        if isElementwise(fy)
+            fy = elementsToNodes(fy)
+        end
+    end
+    if fz isa ScalarField
+        if isElementwise(fz)
+            fz = elementsToNodes(fz)
+        end
+    end
     ld0 = name, fx, fy, fz
     return ld0
 end
@@ -1784,6 +1799,101 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
                 end
                 for k in 1:pdim
                     #nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                end
+                sum0 += s1
+            end
+        end
+    end
+    return sum0
+end
+
+"""
+    integrate(problem::Problem, phName::String, f::Function)
+
+Integrates the function `f` over the physical group `phName` defined in the geometry of `problem`.
+
+Returns: integral
+
+Types:
+- `problem`: Problem
+- `phName`: String
+- `f`: Function (of x, y and z)
+- `integral`: Number
+
+Examples:
+
+```julia
+f(x, y, z) = x^2 + y^2
+Iz = integrate(prob, "body", f)
+```
+"""
+function integrate(problem::Problem, phName::String, f::Function)
+    gmsh.model.setCurrent(problem.name)
+    DIM = problem.dim
+    b = problem.thickness
+    ncoord2 = zeros(3 * problem.non)
+    sum0 = 0
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+    for i ∈ 1:length(dimTags)
+        dimTag = dimTags[i]
+        dim = dimTag[1]
+        tag = dimTag[2]
+        elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+        nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+        for ii in 1:length(elementTypes)
+            elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order+1))
+            numIntPoints = length(intWeights)
+            comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+            h = reshape(fun, :, numIntPoints)
+            nnet = zeros(Int, length(elementTags[ii]), numNodes)
+            for l in 1:length(elementTags[ii])
+                elem = elementTags[ii][l]
+                for k in 1:numNodes
+                    nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                end
+                jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                Jac = reshape(jac, 3, :)
+                s1 = 0
+                for j in 1:numIntPoints
+                    x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                    y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                    z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                    ff = f(x, y, z)
+                    r = x
+                    ############### NANSON ######## 3D ###################################
+                    if DIM == 3 && dim == 3
+                        Ja = jacDet[j]
+                    elseif DIM == 3 && dim == 2
+                        xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                        yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                        zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                        Ja = √(xy^2 + yz^2 + zx^2)
+                    elseif DIM == 3 && dim == 1
+                        Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                    elseif DIM == 3 && dim == 0
+                        Ja = 1
+                        ############ 2D #######################################################
+                    elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                        Ja = jacDet[j] * b
+                    elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                        Ja = 2π * jacDet[j] * r
+                    elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                        Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                    elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                        Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                    elseif DIM == 2 && dim == 0
+                        Ja = 1
+                        ############ 1D #######################################################
+                    elseif DIM == 1 && dim == 1
+                        Ja = (Jac[1, 3*j-2]) * b
+                    else
+                        error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                    end
+                    s1 += ff * Ja * intWeights[j]
                 end
                 sum0 += s1
             end
