@@ -2732,7 +2732,16 @@ function loadVector(problem, loads)
                             end
                             f[1] = isa(fy, Function) ? fx * fy(x, y, z) : fx * fy
                         else
-                            f[1] = isa(fx, Function) ? fx(x, y, z) : fx
+                            if fx isa Function
+                                f[1] = fx(x, y, z)
+                            elseif fx isa ScalarField
+                                f[1] = h[:, j]' * fx.a[nnet[l, :]]
+                            elseif fx isa Number
+                                f[1] = fx
+                            else
+                                error("loadVector: internal error.")
+                            end
+                            #f[1] = isa(fx, Function) ? fx(x, y, z) : fx
                         end
                         if pdim > 1
                             f[2] = isa(fy, Function) ? fy(x, y, z) : fy

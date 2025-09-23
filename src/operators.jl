@@ -761,7 +761,7 @@ function -(A::VectorField, B::VectorField)
         end
     elseif length(A.a) != 0 && length(B.a) != 0
         if A.type == B.type
-            return VectorField([], A.a + B.a, A.t, [], A.nsteps, A.type, A.model)
+            return VectorField([], A.a - B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
