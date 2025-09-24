@@ -1808,16 +1808,16 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
 end
 
 """
-    integrate(problem::Problem, phName::String, f::Function)
+    integrate(problem::Problem, phName::String, f::Union{Function,ScalarField})
 
-Integrates the function `f` over the physical group `phName` defined in the geometry of `problem`.
+Integrates the function or scalar field `f` over the physical group `phName` defined in the geometry of `problem`.
 
 Returns: integral
 
 Types:
 - `problem`: Problem
 - `phName`: String
-- `f`: Function (of x, y and z)
+- `f`: Function (of x, y and z) or ScalarField
 - `integral`: Number
 
 Examples:
@@ -1827,8 +1827,12 @@ f(x, y, z) = x^2 + y^2
 Iz = integrate(prob, "body", f)
 ```
 """
-function integrate(problem::Problem, phName::String, f::Function)
+function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField})
     gmsh.model.setCurrent(problem.name)
+    f2 = 0
+    if f isa ScalarField
+        f2 = elementsToNodes(f)
+    end
     DIM = problem.dim
     b = problem.thickness
     ncoord2 = zeros(3 * problem.non)
@@ -1862,7 +1866,16 @@ function integrate(problem::Problem, phName::String, f::Function)
                     x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
                     y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                     z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                    ff = f(x, y, z)
+                    ff = 0
+                    if f isa Function
+                        ff = f(x, y, z)
+                        #@disp ff
+                    elseif f isa ScalarField
+                        ff = h[:, j]' * f2.a[nnet[l, :]]
+                        #@disp ff
+                    else
+                        error("integrate: internal error.")
+                    end
                     r = x
                     ############### NANSON ######## 3D ###################################
                     if DIM == 3 && dim == 3
@@ -1893,6 +1906,7 @@ function integrate(problem::Problem, phName::String, f::Function)
                     else
                         error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                     end
+                    #@disp ff
                     s1 += ff * Ja * intWeights[j]
                 end
                 sum0 += s1

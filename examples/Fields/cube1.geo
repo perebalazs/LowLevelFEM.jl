@@ -3,7 +3,7 @@ SetFactory("OpenCASCADE");
 Box(1) = {0, 0, 0, 1, 1, 1};
 
 //+
-Transfinite Curve {:} = 2 Using Progression 1;
+Transfinite Curve {:} = 3 Using Progression 1;
 //+
 Transfinite Surface {:};
 //+
@@ -11,7 +11,7 @@ Transfinite Volume{1};
 //+
 Recombine Surface {:};
 //+
-Mesh.ElementOrder = 1;
+Mesh.ElementOrder = 2;
 //+
 Mesh 3;
 //+
