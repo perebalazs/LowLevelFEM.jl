@@ -5,7 +5,7 @@ export field, scalarField, vectorField, tensorField, ScalarField
 export constrainedDoFs, freeDoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate
-export rotateNodes
+export rotateNodes, CoordinateSystem
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
 export plotOnPath, showOnSurface
