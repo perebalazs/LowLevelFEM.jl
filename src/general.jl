@@ -2293,7 +2293,7 @@ function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
             elseif comp == :ezx || comp == :exz
                 k = 6
             else
-                error("ShowStressResults: component is $comp ????")
+                error("ShowStrainResults: component is $comp ????")
             end
             εcomp = []
             sizehint!(εcomp, length(numElem))
@@ -2370,7 +2370,7 @@ function showElementResults(q; name=q.type, visible=false, smooth=false, ff = 0,
     end
 end
 
-function showStressResults(q; name=q.type, visible=false, ff = 0, factor=0)
+function showStressResults(q; name=q.type, visible=false, smooth=false, ff = 0, factor=0)
     if q isa TensorField
         showStressResults(q, :s, name=name, visible=visible, smooth=smooth)
     else
@@ -2406,7 +2406,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(S, comp; name=comp, visible=false, smooth=true)
+function showStressResults(S, comp; name=comp, visible=false, smooth=false)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     problem = S.model
     gmsh.model.setCurrent(problem.name)
