@@ -11,7 +11,7 @@ Transfinite Volume{1};
 //+
 Recombine Surface {:};
 //+
-Mesh.ElementOrder = 2;
+Mesh.ElementOrder = 1;
 //+
 Mesh 3;
 //+

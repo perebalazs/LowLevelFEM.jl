@@ -4,7 +4,7 @@ export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField
 export constrainedDoFs, freeDoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
-export fieldError, resultant, integrate
+export fieldError, resultant, integrate, normalVector
 export rotateNodes, CoordinateSystem
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
@@ -1210,6 +1210,79 @@ function tensorField(problem, dataField; type=:e)
         end
     end
     return TensorField([], reshape(field, :,1), [0], [], 1, type, problem)
+end
+
+function normalVector(problem, phName)
+    gmsh.model.setCurrent(problem.name)
+    dim = problem.dim
+    non = problem.non
+    field = zeros(non * dim)
+    ncoord2 = zeros(3 * problem.non)
+    numElem = Int[]
+    normalvectors = []
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+    for idm in 1:length(dimTags)
+        dimTag = dimTags[idm]
+        edim = dimTag[1]
+        etag = dimTag[2]
+        if edim != 2
+            error("normalVector: physical group is not a surface.")
+        end
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+        nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, etag, true, false)
+        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+        for i in 1:length(elemTypes)
+            et = elemTypes[i]
+            elementName, eldim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+            localNodeCoord2 = zeros(length(localNodeCoord) ÷ 2 * 3)
+            localNodeCoord2[1:3:length(localNodeCoord2)] .= localNodeCoord[1:2:length(localNodeCoord)]
+            localNodeCoord2[2:3:length(localNodeCoord2)] .= localNodeCoord[2:2:length(localNodeCoord)]
+            comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "Lagrange")
+            h = reshape(fun, :, numNodes)
+            comp3, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
+            ∇h = reshape(dfun, :, numNodes)
+            nnet = zeros(Int, length(elemTags[i]), numNodes)
+            nn2 = zeros(Int, dim * numNodes)
+            vx = zeros(numNodes)
+            vy = zeros(numNodes)
+            vz = zeros(numNodes)
+            normvec = zeros(3numNodes)
+            for j in 1:length(elemTags[i])
+                elem = elemTags[i][j]
+                for k in 1:numNodes
+                    nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                end
+                for k in 1:numNodes
+                    v1x = ∇h[1:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    v1y = ∇h[1:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 1]
+                    v1z = ∇h[1:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 0]
+                    v2x = ∇h[2:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    v2y = ∇h[2:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 1]
+                    v2z = ∇h[2:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 0]
+                    vx[k] = v1y * v2z - v1z * v2y
+                    vy[k] = v1z * v2x - v1x * v2z
+                    vz[k] = v1x * v2y - v1y * v2x
+                    v = √(vx[k]^2 + vy[k]^2 + vz[k]^2)
+                    vx[k] /= v
+                    vy[k] /= v
+                    vz[k] /= v
+                end
+                normvec[1:3:3numNodes] .= vx
+                normvec[2:3:3numNodes] .= vy
+                normvec[3:3:3numNodes] .= vz
+                push!(numElem, elem)
+                push!(normalvectors, reshape(normvec,:,1))
+                #display("normvec = $normvec")
+                #for k in 1:numNodes, l in 1:numNodes
+                #    display(∇h[l*dim-(dim-1):l*dim-(dim-dim), k])
+                #end
+            end
+        end
+    end
+    return VectorField(normalvectors, [;;], [0.0], numElem, 1, :v3D, problem)
 end
 
 """
