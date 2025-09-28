@@ -4303,7 +4303,11 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
     end
     problem = K.model
     ωₘᵢₙ² = (2π * fₘᵢₙ)^2
-    ω², ϕ = Arpack.eigs(K.A, M.A, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
+    if size(K.A, 1) < 6
+        ω², ϕ = eigen(Matrix(K.A), Matrix(M.A))
+    else
+        ω², ϕ = Arpack.eigs(K.A, M.A, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
+    end
     #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
     #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     #end
@@ -4531,7 +4535,7 @@ Types:
 - `uz`: Float64 
 - `u0`: VectorField
 """
-function initialDisplacement!(name, u0; ux=1im, uy=1im, uz=1im, type=:u)
+function initialDisplacement!(name, u0; ux=1im, uy=1im, uz=1im)
     problem = u0.model
     pdim = problem.pdim
     dim = problem.dim
@@ -4572,7 +4576,7 @@ Types:
 - `v0`: VectorField
 """
 function initialVelocity(problem, name; vx=1im, vy=1im, vz=1im)
-    return initialDisplacement(problem, name, ux=vx, uy=vy, uz=vz, type=:v)
+    return initialDisplacement(problem, name, ux=vx, uy=vy, uz=vz)
 end
 
 """

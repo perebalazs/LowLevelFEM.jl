@@ -1212,16 +1212,75 @@ function tensorField(problem, dataField; type=:e)
     return TensorField([], reshape(field, :,1), [0], [], 1, type, problem)
 end
 
-function normalVector(problem, phName)
+"""
+    normalVector(problem::Problem, phName::String) -> VectorField
+
+Compute outward unit normal vectors for all nodes of a surface-type physical group
+in a 3D Gmsh model.
+
+# Arguments
+- `problem::Problem`: A `Problem` structure containing the current Gmsh model 
+  (name, dimension, number of nodes, etc.).
+- `phName::String`: The name of a physical surface group in Gmsh for which the normal
+  vectors are computed.
+
+# Description
+The function sets the current model, queries the elements and nodes that belong to the 
+given physical surface group, and evaluates the gradients of the Lagrange basis functions 
+to compute local tangent vectors of the surface. Normal vectors are obtained as cross 
+products of these tangents and normalized to unit length.
+
+Each node belonging to the physical surface group is assigned its corresponding 
+3D unit normal vector.
+
+# Returns
+- `VectorField`: A `VectorField` structure that stores the nodal normal vectors 
+  on the given physical surface.
+
+# Errors
+- Throws an error if the provided physical group is not of surface type (`dim != 2`).
+
+# Example
+```julia
+using LowLevelFEM
+
+# Load a 3D geometry and mesh it in Gmsh
+gmsh.initialize()
+gmsh.open("box_with_surface.msh")
+
+# Define a 3D model on the volume physical group "body"
+mat = material("body")
+prob = Problem([mat])
+
+# Compute nodal normals on a physical surface named "leftWall"
+nv = normalVector(problem, "leftWall")
+
+# Show the normal vectors on the model
+showDoFResults(nv)
+openPostProcessor()
+```
+"""
+function normalVector(problem::Problem, phName::String)
     gmsh.model.setCurrent(problem.name)
-    dim = problem.dim
     non = problem.non
-    field = zeros(non * dim)
-    ncoord2 = zeros(3 * problem.non)
+    ncoord2 = zeros(3 * non)
     numElem = Int[]
     normalvectors = []
 
     dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+    sz = 0
+    for idm in 1:length(dimTags)
+        dimTag = dimTags[idm]
+        edim = dimTag[1]
+        etag = dimTag[2]
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+        for i in 1:length(elemTypes)
+            sz += length(elemTags[i])
+        end
+    end
+    sizehint!(numElem, sz)
+    sizehint!(normalvectors, sz)
+
     for idm in 1:length(dimTags)
         dimTag = dimTags[idm]
         edim = dimTag[1]
@@ -1240,28 +1299,30 @@ function normalVector(problem, phName)
             localNodeCoord2 = zeros(length(localNodeCoord) ÷ 2 * 3)
             localNodeCoord2[1:3:length(localNodeCoord2)] .= localNodeCoord[1:2:length(localNodeCoord)]
             localNodeCoord2[2:3:length(localNodeCoord2)] .= localNodeCoord[2:2:length(localNodeCoord)]
-            comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "Lagrange")
-            h = reshape(fun, :, numNodes)
+            #comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "Lagrange")
+            #h = reshape(fun, :, numNodes)
             comp3, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
             ∇h = reshape(dfun, :, numNodes)
             nnet = zeros(Int, length(elemTags[i]), numNodes)
-            nn2 = zeros(Int, dim * numNodes)
             vx = zeros(numNodes)
             vy = zeros(numNodes)
             vz = zeros(numNodes)
             normvec = zeros(3numNodes)
             for j in 1:length(elemTags[i])
                 elem = elemTags[i][j]
-                for k in 1:numNodes
+                @inbounds for k in 1:numNodes
                     nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
                 end
-                for k in 1:numNodes
-                    v1x = ∇h[1:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 2]
-                    v1y = ∇h[1:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 1]
-                    v1z = ∇h[1:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 0]
-                    v2x = ∇h[2:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 2]
-                    v2y = ∇h[2:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 1]
-                    v2z = ∇h[2:3:size(∇h,1), k]' * ncoord2[nnet[j, :] * 3 .- 0]
+                xx = ncoord2[nnet[j, :] * 3 .- 2]
+                yy = ncoord2[nnet[j, :] * 3 .- 1]
+                zz = ncoord2[nnet[j, :] * 3 .- 0]
+                @inbounds for k in 1:numNodes
+                    v1x = ∇h[1:3:size(∇h,1), k]' * xx
+                    v1y = ∇h[1:3:size(∇h,1), k]' * yy
+                    v1z = ∇h[1:3:size(∇h,1), k]' * zz
+                    v2x = ∇h[2:3:size(∇h,1), k]' * xx
+                    v2y = ∇h[2:3:size(∇h,1), k]' * yy
+                    v2z = ∇h[2:3:size(∇h,1), k]' * zz
                     vx[k] = v1y * v2z - v1z * v2y
                     vy[k] = v1z * v2x - v1x * v2z
                     vz[k] = v1x * v2y - v1y * v2x
@@ -1275,10 +1336,6 @@ function normalVector(problem, phName)
                 normvec[3:3:3numNodes] .= vz
                 push!(numElem, elem)
                 push!(normalvectors, reshape(normvec,:,1))
-                #display("normvec = $normvec")
-                #for k in 1:numNodes, l in 1:numNodes
-                #    display(∇h[l*dim-(dim-1):l*dim-(dim-dim), k])
-                #end
             end
         end
     end

@@ -1068,39 +1068,60 @@ Returns: `VectorField`
 w = u × v
 ```
 """
-function ×(aa::VectorField, bb::VectorField)
-    if length(aa.A) == 0
-        a = nodesToElements(aa)
+function ×(AA::VectorField, BB::VectorField)
+    if isNodal(AA)
+        A = nodesToElements(AA)
     else
-        a = aa
+        A = AA
     end
-    if length(bb.A) == 0
-        b = nodesToElements(bb)
+    if isNodal(BB)
+        B = nodesToElements(BB)
     else
-        b = bb
+        B = BB
     end
-
-    if a isa VectorField && b isa VectorField
-        nsteps = a.nsteps
-        C = []
-        for i in 1:length(a.A)
-            n = length(a.A[i]) ÷ 3
-            H = zeros(3n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    e = SVector{3}(a.A[i][3j-2:3j, k])
-                    f = SVector{3}(b.A[i][3j-2:3j, k])
-                    g = e × f
-                    H[3j-2:3j, k] = g[1:3]
-                end
-            end
-            push!(C, H)
+    sz = 0
+    if A.nsteps != B.nsteps
+        error("×(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
+    end
+    if A.type != :v3D && B.type != :v3D
+        error("×(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
+    end
+    nsteps = B.nsteps
+    sec = intersect(B.numElem, A.numElem)
+    indS = []
+    indT = []
+    sizehint!(indS, length(sec))
+    sizehint!(indT, length(sec))
+    for i in sec
+        append!(indS, findall(j -> j == i, A.numElem))
+        append!(indT, findall(j -> j == i, B.numElem))
+    end
+    C = []
+    num = []
+    sizehint!(C, length(sec))
+    sizehint!(num, length(sec))
+    D = []
+    for i in eachindex(sec)
+        n = length(B.A[i])
+        D = zeros(n, nsteps)
+        if n != sz
+            #D = zeros(n, nsteps)
+            sz = n
         end
-        aa = [;;]
-        return VectorField(C, aa, a.t, a.numElem, a.nsteps, :v3D, a.model)
-    else
-        error("×(a::VectorField, b::VectorField): a and b are not VectorField(s).")
+        for j in 1:(n ÷ 3)
+            for k in 1:nsteps
+                e = SVector{3}(A.A[indS[i]][3j-2:3j, k])
+                f = SVector{3}(B.A[indT[i]][3j-2:3j, k])
+                g = e × f
+
+                D[3j-2:3j,k] .= g[1:3]
+            end
+        end
+        append!(num, sec[i])
+        push!(C, D)
     end
+    a = [;;]
+    return VectorField(C, a, A.t, num, A.nsteps, :v3D, A.model)
 end
 
 """
