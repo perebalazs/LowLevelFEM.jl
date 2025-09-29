@@ -317,7 +317,7 @@ C = A * 2.0
 ```
 """
 function *(AA::ScalarField, b::Number)
-    if AA.A == []
+    if isNodal(AA)
         A = nodesToElements(AA)
     else
         A = AA

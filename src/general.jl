@@ -307,7 +307,7 @@ struct ScalarField <: AbstractField
                         for k in 1:numNodes
                             nodeTag = elemNodeTags[i][(j-1)*numNodes+k]
                             if f != :no
-                                if isa(f, Function)
+                                if f isa Function
                                     coord, parametricCoord, dim, tag = gmsh.model.mesh.getNode(nodeTag)
                                     x = coord[1]
                                     y = coord[2]
@@ -332,6 +332,7 @@ end
 
 """
     VectorField(A, a, t, numElem, nsteps, type, model)
+    VectorField(problem, dataField)
 
 Structure containing the data of a vector field (e.g., displacement or heat flux).
 - A: vector of element-wise vector data
@@ -349,6 +350,16 @@ Types:
 - `nsteps`: Integer
 - `type`: Symbol
 - `model`: Problem
+
+# Example
+
+```julia
+vx(x,y,z) = x + y
+vy(x,y,z) = z
+fv = field("body", fx=vx, fy=vy, fz=3)
+V = VectorField(problem, [fv])
+```
+Here `V` is defined element-wise
 """
 struct VectorField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -358,8 +369,217 @@ struct VectorField <: AbstractField
     nsteps::Int
     type::Symbol
     model::Problem
+    function VectorField(A0, a0, t0, numElem0, nsteps0, type0, model)
+        return new(A0, a0, t0, numElem0, nsteps0, type0, model)
+    end
+    function VectorField(problem, dataField)
+        if !isa(dataField, Vector)
+            error("VectorField: dataField are not arranged in a vector. Put them in [...]")
+        end
+        gmsh.model.setCurrent(problem.name)
+        
+        type = :v3D
+        nsteps = 1
+        A = []
+        numElem = Int[]
+        ff = 0
+        pdim = 1
+        for i in 1:length(dataField)
+            phName, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+            dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+            for idm in 1:length(dimTags)
+                dimTag = dimTags[idm]
+                edim = dimTag[1]
+                etag = dimTag[2]
+                elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+                for i in 1:length(elemTypes)
+                    et = elemTypes[i]
+                    elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                    for j in 1:length(elemTags[i])
+                        vec1 = zeros(3numNodes, nsteps)
+                        elem = elemTags[i][j]
+                        push!(numElem, elem)
+                        for k in 1:numNodes
+                            nodeTag = elemNodeTags[i][(j-1)*numNodes+k]
+                            coord, parametricCoord, dim, tag = gmsh.model.mesh.getNode(nodeTag)
+                            x = coord[1]
+                            y = coord[2]
+                            z = coord[3]
+                            if fx ≠ :no
+                                if fx isa Function
+                                    ff = fx(x, y, z)
+                                else
+                                    ff = fx
+                                end
+                                vec1[3k-2, 1] = ff
+                            end
+                            if fy ≠ :no
+                                if fy isa Function
+                                    ff = fy(x, y, z)
+                                else
+                                    ff = fy
+                                end
+                                vec1[3k-1, 1] = ff
+                            end
+                            if fz ≠ :no
+                                if fz isa Function
+                                    ff = fz(x, y, z)
+                                else
+                                    ff = fz
+                                end
+                                vec1[3k, 1] = ff
+                            end
+                        end
+                        push!(A, vec1)
+                    end
+                end
+            end
+        end
+        a = [;;]
+        t = [0.0]
+        return new(A, a, t, numElem, nsteps, type, problem)
+    end
 end
 
+"""
+    TensorField(A, a, t, numElem, nsteps, type, model)
+    TensorField(problem, dataField)
+
+Structure containing the data of a tensor field (e.g., stress or strain).
+- A: tensor of element-wise tensor data
+- a: matrix of nodal values of the tensor field
+- numElem: vector of element tags
+- nsteps: number of time steps stored in `A` (for animations)
+- type: type of data (e.g., `:u`, `:q`)
+- model: associated `Problem`
+
+Types:
+- `A`: Vector{Matrix{Float64}}
+- `a`: Matrix{Float64}
+- `t`: Vector{Float64}
+- `numElem`: Vector{Integer}
+- `nsteps`: Integer
+- `type`: Symbol
+- `model`: Problem
+
+# Example
+
+```julia
+tx(x,y,z) = x + y
+txy(x,y,z) = z
+ft = field("body", fx=tx, fxy=txy, fz=3)
+T = TensorField(problem, [ft])
+```
+Here `T` is defined element-wise
+"""
+struct TensorField <: AbstractField
+    A::Vector{Matrix{Float64}}
+    a::Matrix{Float64}
+    t::Vector{Float64}
+    numElem::Vector{Int}
+    nsteps::Int
+    type::Symbol
+    model::Problem
+    function TensorField(A0, a0, t0, numElem0, nsteps0, type0, model)
+        return new(A0, a0, t0, numElem0, nsteps0, type0, model)
+    end
+    function TensorField(problem, dataField)
+        if !isa(dataField, Vector)
+            error("TensorField: dataField are not arranged in a vector. Put them in [...]")
+        end
+        gmsh.model.setCurrent(problem.name)
+        
+        type = :e
+        nsteps = 1
+        A = []
+        numElem = Int[]
+        ff = 0
+        pdim = 1
+        for i in 1:length(dataField)
+            phName, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+            dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+            for idm in 1:length(dimTags)
+                dimTag = dimTags[idm]
+                edim = dimTag[1]
+                etag = dimTag[2]
+                elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+                for i in 1:length(elemTypes)
+                    et = elemTypes[i]
+                    elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                    for j in 1:length(elemTags[i])
+                        ten1 = zeros(9numNodes, nsteps)
+                        elem = elemTags[i][j]
+                        push!(numElem, elem)
+                        for k in 1:numNodes
+                            nodeTag = elemNodeTags[i][(j-1)*numNodes+k]
+                            coord, parametricCoord, dim, tag = gmsh.model.mesh.getNode(nodeTag)
+                            x = coord[1]
+                            y = coord[2]
+                            z = coord[3]
+                            if fx ≠ :no
+                                if fx isa Function
+                                    ff = fx(x, y, z)
+                                else
+                                    ff = fx
+                                end
+                                ten1[9k-8, 1] = ff
+                            end
+                            if fy ≠ :no
+                                if fy isa Function
+                                    ff = fy(x, y, z)
+                                else
+                                    ff = fy
+                                end
+                                ten1[9k-4, 1] = ff
+                            end
+                            if fz ≠ :no
+                                if fz isa Function
+                                    ff = fz(x, y, z)
+                                else
+                                    ff = fz
+                                end
+                                ten1[9k, 1] = ff
+                            end
+                            if fxy ≠ :no
+                                if fx isa Function
+                                    ff = fxy(x, y, z)
+                                else
+                                    ff = fxy
+                                end
+                                ten1[9k-7, 1] = ff
+                                ten1[9k-5, 1] = ff
+                            end
+                            if fyz ≠ :no
+                                if fy isa Function
+                                    ff = fyz(x, y, z)
+                                else
+                                    ff = fyz
+                                end
+                                ten1[9k-3, 1] = ff
+                                ten1[9k-1, 1] = ff
+                            end
+                            if fzx ≠ :no
+                                if fz isa Function
+                                    ff = fzx(x, y, z)
+                                else
+                                    ff = fzx
+                                end
+                                ten1[9k-6, 1] = ff
+                                ten1[9k-2, 1] = ff
+                            end
+                        end
+                        push!(A, ten1)
+                    end
+                end
+            end
+        end
+        a = [;;]
+        t = [0.0]
+        return new(A, a, t, numElem, nsteps, type, problem)
+    end
+end
+
+#=
 """
     TensorField(A, a, t, numElem, nsteps, type, model)
 
@@ -389,6 +609,7 @@ struct TensorField <: AbstractField
     type::Symbol
     model::Problem
 end
+=#
 
 function copy(A::AbstractField)
     T = typeof(A)
@@ -440,9 +661,9 @@ ny(x, y) = y
 cs = CoordinateSystem([nx, ny])
 Q = rotateNodes(problem, "body", cs)
 q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
-             # `q1` is a nodal displacement vector.
+# `q1` is a nodal displacement vector.
 S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
-                 # `S2` is in Axisymmetric coordinate system.
+# `S2` is in Axisymmetric coordinate system.
 
 # 3D case
 n1x(x, y, z) = x
@@ -741,7 +962,7 @@ Types:
 - `fy`: Float64 or Function
 - `fz`: Float64 or Function
 """
-function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number, Function, ScalarField}=0, fz::Union{Number, Function, ScalarField}=0)
+function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number, Function, ScalarField}=0, fz::Union{Number, Function, ScalarField}=0, p::Union{Number, Function, ScalarField}=0)
     if fx isa ScalarField
         if isElementwise(fx)
             fx = elementsToNodes(fx)
@@ -756,6 +977,15 @@ function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number
         if isElementwise(fz)
             fz = elementsToNodes(fz)
         end
+    end
+    if p ≠ 0
+        if p isa ScalarField
+            if isElementwise(p)
+                p = elementsToNodes(p)
+            end
+        end
+        fx = p
+        fy = 1im
     end
     ld0 = name, fx, fy, fz
     return ld0
@@ -1266,7 +1496,7 @@ function normalVector(problem::Problem, phName::String)
     ncoord2 = zeros(3 * non)
     numElem = Int[]
     normalvectors = []
-
+    
     dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
     sz = 0
     for idm in 1:length(dimTags)
@@ -1280,7 +1510,7 @@ function normalVector(problem::Problem, phName::String)
     end
     sizehint!(numElem, sz)
     sizehint!(normalvectors, sz)
-
+    
     for idm in 1:length(dimTags)
         dimTag = dimTags[idm]
         edim = dimTag[1]
@@ -1448,15 +1678,10 @@ function elementsToNodes(S)
     end
     s = zeros(non * epn, nsteps)
     pcs = zeros(Int64, non)
-    #display("epn = $epn")
-    #display("size of s = $(size(s))")
     
     for e in 1:length(numElem)
-        #display("e=$e")
         elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
-        #display("nodeTags = $nodeTags")
         for i in 1:length(nodeTags)
-            #display("size of σ[$(e)] = $(size(σ[e]))")
             s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][(i-1)*epn+1:i*epn, :]
             pcs[nodeTags[i]] += 1
         end
@@ -1468,22 +1693,27 @@ function elementsToNodes(S)
 end
 
 """
-    nodesToElements(T)
+    nodesToElements(T, onPhysicalGroup="")
 
 Solves the element results `F` from the nodal results `T`.
 `T` can be ScalarField, VectorField or TensorField.
+If `onPhysicalGroup` is an existing physical group in gmsh, field `T`
+will be solve only on elements belonging to that physical group. Dimension
+of physical group can be different than the dimension of the problem.
+(eg. mapping from 3D volume to a 2D surface)
 
 Return: `F`
 
 Types:
 - `T`: ScalarField, VectorField or TensorField
 - `F`: ScalarField, VectorField or TensorField
+- `onPhysicalGroup`: String
 """
-function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
+function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysicalGroup="")
     problem = r.model
     gmsh.model.setCurrent(problem.name)
     
-    if r.A != []
+    if isElementwise(r)
         return r
     end
     T = typeof(r)
@@ -1503,9 +1733,17 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField})
     dim = problem.dim
     pdim = problem.pdim
     non = problem.non
-    
-    for ipg in 1:length(problem.material)
-        phName = problem.material[ipg].phName
+    nom = length(problem.material)
+    phName = ""
+    if onPhysicalGroup ≠ ""
+        nom = 1
+        phName = onPhysicalGroup
+    end
+
+    for ipg in 1:nom
+        if onPhysicalGroup == ""
+            phName = problem.material[ipg].phName
+        end
         #ν = problem.material[ipg].ν
         dim = 0
         if problem.dim == 3 && problem.type == :Solid

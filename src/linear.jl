@@ -2642,7 +2642,7 @@ end
     loadVector(problem, loads)
 
 Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
-`name`, coordinates `fx`, `fy` and `fz` of the intensity of distributed force.
+`name`, coordinates `fx`, `fy` and `fz` or pressure `p` which are intensities of a distributed force.
 It can solve traction or body force depending on the problem.
 - In case of 2D problems and Point physical group means concentrated force.
 - In case of 2D problems and Line physical group means surface force.
@@ -2682,6 +2682,25 @@ function loadVector(problem, loads)
             f = [.0]
         else
             error("loadVector: dimension of the problem is $(problem.dim).")
+        end
+        if fy == 1im && DIM == 3
+            nv = -normalVector(problem, name)
+            ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
+            ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
+            ez = VectorField(problem, [field(name, fx=0, fy=0, fz=1)])
+            if fx isa Number || fx isa ScalarField
+                fy = elementsToNodes((nv ⋅ ey) * fx)
+                fz = elementsToNodes((nv ⋅ ez) * fx)
+                fx = elementsToNodes((nv ⋅ ex) * fx)
+            elseif fx isa Function
+                pp = scalarField(problem, [field(name, f=fx)])
+                fy = elementsToNodes((nv ⋅ ey) * pp)
+                fz = elementsToNodes((nv ⋅ ez) * pp)
+                fx = elementsToNodes((nv ⋅ ex) * pp)
+            end
+        end
+        if fy == 1im && DIM ≠ 3
+            error("loadVector: pressure can be given on a surface of a 3D solid.")
         end
         dimTags = gmsh.model.getEntitiesForPhysicalName(name)
         for i ∈ 1:length(dimTags)
@@ -3115,8 +3134,8 @@ Types:
 - `dispVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(dispVec::Matrix, supports)
-    problem = dispVec.model
+function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
+    #problem = dispVec.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
@@ -4393,10 +4412,11 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         #applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
         mod = solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
         nn = length(mod.f)
-        ϕ1 = zeros(dof, nn)
-        ϕ1[fdof,:] .= mod.ϕ
+        ϕ10 = zeros(dof, nn)
+        ϕ10[fdof,:] .= mod.ϕ
+        ϕ1 = VectorField([], ϕ10, [0.0], [], 1, :v3D, K.model)
         applyBoundaryConditions!(ϕ1, constraints)
-        return Eigen(mod.f, ϕ1, problem)
+        return Eigen(mod.f, ϕ1.a, problem)
     else
         fdof = freeDoFs(problem, constraints)
         cdof = constrainedDoFs(problem, constraints)
