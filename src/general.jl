@@ -1,7 +1,7 @@
 export Problem, material, getEigenVectors, getEigenValues
 export displacementConstraint, load, elasticSupport
 export temperatureConstraint, heatFlux, heatSource, heatConvection
-export field, scalarField, vectorField, tensorField, ScalarField
+export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export constrainedDoFs, freeDoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, normalVector

@@ -2,8 +2,8 @@
 
 ```@autodocs
 Modules = [LowLevelFEM]
-Private = false
+Public = true
+Private = true
 Order = [:type, :function]
 Pages = ["src/general.jl", "src/LowLevelFEM.jl"]
 ```
-

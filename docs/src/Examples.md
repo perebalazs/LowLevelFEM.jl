@@ -7,6 +7,7 @@
 ![$\sigma_x$ and $\tau_{yx}$ on path](pic/bending_2D_path.png)
 
 cantilever2D.jl
+
 ```Julia
 using LowLevelFEM
 
@@ -40,6 +41,7 @@ gmsh.finalize()
 ```
 
 cantilever2D.geo
+
 ```gmsh
 SetFactory("OpenCASCADE");
 
@@ -72,6 +74,7 @@ Physical Curve("path", 8) = {5};
 ![$\sigma_x$ on deformed shape](pic/bending_3D.png)
 
 cantilever3D.jl
+
 ```Julia
 using LowLevelFEM
 
@@ -114,6 +117,7 @@ gmsh.finalize()
 ```
 
 cantilever3D.geo
+
 ```gmsh
 SetFactory("OpenCASCADE");
 
@@ -153,6 +157,7 @@ Physical Curve("path", 16) = {13};
 ![Equivalent stress on path](pic/sigma_eqv_path.png)
 
 LshapedPlate.jl
+
 ```Julia
 using LowLevelFEM
 
@@ -194,6 +199,7 @@ gmsh.finalize()
 ```
 
 LshapedPlate.geo
+
 ```gmsh
 Point(1) = {0, 0, 0, 15.0};
 Point(2) = {100, 0, 0, 15.0};
@@ -228,6 +234,7 @@ Physical Curve("path", 9) = {7};
 ```
 
 LshapedPlate2.geo
+
 ```gmsh
 R=1;
 
@@ -267,11 +274,10 @@ Physical Curve("path", 10) = {8};
 
 ## Wave propagation in a plate
 
-```@onlyhtml
 ![velocity field](pic/wave.mp4)
-```
 
 wavePropagation.jl
+
 ```Julia
 using LowLevelFEM
 
