@@ -25,6 +25,7 @@ LowLevelFEM is a Julia package for finite element analysis with an engineering-f
 - Field operators and results: gradient/divergence/curl; stress/strain and heat flux as element or nodal fields; smoothing at nodes with field jumps; user-defined scalar/vector/tensor FE fields.
 - Visualization and plots: Gmsh-based views for displacements, stresses, strains, heat flux, with animation for dynamics; plot results along user-defined paths; show results on surfaces.
 - Coordinate systems: rotate nodal DOFs with constant or function-defined local coordinate systems (incl. curvilinear).
+- Truss stuctures (static, transient, modal analysis)
 
 ## Installation
 
@@ -86,9 +87,9 @@ More end-to-end examples are available under [examples](https://github.com/pereb
 ## Planned features
 
 - Other material laws (incompressible Neo-Hooke, Mooney-Rivlin, etc.)
-- Truss, beam, shell elements
+- Beam, shell elements
 - Contact problems (penalty, Lagrange multiplier)
-- Multithreading
+- Multithreading (partially implemented)
 
 Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome. In case of any issue, please send a [bug report](https://github.com/perebalazs/LowLevelFEM.jl/issues).
 
