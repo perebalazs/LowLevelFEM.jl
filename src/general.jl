@@ -98,7 +98,7 @@ struct Problem
     non::Int64
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non) = new(name, type, dim, pdim, material, thickness, non)
-    function Problem(mat; thickness=1, type=:Solid, bandwidth=:none)
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none)
         
         if Sys.CPU_THREADS != Threads.nthreads()
             @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
@@ -140,46 +140,62 @@ struct Problem
         gmsh.option.setString("View.Format", "%.6g")
         
         material = mat
-        elemTags = []
-        for ipg in 1:length(material)
-            phName = material[ipg].phName
-            dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-            for idm in 1:length(dimTags)
-                dimTag = dimTags[idm]
-                edim = dimTag[1]
-                etag = dimTag[2]
-                if edim != dim && (type != :Truss || edim != 1)
-                    error("Problem: dimension of the problem ($dim) is different than the dimension of finite elements ($edim).")
-                end
-                elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
-                for i in 1:length(elementTags)
-                    if length(elementTags[i]) == 0
-                        error("Problem: No mesh in model '$name'.")
+        
+        if bandwidth ≠ :none
+            elemTags = []
+            for ipg in 1:length(material)
+                phName = material[ipg].phName
+                dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+                for idm in 1:length(dimTags)
+                    dimTag = dimTags[idm]
+                    edim = dimTag[1]
+                    etag = dimTag[2]
+                    if edim != dim && (type != :Truss || edim != 1)
+                        error("Problem: dimension of the problem ($dim) is different than the dimension of finite elements ($edim).")
                     end
-                    for j in 1:length(elementTags[i])
-                        push!(elemTags, elementTags[i][j])
+                    elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
+                    for i in 1:length(elementTags)
+                        if length(elementTags[i]) == 0
+                            error("Problem: No mesh in model '$name'.")
+                        end
+                        for j in 1:length(elementTags[i])
+                            push!(elemTags, elementTags[i][j])
+                        end
                     end
                 end
             end
-        end
-        
-        if bandwidth != :RCMK && bandwidth != :Hilbert && bandwidth != :Metis && bandwidth != :none
-            error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
-        end
-        
-        method = bandwidth == :none ? :RCMK : bandwidth
-        oldTags, newTags = gmsh.model.mesh.computeRenumbering(method, elemTags)
-        if bandwidth == :none
+            
+            if bandwidth != :RCMK && bandwidth != :Hilbert && bandwidth != :Metis && bandwidth != :none
+                error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
+            end
+            
+            #method = bandwidth == :none ? :RCMK : bandwidth
+            oldTags, newTags = gmsh.model.mesh.computeRenumbering(bandwidth, elemTags)
             permOldTags = sortperm(oldTags)
             sortNewTags = 1:length(oldTags)
             newTags[permOldTags] = sortNewTags
+            gmsh.model.mesh.renumberNodes(oldTags, newTags)
         end
-        gmsh.model.mesh.renumberNodes(oldTags, newTags)
         
-        non = length(oldTags)
+        nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes()
+        non = length(nodeTags)
         return new(name, type, dim, pdim, material, thickness, non)
     end
 end
+
+#=
+1. Szerezzük meg az összes 3D entitást
+entities = gmsh.model.getEntities(3)  # minden térfogat (dim=3)
+2. Gyűjtsük össze a node-okat entitásonként
+allNodes = Int[]
+for (dim, tag) in entities
+    nodeTags, coord, param = gmsh.model.mesh.getNodes(dim, tag, true)
+    append!(allNodes, nodeTags)
+end
+3. Vegyük az egyedi halmazt
+uniqueNodes = unique(allNodes)
+println("Összes 3D-hez tartozó node: ", length(uniqueNodes))
+=#
 
 using SparseArrays
 
@@ -581,7 +597,7 @@ end
 
 #=
 """
-    TensorField(A, a, t, numElem, nsteps, type, model)
+TensorField(A, a, t, numElem, nsteps, type, model)
 
 Structure containing the data of a tensor field (e.g., stress or strain).
 - A: vector of element-wise tensor data
@@ -1739,7 +1755,7 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
         nom = 1
         phName = onPhysicalGroup
     end
-
+    
     for ipg in 1:nom
         if onPhysicalGroup == ""
             phName = problem.material[ipg].phName
@@ -1771,7 +1787,8 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]

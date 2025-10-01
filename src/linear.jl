@@ -650,7 +650,8 @@ function stiffnessMatrixAXI(problem; elements=[])
         b = 1.0     # axi: “vastagság” tényező normálisan 1
 
         # a teljes 2D háló csomópont-koordinátái (R, Z a 3D X,Y-ból: R=X, Z=Y)
-        nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+        #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+        nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
         ncoord2 = zeros(3 * problem.non)
         ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]   # R (X)
         ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]   # Z (Y)
@@ -814,7 +815,8 @@ function stiffnessMatrixAXIParallel(problem; elements=[])
         b = 1.0
 
         # teljes 2D háló csomópont-koordináták (R = X)
-        nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+        #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+        nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
         ncoord2 = zeros(3 * problem.non)
         ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]
         ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]
@@ -979,7 +981,8 @@ function stiffnessMatrixAXIOld(problem; elements=[])
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -1083,7 +1086,8 @@ function stiffnessMatrixTruss(problem; elements=[])
                 error("stiffnessMatrixTruss: not 1D elements.")
             end
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(1, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(1, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -1390,7 +1394,8 @@ function nonLinearStiffnessMatrixAXI(problem; elements=[])
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -1524,7 +1529,8 @@ function massMatrixSolid(problem; elements = [], lumped::Bool = true)
         # AXI-hoz szükséges a R koordináta (R=X)
         ncoord2 = zeros(3 * problem.non)
         if problem.type == :AxiSymmetric
-            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)] # R
             ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)] # Z
             ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
@@ -1661,7 +1667,8 @@ function massMatrixSolid0(problem; elements=[], lumped=true)
     sizehint!(V, lengthOfIJV)
 
     # globális koordináták (axi esethez kell R=x)
-    nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes(problem.dim, -1, true, false)
+    #nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes(problem.dim, -1, true, false)
+    nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes()
     ncoord2 = zeros(3 * problem.non)
     ncoord2[nodeTags_all .* 3 .- 2] = ncoord_all[1:3:end]
     ncoord2[nodeTags_all .* 3 .- 1] = ncoord_all[2:3:end]
@@ -1835,7 +1842,8 @@ function massMatrixSolidParallel(problem; elements = [], lumped::Bool = true)
         # AXI-hoz kell a R koordináta
         ncoord2 = zeros(3 * problem.non)
         if problem.type == :AxiSymmetric
-            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
@@ -1992,7 +2000,8 @@ function massMatrixSolidParallel0(problem; elements=[], lumped=true)
     sizehint!(V, lengthOfIJV)
 
     # Globális csomópont-koordináták (axi-hoz kell az R=x komponens)
-    nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes(problem.dim, -1, true, false)
+    #nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes(problem.dim, -1, true, false)
+    nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes()
     ncoord2 = zeros(3 * problem.non)
     ncoord2[nodeTags_all .* 3 .- 2] = ncoord_all[1:3:end]   # R (x)
     ncoord2[nodeTags_all .* 3 .- 1] = ncoord_all[2:3:end]   # Z/Y
@@ -2213,7 +2222,8 @@ function massMatrixSolidOld(problem; elements=[], lumped=true)
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -2324,7 +2334,8 @@ function massMatrixTruss(problem; lumped=false)
                 error("stiffnessMatrixTruss: not 1D elements.")
             end
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(1, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(1, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -3366,7 +3377,8 @@ function solveStrain(q; DoFResults::Bool=false)
         # AXI-hoz kell a (R= X) koordináta
         ncoord2 = zeros(3 * non)
         if problem.type == :AxiSymmetric
-            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(local_dim, -1, true, false)
+            #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(local_dim, -1, true, false)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]  # R (X)
             ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]  # Z (Y)
             ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
@@ -3676,7 +3688,8 @@ function solveStrainOld(q; DoFResults=false)
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -3925,7 +3938,8 @@ function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=Sc
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
@@ -4167,7 +4181,8 @@ function solveAxialForce(q::VectorField)
                 error("stiffnessMatrixTruss: not 1D elements.")
             end
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, -1, true, false)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
             ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
             ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
