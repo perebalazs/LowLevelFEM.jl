@@ -5,7 +5,7 @@ using StaticArrays
 using Arpack
 using JLD2
 using Polyester
-using PrecompileTools
+using PrecompileTools: @setup_workload, @compile_workload
 #using Base.Threads
 import gmsh_jll
 include(gmsh_jll.gmsh_api)
@@ -23,29 +23,30 @@ include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
 
-#=
-# --- PRECOMPILE BLOKK ---
-@compile_workload begin
-    gmsh.initialize()
-
-    # nagyon kicsi 3D próba-probléma (pl. egy 1×1×1 kocka)
-    gmsh.open("cube.geo")
-    #gmsh.model.add("cube")
-    #b1 = gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1, 1)
-    #gmsh.model.occ.synchronize()
-    #gmsh.model.addPhysicalGroup(3, [1], 10)
-    #gmsh.model.setPhysicalName(3, 10, "body")
-    ##gmsh.model.mesh.setSize([[0, -1]], 1.0)
-    #gmsh.model.mesh.generate(3)
-
-    mat = material("body")
-    prob = Problem([mat], type = :Solid)
-    openPostProcessor()
-
-    stiffnessMatrix(prob)
-
-    gmsh.finalize()
+@setup_workload begin
+    @compile_workload begin
+        gmsh.initialize()
+        
+        # nagyon kicsi 3D próba-probléma (pl. egy 1×1×1 kocka)
+        gmsh.model.add("cube")
+        b1 = gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1, 1)
+        pts = gmsh.model.getEntities(0)
+        gmsh.model.occ.mesh.setSize(pts, 1.0)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", 1.0)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 1.0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        gmsh.model.occ.synchronize()
+        gmsh.model.addPhysicalGroup(3, [1], 10)
+        gmsh.model.setPhysicalName(3, 10, "body")
+        gmsh.model.mesh.generate(3)
+        
+        mat = material("body")
+        prob = Problem([mat])
+        
+        stiffnessMatrix(prob)
+        
+        gmsh.finalize()
+    end
 end
-=#
 
 end #module

@@ -646,6 +646,7 @@ end
 Internal function to display `ScalarField`, `VectorField` and `TensorField` as a `Matrix{Float64}` or `Vector{Matrix{Float64}}`.
 """
 function Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
+    display(typeof(M))
     if isNodal(M)
         display(M.a)
     else
@@ -2544,6 +2545,7 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
         gmsh.view.addHomogeneousModelData(uvec, j-1, problem.name, "NodeData", nodeTags, u, t[j], nc)
     end
     
+    gmsh.view.option.setNumber(uvec, "GlyphLocation", 2)
     gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
     if ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 1)
@@ -2976,6 +2978,7 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, fac
         gmsh.plugin.run("Smooth")
     end
     
+    gmsh.view.option.setNumber(SS, "GlyphLocation", 2)
     gmsh.view.option.setNumber(SS, "AdaptVisualizationGrid", 0)
     gmsh.view.option.setNumber(SS, "TargetError", -1e-4)
     gmsh.view.option.setNumber(SS, "MaxRecursionLevel", 1)
