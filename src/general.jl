@@ -2022,18 +2022,14 @@ function fieldError(S)
 end
 
 """
-    resultant(problem, field, phName; grad=false, component=:x)
+    resultant(field, phName)
 
-Computes the resultant of `field` on the physical group `phName`.
+Computes the resultant of vector field `field` on the physical group `phName`.
 Returns the resultant(s) in a `tuple`. The number of elements in the tuple depends on the
-dimension of `problem`.
-It can solve the resultant of a load vector (sum of the elements of the vector),
-if `field` is a vector of floats. If `field` is a view (tag of a view in gmsh), then
-the integral of the field is solved. `field` must have only one component.
-If `grad` is `true`, then the gradient of the `field` will be evaluated and `component` of the gradient
-(`:x`, `:y` or `:z`) will be used to solve the resultant.
+dimension of problem (dimension of `field`).
+It can solve for example the resultant of a load vector (sum of the elements of the vector).
 
-Return: `res`
+Return: `resx`
 
 or
 
@@ -2044,10 +2040,8 @@ or
 Return: `resx`, `resy`, `resz`
 
 Types:
-- `field`: Vector{Float64}
+- `field`: VectorField
 - `phName`: String 
-- `dim`: Int64
-- `res`: Float64 
 - `resx`: Float64 
 - `resy`: Float64 
 - `resz`: Float64 
