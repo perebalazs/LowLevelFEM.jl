@@ -3663,7 +3663,7 @@ Types:
 - `q`: VectorField
 - `E`: TensorField
 """
-function solveStrain(q; DoFResults::Bool=false)
+function solveStrainNew(q; DoFResults::Bool=false)
     problem = q.model
     gmsh.model.setCurrent(problem.name)
     
@@ -3973,7 +3973,7 @@ function solveStrain(q; DoFResults::Bool=false)
     end
 end
 
-function solveStrainOld(q; DoFResults=false)
+function solveStrain(q; DoFResults=false)
     problem = q.model
     gmsh.model.setCurrent(problem.name)
     
@@ -4052,35 +4052,37 @@ function solveStrainOld(q; DoFResults=false)
                 B = zeros(rowsOfB * numNodes, pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
                 r = zeros(numNodes)
-                for j in 1:length(elemTags[i])
+                e = zeros(9numNodes, nsteps) # tensors have nine elements
+                leTags = length(elemTags[i])
+                @inbounds for j in 1:leTags
                     elem = elemTags[i][j]
-                    for k in 1:numNodes
+                    @inbounds for k in 1:numNodes
                         nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
                     end
                     jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
                     Jac = reshape(jac, 3, :)
-                    for k in 1:numNodes
+                    @inbounds for k in 1:numNodes
                         invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
                         r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
                     end
-                    ∂h .*= 0
-                    for k in 1:numNodes, l in 1:numNodes
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
                         ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
                     end
-                    B .*= 0
+                    fill!(B, 0.0)
                     if dim == 2 && rowsOfB == 3
-                        for k in 1:numNodes, l in 1:numNodes
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
                             B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
                             B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
                         end
                     elseif dim == 3 && rowsOfB == 6
-                        for k in 1:numNodes, l in 1:numNodes
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
                             B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
                             B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
                             B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
                         end
                     elseif dim == 2 && rowsOfB == 4
-                        for k in 1:numNodes, l in 1:numNodes
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
                             B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
                             B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
                             B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l, k] / r[k]
@@ -4089,14 +4091,14 @@ function solveStrainOld(q; DoFResults=false)
                         error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     push!(numElem, elem)
-                    for k in 1:dim
+                    @inbounds for k in 1:dim
                         nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
                     end
-                    e = zeros(9numNodes, nsteps) # tensors have nine elements
-                    for k in 1:numNodes
+                    fill!(e, 0.0)
+                    @inbounds for k in 1:numNodes
                         if rowsOfB == 6 && dim == 3 && problem.type == :Solid
-                            B1 = B[k*6-5:k*6, 1:3*numNodes]
-                            for kk in 1:nsteps
+                            B1 = @view B[k*6-5:k*6, 1:3*numNodes]
+                            @inbounds for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, e0[6]/2,
@@ -4108,8 +4110,8 @@ function solveStrainOld(q; DoFResults=false)
                                 end
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
-                            B1 = B[k*3-2:k*3, 1:2*numNodes]
-                            for kk in 1:nsteps
+                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
@@ -4121,8 +4123,8 @@ function solveStrainOld(q; DoFResults=false)
                                 end
                             end
                         elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
-                            B1 = B[k*3-2:k*3, 1:2*numNodes]
-                            for kk in 1:nsteps
+                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
@@ -4134,8 +4136,8 @@ function solveStrainOld(q; DoFResults=false)
                                 end
                             end
                         elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
-                            B1 = B[k*4-3:k*4, 1:2*numNodes]
-                            for kk in 1:nsteps
+                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
                                 e0 = B1 * q.a[nn2, kk]
                                 if DoFResults == false
                                     e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
@@ -4161,8 +4163,8 @@ function solveStrainOld(q; DoFResults=false)
         end
     end
     if DoFResults == true
-        for k in 1:9
-            for l in 1:non
+        @inbounds for k in 1:9
+            @inbounds for l in 1:non
                 E1[k + 9 * l - 9, :] ./= pcs[l]
             end
         end
@@ -4673,8 +4675,8 @@ function solveStress(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=Sc
                 h = reshape(fun, :, numNodes)
                 nnet = zeros(Int, length(elemTags[i]), numNodes)
                 H = zeros(numNodes, numNodes)
-                for j in 1:numNodes
-                    for k in 1:numNodes
+                @inbounds for j in 1:numNodes
+                    @inbounds for k in 1:numNodes
                         H[j, k] = h[k, j]
                     end
                 end
