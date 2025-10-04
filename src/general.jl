@@ -2052,6 +2052,35 @@ Types:
 - `resy`: Float64 
 - `resz`: Float64 
 """
+function resultant(field::VectorField, phName::String)
+    axiSymmetric = false
+    problem = field.model
+    if isElementwise(field)
+        error("resultant: only nodal results are permitted.")
+    end
+    if problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction
+        axiSymmetric = true
+    end
+    ph1 = getTagForPhysicalName(phName)
+    nodes0, coords = gmsh.model.mesh.getNodesForPhysicalGroup(-1,ph1)
+    nodes = Vector{Int64}(nodes0)
+    dim = problem.dim
+    s = [0.0, 0.0, 0.0]
+    for i in 1:dim
+        for j in 1:length(nodes)
+            b = axiSymmetric == true ? 2π * coords[3j-2] : 1
+            s[i] += field.a[dim * nodes[j] - (dim - i)] * b
+        end
+    end
+    if dim == 1
+        return s[1]
+    elseif dim == 2
+        return s[1], s[2]
+    elseif dim == 3
+        return s[1], s[2], s[3]
+    end
+end
+
 function resultant(problem, field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0)
     if !isa(field, VectorField) && !isa(field, Matrix)
         return resultant2(problem, field, phName, grad, component, offsetX, offsetY, offsetZ)
