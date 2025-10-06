@@ -2067,11 +2067,11 @@ function resultant(field::VectorField, phName::String)
         end
     end
     if dim == 1
-        return s[1]
+        return [s[1]]
     elseif dim == 2
-        return s[1], s[2]
+        return [s[1], s[2]]
     elseif dim == 3
-        return s[1], s[2], s[3]
+        return [s[1], s[2], s[3]]
     end
 end
 
@@ -2485,6 +2485,7 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     pdim = problem.pdim
     pdim = div(size(q.a,1), problem.non)
     nodeTags = []
+    u = []
     ##############################################################################
     #if problem.type == :Reynolds || problem.type == :NavierStokes
     #    phName = problem.material.phName
