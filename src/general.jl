@@ -171,9 +171,9 @@ struct Problem
             
             #method = bandwidth == :none ? :RCMK : bandwidth
             oldTags, newTags = gmsh.model.mesh.computeRenumbering(bandwidth, elemTags)
-            permOldTags = sortperm(oldTags)
-            sortNewTags = 1:length(oldTags)
-            newTags[permOldTags] = sortNewTags
+            #permOldTags = sortperm(oldTags)
+            #sortNewTags = 1:length(oldTags)
+            #newTags[permOldTags] = sortNewTags
             gmsh.model.mesh.renumberNodes(oldTags, newTags)
         end
         

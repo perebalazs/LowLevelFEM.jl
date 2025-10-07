@@ -3590,10 +3590,11 @@ function solveDisplacement(K, f)
 end
 
 """
-    solveDisplacement(problem, load, supp)
+    solveDisplacement(problem, load, supp; condensed=true)
                             
-Solves the displacement vector `q` of `problem` with loads `load` and
-supports `supp`.
+Computes the displacement vector `q` for the given `problem` subject to 
+loads `load` and supports `supp`. When `condensed` is `true`, the 
+reduced stiffness matrix and load vector are used in the solution.
                             
 Return: `q`
                             
@@ -3601,21 +3602,63 @@ Types:
 - `problem`: Problem 
 - `load`: Vector{Tuple} 
 - `supp`: Vector{Tuple}
+- `condensed`: Boolean
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp)
+function solveDisplacement(problem, load, supp; condensed=true)
     K = stiffnessMatrix(problem)
     f = loadVector(problem, load)
-    applyBoundaryConditions!(K, f, supp)
-    type = :null
-    if f.type == :v3D
-        type = :v3D
-    elseif f.type == :v2D
-        type = :v2D
+    A = []
+    if condensed
+        fixed = constrainedDoFs(problem, supp)
+        free = setdiff(1:problem.non*problem.pdim, fixed)
+        u = copy(f)
+        fill!(u.a, 0.0)
+        applyBoundaryConditions!(u, supp)
+        f_kin = K.A[:, fixed] * u.a[fixed]
+        u.a[free] = K.A[free, free] \ (f.a[free] - f_kin[free])
+        return u
     else
-        error("solveDisplacement: wrong type of 'f': ($(f.type))")
+        fixed_dofs = constrainedDoFs(problem, supp)
+        u = copy(f)
+        fill!(u.a, 0.0)
+        applyBoundaryConditions!(u, supp)
+        f_kin = K.A[:, fixed_dofs] * u.a[fixed_dofs]
+        fixed = falses(size(K.A, 1))
+        fixed[fixed_dofs] .= true
+        for col in 1:size(K.A, 2)
+            colrange = K.A.colptr[col]:(K.A.colptr[col+1]-1)
+            for rowidx in colrange
+                row = K.A.rowval[rowidx]
+                if fixed[row]
+                    K.A.nzval[rowidx] = 0.0
+                elseif fixed[col]
+                    K.A.nzval[rowidx] = 0.0
+                end
+            end
+        end
+        for dof in fixed_dofs
+            K.A[dof, dof] = 1.0  # ha létezett korábban
+            f.a[dof] = u.a[dof]
+            f_kin[dof] = 0.0
+        end
+        dropzeros!(K.A)
+        u.a .= K.A \ (f.a - f_kin)
+        return u
+
+
+        #applyBoundaryConditions!(K, f, supp)
+        #A = reshape(K.A \ f.a, :, 1)
+        #type = :null
+        #if f.type == :v3D
+        #    type = :v3D
+        #elseif f.type == :v2D
+        #    type = :v2D
+        #else
+        #    error("solveDisplacement: wrong type of 'f': ($(f.type))")
+        #end
+        #return VectorField([], A, [0.0], [], 1, type, problem)
     end
-    return VectorField([], reshape(K.A \ f.a, :, 1), [0.0], [], 1, type, problem)
 end
 
 """
