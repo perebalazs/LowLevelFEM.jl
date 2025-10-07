@@ -5028,13 +5028,13 @@ Types:
 - `fₘᵢₙ`: Float64
 - `modes`: Eigen 
 """
-function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01)
+function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01, directSolver=false)
     if K.model != M.model
         error("solveEigenModes: K and M does not belong to the same model.")
     end
     problem = K.model
     ωₘᵢₙ² = (2π * fₘᵢₙ)^2
-    if size(K.A, 1) < 6
+    if directSolver
         ω², ϕ = eigen(Matrix(K.A), Matrix(M.A))
     else
         ω², ϕ = Arpack.eigs(K.A, M.A, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
@@ -5103,7 +5103,7 @@ Types:
 - `n`: Int64
 - `modes`: Eigen
 """
-function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0.1)
+function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0.1, directSolver=false)
     if !isa(loads, Vector)
         error("solveModalAnalysis: loads are not arranged in a vector. Put them in [...]")
     end
@@ -5122,7 +5122,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         M = SystemMatrix(M.A[fdof, fdof], M.model)
         #f = zeros(dof)
         #applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
+        mod = solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
         nn = length(mod.f)
         ϕ10 = zeros(dof, nn)
         ϕ10[fdof,:] .= mod.ϕ
