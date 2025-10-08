@@ -3590,11 +3590,12 @@ function solveDisplacement(K, f)
 end
 
 """
-    solveDisplacement(problem, load, supp; condensed=true)
+    solveDisplacement(problem, load, supp, elSupp; condensed=true)
                             
 Computes the displacement vector `q` for the given `problem` subject to 
-loads `load` and supports `supp`. When `condensed` is `true`, the 
+loads `load`, supports `supp` and elastic supports `elSupp`. When `condensed` is `true`, the 
 reduced stiffness matrix and load vector are used in the solution.
+(see `load`, `displacementConstraint` and `elasticSupport`)
                             
 Return: `q`
                             
@@ -3602,13 +3603,16 @@ Types:
 - `problem`: Problem 
 - `load`: Vector{Tuple} 
 - `supp`: Vector{Tuple}
+- `elSupp`: Vector{Tuple}
 - `condensed`: Boolean
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp; condensed=true)
+function solveDisplacement(problem, load, supp, elSupp; condensed=true)
     K = stiffnessMatrix(problem)
+    if elSupp ≠ []
+        applyElasticSupport!(K, elSupp)
+    end
     f = loadVector(problem, load)
-    A = []
     if condensed
         fixed = constrainedDoFs(problem, supp)
         free = setdiff(1:problem.non*problem.pdim, fixed)
@@ -3662,10 +3666,12 @@ function solveDisplacement(problem, load, supp; condensed=true)
 end
 
 """
-    solveDisplacement(problem, load, supp, elasticSupp)
+    solveDisplacement(problem, load, supp; condensed=true)
                             
-Solves the displacement vector `q` of `problem` with loads `load`, 
-supports `supp` and elastic supports `elasticSupp`.
+Computes the displacement vector `q` for the given `problem` subject to 
+loads `load` and supports `supp`. When `condensed` is `true`, the 
+reduced stiffness matrix and load vector are used in the solution.
+(see `load`, `displacementConstraint` and `elasticSupport`)
                             
 Return: `q`
                             
@@ -3675,20 +3681,8 @@ Types:
 - `supp`: Vector{Tuple}
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp, elsupp)
-    K = stiffnessMatrix(problem)
-    f = loadVector(problem, load)
-    applyElasticSupport!(K, elsupp)
-    applyBoundaryConditions!(K, f, supp)
-    type = :null
-    if f.type == :v3D
-        type = :v3D
-    elseif f.type == :v2D
-        type = :v2D
-    else
-        error("solveDisplacement: wrong type of 'f': ($(f.type))")
-    end
-    return VectorField([], reshape(K.A \ f.a, :, 1), [0.0], [], 1, type, problem)
+function solveDisplacement(problem, load, supp; condensed=true)
+    return solveDisplacement(problem, load, supp, [], condensed=condensed)
 end
 
 """
