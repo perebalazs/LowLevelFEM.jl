@@ -3590,7 +3590,7 @@ function solveDisplacement(K, f)
 end
 
 """
-    solveDisplacement(problem, load, supp, elSupp; condensed=true)
+    solveDisplacement(problem, load, supp, elSupp; condensed=false)
                             
 Computes the displacement vector `q` for the given `problem` subject to 
 loads `load`, supports `supp` and elastic supports `elSupp`. When `condensed` is `true`, the 
@@ -3607,7 +3607,7 @@ Types:
 - `condensed`: Boolean
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp, elSupp; condensed=true)
+function solveDisplacement(problem, load, supp, elSupp; condensed=false)
     K = stiffnessMatrix(problem)
     if elSupp ≠ []
         applyElasticSupport!(K, elSupp)
@@ -3620,7 +3620,7 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=true)
         fill!(u.a, 0.0)
         applyBoundaryConditions!(u, supp)
         f_kin = K.A[:, fixed] * u.a[fixed]
-        u.a[free] = K.A[free, free] \ (f.a[free] - f_kin[free])
+        u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
         return u
     else
         fixed_dofs = constrainedDoFs(problem, supp)
@@ -3647,7 +3647,7 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=true)
             f_kin[dof] = 0.0
         end
         dropzeros!(K.A)
-        u.a .= K.A \ (f.a - f_kin)
+        u.a .= cholesky(Symmetric(K.A)) \ (f.a - f_kin)
         return u
 
 
@@ -3666,7 +3666,7 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=true)
 end
 
 """
-    solveDisplacement(problem, load, supp; condensed=true)
+    solveDisplacement(problem, load, supp; condensed=false)
                             
 Computes the displacement vector `q` for the given `problem` subject to 
 loads `load` and supports `supp`. When `condensed` is `true`, the 
@@ -3681,7 +3681,7 @@ Types:
 - `supp`: Vector{Tuple}
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp; condensed=true)
+function solveDisplacement(problem, load, supp; condensed=false)
     return solveDisplacement(problem, load, supp, [], condensed=condensed)
 end
 
