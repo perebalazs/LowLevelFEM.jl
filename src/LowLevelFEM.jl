@@ -25,6 +25,7 @@ include("nonlinear.jl")
 
 @setup_workload begin
     @compile_workload begin
+        gmsh.option.setNumber("General.Terminal", 0)
         gmsh.initialize()
         
         # nagyon kicsi 3D próba-probléma (pl. egy 1×1×1 kocka)
