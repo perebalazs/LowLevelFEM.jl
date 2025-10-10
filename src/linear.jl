@@ -50,7 +50,7 @@ function make_ws_axi(dim::Int, numNodes::Int, numIntPoints::Int, rowsOfB::Int, d
 end
 
 """
-    stiffnessMatrix(problem)
+    stiffnessMatrix(problem; forceOneThread=true)
 
 Solves the stiffness matrix of the `problem`.
 
@@ -66,7 +66,7 @@ Types:
 K = stiffnessMatrix(problem)
 ```
 """
-function stiffnessMatrix(problem; elements=[], forceOneThread=false)
+function stiffnessMatrix(problem; elements=[], forceOneThread=true)
     if problem.type == :AxiSymmetric && Threads.nthreads() == 1
         return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :AxiSymmetric && Threads.nthreads() > 1

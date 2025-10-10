@@ -1,7 +1,7 @@
 name = "LowLevelFEM"
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
 authors = ["Balázs Pere"]
-version = "1.10.3"
+version = "1.10.4"
 
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
