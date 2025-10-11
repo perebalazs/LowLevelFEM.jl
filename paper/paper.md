@@ -1,21 +1,20 @@
 ---
 title: 'LowLevelFEM.jl: A lightweight finite element toolbox in Julia'
 tags:
-
-* Julia
-* finite element method
-* structural mechanics
-* continuum mechanics
-* open source
-  authors:
-* name: Balázs Pere
-  orcid: 0000-0002-1161-4206
-  affiliation: 1
-  affiliations:
-* name: Department of Applied Mechanics, Széchenyi István University, Győr, Hungary
-  index: 1
-  date: 2025-09-07
-  bibliography: paper.bib
+  - Julia
+  - finite element method
+  - structural mechanics
+  - continuum mechanics
+  - open source
+authors:
+  - name: Balázs Pere
+    orcid: 0000-0002-1161-4206
+    affiliation: 1
+affiliations:
+  - name: Department of Applied Mechanics, Széchenyi István University, Győr, Hungary
+    index: 1
+date: 2025-09-07
+bibliography: paper.bib
 ---
 
 # Summary
