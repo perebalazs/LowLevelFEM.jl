@@ -16,7 +16,6 @@ tags:
   index: 1
   date: 2025-09-07
   bibliography: paper.bib
-
 ---
 
 # Summary
