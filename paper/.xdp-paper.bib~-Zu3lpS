@@ -1,0 +1,57 @@
+@article{Bezanson2017,
+  title={Julia: A fresh approach to numerical computing},
+  author={Bezanson, Jeff and Edelman, Alan and Karpinski, Stefan and Shah, Viral B.},
+  journal={SIAM Review},
+  volume={59},
+  number={1},
+  pages={65--98},
+  year={2017},
+  publisher={SIAM},
+  doi={10.1137/141000671}
+}
+
+@article{Alnaes2015,
+  title={The FEniCS Project Version 1.5},
+  author={Aln{e}s, Martin and Blechta, Jan and Hake, Johan and Johansson, Anders and Kehlet, Benjamin and Logg, Anders and Richardson, Chris and others},
+  journal={Archive of Numerical Software},
+  volume={3},
+  number={100},
+  pages={9--23},
+  year={2015},
+  doi={10.11588/ans.2015.100.20553}
+}
+
+@article{Bangerth2007,
+  title={deal.II--A general-purpose object-oriented finite element library},
+  author={Bangerth, Wolfgang and Hartmann, Ralf and Kanschat, Guido},
+  journal={ACM Transactions on Mathematical Software (TOMS)},
+  volume={33},
+  number={4},
+  pages={24},
+  year={2007},
+  publisher={ACM New York, NY, USA},
+  doi={10.1145/1268776.1268779}
+}
+
+@article{Badia2020,
+  title={Gridap: An extensible Finite Element toolbox in Julia},
+  author={Badia, Santiago and Verdugo, Francesc},
+  journal={Journal of Open Source Software},
+  volume={5},
+  number={52},
+  pages={2520},
+  year={2020},
+  doi={10.21105/joss.02520}
+}
+
+@article{Geuzaine2009,
+  title={Gmsh: A three-dimensional finite element mesh generator with built-in pre-and post-processing facilities},
+  author={Geuzaine, Christophe and Remacle, Jean-Fran{\c{c}}ois},
+  journal={International Journal for Numerical Methods in Engineering},
+  volume={79},
+  number={11},
+  pages={1309--1331},
+  year={2009},
+  publisher={Wiley Online Library},
+  doi={10.1002/nme.2579}
+}

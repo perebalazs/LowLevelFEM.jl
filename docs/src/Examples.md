@@ -467,9 +467,8 @@ bc_hot = temperatureConstraint("hot", T=100.0)
 hcv = heatConvection("conv", h=15.0, Tₐ=20.0)
 Kth = heatConductionMatrix(probT)
 qth = heatFluxVector(probT, [])
-Cth = heatCapacityMatrix(probT)
 applyHeatConvection!(Kth, qth, [hcv])
-applyBoundaryConditions!(Kth, Cth, qth, [bc_hot])
+applyBoundaryConditions!(Kth, qth, [bc_hot])
 T = solveTemperature(Kth, qth)
 
 # 2) Elastic problem with thermal load
