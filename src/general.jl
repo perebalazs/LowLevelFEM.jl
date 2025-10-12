@@ -1509,83 +1509,90 @@ openPostProcessor()
 """
 function normalVector(problem::Problem, phName::String)
     gmsh.model.setCurrent(problem.name)
+
     non = problem.non
     ncoord2 = zeros(3 * non)
     numElem = Int[]
-    normalvectors = []
-    
+    normalvectors = Vector{Matrix{Float64}}()
+
+    # Fizikai csoport lekérdezése (pl. felület)
     dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-    sz = 0
-    for idm in 1:length(dimTags)
-        dimTag = dimTags[idm]
-        edim = dimTag[1]
-        etag = dimTag[2]
-        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-        for i in 1:length(elemTypes)
-            sz += length(elemTags[i])
-        end
-    end
-    sizehint!(numElem, sz)
-    sizehint!(normalvectors, sz)
-    
-    for idm in 1:length(dimTags)
-        dimTag = dimTags[idm]
-        edim = dimTag[1]
-        etag = dimTag[2]
+
+    for dimTag in dimTags
+        edim, etag = dimTag
         if edim != 2
             error("normalVector: physical group is not a surface.")
         end
+
         elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-        nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, etag, true, false)
-        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+        nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(edim, etag, true, false)
+
+        # Globális csomópontkoordináták betöltése
+        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:end]
+        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:end]
+        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:end]
+
+        # --- Elemciklus ---
         for i in 1:length(elemTypes)
             et = elemTypes[i]
-            elementName, eldim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+            elementName, eldim, order, numNodes, localNodeCoord, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            # Lokális koordináták átalakítása 3D formába
             localNodeCoord2 = zeros(length(localNodeCoord) ÷ 2 * 3)
-            localNodeCoord2[1:3:length(localNodeCoord2)] .= localNodeCoord[1:2:length(localNodeCoord)]
-            localNodeCoord2[2:3:length(localNodeCoord2)] .= localNodeCoord[2:2:length(localNodeCoord)]
-            #comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "Lagrange")
-            #h = reshape(fun, :, numNodes)
-            comp3, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
-            ∇h = reshape(dfun, :, numNodes)
+            localNodeCoord2[1:3:end] .= localNodeCoord[1:2:end]
+            localNodeCoord2[2:3:end] .= localNodeCoord[2:2:end]
+
+            # Bázisfüggvények deriváltjai a referenciadoménben
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
+            ∇h = reshape(dfun, :, numNodes)  # (3*numEval × numNodes)
+
             nnet = zeros(Int, length(elemTags[i]), numNodes)
-            vx = zeros(numNodes)
-            vy = zeros(numNodes)
-            vz = zeros(numNodes)
-            normvec = zeros(3numNodes)
+
+            # --- Elemeken végig ---
             for j in 1:length(elemTags[i])
                 elem = elemTags[i][j]
                 @inbounds for k in 1:numNodes
-                    nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    nnet[j, k] = elemNodeTags[i][(j-1)*numNodes + k]
                 end
-                xx = ncoord2[nnet[j, :] * 3 .- 2]
-                yy = ncoord2[nnet[j, :] * 3 .- 1]
-                zz = ncoord2[nnet[j, :] * 3 .- 0]
-                @inbounds for k in 1:numNodes
-                    v1x = ∇h[1:3:size(∇h,1), k]' * xx
-                    v1y = ∇h[1:3:size(∇h,1), k]' * yy
-                    v1z = ∇h[1:3:size(∇h,1), k]' * zz
-                    v2x = ∇h[2:3:size(∇h,1), k]' * xx
-                    v2y = ∇h[2:3:size(∇h,1), k]' * yy
-                    v2z = ∇h[2:3:size(∇h,1), k]' * zz
-                    vx[k] = v1y * v2z - v1z * v2y
-                    vy[k] = v1z * v2x - v1x * v2z
-                    vz[k] = v1x * v2y - v1y * v2x
-                    v = √(vx[k]^2 + vy[k]^2 + vz[k]^2)
-                    vx[k] /= v
-                    vy[k] /= v
-                    vz[k] /= v
+
+                xx = ncoord2[nnet[j, :]*3 .- 2]
+                yy = ncoord2[nnet[j, :]*3 .- 1]
+                zz = ncoord2[nnet[j, :]*3 .- 0]
+
+                normvec_elem = zeros(3 * numNodes)
+
+                # --- Csomópontonként ---
+                for k in 1:numNodes
+                    # Kiválasztjuk a lokális ∂N/∂ξ és ∂N/∂η értékeket a k-adik pontban
+                    dN_dξ = ∇h[1:3:end, k]
+                    dN_dη = ∇h[2:3:end, k]
+
+                    # Jacobi-mátrix komponensek (a k-adik pontban)
+                    dx_dξ = dot(dN_dξ, xx)
+                    dy_dξ = dot(dN_dξ, yy)
+                    dz_dξ = dot(dN_dξ, zz)
+                    dx_dη = dot(dN_dη, xx)
+                    dy_dη = dot(dN_dη, yy)
+                    dz_dη = dot(dN_dη, zz)
+
+                    # Kereszt-szorzat (∂x/∂ξ × ∂x/∂η)
+                    nx = dy_dξ * dz_dη - dz_dξ * dy_dη
+                    ny = dz_dξ * dx_dη - dx_dξ * dz_dη
+                    nz = dx_dξ * dy_dη - dy_dξ * dx_dη
+
+                    vnorm = √(nx^2 + ny^2 + nz^2)
+                    normvec_elem[3*k-2] = nx / vnorm
+                    normvec_elem[3*k-1] = ny / vnorm
+                    normvec_elem[3*k-0] = nz / vnorm
                 end
-                normvec[1:3:3numNodes] .= vx
-                normvec[2:3:3numNodes] .= vy
-                normvec[3:3:3numNodes] .= vz
+
                 push!(numElem, elem)
-                push!(normalvectors, reshape(normvec,:,1))
+                push!(normalvectors, reshape(normvec_elem, :, 1))
             end
         end
     end
+
     return VectorField(normalvectors, [;;], [0.0], numElem, 1, :v3D, problem)
 end
 
@@ -2446,7 +2453,7 @@ function rotateNodes(problem, phName, CoordSys)
 end
 
 """
-    showDoFResults(q, comp; name=..., visible=...)
+    showDoFResults(q, comp; name=..., visible=..., factor=0)
 
 Loads nodal results into a View in Gmsh. `q` is the field to show, `comp` is
 the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
@@ -2454,6 +2461,7 @@ the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar, :tensor),
 `name` is a title to display and `visible` is a Boolean to toggle the initial visibility in Gmsh on or off.
 If `q` has more columns, then a sequence of results will be shown (e.g., as an animation).
+`factor` multiplies the DoF result to increase for better visibility.
 This function returns the tag of the View.
 
 Returns: `tag`
@@ -2465,7 +2473,7 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
+function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Symbol; name=comp, visible=false, ff = 0, factor=0)
     problem = q.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
@@ -2594,7 +2602,7 @@ function showDoFResults(q, comp; name=comp, visible=false, ff = 0, factor=0)
     return uvec
 end
 
-function showDoFResults(q; name=q.type, visible=false, ff = 0, factor=0)
+function showDoFResults(q::Union{ScalarField,VectorField,TensorField}; name=q.type, visible=false, ff = 0, factor=0)
     if q isa ScalarField
         showDoFResults(q, :scalar, name=name, visible=visible, factor=factor)
     elseif q isa VectorField
@@ -2753,23 +2761,23 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showElementResults(F, comp; name=comp, visible=false, smooth=false, factor=0)
-    if F.type == :e || F.type == :tensor
+function showElementResults(F::Union{ScalarField,VectorField,TensorField}, comp; name=comp, visible=false, smooth=false, factor=0)
+    if F.type == :e || F.type == :tensor && isElementwise(F)
         return showStrainResults(F, comp, name=name, visible=visible, smooth=smooth)
-    elseif F.type == :s
+    elseif F.type == :s && isElementwise(F)
         return showStressResults(F, comp, name=name, visible=visible, smooth=smooth)
-    elseif F isa VectorField && F.A != []
+    elseif F isa VectorField && isElementwise(F)
         return showHeatFluxResults(F, comp, name=name, visible=visible, smooth=smooth, factor=factor)
     elseif F isa ScalarField && isElementwise(F)
         return showScalarResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
-    elseif F isa ScalarField && isNodal(F)
+    elseif isNodal(F)
         return showDoFResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
     else
         error("showElementResults: type is '$(F.type)'")
     end
 end
 
-function showElementResults(q; name=q.type, visible=false, smooth=false, ff = 0, factor=0)
+function showElementResults(q::Union{ScalarField,VectorField,TensorField}; name=typeof(q), visible=false, smooth=false, ff = 0, factor=0)
     if q isa ScalarField
         showElementResults(q, :scalar, name=name, visible=visible, smooth=smooth)
     elseif q isa VectorField
@@ -2781,7 +2789,7 @@ function showElementResults(q; name=q.type, visible=false, smooth=false, ff = 0,
     end
 end
 
-function showStressResults(q; name=q.type, visible=false, smooth=false, ff = 0, factor=0)
+function showStressResults(q::TensorField; name="StressField", visible=false, smooth=false, ff = 0, factor=0)
     if q isa TensorField
         showStressResults(q, :s, name=name, visible=visible, smooth=smooth)
     else
@@ -2789,11 +2797,19 @@ function showStressResults(q; name=q.type, visible=false, smooth=false, ff = 0, 
     end
 end
 
-function showStrainResults(q; name=q.type, visible=false, ff = 0, factor=0)
+function showStrainResults(q::TensorField; name="StrainField", visible=false, ff = 0, factor=0)
     if q isa TensorField
         showStrainResults(q, :e, name=name, visible=visible, smooth=smooth)
     else
         error("showStrainResults: argument must be a TensorField.")
+    end
+end
+
+function showHeatFluxResults(q::VectorField; name="VectorField", visible=false, ff = 0, factor=0)
+    if q isa VectorField
+        showHeatFluxResults(q, :vector, name=name, visible=visible, smooth=smooth)
+    else
+        error("showHeatFluxResults: argument must be a VectorField.")
     end
 end
 
@@ -2817,7 +2833,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(S, comp; name=comp, visible=false, smooth=false)
+function showStressResults(S::TensorField, comp; name=comp, visible=false, smooth=false)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     problem = S.model
     gmsh.model.setCurrent(problem.name)
@@ -2838,7 +2854,7 @@ function showStressResults(S, comp; name=comp, visible=false, smooth=false)
     for jj in 1:length(t)
         
         k = 1im
-        if comp == :s
+        if comp == :s || comp == :tensor
             σcomp = [σ[i][:,jj] for i in 1:length(S.numElem)]
             nc = 9
         elseif comp == :seqv
@@ -2926,7 +2942,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, factor=0)
+function showHeatFluxResults(S::VectorField, comp; name=comp, visible=false, smooth=true, factor=0)
     problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
@@ -3018,7 +3034,7 @@ function showHeatFluxResults(S, comp; name=comp, visible=false, smooth=true, fac
     return SS
 end
 
-function showScalarResults(S; name="scalar", visible=false, smooth=false, factor=0)
+function showScalarResults(S; name="ScalarField", visible=false, smooth=false, factor=0)
     problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
@@ -3073,7 +3089,7 @@ function showScalarResults(S; name="scalar", visible=false, smooth=false, factor
 end
 
 """
-    plotOnPath(problem, pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
+    plotOnPath(pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
 
 Loads a 2D plot along a path into a View in Gmsh. `field` is the View id in
 Gmsh from which the field data is imported. `pathName` is the name of a

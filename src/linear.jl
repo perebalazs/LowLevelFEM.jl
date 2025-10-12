@@ -3620,7 +3620,8 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false)
         fill!(u.a, 0.0)
         applyBoundaryConditions!(u, supp)
         f_kin = K.A[:, fixed] * u.a[fixed]
-        u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
+        #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
+        u.a[free] = lu(K.A[free, free]) \ (f.a[free] - f_kin[free])
         return u
     else
         fixed_dofs = constrainedDoFs(problem, supp)
@@ -3647,7 +3648,8 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false)
             f_kin[dof] = 0.0
         end
         dropzeros!(K.A)
-        u.a .= cholesky(Symmetric(K.A)) \ (f.a - f_kin)
+        #u.a .= cholesky(Symmetric(K.A)) \ (f.a - f_kin)
+        u.a .= lu(K.A) \ (f.a - f_kin)
         return u
 
 

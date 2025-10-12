@@ -1560,3 +1560,7 @@ function showDeformationResults(r::VectorField, comp; name=comp, visible=false)
     end
     return showDoFResults(u, comp, name=name, visible=visible, factor=1)
 end
+
+function showDeformationResults(r::VectorField; name="vector", visible=false)
+    return showDeformationResults(r, :vector, name=name, visible=visible)
+end
