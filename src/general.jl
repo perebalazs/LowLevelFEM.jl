@@ -255,6 +255,7 @@ abstract type AbstractField end
 """
     ScalarField(A, a, t, numElem, nsteps, type, model)
     ScalarField(problem, dataField)
+    ScalarField(problem::Problem, phName::String, data::Union{Number,Function})
 
 Structure containing all data of a scalar field (e.g., temperature).
 - A: vector of element-wise scalar data
@@ -344,11 +345,16 @@ struct ScalarField <: AbstractField
         t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
     end
+    function ScalarField(problem::Problem, phName::String, data::Union{Number,Function})
+        f = field(phName, f=data)
+    return ScalarField(problem, [f])
+    end
 end
 
 """
     VectorField(A, a, t, numElem, nsteps, type, model)
     VectorField(problem, dataField)
+    VectorField(problem::Problem, phName::String, data::Vector)
 
 Structure containing the data of a vector field (e.g., displacement or heat flux).
 - A: vector of element-wise vector data
@@ -455,11 +461,20 @@ struct VectorField <: AbstractField
         t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
     end
+    function VectorField(problem::Problem, phName::String, data::Vector)
+        if size(data) == (3,)
+            f = field(phName, fx=data[1], fy=data[2], fz=data[3])
+            return VectorField(problem, [f])
+        else
+            error("VectorField: size of data is $(size(data)).")
+        end
+    end
 end
 
 """
     TensorField(A, a, t, numElem, nsteps, type, model)
     TensorField(problem, dataField)
+    TensorField(problem::Problem, phName::String, data::Matrix)
 
 Structure containing the data of a tensor field (e.g., stress or strain).
 - A: tensor of element-wise tensor data
@@ -592,6 +607,14 @@ struct TensorField <: AbstractField
         a = [;;]
         t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
+    end
+    function TensorField(problem::Problem, phName::String, data::Matrix)
+        if size(data) == (3,3)
+            f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
+            return TensorField(problem, [f])
+        else
+            error("TensorField: size of data is $(size(data)).")
+        end
     end
 end
 
