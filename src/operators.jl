@@ -2141,6 +2141,33 @@ function \(A::Union{SystemMatrix,Matrix,SparseMatrixCSC}, b::SparseMatrixCSC)
     return d
 end
 
+function ldiv_sparse!(X::SparseMatrixCSC, K::SystemMatrix, F::SparseMatrixCSC)
+    n, m = size(K.A, 1), size(F, 2)
+    Ffac = lu(K.A)
+    x = zeros(n)
+    b = zeros(n)
+    I, V, J = Int[], Float64[], Int[]
+
+    for j in 1:m
+        idx, val = findnz(view(F, :, j))
+        b .= 0
+        b[idx] .= val
+        ldiv!(x, Ffac, b)
+        nz = findall(!iszero, x)
+        append!(I, nz)
+        append!(J, fill(j, length(nz)))
+        append!(V, x[nz])
+    end
+
+    X = sparse(I, J, V, n, m)
+    return X
+end
+
+function \(K::SystemMatrix, F::SparseMatrixCSC)
+    X = spzeros(size(K.A, 1), size(F, 2))
+    return ldiv_sparse!(X, K, F)
+end
+
 function *(A::SystemMatrix, b::Number)
     return SystemMatrix(A.A * b, A.model)
 end
