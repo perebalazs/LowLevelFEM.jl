@@ -48,7 +48,17 @@ include("nonlinear.jl")
         mat = material("body")
         prob = Problem([mat])
         
-        stiffnessMatrix(prob)
+        #stiffnessMatrix(prob)
+        supp = displacementConstraint("left", ux=0, uy=0, uz=0)
+        load1 = load("right", fx=1)
+
+        u = solveDisplacement(prob, [load1], [supp])
+
+        S = solveStress(u)
+
+        showDoFResults(u)
+        showDoFResults(S)
+        showElementResults(S)
         
         gmsh.finalize()
     end

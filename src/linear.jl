@@ -318,6 +318,10 @@ function stiffnessMatrixSolid(problem; elements=[])
     dof = problem.pdim * problem.non
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
+    I = nothing
+    J = nothing
+    V = nothing
+    GC.gc()
     return SystemMatrix(K, problem)
 end
 

@@ -2835,13 +2835,13 @@ function showElementResults(F::Union{ScalarField,VectorField,TensorField}, comp;
     end
 end
 
-function showElementResults(q::Union{ScalarField,VectorField,TensorField}; name=typeof(q), visible=false, smooth=false, ff = 0, factor=0)
+function showElementResults(q::Union{ScalarField,VectorField,TensorField}; name="__field__", visible=false, smooth=false, ff = 0, factor=0)
     if q isa ScalarField
-        showElementResults(q, :scalar, name=name, visible=visible, smooth=smooth)
+        showElementResults(q, :scalar, name=name == "__field__" ? :scalar : name, visible=visible, smooth=smooth)
     elseif q isa VectorField
-        showElementResults(q, :vector, name=name, visible=visible, smooth=smooth, factor=factor)
+        showElementResults(q, :vector, name=name == "__field__" ? :vector : name, visible=visible, smooth=smooth, factor=factor)
     elseif q isa TensorField
-        showElementResults(q, :tensor, name=name, visible=visible, smooth=smooth)
+        showElementResults(q, :tensor, name=name == "__field__" ? :tensor : name, visible=visible, smooth=smooth)
     else
         error("showElementResults: argument must be a ScalarField, VectorField or TensorField.")
     end
@@ -2891,7 +2891,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(S::TensorField, comp; name=String(comp), visible=false, smooth=false)
+function showStressResults(S::TensorField, comp; name=comp, visible=false, smooth=false)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     problem = S.model
     gmsh.model.setCurrent(problem.name)
@@ -3000,7 +3000,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showHeatFluxResults(S::VectorField, comp; name=String(comp), visible=false, smooth=true, factor=0)
+function showHeatFluxResults(S::VectorField, comp; name=comp, visible=false, smooth=true, factor=0)
     problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
