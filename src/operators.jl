@@ -1469,7 +1469,8 @@ function *(AA::TensorField, BB::VectorField)
         b = BB
     end
     #if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-    if b.model.dim == 3
+    #if b.model.dim == 3
+    if b.type == :v3D
         if length(A.A) != length(b.A)
             error("*(A::TensorField, b::VectorField): size of A=$(length(A.A)) != size of b=$(length(b.A))")
         end
@@ -1515,7 +1516,8 @@ function *(BB::VectorField, AA::TensorField)
         b = BB
     end
     #if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-    if b.model.dim == 3
+    #if b.model.dim == 3
+    if b.type == :v3D
         if length(A.A) != length(b.A)
             error("*(A::TensorField, b::VectorField): size of A=$(length(A.A)) != size of b=$(length(b.A))")
         end
