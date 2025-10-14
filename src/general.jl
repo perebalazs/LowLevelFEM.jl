@@ -280,6 +280,8 @@ Types:
 s(x,y,z) = 2x + 3y
 fs = field("body", f=s)
 S = ScalarField(problem, [fs])
+
+S2 = ScalarField(problem, "body", s)
 ```
 Here `S` is defined element-wise.
 """
@@ -347,7 +349,7 @@ struct ScalarField <: AbstractField
     end
     function ScalarField(problem::Problem, phName::String, data::Union{Number,Function})
         f = field(phName, f=data)
-    return ScalarField(problem, [f])
+        return ScalarField(problem, [f])
     end
 end
 
@@ -380,6 +382,8 @@ vx(x,y,z) = x + y
 vy(x,y,z) = z
 fv = field("body", fx=vx, fy=vy, fz=3)
 V = VectorField(problem, [fv])
+
+v2 = VectorField(problem, "body", [vx, vy, 3])
 ```
 Here `V` is defined element-wise
 """
@@ -500,6 +504,8 @@ tx(x,y,z) = x + y
 txy(x,y,z) = z
 ft = field("body", fx=tx, fxy=txy, fz=3)
 T = TensorField(problem, [ft])
+
+T2 = TensorField(problem, "body", [1 0 0; 0 2 0; 0 0 3])
 ```
 Here `T` is defined element-wise
 """
@@ -1211,7 +1217,9 @@ Types:
 ```julia
 f2 = field("face1", f=1)
 qq = scalarField(problem, [f2])
-qqq = showDoFResults(qq, :scalar)
+qqq = showDoFResults(qq)
+
+qq2 = scalarField(problem, "body", 2.0)
 ```
 
 Here ScalarField is defined in nodes.
@@ -1248,6 +1256,11 @@ function scalarField(problem, dataField)
     end
     return ScalarField([], reshape(field, :, 1), [0], [], 1, :scalar, problem)
 end
+    
+function scalarField(problem::Problem, phName::String, data::Union{Number,Function})
+    f = field(phName, f=data)
+    return scalarField(problem, [f])
+end
 
 """
     vectorField(problem, dataField; type=...)
@@ -1270,7 +1283,9 @@ f2(x, y, z) = 5y
 ff1 = field("face1", fx=f1, fy=f2, fz=0)
 ff2 = field("face2", fx=f2, fy=f1, fz=1)
 qq = vectorField(problem, [ff1, ff2])
-qq0 = showDoFResults(qq, :vector)
+qq0 = showDoFResults(qq)
+
+qq2 = vectorField(problem, "body", [1, 2, ff2])
 ```
 
 Here VectorField is defined in nodes.
@@ -1336,6 +1351,15 @@ function vectorField(problem, dataField)
     return VectorField([], reshape(field, :,1), [0], [], 1, type, problem)
 end
 
+function vectorField(problem::Problem, phName::String, data::Vector)
+    if size(data) == (3,)
+        f = field(phName, fx=data[1], fy=data[2], fz=data[3])
+        return vectorField(problem, [f])
+    else
+        error("vectorField: size of data is $(size(data)).")
+    end
+end
+
 """
     tensorField(problem, dataField; type=...)
 
@@ -1357,7 +1381,9 @@ f2(x, y, z) = 5y
 ff1 = field("face1", fx=f1, fy=f2, fz=0, fxy=1, fyz=1, fzx=f2)
 ff2 = field("face2", fx=f2, fy=f1, fz=1, fxy=1, fyz=f1, fzx=1)
 qq = tensorField(problem, [ff1, ff2])
-qq0 = showDoFResults(qq, :tensor)
+qq0 = showDoFResults(qq)
+
+qq2 = tensorField(problem, "body", [1 0 0; 0 2 0; 0 0 f1])
 ```
 
 Here TensorField is defined in nodes.
@@ -1480,6 +1506,15 @@ function tensorField(problem, dataField; type=:e)
         end
     end
     return TensorField([], reshape(field, :,1), [0], [], 1, type, problem)
+end
+
+function tensorField(problem::Problem, phName::String, data::Matrix)
+    if size(data) == (3,3)
+        f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
+        return tensorField(problem, [f])
+    else
+        error("tensorField: size of data is $(size(data)).")
+    end
 end
 
 """
@@ -2856,7 +2891,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(S::TensorField, comp; name=comp, visible=false, smooth=false)
+function showStressResults(S::TensorField, comp; name=String(comp), visible=false, smooth=false)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     problem = S.model
     gmsh.model.setCurrent(problem.name)
@@ -2965,7 +3000,7 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showHeatFluxResults(S::VectorField, comp; name=comp, visible=false, smooth=true, factor=0)
+function showHeatFluxResults(S::VectorField, comp; name=String(comp), visible=false, smooth=true, factor=0)
     problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
