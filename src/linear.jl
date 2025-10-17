@@ -3594,12 +3594,13 @@ function solveDisplacement(K, f)
 end
 
 """
-    solveDisplacement(problem, load, supp, elSupp; condensed=false)
+    solveDisplacement(problem, load, supp, elSupp; condensed=false, iterative=false)
                             
 Computes the displacement vector `q` for the given `problem` subject to 
 loads `load`, supports `supp` and elastic supports `elSupp`. When `condensed` is `true`, the 
 reduced stiffness matrix and load vector are used in the solution.
 (see `load`, `displacementConstraint` and `elasticSupport`)
+If `iterative` is true, conjugate gradient method will be used.
                             
 Return: `q`
                             
@@ -3611,7 +3612,7 @@ Types:
 - `condensed`: Boolean
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp, elSupp; condensed=false)
+function solveDisplacement(problem, load, supp, elSupp; condensed=false, iterative=false)
     K = stiffnessMatrix(problem)
     if elSupp ≠ []
         applyElasticSupport!(K, elSupp)
@@ -3625,7 +3626,11 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false)
         applyBoundaryConditions!(u, supp)
         f_kin = K.A[:, fixed] * u.a[fixed]
         #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
-        u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
+        if iterative
+            u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free])
+        else
+            u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
+        end
         return u
     else
         fixed_dofs = constrainedDoFs(problem, supp)
@@ -3653,7 +3658,11 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false)
         end
         dropzeros!(K.A)
         #u.a .= cholesky(Symmetric(K.A)) \ (f.a - f_kin)
-        u.a .= (K.A) \ (f.a - f_kin)
+        if iterative
+            u.a .= cg(K.A, f.a - f_kin)
+        else
+            u.a .= (K.A) \ (f.a - f_kin)
+        end
         return u
 
 
@@ -3672,12 +3681,13 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false)
 end
 
 """
-    solveDisplacement(problem, load, supp; condensed=false)
+    solveDisplacement(problem, load, supp; condensed=false, iterative=false)
                             
 Computes the displacement vector `q` for the given `problem` subject to 
 loads `load` and supports `supp`. When `condensed` is `true`, the 
 reduced stiffness matrix and load vector are used in the solution.
 (see `load`, `displacementConstraint` and `elasticSupport`)
+If `iterative` is true, conjugate gradient method will be used.
                             
 Return: `q`
                             
@@ -3687,8 +3697,8 @@ Types:
 - `supp`: Vector{Tuple}
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp; condensed=false)
-    return solveDisplacement(problem, load, supp, [], condensed=condensed)
+function solveDisplacement(problem, load, supp; condensed=false, iterative=false)
+    return solveDisplacement(problem, load, supp, [], condensed=condensed, iterative=iterative)
 end
 
 """

@@ -1,6 +1,7 @@
 module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
+using IterativeSolvers, IncompleteLU
 using StaticArrays
 using Arpack
 using JLD2

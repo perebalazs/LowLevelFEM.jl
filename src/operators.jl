@@ -2101,6 +2101,8 @@ function \(A::Union{SystemMatrix,Matrix}, BB::ScalarField)
     if B.a != [;;] && B.nsteps == 1
         type = :scalar
         C = A isa Matrix ? A \ B.a : A.A \ B.a
+        B = nothing
+        GC.gc()
         return ScalarField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
     else
         error("\\(A::SystemMatrix, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
@@ -2125,12 +2127,15 @@ function \(A::Union{SystemMatrix,Matrix}, BB::VectorField)
             error("\\(A::SystemMatrix, B::VectorField): ")
         end
         C = A isa Matrix ? A \ B.a : A.A \ B.a
+        B = nothing
+        GC.gc()
         return VectorField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
     else
         error("\\(A::SystemMatrix, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
     end
 end
 
+#=
 function \(A::Union{SystemMatrix,Matrix,SparseMatrixCSC}, b::SparseMatrixCSC)
     m, n = size(b)
     c = zeros(m)
@@ -2142,6 +2147,7 @@ function \(A::Union{SystemMatrix,Matrix,SparseMatrixCSC}, b::SparseMatrixCSC)
     end
     return d
 end
+=#
 
 function ldiv_sparse!(X::SparseMatrixCSC, K::SystemMatrix, F::SparseMatrixCSC)
     n, m = size(K.A, 1), size(F, 2)
