@@ -99,10 +99,13 @@ struct Problem
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non) = new(name, type, dim, pdim, material, thickness, non)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none)
-        
-        if Sys.CPU_THREADS != Threads.nthreads()
-            @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
+        if type == :dummy
+            return new("dummy", :dummy, 0, 0, mat, 0, 0)
         end
+
+        #if Sys.CPU_THREADS != Threads.nthreads()
+        #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
+        #end
         
         if type == :Solid
             dim = 3

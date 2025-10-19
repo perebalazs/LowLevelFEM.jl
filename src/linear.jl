@@ -67,6 +67,9 @@ K = stiffnessMatrix(problem)
 ```
 """
 function stiffnessMatrix(problem; elements=[], forceOneThread=true)
+    if problem.type == :dummy
+        return nothing
+    end
     if problem.type == :AxiSymmetric && Threads.nthreads() == 1
         return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :AxiSymmetric && Threads.nthreads() > 1
@@ -3594,13 +3597,23 @@ function solveDisplacement(K, f)
 end
 
 """
-    solveDisplacement(problem, load, supp, elSupp; condensed=false, iterative=false)
+    solveDisplacement(problem, load, supp, elSupp;
+                      condensed = false,
+                      iterative = false,
+                      reltol::Real = sqrt(eps()),
+                      maxiter::Int = problem.non * problem.dim,
+                      preconditioner = Identity(),
+                      ordering=true)
                             
 Computes the displacement vector `q` for the given `problem` subject to 
 loads `load`, supports `supp` and elastic supports `elSupp`. When `condensed` is `true`, the 
 reduced stiffness matrix and load vector are used in the solution.
 (see `load`, `displacementConstraint` and `elasticSupport`)
-If `iterative` is true, conjugate gradient method will be used.
+If `iterative` is true, conjugate gradient method will be used with `reltol` and
+`maxiter` (see `cg` in the `IterativeSolvers` package)
+If `ordering` is false, no culomn ordering will be performed in the stiffness
+matrix. In this case it is advisable to use the `bandwidth` option when define `Problem`.
+(see `lu` in `LinearAlgebra` package, `q=nothing` option)
                             
 Return: `q`
                             
@@ -3610,9 +3623,22 @@ Types:
 - `supp`: Vector{Tuple}
 - `elSupp`: Vector{Tuple}
 - `condensed`: Boolean
+- `iterative`: Boolean
+- `maxiter`: Int
+- `reltol`: Real
+- `preconditioner`: preconditioner object (made by eg. `ilu` or `ichol`)
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp, elSupp; condensed=false, iterative=false)
+function solveDisplacement(problem, load, supp, elSupp;
+                           condensed=false,
+                           iterative=false,
+                           reltol::Real = sqrt(eps()),
+                           maxiter::Int = problem.non * problem.dim,
+                           preconditioner = Identity(),
+                           ordering=true)
+    if problem.type == :dummy
+        return nothing
+    end
     K = stiffnessMatrix(problem)
     if elSupp ≠ []
         applyElasticSupport!(K, elSupp)
@@ -3627,7 +3653,9 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false, iterati
         f_kin = K.A[:, fixed] * u.a[fixed]
         #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
         if iterative
-            u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free])
+            u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free], Pl=preconditioner, reltol=reltol, maxiter=maxiter)
+        elseif ordering == false
+            u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
         else
             u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
         end
@@ -3659,9 +3687,11 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false, iterati
         dropzeros!(K.A)
         #u.a .= cholesky(Symmetric(K.A)) \ (f.a - f_kin)
         if iterative
-            u.a .= cg(K.A, f.a - f_kin)
+            u.a .= cg(K.A, f.a - f_kin, Pl=preconditioner, reltol=reltol, maxiter=maxiter)
+        elseif ordering == false
+            u.a .= lu(K.A, q=nothing) \ (f.a - f_kin)
         else
-            u.a .= (K.A) \ (f.a - f_kin)
+            K.A \ (f.a - f_kin)
         end
         return u
 
@@ -3681,13 +3711,23 @@ function solveDisplacement(problem, load, supp, elSupp; condensed=false, iterati
 end
 
 """
-    solveDisplacement(problem, load, supp; condensed=false, iterative=false)
+    solveDisplacement(problem, load, supp;
+                      condensed = false,
+                      iterative = false,
+                      reltol::Real = sqrt(eps()),
+                      maxiter::Int = problem.non * problem.dim,
+                      preconditioner = Identity(),
+                      ordering=true)
                             
 Computes the displacement vector `q` for the given `problem` subject to 
 loads `load` and supports `supp`. When `condensed` is `true`, the 
 reduced stiffness matrix and load vector are used in the solution.
 (see `load`, `displacementConstraint` and `elasticSupport`)
-If `iterative` is true, conjugate gradient method will be used.
+If `iterative` is true, conjugate gradient method will be used with `reltol` and
+`maxiter` (see `cg` in the `IterativeSolvers` package)
+If `ordering` is false, no culomn ordering will be performed in the stiffness
+matrix. In this case it is advisable to use the `bandwidth` option when define `Problem`.
+(see `lu` in `LinearAlgebra` package, `q=nothing` option)
                             
 Return: `q`
                             
@@ -3697,8 +3737,14 @@ Types:
 - `supp`: Vector{Tuple}
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp; condensed=false, iterative=false)
-    return solveDisplacement(problem, load, supp, [], condensed=condensed, iterative=iterative)
+function solveDisplacement(problem, load, supp;
+                           condensed=false,
+                           iterative=false,
+                           reltol::Real = sqrt(eps()),
+                           maxiter::Int = problem.non * problem.dim,
+                           preconditioner = Identity(),
+                           ordering=true)
+    return solveDisplacement(problem, load, supp, [], condensed=condensed, iterative=iterative, reltol=reltol, maxiter=maxiter, preconditioner=preconditioner, ordering=ordering)
 end
 
 """
@@ -4612,6 +4658,9 @@ function solveStressSlow(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model),
 end
 
 function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model), DoFResults=false)
+    if q.type == :dummy
+        return nothing
+    end
     problem = q.model
     gmsh.model.setCurrent(problem.name)
     # Jacobian --> faster

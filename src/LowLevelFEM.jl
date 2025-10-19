@@ -1,7 +1,7 @@
 module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
-using IterativeSolvers, IncompleteLU
+using IterativeSolvers
 using StaticArrays
 using Arpack
 using JLD2
@@ -26,42 +26,30 @@ include("nonlinear.jl")
 
 @setup_workload begin
     @compile_workload begin
-        gmsh.initialize()
-        gmsh.option.setNumber("General.Terminal", 0)
-        
-        # nagyon kicsi 3D próba-probléma (pl. egy 1×1×1 kocka)
-        gmsh.model.add("cube")
-        b1 = gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1, 1)
-        pts = gmsh.model.getEntities(0)
-        gmsh.model.occ.mesh.setSize(pts, 1.0)
-        gmsh.option.setNumber("Mesh.MeshSizeMin", 1.0)
-        gmsh.option.setNumber("Mesh.MeshSizeMax", 1.0)
-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
-        gmsh.model.occ.synchronize()
-        gmsh.model.mesh.generate(3)
-        gmsh.model.addPhysicalGroup(3, [1], 10)
-        gmsh.model.setPhysicalName(3, 10, "body")
-        gmsh.model.addPhysicalGroup(2, [1], 11)
-        gmsh.model.setPhysicalName(2, 11, "left")
-        gmsh.model.addPhysicalGroup(2, [2], 12)
-        gmsh.model.setPhysicalName(2, 12, "right")
-        
-        mat = material("body")
-        prob = Problem([mat])
-        
-        #stiffnessMatrix(prob)
-        supp = displacementConstraint("left", ux=0, uy=0, uz=0)
-        load1 = load("right", fx=1)
-
-        u = solveDisplacement(prob, [load1], [supp])
-
-        S = solveStress(u)
-
-        showDoFResults(u)
-        showDoFResults(S)
-        showElementResults(S)
-        
-        gmsh.finalize()
+        mat = material("dummy")
+        prob = Problem([mat], type = :dummy)
+        stiffnessMatrix(prob)
+        solveDisplacement(prob, [], [])
+        solveDisplacement(prob, [], [], condensed=true)
+        solveDisplacement(prob, [], [], iterative=true)
+        solveDisplacement(prob, [], [], condensed=true, iterative=true)
+        solveDisplacement(prob, [], [], iterative=true, reltol=0)
+        solveDisplacement(prob, [], [], iterative=true, maxiter=0)
+        solveDisplacement(prob, [], [], iterative=true, maxiter=0, reltol=0)
+        solveDisplacement(prob, [], [], condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
+        solveDisplacement(prob, [], [], [])
+        solveDisplacement(prob, [], [], [], condensed=true)
+        solveDisplacement(prob, [], [], [], iterative=true)
+        solveDisplacement(prob, [], [], [], condensed=true, iterative=true)
+        solveDisplacement(prob, [], [], [], iterative=true, reltol=0)
+        solveDisplacement(prob, [], [], [], iterative=true, maxiter=0)
+        solveDisplacement(prob, [], [], [], iterative=true, maxiter=0, reltol=0)
+        solveDisplacement(prob, [], [], [], condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
+        q = VectorField([], [;;], [], [], 0, :dummy, prob)
+        T = ScalarField([], [;;], [], [], 0, :dummy, prob)
+        solveStress(q)
+        solveStress(q, DoFResults=true)
+        solveStress(q, T=T, DoFResults=true)
     end
 end
 
