@@ -56,13 +56,28 @@ jobs:
         with:
           version: '1.12'
 
+      # --- új lépés: javítja a JLL előkompilálási hibát ---
+      - name: Pre-install Julia stdlibs
+        run: |
+          julia -e '
+            using Pkg;
+            Pkg.Registry.update();
+            for pkg in ["OpenSSL_jll", "LibSSH2_jll", "LibGit2_jll", "LibCURL_jll"]
+                try
+                    Pkg.add(pkg)
+                catch e
+                    @warn("Skipping preinstall for $pkg", e)
+                end
+            end
+          '
+
       - name: Install documentation dependencies
         run: |
           julia --project=docs -e '
-            using Pkg;
-            Pkg.Registry.update();
-            Pkg.develop(PackageSpec(path=pwd()));
-            Pkg.instantiate();
+            using Pkg
+            Pkg.Registry.update()
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()
           '
 
       - name: Build docs (HTML + LaTeX)
