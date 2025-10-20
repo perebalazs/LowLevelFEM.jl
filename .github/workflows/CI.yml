@@ -60,6 +60,7 @@ jobs:
         run: |
           julia --project=docs -e '
             using Pkg;
+            Pkg.Registry.update();
             Pkg.develop(PackageSpec(path=pwd()));
             Pkg.instantiate();
           '
