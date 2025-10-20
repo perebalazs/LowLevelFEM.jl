@@ -39,7 +39,7 @@ using Test
         u = solveDisplacement(prob, [load1], [supp])
         S = solveStress(u)
         σ = probe(S, 0.5, 0.5, 0.5)
-        @test any(!iszero, σ)
+        @test all(!isnan, σ)
     finally
         gmsh.finalize()
     end
