@@ -54,12 +54,34 @@ struct Material
     λ::Float64
     μ::Float64
     κ::Float64
+    η::Float64
+    p₀::Float64
     A::Float64
     Material() = new()
-    Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, A) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ, A)
+    Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
 
+struct Geometry
+    nameGeo::String
+    nameGap::String
+    dim::Int64
+    tagTop::Int64
+    tagBottom::Int64
+    Geometry() = new()
+    function Geometry(nameGeo, nameGap)
+        dimTags = gmsh.model.getEntitiesForPhysicalName(nameGap)
+        dim = dimTags[1][1]
+        for i in 1:length(dimTags)
+            if dim ≠ dimTags[i][1]
+                error("Geometry: different surface dimensions $dim <==> $(dimTags[i][1])")
+            end
+        end
+        tagTop = showGapThickness(nameGap)
+        tagBottom = showGapThickness(nameGeo)
+        return new(nameGeo, nameGap, dim, tagTop, tagBottom)
+    end
+end
 
 """
     Problem(materials; thickness=..., type=..., bandwidth=...)
@@ -96,9 +118,10 @@ struct Problem
     material::Vector{Material}
     thickness::Float64
     non::Int64
+    geometry::Geometry
     Problem() = new()
-    Problem(name, type, dim, pdim, material, thickness, non) = new(name, type, dim, pdim, material, thickness, non)
-    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameGeo="", nameGap="")
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0)
         end
@@ -106,7 +129,8 @@ struct Problem
         #if Sys.CPU_THREADS != Threads.nthreads()
         #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
         #end
-        
+        geometry = Geometry()
+
         if type == :Solid
             dim = 3
             pdim = 3
@@ -131,6 +155,10 @@ struct Problem
         elseif type == :Truss
             dim = 3
             pdim = 3
+        elseif type == :Reynolds
+            geometry = Geometry(nameGeo, nameGap)
+            dim = geometry.dim
+            pdim = 1
         else
             error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`.
             Now problem type = $type ????")
@@ -182,7 +210,7 @@ struct Problem
         
         nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes()
         non = length(nodeTags)
-        return new(name, type, dim, pdim, material, thickness, non)
+        return new(name, type, dim, pdim, material, thickness, non, geometry)
     end
 end
 
@@ -815,13 +843,14 @@ Types:
 - `μ`: Float64
 - `κ`: Float64
 """
-function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3, A=1)
+function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3, η=1e-7, p₀=0.1, A=1)
     if type != :Hooke &&
         type != :StVenantKirchhoff &&
-        type != :NeoHookeCompressible
+        type != :NeoHookeCompressible &&
+        type ≠ :JFO
         error("material: type can be :Hooke, :StVenantKirchhoff or :NeoHookeCompressible. Now type is $type.")
     end
-    return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, A)
+    return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
 
 """

@@ -23,6 +23,7 @@ include("operators.jl")
 include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
+include("extra.jl")
 
 @setup_workload begin
     @compile_workload begin
