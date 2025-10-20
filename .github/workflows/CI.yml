@@ -54,7 +54,7 @@ jobs:
       - name: Set up Julia
         uses: julia-actions/setup-julia@v2
         with:
-          version: '1.12'
+          version: '1.11'
 
       # --- új lépés: javítja a JLL előkompilálási hibát ---
       - name: Pre-install Julia stdlibs
