@@ -10,6 +10,7 @@ import Base.+
 import Base.-
 import Base.log
 import Base.sqrt
+import Base.cbrt
 
 """
     *(A::ScalarField, B::ScalarField)
@@ -424,6 +425,28 @@ function sqrt(AA::ScalarField)
         for j in 1:n
             for k in 1:nsteps
                 D[j, k] = sqrt(A.A[i][j, k])
+            end
+        end
+        push!(C, D)
+    end
+    a = [;;]
+    return ScalarField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+function cbrt(AA::ScalarField)
+    if AA.A == []
+        A = nodesToElements(AA)
+    else
+        A = AA
+    end
+    nsteps = A.nsteps
+    C = []
+    for i in 1:length(A.A)
+        n = length(A.A[i])
+        D = zeros(n, nsteps)
+        for j in 1:n
+            for k in 1:nsteps
+                D[j, k] = cbrt(A.A[i][j, k])
             end
         end
         push!(C, D)
@@ -2015,6 +2038,32 @@ function sqrt(AA::TensorField)
         return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
     else
         error("sqrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+    end
+end
+
+function cbrt(AA::TensorField)
+    if AA.A == []
+        A = nodesToElements(AA)
+    else
+        A = AA
+    end
+    if A.type == :s || A.type == :e || A.type == :F
+        nsteps = A.nsteps
+        C = []
+        for i in 1:length(A.A)
+            n = length(A.A[i]) ÷ 9
+            D = zeros(9n, nsteps)
+            for j in 1:n
+                for k in 1:nsteps
+                    D[9j-8:9j, k] = reshape(cbrt(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
+                end
+            end
+            push!(C, D)
+        end
+        a = [;;]
+        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+    else
+        error("cbrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
     end
 end
 
