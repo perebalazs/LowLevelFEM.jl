@@ -13,17 +13,16 @@ include(gmsh_jll.gmsh_api)
 import .gmsh
 export gmsh
 
-macro disp(expr)
-    s = string(expr)
-    return :(display($s * " = " * string($(esc(expr)))))
-end
-
+include("debugtools.jl")
+using .DebugTools
 include("general.jl")
 include("operators.jl")
 include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
 include("extra.jl")
+
+export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 
 @setup_workload begin
     @compile_workload begin
