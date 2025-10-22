@@ -1,6 +1,6 @@
 name = "LowLevelFEM"
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
-version = "1.10.8"
+version = "1.10.9"
 authors = ["Balázs Pere"]
 
 [deps]
