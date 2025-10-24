@@ -78,7 +78,13 @@ function flowRate(name; q=0)
     return ld0
 end
 
-function systemMatrix(problem, αInNodes::ScalarField, velocity)
+function filmThickness(problem::Problem)
+    fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0)[1][1] - z
+    return scalarField(problem, problem.material[1].phName, fh)
+end
+
+#function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
+function systemMatrix(problem, velocity::Number, height::ScalarField)
     gmsh.model.setCurrent(problem.name)
     if problem.type ≠ :Reynolds && problem.material[1].type ≠ :JFO
         error("systemMatrix: only Reynolds equation with JFO cavitation model is implemented.")
@@ -86,6 +92,12 @@ function systemMatrix(problem, αInNodes::ScalarField, velocity)
     if length(problem.material) ≠ 1
         error("systemMatrix: only one material is permitted.")
     end
+
+    ex = VectorField(problem, problem.material[1].phName, [1,0,0])
+    gradh = ∇(height)
+    dhdx = gradh * ex
+    dhdx = elementsToNodes(dhdx)
+
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
     nn = []
@@ -158,7 +170,9 @@ function systemMatrix(problem, αInNodes::ScalarField, velocity)
                 end
                 x = zeros(numIntPoints)
                 y = dim == 2 ? zeros(numIntPoints) : 0
-                α = zeros(numIntPoints)
+                #α = zeros(numIntPoints)
+                hh = zeros(numIntPoints)
+                dhhdx = zeros(numIntPoints)
                 for j in 1:length(elemTags[i])
                     elem = elemTags[i][j]
                     for k in 1:numNodes
@@ -172,7 +186,9 @@ function systemMatrix(problem, αInNodes::ScalarField, velocity)
                         if dim == 2
                             y[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 1]
                         end
-                        α[k] = h[:, k]' * αInNodes.a[nnet[j, :]]
+                        #α[k] = h[:, k]' * αInNodes.a[nnet[j, :]]
+                        hh[k] = h[:, k]' * height.a[nnet[j, :]]
+                        dhhdx[k] = h[:, k]' * dhdx.a[nnet[j, :]]
                     end
                     ∂h .*= 0
                     for k in 1:numIntPoints, l in 1:numNodes
@@ -193,29 +209,29 @@ function systemMatrix(problem, αInNodes::ScalarField, velocity)
                     end
                     K1 .*= 0
                     K2 .*= 0
-                    hh = 0
-                    dhdx = 0
+                    #hh = 0
+                    #dhdx = 0
                     for k in 1:numIntPoints
                         #g = α[k] < 1.0 ? 0.0 : 1.0
-                        if dim == 1
-                            hh = gmsh.view.probe(problem.geometry.tagTop, x[k], 0, 0, -1, -1, false, -1)[1][1]
-                            hhB = gmsh.view.probe(problem.geometry.tagBottom, x[k], 0, 0, -1, -1, false, -1)[1][1]
-                            hh -= hhB
-                            dhdx = gmsh.view.probe(problem.geometry.tagTop, x[k], 0, 0,-1,-1,true, -1)[1][1]
-                        elseif dim == 2
-                            hh = gmsh.view.probe(problem.geometry.tagTop, x[k], y[k], 0, -1, -1, false, -1)[1][1]
-                            hhB = gmsh.view.probe(problem.geometry.tagBottom, x[k], y[k], 0, -1, -1, false, -1)[1][1]
-                            hh -= hhB
-                            dhdx = gmsh.view.probe(problem.geometry.tagTop, x[k], y[k], 0,-1,-1,true, -1)[1][1]
-                        else
-                            error("systemMatrixReynoldsCavitation: dim = $dim.")
-                        end
+                        #if dim == 1
+                        #    hh = gmsh.view.probe(problem.geometry.tagTop, x[k], 0, 0, -1, -1, false, -1)[1][1]
+                        #    hhB = gmsh.view.probe(problem.geometry.tagBottom, x[k], 0, 0, -1, -1, false, -1)[1][1]
+                        #    hh -= hhB
+                        #    dhdx = gmsh.view.probe(problem.geometry.tagTop, x[k], 0, 0,-1,-1,true, -1)[1][1]
+                        #elseif dim == 2
+                        #    hh = gmsh.view.probe(problem.geometry.tagTop, x[k], y[k], 0, -1, -1, false, -1)[1][1]
+                        #    hhB = gmsh.view.probe(problem.geometry.tagBottom, x[k], y[k], 0, -1, -1, false, -1)[1][1]
+                        #    hh -= hhB
+                        #    dhdx = gmsh.view.probe(problem.geometry.tagTop, x[k], y[k], 0,-1,-1,true, -1)[1][1]
+                        #else
+                        #    error("systemMatrixReynoldsCavitation: dim = $dim.")
+                        #end
                         H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
                         B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
                         dHdx1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB-(rowsOfB-1), 1:pdim*numNodes]
-                        K1 += (B1' * B1) * hh^3 * 1 * κ * jacDet[k] * intWeights[k]
-                        K2 -= (H1' * H1) * 6.0 * dhdx * velocity * η / 2 * jacDet[k] * intWeights[k]
-                        K2 += (H1' * dHdx1) * 6.0 * hh * velocity * η / 2 * jacDet[k] * intWeights[k]
+                        K1 += (B1' * B1) * hh[k]^3 * 1 * κ * jacDet[k] * intWeights[k]
+                        K2 -= (H1' * H1) * 6.0 * dhhdx[k] * velocity * η / 2 * jacDet[k] * intWeights[k]
+                        K2 += (H1' * dHdx1) * 6.0 * hh[k] * velocity * η / 2 * jacDet[k] * intWeights[k]
                         #K2 += jacDet[k] * intWeights[k]
                     end
                     for k in 1:pdim
@@ -236,4 +252,151 @@ function systemMatrix(problem, αInNodes::ScalarField, velocity)
     dropzeros!(K)
     dropzeros!(KK)
     return SystemMatrix(K, problem), SystemMatrix(KK, problem)
+    GC.gc()
+end
+
+function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", periodicMaster="")
+    if problem.type != :Reynolds
+        error("solvePressure: bad problem type '$type'.")
+    end
+    p0 = problem.material.p₀
+    κ = problem.material.κ
+    h = filmThickness(problem)
+    #one = zeros(problem.non * problem.pdim) .+ 1
+    #type = :none
+    #if problem.dim == 1
+    #    type = :scalar
+    #elseif problem.dim == 2
+    #    type = :scalar
+    #else
+    #    error("problem.dim = $(problem.dim)")
+    #end
+    #α = ScalarField([], reshape(one, :,1), [0.0], [], 1, type, problem)
+    α = scalarField(problem, problem.material[1].phName, 1)
+    α0 = copy(α)
+    f0 = massFlowVectorReynolds(problem, load)
+    f = copy(f0)
+    err = 1
+    c = 0
+    if problem.dim == 1
+        if length(periodicSlave) != 0
+            pbc1 = LowLevelFEM.getTagForPhysicalName(periodicSlave)
+            nbc1::Int64 = gmsh.model.mesh.getNodesForPhysicalGroup(0, pbc1)[1][1]
+            pbc2 = LowLevelFEM.getTagForPhysicalName(periodicMaster)
+            nbc2::Int64 = gmsh.model.mesh.getNodesForPhysicalGroup(0, pbc2)[1][1]
+        
+            G = zeros(1, problem.non)
+            #GT = zeros(problem.non)
+
+            G[nbc1] = 1
+            G[nbc2] = -1
+            GT = G'
+
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                f = copy(f0)
+                f -= KK * α
+                Reynolds.applyBoundaryConditions!(problem, K, f, BC)
+                a0 = K \ f
+                KG = K \ GT
+                λ = (G * KG) \ G * a0
+                #a1 = FEM.ScalarField([], -KG * λ, [0.0], [], 1, a0.type, a0.model)
+                a1 = -KG * λ
+                α = a0 + a1
+                
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+        elseif length(periodicSlave) == 0
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                f = copy(f0)
+                f -= KK * α
+                #f .= f0
+                Reynolds.applyBoundaryConditions!(problem, K, f, BC)
+                α = K \ f
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+        end
+    elseif problem.dim == 2
+        if length(periodicSlave) != 0
+            pbc1 = LowLevelFEM.getTagForPhysicalName(periodicSlave) # right0: slave
+            cv1 = (gmsh.model.getEntitiesForPhysicalGroup(1, pbc1))[1]
+            tagMaster, slave::Vector{Int64}, master::Vector{Int64}, affineTransform = gmsh.model.mesh.getPeriodicNodes(1, cv1, true)
+            @info "master = $tagMaster, slave = $cv1"
+            #display("master = $tagMaster")
+            #display("slave = $cv1")
+
+            G = spzeros(length(master), problem.non)
+            GT = spzeros(problem.non, length(master))
+
+            for i in 1:length(master)
+                G[i, master[i]] = 1
+                G[i, slave[i]] = -1
+
+                GT[master[i], i] = 1
+                GT[slave[i], i] = -1
+            end
+            
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                f = copy(f0)
+                f -= KK * α
+                #applyBoundaryConditions!(problem, K, f, BC)
+                display(K.model.type)
+                display(K.model.material[1].κ)
+                Reynolds.applyBoundaryConditions!(K, f, BC)
+                a0 = K \ f
+                KG = K \ GT
+                λ = (G * KG) \ G * a0
+                a1 = -KG * λ
+                α = a0 + a1
+                
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+
+        elseif length(periodicSlave) == 0
+
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                f = copy(f0)
+                f -= KK * α
+                #f .= f0
+                Reynolds.applyBoundaryConditions!(problem, K, f, BC)
+                α = K \ f
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+        end
+    end
+    @info "solvePressure: number of iterations is $c."
+    g = [i < 1.0 ? 0.0 : 1.0 for i in α.a]
+    αcav = 1 .- [i < 1.0 ? i : 1.0 for i in α.a]
+    α = [i < 1 ? 1 : i for i in α.a]
+    if cav == false
+        pret =  p0 .+ κ * g .* log.(α)
+        return ScalarField([], reshape(pret, :,1), [0], [], 1, :other, problem)
+    else
+        #return α, αcav # log.(α), αcav
+        pret =  p0 .+ κ * g .* log.(α)
+        return ScalarField([], reshape(pret, :,1), [0], [], 1, :other, problem), ScalarField([], reshape(αcav, :,1), [0], [], 1, :p, problem)
+    end
 end

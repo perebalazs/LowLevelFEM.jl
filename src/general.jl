@@ -63,13 +63,13 @@ struct Material
 end
 
 struct Geometry
-    nameGeo::String
+    #nameGeo::String
     nameGap::String
     dim::Int64
     tagTop::Int64
-    tagBottom::Int64
+    #tagBottom::Int64
     Geometry() = new()
-    function Geometry(nameGeo, nameGap)
+    function Geometry(nameGap)
         dimTags = gmsh.model.getEntitiesForPhysicalName(nameGap)
         dim = dimTags[1][1]
         for i in 1:length(dimTags)
@@ -78,8 +78,8 @@ struct Geometry
             end
         end
         tagTop = showGapThickness(nameGap)
-        tagBottom = showGapThickness(nameGeo)
-        return new(nameGeo, nameGap, dim, tagTop, tagBottom)
+        #tagBottom = 0 #showGapThickness(nameGeo)
+        return new(nameGap, dim, tagTop)
     end
 end
 
@@ -121,7 +121,7 @@ struct Problem
     geometry::Geometry
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
-    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameGeo="", nameGap="")
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="")
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0)
         end
@@ -156,7 +156,7 @@ struct Problem
             dim = 3
             pdim = 3
         elseif type == :Reynolds
-            geometry = Geometry(nameGeo, nameGap)
+            geometry = Geometry(nameTopSurface)
             dim = geometry.dim
             pdim = 1
         else

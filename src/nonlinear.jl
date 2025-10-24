@@ -41,19 +41,19 @@ function nodePositionVector(problem)
 end
 
 """
-    ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+    ∇(r::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
 
-Computes derivatives of `rr`.
-- If `rr` is a `ScalarField` and `nabla == :grad`, returns the gradient (a `VectorField`).
-- If `rr` is a `VectorField` and `nabla == :grad`, returns the gradient (a `TensorField`).
-- If `rr` is a `VectorField` and `nabla == :curl`, returns the curl (a `VectorField`).
-- If `rr` is a `VectorField` and `nabla == :div`, returns the divergence (a `ScalarField`).
-- If `rr` is a `TensorField` and `nabla == :div`, returns the divergence (a `VectorField`).
+Computes derivatives of `r`.
+- If `r` is a `ScalarField` and `nabla == :grad`, returns the gradient (a `VectorField`).
+- If `r` is a `VectorField` and `nabla == :grad`, returns the gradient (a `TensorField`).
+- If `r` is a `VectorField` and `nabla == :curl`, returns the curl (a `VectorField`).
+- If `r` is a `VectorField` and `nabla == :div`, returns the divergence (a `ScalarField`).
+- If `r` is a `TensorField` and `nabla == :div`, returns the divergence (a `VectorField`).
 
 Returns: `ScalarField`, `VectorField`, or `TensorField`
 
 Types:
-- `rr`: `ScalarField`, `VectorField`, or `TensorField`
+- `r`: `ScalarField`, `VectorField`, or `TensorField`
 - `nabla`: Symbol
 
 # 3D Examples (assumes `problem` is set as in the ∇ doc setup)
@@ -141,7 +141,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
             rowsOfB = 9
             b = 1
             sz = 3
-        elseif problem.dim == 3 && r isa ScalarField
+        elseif (problem.dim == 1 || problem.dim == 2 || problem.dim == 3) && r isa ScalarField
             dim = 3
             pdim = 1
             rowsOfB = 3
@@ -212,7 +212,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                             B[k*9-(9-4), l*3-(3-1)] = B[k*9-(9-5), l*3-(3-2)] = B[k*9-(9-6), l*3-(3-3)] = ∂h[2, (k-1)*numNodes+l]
                             B[k*9-(9-7), l*3-(3-1)] = B[k*9-(9-8), l*3-(3-2)] = B[k*9-(9-9), l*3-(3-3)] = ∂h[3, (k-1)*numNodes+l]
                         end
-                    elseif dim == 3 && rowsOfB == 3 && r isa ScalarField
+                    elseif (dim == 1 || dim == 2 || dim == 3) && rowsOfB == 3 && r isa ScalarField
                         for k in 1:numNodes, l in 1:numNodes
                             B[k*3-(3-1), l] = ∂h[1, (k-1)*numNodes+l]
                             B[k*3-(3-2), l] = ∂h[2, (k-1)*numNodes+l]
@@ -231,7 +231,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                             B[k*4-2, l*2-1] = rr[k] < 1e-10 ? 0 : h[l, k] / rr[k]
                         end
                     else
-                        error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                        error("∇: rows of B is $rowsOfB, dimension of the problem is $dim.")
                     end
                     push!(numElem, elem)
                     for k in 1:pdim
@@ -266,7 +266,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                                     end
                                 end
                             end
-                        elseif rowsOfB == 3 && dim == 3 && r isa ScalarField && nabla == :grad
+                        elseif rowsOfB == 3 && (dim == 1 || dim == 2 || dim == 3) && r isa ScalarField && nabla == :grad
                             B1 = B[k*3-2:k*3, 1:numNodes]
                             for kk in 1:nsteps
                                 e0 = B1 * r.a[nn2, kk]
@@ -302,7 +302,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                                 end
                             end
                         else
-                            error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                            error("∇: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
                         end
                     end
                     if DoFResults == true
