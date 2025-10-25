@@ -62,12 +62,12 @@ struct Material
     Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
 
-struct Geometry
-    #nameGeo::String
+mutable struct Geometry
     nameGap::String
     dim::Int64
     tagTop::Int64
-    #tagBottom::Int64
+    h::Any
+    dhdx::Any
     Geometry() = new()
     function Geometry(nameGap)
         dimTags = gmsh.model.getEntitiesForPhysicalName(nameGap)
@@ -79,7 +79,7 @@ struct Geometry
         end
         tagTop = showGapThickness(nameGap)
         #tagBottom = 0 #showGapThickness(nameGeo)
-        return new(nameGap, dim, tagTop)
+        return new(nameGap, dim, tagTop, nothing, nothing)
     end
 end
 

@@ -78,13 +78,19 @@ function flowRate(name; q=0)
     return ld0
 end
 
-function filmThickness(problem::Problem)
+function initialize(problem::Problem)
     fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0)[1][1] - z
-    return scalarField(problem, problem.material[1].phName, fh)
+    h = scalarField(problem, problem.material[1].phName, fh)
+    grad_h = ∇(h)
+    ex = VectorField(problem, problem.material[1].phName, [1,0,0])
+    dhdx = grad_h * ex
+    problem.geometry.h = h
+    problem.geometry.dhdx = elementsToNodes(dhdx)
+    gmsh.view.remove(problem.geometry.tagTop)
 end
 
 #function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
-function systemMatrix(problem, velocity::Number, height::ScalarField)
+function systemMatrix(problem, velocity::Number)
     gmsh.model.setCurrent(problem.name)
     if problem.type ≠ :Reynolds && problem.material[1].type ≠ :JFO
         error("systemMatrix: only Reynolds equation with JFO cavitation model is implemented.")
@@ -92,11 +98,10 @@ function systemMatrix(problem, velocity::Number, height::ScalarField)
     if length(problem.material) ≠ 1
         error("systemMatrix: only one material is permitted.")
     end
-
-    ex = VectorField(problem, problem.material[1].phName, [1,0,0])
-    gradh = ∇(height)
-    dhdx = gradh * ex
-    dhdx = elementsToNodes(dhdx)
+    if problem.geometry.h == nothing
+        #error("systemMatrix: Problem must be initialized with \"initialize(problem)\"")
+        initialize(problem)
+    end
 
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -187,8 +192,8 @@ function systemMatrix(problem, velocity::Number, height::ScalarField)
                             y[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 1]
                         end
                         #α[k] = h[:, k]' * αInNodes.a[nnet[j, :]]
-                        hh[k] = h[:, k]' * height.a[nnet[j, :]]
-                        dhhdx[k] = h[:, k]' * dhdx.a[nnet[j, :]]
+                        hh[k] = h[:, k]' * problem.geometry.h.a[nnet[j, :]]
+                        dhhdx[k] = h[:, k]' * problem.geometry.dhdx.a[nnet[j, :]]
                     end
                     ∂h .*= 0
                     for k in 1:numIntPoints, l in 1:numNodes
