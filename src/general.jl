@@ -1866,17 +1866,17 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
         elseif problem.dim == 3 && problem.type == :Truss
             dim = 3
             #rowsOfH = 3
-        elseif problem.dim == 2 && problem.type == :PlaneStress
+        elseif problem.dim == 2 # && problem.type == :PlaneStress
             dim = 2
             rowsOfH = 2
-        elseif problem.dim == 2 && problem.type == :PlaneStrain
-            dim = 2
-            rowsOfH = 2
-        elseif problem.dim == 2 && problem.type == :AxiSymmetric
-            dim = 2
-            rowsOfH = 2
+        #elseif problem.dim == 2 && problem.type == :PlaneStrain
+        #    dim = 2
+        #    rowsOfH = 2
+        #elseif problem.dim == 2 && problem.type == :AxiSymmetric
+        #    dim = 2
+        #    rowsOfH = 2
         else
-            error("deformationGradient: dimension is $(problem.dim), problem type is $(problem.type).")
+            error("nodesToElements: dimension is $(problem.dim), problem type is $(problem.type).")
         end
         
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)

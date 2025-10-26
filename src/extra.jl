@@ -1,4 +1,5 @@
-export systemMatrix
+export pressureConstraint, flowRate
+export solvePressure
 
 
 function showGapThickness(phName; name=phName, visible=false)
@@ -68,12 +69,12 @@ function showGapThickness(phName; name=phName, visible=false)
     return SS
 end
 
-function pressureConstraint(name; p=1im)
-    bc0 = name, p
+function pressureConstraint(name::String; p=1im)
+    bc0 = name, p, 1im, 1im
     return bc0
 end
 
-function flowRate(name; q=0)
+function flowRate(name::String; q=0)
     ld0 = name, q
     return ld0
 end
@@ -260,13 +261,120 @@ function systemMatrix(problem, velocity::Number)
     GC.gc()
 end
 
+function flowRateVector(problem, loads)
+    gmsh.model.setCurrent(problem.name)
+    dim0 = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    dof = pdim * non
+    #η = problem.material[1].η
+    fp = zeros(dof)
+    ncoord2 = zeros(3 * problem.non)
+    for n in 1:length(loads)
+        name, ff = loads[n]
+        f = ff
+        dimTags = gmsh.model.getEntitiesForPhysicalName(name)
+        for i ∈ 1:length(dimTags)
+            dimTag = dimTags[i]
+            dim = dimTag[1]
+            tag = dimTag[2]
+            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for ii in 1:length(elementTypes)
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+                nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order+1))
+                numIntPoints = length(intWeights)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elementTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                H = zeros(pdim * numIntPoints, pdim * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdim
+                            H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                        end
+                    end
+                end
+                ∂h = zeros(dim0, numNodes * numIntPoints)
+                f1 = zeros(pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                for l in 1:length(elementTags[ii])
+                    elem = elementTags[ii][l]
+                    for k in 1:numNodes
+                        nnet[l, k] = elemNodeTags[i][(l-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim0, (k-1)*numNodes+l] .= invJac[1:dim0, k*3-2:k*3-(3-dim0)] * ∇h[l*3-2:l*3-(3-dim0), k]
+                    end
+                    f1 .*= 0
+                    for j in 1:numIntPoints
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        if isa(ff, Function)
+                            y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                            f = ff(x, y)
+                        end
+                        H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                        ############### NANSON ###########################################
+                        if pdim == 1 && dim == 2
+                            Ja = jacDet[j]
+                        elseif pdim == 1 && dim == 1
+                            Ja = jacDet[j]
+                            #Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2)
+                            #Ja = 1
+                        elseif pdim == 1 && dim == 0
+                            Ja = 1
+                        else
+                            error("massFlowVectorReynolds: dimension of the problem is $(problem.pdim), dimension of load is $dim.")
+                        end
+                        f1 += H1' * f * Ja * intWeights[j]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                    end
+                    fp[nn2] += f1
+                end
+            end
+        end
+    end
+    type = :none
+    if problem.dim == 1
+        type = :scalar
+    elseif problem.dim == 2
+        type = :scalar
+    else
+        error("problem.dim = $(problem.dim)")
+    end
+    return ScalarField([], reshape(fp, :,1), [0.0], [], 1, type, problem)
+end
+
 function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", periodicMaster="")
+    if problem.type == :dummy
+        return nothing
+    end
     if problem.type != :Reynolds
         error("solvePressure: bad problem type '$type'.")
     end
-    p0 = problem.material.p₀
-    κ = problem.material.κ
-    h = filmThickness(problem)
+    p0 = problem.material[1].p₀
+    κ = problem.material[1].κ
+    if problem.geometry.h == nothing
+        initialize(problem)
+    end
+    fluid = constrainedDoFs(problem, [pressureConstraint(problem.material[1].phName, p=0)])
+    bc = constrainedDoFs(problem, BC)
+    free = setdiff(fluid, bc)
     #one = zeros(problem.non * problem.pdim) .+ 1
     #type = :none
     #if problem.dim == 1
@@ -279,15 +387,15 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
     #α = ScalarField([], reshape(one, :,1), [0.0], [], 1, type, problem)
     α = scalarField(problem, problem.material[1].phName, 1)
     α0 = copy(α)
-    f0 = massFlowVectorReynolds(problem, load)
+    f0 = flowRateVector(problem, load)
     f = copy(f0)
     err = 1
     c = 0
     if problem.dim == 1
         if length(periodicSlave) != 0
-            pbc1 = LowLevelFEM.getTagForPhysicalName(periodicSlave)
+            pbc1 = getTagForPhysicalName(periodicSlave)
             nbc1::Int64 = gmsh.model.mesh.getNodesForPhysicalGroup(0, pbc1)[1][1]
-            pbc2 = LowLevelFEM.getTagForPhysicalName(periodicMaster)
+            pbc2 = getTagForPhysicalName(periodicMaster)
             nbc2::Int64 = gmsh.model.mesh.getNodesForPhysicalGroup(0, pbc2)[1][1]
         
             G = zeros(1, problem.non)
@@ -300,16 +408,21 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
             while err > 1e-10 && c < 101
                 c += 1
                 α0 = copy(α)
-                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                fill!(α.a, 0.0)
+                K, KK = systemMatrix(problem, -V)
                 f = copy(f0)
-                f -= KK * α
-                Reynolds.applyBoundaryConditions!(problem, K, f, BC)
-                a0 = K \ f
+                f -= KK * α0
+                applyBoundaryConditions!(α, BC)
+                α.a[bc] .= exp.((α.a[bc] .- p0) ./ κ)
+                p1 = K.A[:, bc] * α.a[bc]
+                #Reynolds.applyBoundaryConditions!(problem, K, f, BC)
+                #a0 = similar(α0.a)
+                a0 = K.A[free, free] \ (f.a[free] - p1[free])
                 KG = K \ GT
                 λ = (G * KG) \ G * a0
-                #a1 = FEM.ScalarField([], -KG * λ, [0.0], [], 1, a0.type, a0.model)
+                #a1 = ScalarField([], -KG * λ, [0.0], [], 1, a0.type, a0.model)
                 a1 = -KG * λ
-                α = a0 + a1
+                α.a[free] = a0 + a1
                 
                 err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
                 if c == 100
@@ -320,11 +433,11 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
             while err > 1e-10 && c < 101
                 c += 1
                 α0 = copy(α)
-                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                K, KK = systemMatrix(problem, -V)
                 f = copy(f0)
                 f -= KK * α
                 #f .= f0
-                Reynolds.applyBoundaryConditions!(problem, K, f, BC)
+                applyBoundaryConditions!(problem, K, f, BC)
                 α = K \ f
                 err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
                 if c == 100
@@ -334,12 +447,10 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
         end
     elseif problem.dim == 2
         if length(periodicSlave) != 0
-            pbc1 = LowLevelFEM.getTagForPhysicalName(periodicSlave) # right0: slave
+            pbc1 = getTagForPhysicalName(periodicSlave) # right0: slave
             cv1 = (gmsh.model.getEntitiesForPhysicalGroup(1, pbc1))[1]
             tagMaster, slave::Vector{Int64}, master::Vector{Int64}, affineTransform = gmsh.model.mesh.getPeriodicNodes(1, cv1, true)
             @info "master = $tagMaster, slave = $cv1"
-            #display("master = $tagMaster")
-            #display("slave = $cv1")
 
             G = spzeros(length(master), problem.non)
             GT = spzeros(problem.non, length(master))
@@ -355,18 +466,17 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
             while err > 1e-10 && c < 101
                 c += 1
                 α0 = copy(α)
-                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                K, KK = systemMatrix(problem, -V)
                 f = copy(f0)
-                f -= KK * α
-                #applyBoundaryConditions!(problem, K, f, BC)
-                display(K.model.type)
-                display(K.model.material[1].κ)
-                Reynolds.applyBoundaryConditions!(K, f, BC)
-                a0 = K \ f
+                f -= KK * α0
+                applyBoundaryConditions!(α, BC)
+                α.a[bc] .= exp.((α.a[bc] .- p0) ./ κ)
+                p1 = K.A[:, bc] * α.a[bc]
+                a0 = K.A[free, free] \ (f.a[free] - p1[free])
                 KG = K \ GT
                 λ = (G * KG) \ G * a0
                 a1 = -KG * λ
-                α = a0 + a1
+                α.a[free] = a0 + a1
                 
                 err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
                 if c == 100
@@ -379,12 +489,15 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
             while err > 1e-10 && c < 101
                 c += 1
                 α0 = copy(α)
-                K, KK = Reynolds.systemMatrixReynoldsCavitation(problem, -V, h)
+                K, KK = systemMatrix(problem, -V)
                 f = copy(f0)
                 f -= KK * α
-                #f .= f0
-                Reynolds.applyBoundaryConditions!(problem, K, f, BC)
-                α = K \ f
+                applyBoundaryConditions!(α, BC)
+                α.a[bc] .= exp.((α.a[bc] .- p0) ./ κ)
+                p1 = K.A[:, bc] * α.a[bc]
+                a0 = K.A[free, free] \ (f.a[free,1] - p1[free])
+                α.a[free] = a0
+                
                 err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
                 if c == 100
                     @warn("solvePressure: number of iterations reached step $c.")
@@ -393,15 +506,17 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
         end
     end
     @info "solvePressure: number of iterations is $c."
-    g = [i < 1.0 ? 0.0 : 1.0 for i in α.a]
-    αcav = 1 .- [i < 1.0 ? i : 1.0 for i in α.a]
-    α = [i < 1 ? 1 : i for i in α.a]
+    pret = zeros(problem.non, 1)
+    αcav = zeros(problem.non, 1)
+    g = [i < 1.0 ? 0.0 : 1.0 for i in α.a[fluid]]
+    αcav[fluid] = 1 .- [i < 1.0 ? i : 1.0 for i in α.a[fluid]]
+    α = [i < 1 ? 1 : i for i in α.a[fluid]]
     if cav == false
-        pret =  p0 .+ κ * g .* log.(α)
+        pret[fluid] =  p0 .+ κ * g .* log.(α)
         return ScalarField([], reshape(pret, :,1), [0], [], 1, :other, problem)
     else
         #return α, αcav # log.(α), αcav
-        pret =  p0 .+ κ * g .* log.(α)
+        pret[fluid] =  p0 .+ κ * g .* log.(α)
         return ScalarField([], reshape(pret, :,1), [0], [], 1, :other, problem), ScalarField([], reshape(αcav, :,1), [0], [], 1, :p, problem)
     end
 end

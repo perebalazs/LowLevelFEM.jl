@@ -1,7 +1,12 @@
 name = "LowLevelFEM"
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
-version = "1.10.9"
+version = "1.10.10"
 authors = ["Balázs Pere"]
+description = "LowLevelFEM.jl is a finite element method (FEM) toolbox written entirely in the Julia programming language."
+keywords = ["finite-element-method", "mechanics", "FEM", "Julia", "continuum-mechanics", "structural-analysis", "heat-conduction", "coupled-thermo-mechanical-problems", "transient-problems", "vector-field-operations", "gmsh"]
+homepage = "https://github.com/perebalazs/LowLevelFEM.jl"
+repository = "https://github.com/perebalazs/LowLevelFEM.jl"
+documentation = "https://perebalazs.github.io/LowLevelFEM.jl/stable/"
 
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"

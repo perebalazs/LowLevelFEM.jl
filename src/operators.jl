@@ -317,19 +317,18 @@ Return: ScalarField
 C = A * 2.0
 ```
 """
-function *(AA::ScalarField, b::Number)
-    if isNodal(AA)
-        A = nodesToElements(AA)
+function *(A::ScalarField, b::Number)
+    if isElementwise(A)
+        C = []
+        for i in 1:length(A.A)
+            D = A.A[i] * b
+            push!(C, D)
+        end
+        a = [;;]
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
     else
-        A = AA
+        return ScalarField(A.A, A.a * b, A.t, A.numElem, A.nsteps, A.type, A.model)
     end
-    C = []
-    for i in 1:length(A.A)
-        D = A.A[i] * b
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -344,19 +343,18 @@ Return: ScalarField
 C = 2.0 * A
 ```
 """
-function *(b::Number, AA::ScalarField)
-    if AA.A == []
-        A = nodesToElements(AA)
+function *(b::Number, A::ScalarField)
+    if isElementwise(A)
+        C = []
+        for i in 1:length(A.A)
+            D = A.A[i] * b
+            push!(C, D)
+        end
+        a = [;;]
+        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
     else
-        A = AA
+        return ScalarField(A.A, A.a * b, A.t, A.numElem, A.nsteps, A.type, A.model)
     end
-    C = []
-    for i in 1:length(A.A)
-        D = A.A[i] * b
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 function /(AA::ScalarField, b::Number)

@@ -3545,7 +3545,7 @@ function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
     end
 end
 
-function applyBoundaryConditions!(dispVec::VectorField, supports)
+function applyBoundaryConditions!(dispVec::Union{ScalarField,VectorField}, supports)
     return applyBoundaryConditions!(dispVec.model, dispVec.a, supports)
 end
 
