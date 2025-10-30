@@ -2196,9 +2196,14 @@ function \(A::Union{SystemMatrix,Matrix,SparseMatrixCSC}, b::SparseMatrixCSC)
 end
 =#
 
-function ldiv_sparse!(X::SparseMatrixCSC, K::SystemMatrix, F::SparseMatrixCSC)
-    n, m = size(K.A, 1), size(F, 2)
-    Ffac = lu(K.A)
+function ldiv_sparse!(X::SparseMatrixCSC, K::Union{SystemMatrix,SparseMatrixCSC}, F::SparseMatrixCSC)
+    if K isa SystemMatrix
+        n, m = size(K.A, 1), size(F, 2)
+        Ffac = lu(K.A)
+    elseif K isa SparseMatrixCSC
+        n, m = size(K, 1), size(F, 2)
+        Ffac = lu(K)
+    end
     x = zeros(n)
     b = zeros(n)
     I, V, J = Int[], Float64[], Int[]
@@ -2218,8 +2223,12 @@ function ldiv_sparse!(X::SparseMatrixCSC, K::SystemMatrix, F::SparseMatrixCSC)
     return X
 end
 
-function \(K::SystemMatrix, F::SparseMatrixCSC)
-    X = spzeros(size(K.A, 1), size(F, 2))
+function \(K::Union{SystemMatrix,SparseMatrixCSC}, F::SparseMatrixCSC)
+    if K isa SystemMatrix
+        X = spzeros(size(K.A, 1), size(F, 2))
+    elseif K isa SparseMatrixCSC
+        X = spzeros(size(K, 1), size(F, 2))
+    end
     return ldiv_sparse!(X, K, F)
 end
 

@@ -609,7 +609,7 @@ struct TensorField <: AbstractField
                                 ten1[9k, 1] = ff
                             end
                             if fxy ≠ :no
-                                if fx isa Function
+                                if fxy isa Function
                                     ff = fxy(x, y, z)
                                 else
                                     ff = fxy
@@ -618,7 +618,7 @@ struct TensorField <: AbstractField
                                 ten1[9k-5, 1] = ff
                             end
                             if fyz ≠ :no
-                                if fy isa Function
+                                if fyz isa Function
                                     ff = fyz(x, y, z)
                                 else
                                     ff = fyz
@@ -627,7 +627,7 @@ struct TensorField <: AbstractField
                                 ten1[9k-1, 1] = ff
                             end
                             if fzx ≠ :no
-                                if fz isa Function
+                                if fzx isa Function
                                     ff = fzx(x, y, z)
                                 else
                                     ff = fzx
@@ -647,7 +647,9 @@ struct TensorField <: AbstractField
     end
     function TensorField(problem::Problem, phName::String, data::Matrix)
         if size(data) == (3,3)
-            f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
+            g = [x isa Function ? x : ((_,_,_)->x) for x in data]
+            f = field(phName, fx=g[1], fy=g[5], fz=g[9], fxy=g[2], fyz=g[6], fzx=g[3])
+            #f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
             return TensorField(problem, [f])
         else
             error("TensorField: size of data is $(size(data)).")

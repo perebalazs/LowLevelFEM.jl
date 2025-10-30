@@ -452,8 +452,8 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
             tagMaster, slave::Vector{Int64}, master::Vector{Int64}, affineTransform = gmsh.model.mesh.getPeriodicNodes(1, cv1, true)
             @info "master = $tagMaster, slave = $cv1"
 
-            G = spzeros(length(master), problem.non)
-            GT = spzeros(problem.non, length(master))
+            G = zeros(length(master), problem.non)
+            GT = zeros(problem.non, length(master))
 
             for i in 1:length(master)
                 G[i, master[i]] = 1
@@ -472,10 +472,10 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
                 applyBoundaryConditions!(α, BC)
                 α.a[bc] .= exp.((α.a[bc] .- p0) ./ κ)
                 p1 = K.A[:, bc] * α.a[bc]
-                a0 = K.A[free, free] \ (f.a[free] - p1[free])
-                KG = K \ GT
-                λ = (G * KG) \ G * a0
-                a1 = -KG * λ
+                a0 = K.A[free, free] \ (f.a[free] - p1[free]) # free × 1
+                KG = K.A[free, free] \ GT[free, :] # free × master
+                λ = (G[:, free] * KG) \ G[:, free] * a0 # master × 1
+                a1 = -KG * λ # free × 1
                 α.a[free] = a0 + a1
                 
                 err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
