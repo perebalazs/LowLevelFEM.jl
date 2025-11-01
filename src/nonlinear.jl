@@ -119,9 +119,18 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
         pcs = zeros(Int64, non * dim)
     end
 
-    for ipg in 1:length(problem.material)
-        phName = problem.material[ipg].phName
-        ν = problem.material[ipg].ν
+    for ipg in 0:length(problem.material)
+        phName = ""
+        if ipg == 0
+            if rr.model.geometry.nameVolume ≠ ""
+                phName = rr.model.geometry.nameVolume
+            else
+                continue
+            end
+        else
+            phName = problem.material[ipg].phName
+        end
+        #ν = problem.material[ipg].ν
         dim = 0
         if problem.dim == 3 && r isa VectorField && nabla == :grad
             dim = 3

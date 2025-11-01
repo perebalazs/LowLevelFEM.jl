@@ -64,12 +64,15 @@ end
 
 mutable struct Geometry
     nameGap::String
+    nameVolume::String
     dim::Int64
     tagTop::Int64
     h::Any
     dhdx::Any
+    hh::Any
+    p::Any
     Geometry() = new()
-    function Geometry(nameGap)
+    function Geometry(nameGap, nameVolume)
         dimTags = gmsh.model.getEntitiesForPhysicalName(nameGap)
         dim = dimTags[1][1]
         for i in 1:length(dimTags)
@@ -79,7 +82,7 @@ mutable struct Geometry
         end
         tagTop = showGapThickness(nameGap)
         #tagBottom = 0 #showGapThickness(nameGeo)
-        return new(nameGap, dim, tagTop, nothing, nothing)
+        return new(nameGap, nameVolume, dim, tagTop, nothing, nothing, nothing, nothing)
     end
 end
 
@@ -121,7 +124,7 @@ struct Problem
     geometry::Geometry
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
-    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="")
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="")
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0)
         end
@@ -156,7 +159,7 @@ struct Problem
             dim = 3
             pdim = 3
         elseif type == :Reynolds
-            geometry = Geometry(nameTopSurface)
+            geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
             pdim = 1
         else
@@ -2600,6 +2603,12 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
         append!(nodeTags, nT)
     end
+    if problem.type == :Reynolds
+        phName = problem.geometry.nameVolume
+        tag = getTagForPhysicalName(phName)
+        nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim + 1, tag)
+        append!(nodeTags, nT)
+    end
     #end #########################################################################
     
     #nodeTags, nodeCoords, nodeParams = gmsh.model.mesh.getNodes(dim, -1, true)
@@ -3329,7 +3338,7 @@ Types:
 - `visible`: Boolean
 - `tag`: Integer
 """
-function showOnSurface(phName, field; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
+function showOnSurface(field::Number, phName::String; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
     SS = gmsh.view.add(name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
     nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(-1, -1, true, false)
@@ -3405,6 +3414,12 @@ function showOnSurface(phName, field; grad=false, component=:x, offsetX=0, offse
     return SS
 end
 
+function showOnSurface(field::ScalarField, phName::String)
+    s = elementsToNodes(field)
+    s = nodesToElements(s, onPhysicalGroup=phName)
+    view = showElementResults(s)
+    return view
+end
 
 """
     openPreProcessor(; openGL=...)

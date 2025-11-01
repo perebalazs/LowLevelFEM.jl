@@ -90,6 +90,22 @@ function initialize(problem::Problem)
     gmsh.view.remove(problem.geometry.tagTop)
 end
 
+function initializePressure(p::ScalarField)
+    if p.model.geometry.nameVolume == ""
+        error("initializePressure: no volume for lubricant has been defined.")
+    end
+    if p.model.geometry.hh == nothing
+        view_h = showDoFResults(p.model.geometry.h)
+        fh(x, y, z) = gmsh.view.probe(view_h, x, y, 0, -1, -1, false, -1)[1][1]
+        p.model.geometry.hh = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fh)])
+        gmsh.view.remove(view_h)
+    end
+    view_p = showDoFResults(p)
+    fp(x, y, z) = gmsh.view.probe(view_p, x, y, 0, -1, -1, false, -1)[1][1]
+    p.model.geometry.p = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
+    gmsh.view.remove(view_p)
+end
+
 #function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
 function systemMatrix(problem, velocity::Number)
     gmsh.model.setCurrent(problem.name)

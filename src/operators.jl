@@ -45,7 +45,7 @@ function *(AA::ScalarField, BB::ScalarField)
     indT = []
     sizehint!(indS, length(sec))
     sizehint!(indT, length(sec))
-    for i in sec
+    @inbounds for i in sec
         append!(indS, findall(j -> j == i, A.numElem))
         append!(indT, findall(j -> j == i, B.numElem))
     end
@@ -54,15 +54,15 @@ function *(AA::ScalarField, BB::ScalarField)
     sizehint!(C, length(sec))
     sizehint!(num, length(sec))
     D = []
-    for i in eachindex(sec)
+    @inbounds for i in eachindex(sec)
         n = length(B.A[i])
         D = zeros(n, nsteps)
         if n != sz
             #D = zeros(n, nsteps)
             sz = n
         end
-        for j in 1:n
-            for k in 1:nsteps
+        @inbounds for j in 1:n
+            @inbounds for k in 1:nsteps
                 D[j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][j, k]
             end
         end
