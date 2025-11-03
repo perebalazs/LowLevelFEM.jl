@@ -1,8 +1,104 @@
 module FieldTools
 
+using LinearAlgebra: dot
 using ..LowLevelFEM
 
-export probe_field
+export probe_field_bulk
+
+"""
+    build_bbox(rr::ScalarField)
+
+Előkészíti az elemek *bounding boxait* gyors térbeli szűréshez.
+Minden elemhez `(xmin, xmax, ymin, ymax, zmin, zmax)` értékeket tárol,
+amelyeket a `probe_field_bulk` használ majd a keresés gyorsítására.
+"""
+function build_bbox(rr::ScalarField)
+    gmsh.model.setCurrent(rr.model.name)
+
+    elem_bboxes = Vector{NTuple{6,Float64}}(undef, length(rr.numElem))
+    nodeTags, coords, _ = gmsh.model.mesh.getNodes()
+    X, Y, Z = coords[1:3:end], coords[2:3:end], coords[3:3:end]
+    _, _, dim, _ = gmsh.model.mesh.getElement(rr.numElem[1])
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
+
+    counter = 1
+    for (i, et) in enumerate(elemTypes)
+        _, dim, order, numNodes, _, _ = gmsh.model.mesh.getElementProperties(et)
+        for j in 1:length(elemTags[i])
+            nodes = elemNodeTags[i][(j-1)*numNodes+1:j*numNodes]
+            xs, ys, zs = X[nodes], Y[nodes], Z[nodes]
+            elem_bboxes[counter] = (
+                minimum(xs), maximum(xs),
+                minimum(ys), maximum(ys),
+                minimum(zs), maximum(zs)
+            )
+            counter += 1
+        end
+    end
+
+    return elem_bboxes
+end
+
+
+
+"""
+    probe_field_bulk(rr::ScalarField, points::Matrix{Float64})
+
+Gyors, tisztán Julia-alapú tömeges lekérdezés (`(x,y,z)` pontok → mezőértékek).
+A `points` mátrix mérete `N×3` legyen (egy sor egy pontot jelent).
+Előfeltétel: a `rr.bbox` mező a `build_bbox(rr)` eredménye legyen.
+"""
+function probe_field_bulk(rr::ScalarField, points::Matrix{Float64})
+    gmsh.model.setCurrent(rr.model.name)
+    npts = size(points, 1)
+    vals = fill(NaN, npts)
+
+    rr_bbox = build_bbox(rr)
+
+    # 1. Lekérjük a hálóhoz tartozó adatokat egyszer
+    _, _, dim, _ = gmsh.model.mesh.getElement(rr.numElem[1])
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
+    nodeTags, coords, _ = gmsh.model.mesh.getNodes()
+    xnode, ynode, znode = coords[1:3:end], coords[2:3:end], coords[3:3:end]
+
+    # 2. Végigmegyünk az összes kiértékelendő ponton
+    @inbounds for ipt in 1:npts
+        x, y, z = points[ipt, 1], points[ipt, 2], points[ipt, 3]
+
+        # 2a. Gyors bbox szűrés
+        for (i, bbox) in enumerate(rr_bbox)
+            (xmin, xmax, ymin, ymax, zmin, zmax) = bbox
+            if !(x ≥ xmin && x ≤ xmax && y ≥ ymin && y ≤ ymax && z ≥ zmin && z ≤ zmax)
+                continue
+            end
+
+            # 2b. Megvizsgáljuk az elemen belüli interpolációt
+            _, _, dim, _ = gmsh.model.mesh.getElement(rr.numElem[i])
+            et = elemTypes[1]  # feltételezve azonos típus a mezőben
+            _, dim, order, numNodes, _, _ = gmsh.model.mesh.getElementProperties(et)
+            nodes = elemNodeTags[1][(i-1)*numNodes+1:i*numNodes]
+            xs, ys, zs = xnode[nodes], ynode[nodes], znode[nodes]
+
+            # Természetes koordináták (ξ, η, ζ)
+            ξηζ = natural_coordinates_generic(x, y, z, xs, ys, zs, et)
+            if ξηζ === nothing
+                continue
+            end
+            ξ, η, ζ = ξηζ
+
+            # Lagrange-alakfüggvények és interpoláció
+            N = lagrange_shape_generic(ξ, η, ζ, et)
+            if length(N) != numNodes
+                continue
+            end
+
+            vals[ipt] = dot(N, rr.A[i][:, 1])
+            break  # kilépés az első megfelelő elemmel
+        end
+    end
+
+    return vals
+end
 
 """
     probe_field(rr::ScalarField, x, y, z)
@@ -18,7 +114,11 @@ function probe_field(rr::ScalarField, x::Float64, y::Float64, z::Float64)
     nodeTags, coords, _ = gmsh.model.mesh.getNodes()
     X = coords[1:3:end]; Y = coords[2:3:end]; Z = coords[3:3:end]
 
-    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(rr.model.dim, -1)
+    if isempty(rr.numElem)
+        error("probe_field: field has no associated elements.")
+    end
+    _, _, dim, _ = gmsh.model.mesh.getElement(rr.numElem[1])
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
 
     @inbounds for (i, et) in enumerate(elemTypes)
         elementName, dim, order, numNodes::Int, localCoord, numPrimary =
@@ -39,10 +139,11 @@ function probe_field(rr::ScalarField, x::Float64, y::Float64, z::Float64)
                 continue
             end
 
-            ξ, η, ζ = natural_coordinates_generic(x, y, z, xnodes, ynodes, znodes, et)
-            if isnothing(ξ)
+            ξηζ = natural_coordinates_generic(x, y, z, xnodes, ynodes, znodes, et)
+            if ξηζ === nothing
                 continue
             end
+            ξ, η, ζ = ξηζ
 
             N = lagrange_shape_generic(ξ, η, ζ, et)
             if length(N) != numNodes
