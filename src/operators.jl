@@ -11,6 +11,7 @@ import Base.-
 import Base.log
 import Base.sqrt
 import Base.cbrt
+using StaticArrays
 
 """
     *(A::ScalarField, B::ScalarField)
@@ -24,6 +25,40 @@ Returns: `ScalarField`
 C = A * B
 ```
 """
+function *(A::ScalarField, B::ScalarField)
+    A = isNodal(A) ? nodesToElements(A) : A
+    B = isNodal(B) ? nodesToElements(B) : B
+
+    A.nsteps == B.nsteps || error("*(ScalarField, ScalarField): nsteps mismatch")
+    nsteps = A.nsteps
+
+    # elem → index gyorsleképezés
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
+    # közös elemek
+    sec = intersect(A.numElem, B.numElem)
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    @inbounds @views for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        # kisebbik csomópontszám a biztonság kedvéért
+        n = min(size(AAi, 1), size(BBi, 1))
+        @views C[ii] = AAi[1:n, :] .* BBi[1:n, :]
+        num[ii] = e
+    end
+
+    return ScalarField(C, [;;], A.t, num, nsteps, :scalar, A.model)
+end
+#=
 function *(AA::ScalarField, BB::ScalarField)
     if isNodal(AA)
         A = nodesToElements(AA)
@@ -72,6 +107,7 @@ function *(AA::ScalarField, BB::ScalarField)
     a = [;;]
     return ScalarField(C, a, A.t, num, A.nsteps, :scalar, A.model)
 end
+=#
 
 """
     /(A::ScalarField, B::ScalarField)
@@ -86,52 +122,33 @@ C = A / B
 ```
 """
 function /(AA::ScalarField, BB::ScalarField)
-    if isNodal(AA)
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    A.nsteps == B.nsteps || error("/(ScalarField, ScalarField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps))")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
+    sec = intersect(A.numElem, B.numElem)
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        n = min(size(AAi, 1), size(BBi, 1))
+        @views C[ii] = AAi[1:n, :] ./ BBi[1:n, :]
+        num[ii] = e
     end
-    if isNodal(BB)
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
-    if A.nsteps != B.nsteps
-        error("/(ScalarField, ScalarField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
-    end
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i])
-        D = zeros(n, nsteps)
-        if n != sz
-            #D = zeros(n, nsteps)
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = A.A[indS[i]][j, k] / B.A[indT[i]][j, k]
-            end
-        end
-        append!(num, sec[i])
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, num, A.nsteps, :scalar, A.model)
+
+    return ScalarField(C, [;;], A.t, num, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -149,60 +166,44 @@ C = A + B
 function +(A::ScalarField, B::ScalarField)
     if isElementwise(A) && isElementwise(B)
         if A.type == B.type
-            #if length(A.A) != length(B.A)
-            #    error("+(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-            #end
-            nsteps = A.nsteps
-            nsteps2 = B.nsteps
-            if nsteps != nsteps2
-                error("+(A::ScalarField, B::ScalarField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-            end
+            A.nsteps == B.nsteps || error("+(A::ScalarField, B::ScalarField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+
+            a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+            b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
             sec = intersect(A.numElem, B.numElem)
-            ind1 = []
-            ind2 = []
-            sizehint!(ind1, length(sec))
-            sizehint!(ind2, length(sec))
-            for i in sec
-                append!(ind1, findall(j -> j == i, A.numElem))
-                append!(ind2, findall(j -> j == i, B.numElem))
-            end
             dif1 = setdiff(A.numElem, B.numElem)
-            ind3 = []
-            sizehint!(ind3, length(dif1))
-            for i in dif1
-                append!(ind3, findall(j -> j == i, A.numElem))
-            end
             dif2 = setdiff(B.numElem, A.numElem)
-            ind4 = []
-            sizehint!(ind4, length(dif2))
-            for i in dif2
-                append!(ind4, findall(j -> j == i, B.numElem))
+
+            total = length(sec) + length(dif1) + length(dif2)
+            C = Vector{Matrix{Float64}}(undef, total)
+            num = Vector{Int}(undef, total)
+
+            pos = 1
+
+            @inbounds for e in sec
+                ia = a_index[e]
+                ib = b_index[e]
+                C[pos] = A.A[ia] .+ B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            C = []
-            num = []
-            sizehint!(C, length(sec) + length(dif1) + length(dif2))
-            sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            idx01 = findall(j -> j in sec, A.numElem)
-            idx02 = findall(j -> j in sec, B.numElem)
-            for i in eachindex(idx01)
-                D = A.A[idx01[i]] + B.A[idx02[i]]
-                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif1
+                ia = a_index[e]
+                C[pos] = A.A[ia]
+                num[pos] = e
+                pos += 1
             end
-            idx1 = findall(j -> j in dif1, A.numElem)
-            for i in idx1 #eachindex(dif1)
-                D = A.A[i]
-                append!(num, A.numElem[i] #=dif1[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif2
+                ib = b_index[e]
+                C[pos] = B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            idx2 = findall(j -> j in dif2, B.numElem)
-            for i in idx2 #eachindex(dif2)
-                D = B.A[i]
-                append!(num, B.numElem[i] #=dif2[i]=#)
-                push!(C, D)
-            end
-            a = [;;]
-            return ScalarField(C, a, A.t, num, A.nsteps, A.type, A.model)
+
+            return ScalarField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -232,61 +233,44 @@ C = A - B
 function -(A::ScalarField, B::ScalarField)
     if isElementwise(A) && isElementwise(B)
         if A.type == B.type
-            #if length(A.A) != length(B.A)
-            #    error("+(A::ScalarField, B::ScalarField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-            #end
-            nsteps = A.nsteps
-            nsteps2 = B.nsteps
-            if nsteps != nsteps2
-                error("-(A::ScalarField, B::ScalarField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-            end
+            A.nsteps == B.nsteps || error("-(A::ScalarField, B::ScalarField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+
+            a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+            b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
             sec = intersect(A.numElem, B.numElem)
-            ind1 = []
-            ind2 = []
-            sizehint!(ind1, length(sec))
-            sizehint!(ind2, length(sec))
-            for i in sec
-                append!(ind1, findall(j -> j == i, A.numElem))
-                append!(ind2, findall(j -> j == i, B.numElem))
-            end
             dif1 = setdiff(A.numElem, B.numElem)
-            ind3 = []
-            sizehint!(ind3, length(dif1))
-            for i in dif1
-                append!(ind3, findall(j -> j == i, A.numElem))
-            end
             dif2 = setdiff(B.numElem, A.numElem)
-            ind4 = []
-            sizehint!(ind4, length(dif2))
-            for i in dif2
-                append!(ind4, findall(j -> j == i, B.numElem))
+
+            total = length(sec) + length(dif1) + length(dif2)
+            C = Vector{Matrix{Float64}}(undef, total)
+            num = Vector{Int}(undef, total)
+
+            pos = 1
+
+            @inbounds for e in sec
+                ia = a_index[e]
+                ib = b_index[e]
+                C[pos] = A.A[ia] .- B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            C = []
-            num = []
-            sizehint!(C, length(sec) + length(dif1) + length(dif2))
-            sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            idx01 = findall(j -> j in sec, A.numElem)
-            idx02 = findall(j -> j in sec, B.numElem)
-            for i in eachindex(idx01)
-                D = A.A[idx01[i]] - B.A[idx02[i]]
-                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif1
+                ia = a_index[e]
+                C[pos] = A.A[ia]
+                num[pos] = e
+                pos += 1
             end
-            idx1 = findall(j -> j in dif1, A.numElem)
-            for i in idx1 #eachindex(dif1)
-                #display("dif1 = $dif1")
-                D = A.A[i]
-                append!(num, A.numElem[i] #=dif1[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif2
+                ib = b_index[e]
+                C[pos] = -B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            idx2 = findall(j -> j in dif2, B.numElem)
-            for i in idx2 #eachindex(dif2)
-                D = -B.A[i]
-                append!(num, B.numElem[i] #=dif2[i]=#)
-                push!(C, D)
-            end
-            a = [;;]
-            return ScalarField(C, a, A.t, num, A.nsteps, A.type, A.model)
+
+            return ScalarField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
         else
             error("-(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -319,13 +303,12 @@ C = A * 2.0
 """
 function *(A::ScalarField, b::Number)
     if isElementwise(A)
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] * b
-            push!(C, D)
+        n = length(A.A)
+        C = Vector{Matrix{Float64}}(undef, n)
+        @inbounds for i in 1:n
+            C[i] = A.A[i] .* b
         end
-        a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
+        return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
     else
         return ScalarField(A.A, A.a * b, A.t, A.numElem, A.nsteps, A.type, A.model)
     end
@@ -344,113 +327,57 @@ C = 2.0 * A
 ```
 """
 function *(b::Number, A::ScalarField)
-    if isElementwise(A)
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] * b
-            push!(C, D)
-        end
-        a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
-    else
-        return ScalarField(A.A, A.a * b, A.t, A.numElem, A.nsteps, A.type, A.model)
-    end
+    return A * b
 end
 
 function /(AA::ScalarField, b::Number)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] ./ b
     end
-    C = []
-    for i in 1:length(A.A)
-        D = A.A[i] / b
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
 
 function /(b::Number, AA::ScalarField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = b ./ A.A[i]
     end
-    C = []
-    for i in 1:length(A.A)
-        D = b ./ A.A[i]
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
 
 function log(AA::ScalarField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = log.(A.A[i])
     end
-    nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        n = length(A.A[i])
-        D = zeros(n, nsteps)
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = log(A.A[i][j, k])
-            end
-        end
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
 
 function sqrt(AA::ScalarField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = sqrt.(A.A[i])
     end
-    nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        n = length(A.A[i])
-        D = zeros(n, nsteps)
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = sqrt(A.A[i][j, k])
-            end
-        end
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
 
 function cbrt(AA::ScalarField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = cbrt.(A.A[i])
     end
-    nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        n = length(A.A[i])
-        D = zeros(n, nsteps)
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = cbrt(A.A[i][j, k])
-            end
-        end
-        push!(C, D)
-    end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
 
 ###############################################################################
@@ -480,55 +407,55 @@ v2 = s .* v  # equivalent to s * v
 ```
 """
 function *(AA::ScalarField, BB::VectorField)
-    if isNodal(AA)
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if isNodal(BB)
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
-    if BB.type != :v3D
-        error("*(AA::ScalarField, BB::VectorField): Vector field must be 3 dimansional.")
-    end
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    B.type == :v3D || error("*(AA::ScalarField, BB::VectorField): Vector field must be 3 dimansional.")
     if A.nsteps != B.nsteps || A.nsteps != 1
         error("*(AA::ScalarField, BB::VectorField): Number of nsteps in AA must be one or equal to BB.nsteps.")
     end
-    nsteps = B.nsteps
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
     sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 3
-        D = zeros(3n, nsteps)
-        if n != sz
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                kk = AA.nsteps > 1 ? k : 1
-                D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, kk]
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = B.nsteps
+    a_has_single_step = (A.nsteps == 1)
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        n_nodes = min(size(AAi, 1), size(BBi, 1) ÷ 3)
+        rows = 3n_nodes
+
+        result = Matrix{Float64}(undef, rows, nsteps)
+
+        if n_nodes > 0
+            @inbounds @views for j in 1:n_nodes
+                dest = result[3j-2:3j, :]
+                src = BBi[3j-2:3j, :]
+                if a_has_single_step
+                    dest .= src .* AAi[j, 1]
+                else
+                    dest .= src .* AAi[j, :]
+                end
             end
         end
-        append!(num, sec[i])
-        push!(C, D)
+
+        C[ii] = result
+        num[ii] = e
     end
-    a = [;;]
-    return VectorField(C, a, B.t, num, B.nsteps, BB.type, B.model)
+
+    return VectorField(C, [;;], B.t, num, B.nsteps, BB.type, B.model)
 end
 
 """
@@ -539,55 +466,7 @@ Scales a `VectorField` by a `ScalarField` element-wise on matching elements.
 Returns: `VectorField`
 """
 function *(BB::VectorField, AA::ScalarField)
-    if isNodal(AA)
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if isNodal(BB)
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
-    if BB.type != :v3D
-        error("*(BB::VectorField, AA::ScalarField): Vector field must be 3 dimansional.")
-    end
-    if A.nsteps != B.nsteps || A.nsteps != 1
-        error("*(BB::VectorField, AA::ScalarField): Number of nsteps in AA must be one or equal to BB.nsteps.")
-    end
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 3
-        D = zeros(3n, nsteps)
-        if n != sz
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                kk = AA.nsteps > 1 ? k : 1
-                D[3j-2:3j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][3j-2:3j, kk]
-            end
-        end
-        append!(num, sec[i])
-        push!(C, D)
-    end
-    a = [;;]
-    return VectorField(C, a, B.t, num, B.nsteps, BB.type, B.model)
+    return AA * BB
 end
 
 """
@@ -598,55 +477,55 @@ Divides a `VectorField` by a `ScalarField` element-wise on matching elements.
 Returns: `VectorField`
 """
 function /(BB::VectorField, AA::ScalarField)
-    if isNodal(AA)
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if isNodal(BB)
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
-    if BB.type != :v3D
-        error("/(BB::VectorField, AA::ScalarField): Vector field must be 3 dimansional.")
-    end
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    B.type == :v3D || error("/(BB::VectorField, AA::ScalarField): Vector field must be 3 dimansional.")
     if A.nsteps != B.nsteps || A.nsteps != 1
         error("/(BB::VectorField, AA::ScalarField): Number of nsteps in AA must be one or equal to BB.nsteps.")
     end
-    nsteps = B.nsteps
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
     sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 3
-        D = zeros(3n, nsteps)
-        if n != sz
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                kk = AA.nsteps > 1 ? k : 1
-                D[3j-2:3j, k] = A.A[indS[i]][j, k] / B.A[indT[i]][3j-2:3j, kk]
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = B.nsteps
+    a_has_single_step = (A.nsteps == 1)
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        n_nodes = min(size(AAi, 1), size(BBi, 1) ÷ 3)
+        rows = 3n_nodes
+
+        result = Matrix{Float64}(undef, rows, nsteps)
+
+        if n_nodes > 0
+            @inbounds @views for j in 1:n_nodes
+                dest = result[3j-2:3j, :]
+                src = BBi[3j-2:3j, :]
+                if a_has_single_step
+                    dest .= src ./ AAi[j, 1]
+                else
+                    dest .= src ./ AAi[j, :]
+                end
             end
         end
-        append!(num, sec[i])
-        push!(C, D)
+
+        C[ii] = result
+        num[ii] = e
     end
-    a = [;;]
-    return VectorField(C, a, B.t, num, B.nsteps, BB.type, B.model)
+
+    return VectorField(C, [;;], B.t, num, B.nsteps, BB.type, B.model)
 end
 
 function +(A::VectorField, B::VectorField)
@@ -660,52 +539,42 @@ function +(A::VectorField, B::VectorField)
             if nsteps != nsteps2
                 error("+(A::VectorField, B::VectorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
             end
+            a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+            b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
             sec = intersect(A.numElem, B.numElem)
-            ind1 = []
-            ind2 = []
-            sizehint!(ind1, length(sec))
-            sizehint!(ind2, length(sec))
-            for i in sec
-                append!(ind1, findall(j -> j == i, A.numElem))
-                append!(ind2, findall(j -> j == i, B.numElem))
-            end
             dif1 = setdiff(A.numElem, B.numElem)
-            ind3 = []
-            sizehint!(ind3, length(dif1))
-            for i in dif1
-                append!(ind3, findall(j -> j == i, A.numElem))
-            end
             dif2 = setdiff(B.numElem, A.numElem)
-            ind4 = []
-            sizehint!(ind4, length(dif2))
-            for i in dif2
-                append!(ind4, findall(j -> j == i, B.numElem))
+
+            total = length(sec) + length(dif1) + length(dif2)
+            C = Vector{Matrix{Float64}}(undef, total)
+            num = Vector{Int}(undef, total)
+
+            pos = 1
+
+            @inbounds for e in sec
+                ia = a_index[e]
+                ib = b_index[e]
+                C[pos] = A.A[ia] .+ B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            C = []
-            num = []
-            sizehint!(C, length(sec) + length(dif1) + length(dif2))
-            sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            idx01 = findall(j -> j in sec, A.numElem)
-            idx02 = findall(j -> j in sec, B.numElem)
-            for i in eachindex(idx01)
-                D = A.A[idx01[i]] + B.A[idx02[i]]
-                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif1
+                ia = a_index[e]
+                C[pos] = A.A[ia]
+                num[pos] = e
+                pos += 1
             end
-            idx1 = findall(j -> j in dif1, A.numElem)
-            for i in idx1 #eachindex(dif1)
-                D = A.A[i]
-                append!(num, A.numElem[i] #=dif1[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif2
+                ib = b_index[e]
+                C[pos] = B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            idx2 = findall(j -> j in dif2, B.numElem)
-            for i in idx2 #eachindex(dif2)
-                D = B.A[i]
-                append!(num, B.numElem[i] #=dif2[i]=#)
-                push!(C, D)
-            end
-            a = [;;]
-            return VectorField(C, a, A.t, num, A.nsteps, A.type, A.model)
+
+            return VectorField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
         else
             error("+(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -731,52 +600,42 @@ function -(A::VectorField, B::VectorField)
             if nsteps != nsteps2
                 error("-(A::VectorField, B::VectorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
             end
+            a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+            b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
             sec = intersect(A.numElem, B.numElem)
-            ind1 = []
-            ind2 = []
-            sizehint!(ind1, length(sec))
-            sizehint!(ind2, length(sec))
-            for i in sec
-                append!(ind1, findall(j -> j == i, A.numElem))
-                append!(ind2, findall(j -> j == i, B.numElem))
-            end
             dif1 = setdiff(A.numElem, B.numElem)
-            ind3 = []
-            sizehint!(ind3, length(dif1))
-            for i in dif1
-                append!(ind3, findall(j -> j == i, A.numElem))
-            end
             dif2 = setdiff(B.numElem, A.numElem)
-            ind4 = []
-            sizehint!(ind4, length(dif2))
-            for i in dif2
-                append!(ind4, findall(j -> j == i, B.numElem))
+
+            total = length(sec) + length(dif1) + length(dif2)
+            C = Vector{Matrix{Float64}}(undef, total)
+            num = Vector{Int}(undef, total)
+
+            pos = 1
+
+            @inbounds for e in sec
+                ia = a_index[e]
+                ib = b_index[e]
+                C[pos] = A.A[ia] .- B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            C = []
-            num = []
-            sizehint!(C, length(sec) + length(dif1) + length(dif2))
-            sizehint!(num, length(sec) + length(dif1) + length(dif2))
-            idx01 = findall(j -> j in sec, A.numElem)
-            idx02 = findall(j -> j in sec, B.numElem)
-            for i in eachindex(idx01)
-                D = A.A[idx01[i]] - B.A[idx02[i]]
-                append!(num, A.numElem[idx01[i]] #=sec[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif1
+                ia = a_index[e]
+                C[pos] = A.A[ia]
+                num[pos] = e
+                pos += 1
             end
-            idx1 = findall(j -> j in dif1, A.numElem)
-            for i in idx1 #eachindex(dif1)
-                D = A.A[i]
-                append!(num, A.numElem[i] #=dif1[i]=#)
-                push!(C, D)
+
+            @inbounds for e in dif2
+                ib = b_index[e]
+                C[pos] = -B.A[ib]
+                num[pos] = e
+                pos += 1
             end
-            idx2 = findall(j -> j in dif2, B.numElem)
-            for i in idx2 #eachindex(dif2)
-                D = -B.A[i]
-                append!(num, B.numElem[i] #=dif2[i]=#)
-                push!(C, D)
-            end
-            a = [;;]
-            return VectorField(C, a, A.t, num, A.nsteps, A.type, A.model)
+
+            return VectorField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
         else
             error("-(A::VectorField, B::VectorField): VectorField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
@@ -796,20 +655,14 @@ function -(A::VectorField)
 end
 
 function *(A::VectorField, b::Number)
-    if length(A.A) != 0
-        if A.type == :v3D || A.type == :v2D || A.type == :v3D || A.type == :v2D || true
-            nsteps = A.nsteps
-            C = []
-            for i in 1:length(A.A)
-                D = A.A[i] * b
-                push!(C, D)
-            end
-            a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
-        else
-            error("*(A::VectorField, b): VectorField type ($(A.type) or $(b.type)) is not yet implemented.")
+    if isElementwise(A)
+        n = length(A.A)
+        C = Vector{Matrix{Float64}}(undef, n)
+        @inbounds for i in 1:n
+            C[i] = A.A[i] .* b
         end
-    elseif length(A.a) != 0
+        return VectorField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+    elseif A.a != [;;]
         return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model)
     else
         error("*(VectorField, b): internal error")
@@ -817,96 +670,78 @@ function *(A::VectorField, b::Number)
 end
 
 function *(b::Number, A::VectorField)
-    if length(A.A) != 0
-        if A.type == :u3D || A.type == :u2D || A.type == :f3D || A.type == :f2D || true
-            nsteps = A.nsteps
-            C = []
-            for i in 1:length(A.A)
-                D = A.A[i] * b
-                push!(C, D)
-            end
-            a = [;;]
-            return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
-        else
-            error("*(A::VectorField, b): VectorField type ($(A.type) or $(b.type)) is not yet implemented.")
-        end
-    elseif length(A.a) != 0
-        return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model)
-    else
-        error("*(b, VectorField): internal error")
-    end
+    return A * b
 end
 
 function /(A::VectorField, b::Number)
-    if length(A.A) != 0
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] / b
-            push!(C, D)
+    if isElementwise(A)
+        n = length(A.A)
+        C = Vector{Matrix{Float64}}(undef, n)
+        @inbounds for i in 1:n
+            C[i] = A.A[i] ./ b
         end
-        a = [;;]
-        return VectorField(C, a, A.t, A.numElem, A.nsteps, A.type, A.model)
-    elseif length(A.a) != 0
-        return VectorField([], A.a / b, A.t, [], A.nsteps, A.type, A.model)
+        return VectorField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+    elseif A.a != [;;]
+        return VectorField([], A.a ./ b, A.t, [], A.nsteps, A.type, A.model)
     else
         error("/(VectorField, b): internal error")
     end
 end
 
 function dot(AA::VectorField, BB::VectorField)
-    if isNodal(AA)
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if isNodal(BB)
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
     if A.nsteps != B.nsteps
         error("*(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
     end
     if A.type != :v3D && B.type != :v3D
         error("*(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
     end
-    nsteps = B.nsteps
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
     sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i])
-        D = zeros(n ÷ 3, nsteps)
-        if n != sz
-            #D = zeros(n, nsteps)
-            sz = n
-        end
-        for j in 1:n ÷ 3
-            for k in 1:nsteps
-                D[j, k] = A.A[indS[i]][3j-2, k] * B.A[indT[i]][3j-2, k] +
-                        A.A[indS[i]][3j-1, k] * B.A[indT[i]][3j-1, k] +
-                        A.A[indS[i]][3j,   k] * B.A[indT[i]][3j,   k]
-                 #A.A[indS[i]][j, k] * B.A[indT[i]][j, k]
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = B.nsteps
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        rows = min(size(AAi, 1), size(BBi, 1))
+        n_nodes = fld(rows, 3)
+        used_rows = 3n_nodes
+
+        result = Matrix{Float64}(undef, n_nodes, nsteps)
+
+        if n_nodes > 0
+            Ab = view(AAi, 1:used_rows, 1:nsteps)
+            Bb = view(BBi, 1:used_rows, 1:nsteps)
+
+            @inbounds @views for j in 1:n_nodes
+                a_block = Ab[3j-2:3j, :]
+                b_block = Bb[3j-2:3j, :]
+                row = result[j, :]
+                row .= a_block[1, :] .* b_block[1, :] .+
+                        a_block[2, :] .* b_block[2, :] .+
+                        a_block[3, :] .* b_block[3, :]
             end
         end
-        append!(num, sec[i])
-        push!(C, D)
+
+        C[ii] = result
+        num[ii] = e
     end
-    a = [;;]
-    return ScalarField(C, a, A.t, num, A.nsteps, :scalar, A.model)
+
+    return ScalarField(C, [;;], A.t, num, A.nsteps, :scalar, A.model)
 end
 
 #=
@@ -961,77 +796,68 @@ function *(A::VectorField, B::VectorField)
 end
 
 function ∘(AA::VectorField, BB::VectorField)
-    if isNodal(AA)
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if isNodal(BB)
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
     if A.nsteps != B.nsteps
         error("∘(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
     end
     if A.type != :v3D && B.type != :v3D
         error("∘(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
     end
-    nsteps = B.nsteps
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
     sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i])
-        D = zeros(3n, nsteps)
-        if n != sz
-            #D = zeros(n, nsteps)
-            sz = n
-        end
-        for j in 1:(n ÷ 3)
-            for k in 1:nsteps
-                ax = A.A[indS[i]][3j-2, k]
-                ay = A.A[indS[i]][3j-1, k]
-                az = A.A[indS[i]][3j,   k]
+    nsec = length(sec)
 
-                bx = B.A[indT[i]][3j-2, k]
-                by = B.A[indT[i]][3j-1, k]
-                bz = B.A[indT[i]][3j,   k]
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
 
-                D[9j-8,k] = ax * bx
-                D[9j-7,k] = ay * bx
-                D[9j-6,k] = az * bx
+    nsteps = B.nsteps
 
-                D[9j-5,k] = ax * by
-                D[9j-4,k] = ay * by
-                D[9j-3,k] = az * by
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
 
-                D[9j-2,k] = ax * bz
-                D[9j-1,k] = ay * bz
-                D[9j  ,k] = az * bz
-                #D[j, k] = A.A[indS[i]][3j-2, k] * B.A[indT[i]][3j-2, k] +
-                #        A.A[indS[i]][3j-1, k] * B.A[indT[i]][3j-1, k] +
-                #        A.A[indS[i]][3j,   k] * B.A[indT[i]][3j,   k]
-                 #A.A[indS[i]][j, k] * B.A[indT[i]][j, k]
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        rows = min(size(AAi, 1), size(BBi, 1))
+        n_nodes = fld(rows, 3)
+        used_rows = 3n_nodes
+
+        result = Matrix{Float64}(undef, 9n_nodes, nsteps)
+
+        if n_nodes > 0
+            Ab = view(AAi, 1:used_rows, 1:nsteps)
+            Bb = view(BBi, 1:used_rows, 1:nsteps)
+
+            @inbounds @views for j in 1:n_nodes
+                dest = result[9j-8:9j, :]
+                a_block = Ab[3j-2:3j, :]
+                b_block = Bb[3j-2:3j, :]
+
+                dest[1, :] .= a_block[1, :] .* b_block[1, :]
+                dest[2, :] .= a_block[2, :] .* b_block[1, :]
+                dest[3, :] .= a_block[3, :] .* b_block[1, :]
+
+                dest[4, :] .= a_block[1, :] .* b_block[2, :]
+                dest[5, :] .= a_block[2, :] .* b_block[2, :]
+                dest[6, :] .= a_block[3, :] .* b_block[2, :]
+
+                dest[7, :] .= a_block[1, :] .* b_block[3, :]
+                dest[8, :] .= a_block[2, :] .* b_block[3, :]
+                dest[9, :] .= a_block[3, :] .* b_block[3, :]
             end
         end
-        append!(num, sec[i])
-        push!(C, D)
+
+        C[ii] = result
+        num[ii] = e
     end
-    a = [;;]
-    return TensorField(C, a, A.t, num, A.nsteps, :e, A.model)
+
+    return TensorField(C, [;;], A.t, num, A.nsteps, :e, A.model)
 end
 
 #=
@@ -1090,59 +916,59 @@ w = u × v
 ```
 """
 function ×(AA::VectorField, BB::VectorField)
-    if isNodal(AA)
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if isNodal(BB)
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
     if A.nsteps != B.nsteps
         error("×(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
     end
     if A.type != :v3D && B.type != :v3D
         error("×(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
     end
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i])
-        D = zeros(n, nsteps)
-        if n != sz
-            #D = zeros(n, nsteps)
-            sz = n
-        end
-        for j in 1:(n ÷ 3)
-            for k in 1:nsteps
-                e = SVector{3}(A.A[indS[i]][3j-2:3j, k])
-                f = SVector{3}(B.A[indT[i]][3j-2:3j, k])
-                g = e × f
 
-                D[3j-2:3j,k] .= g[1:3]
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
+    sec = intersect(B.numElem, A.numElem)
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = B.nsteps
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        rows = min(size(AAi, 1), size(BBi, 1))
+        n_nodes = fld(rows, 3)
+        used_rows = 3n_nodes
+
+        result = Matrix{Float64}(undef, used_rows, nsteps)
+
+        if n_nodes > 0
+            Ab = view(AAi, 1:used_rows, 1:nsteps)
+            Bb = view(BBi, 1:used_rows, 1:nsteps)
+
+            @inbounds @views for j in 1:n_nodes
+                dest = result[3j-2:3j, :]
+                a_block = Ab[3j-2:3j, :]
+                b_block = Bb[3j-2:3j, :]
+                dest[1, :] .= a_block[2, :] .* b_block[3, :] .- a_block[3, :] .* b_block[2, :]
+                dest[2, :] .= a_block[3, :] .* b_block[1, :] .- a_block[1, :] .* b_block[3, :]
+                dest[3, :] .= a_block[1, :] .* b_block[2, :] .- a_block[2, :] .* b_block[1, :]
             end
         end
-        append!(num, sec[i])
-        push!(C, D)
+
+        C[ii] = result
+        num[ii] = e
     end
-    a = [;;]
-    return VectorField(C, a, A.t, num, A.nsteps, :v3D, A.model)
+
+    return VectorField(C, [;;], A.t, num, A.nsteps, :v3D, A.model)
 end
 
 """
@@ -1153,25 +979,32 @@ Element-wise Euclidean norm of a `VectorField`.
 Returns: `ScalarField`
 """
 function norm(AA::VectorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
+    A = isNodal(AA) ? nodesToElements(AA) : AA
     nsteps = A.nsteps
-    C = []
-    for i in 1:length(A.A)
-        n = length(A.A[i]) ÷ 3
-        D = zeros(n, nsteps)
-        for j in 1:n
-            for k in 1:nsteps
-                D[j, k] = norm(reshape(A.A[i][3j-2:3j, k], 3, 1))
+
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds for i in 1:n
+        Ai = A.A[i]
+        rows = size(Ai, 1)
+        n_nodes = fld(rows, 3)
+        used_rows = 3n_nodes
+
+        result = Matrix{Float64}(undef, n_nodes, nsteps)
+
+        if n_nodes > 0
+            Ab = view(Ai, 1:used_rows, 1:nsteps)
+            @inbounds @views for j in 1:n_nodes
+                block = Ab[3j-2:3j, :]
+                result[j, :] .= sqrt.(block[1, :].^2 .+ block[2, :].^2 .+ block[3, :].^2)
             end
         end
-        push!(C, D)
+
+        C[i] = result
     end
-    a = [;;]
-    return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
+
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -1183,28 +1016,36 @@ components on the tensor diagonal for each node/element.
 Returns: `TensorField`
 """
 function diagm(AA::VectorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A isa VectorField && A.model.dim == 3
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    if A isa VectorField && A.type == :v3D
         nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 3
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    e = reshape(A.A[i][3j-2:3j, k], 3, 1)
-                    F = [e[1] 0 0; 0 e[2] 0; 0 0 e[3]]
-                    D[9j-8:9j, k] = reshape(F, 9, 1)
+        n = length(A.A)
+        C = Vector{Matrix{Float64}}(undef, n)
+
+        @inbounds for i in 1:n
+            Ai = A.A[i]
+            rows = size(Ai, 1)
+            n_nodes = fld(rows, 3)
+            used_rows = 3n_nodes
+
+            result = Matrix{Float64}(undef, 9n_nodes, nsteps)
+
+            if n_nodes > 0
+                Ab = view(Ai, 1:used_rows, 1:nsteps)
+                @inbounds @views for j in 1:n_nodes
+                    dest = result[9j-8:9j, :]
+                    block = Ab[3j-2:3j, :]
+                    dest .= 0.0
+                    dest[1, :] .= block[1, :]
+                    dest[5, :] .= block[2, :]
+                    dest[9, :] .= block[3, :]
                 end
             end
-            push!(C, D)
+
+            C[i] = result
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+
+        return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
     else
         error("diagm(A::VectorField): A is not a VectorField or dim != 3.")
     end
@@ -1237,48 +1078,53 @@ into 3×3, multiplies, then flattens back.
 Returns: `TensorField`
 """
 function *(AA::TensorField, BB::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if BB.A == []
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    if true #(A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-        if length(A.A) != length(B.A)
-            error("*(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-        end
-        if A.numElem != B.numElem
-            error("*(A::TensorField, B::TensorField): tensor fields are not compatible.")
-        end
-        nsteps = A.nsteps
-        nsteps2 = B.nsteps
-        if nsteps != nsteps2
-            error("*(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-        end
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            m = length(B.A[i]) ÷ 9
-            if n != m
-                error("*(A::TensorField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
-            end
-            D = zeros(9n, nsteps)
-            for j in 1:n
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    A.nsteps == B.nsteps || error("*(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
+    sec = intersect(A.numElem, B.numElem)
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = A.nsteps
+
+    @inbounds @views for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        rows = min(size(AAi, 1), size(BBi, 1))
+        nblocks = fld(rows, 9)
+        used_rows = 9nblocks
+
+        result = Matrix{Float64}(undef, used_rows, nsteps)
+
+        if nblocks > 0
+            @inbounds for j in 1:nblocks
+                Ab = AAi[9j-8:9j, :]
+                Bb = BBi[9j-8:9j, :]
                 for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(reshape(A.A[i][9j-8:9j, k], 3, 3) * reshape(B.A[i][9j-8:9j, k], 3, 3), 9, 1)
+                    MA = SMatrix{3,3}(reshape(Ab[:, k], 3, 3))
+                    MB = SMatrix{3,3}(reshape(Bb[:, k], 3, 3))
+                    dest = view(result, 9j-8:9j, k)
+                    dest .= (MA * MB)[:]
                 end
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+
+        C[ii] = result
+        num[ii] = e
     end
+
+    return TensorField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
 end
 
 """
@@ -1290,188 +1136,142 @@ scalar per tensor (i.e., Frobenius inner product).
 Returns: `ScalarField`
 """
 function ⋅(AA::TensorField, BB::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if BB.A == []
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    if true #(A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-        if length(A.A) != length(B.A)
-            error("*(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-        end
-        if A.numElem != B.numElem
-            error("*(A::TensorField, B::TensorField): tensor fields are not compatible.")
-        end
-        nsteps = A.nsteps
-        nsteps2 = B.nsteps
-        if nsteps != nsteps2
-            error("*(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-        end
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            m = length(B.A[i]) ÷ 9
-            if n != m
-                error("*(A::TensorField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
-            end
-            D = zeros(n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    E = reshape(A.A[i][9j-8:9j, k], 3, 3) .* reshape(B.A[i][9j-8:9j, k], 3, 3)
-                    D[j, k] = sum(E)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    A.nsteps == B.nsteps || error("*(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
+    sec = intersect(A.numElem, B.numElem)
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = A.nsteps
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        rows = min(size(AAi, 1), size(BBi, 1))
+        nblocks = fld(rows, 9)
+        used_rows = 9nblocks
+
+        result = Matrix{Float64}(undef, nblocks, nsteps)
+
+        if nblocks > 0
+            Ab = AAi[1:used_rows, 1:nsteps]
+            Bb = BBi[1:used_rows, 1:nsteps]
+            @inbounds for j in 1:nblocks
+                blockA = Ab[9j-8:9j, :]
+                blockB = Bb[9j-8:9j, :]
+                row = view(result, j, :)
+                row .= 0.0
+                @inbounds for r in 1:9
+                    row .+= blockA[r, :] .* blockB[r, :]
                 end
             end
-            push!(C, D)
         end
-        a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
-    else
-        error("*(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+
+        C[ii] = result
+        num[ii] = e
     end
+
+    return ScalarField(C, [;;], A.t, num, A.nsteps, :scalar, A.model)
 end
 
 function +(AA::TensorField, BB::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    A.nsteps == B.nsteps || error("+(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
+    sec = intersect(A.numElem, B.numElem)
+    dif1 = setdiff(A.numElem, B.numElem)
+    dif2 = setdiff(B.numElem, A.numElem)
+
+    total = length(sec) + length(dif1) + length(dif2)
+    C = Vector{Matrix{Float64}}(undef, total)
+    num = Vector{Int}(undef, total)
+
+    pos = 1
+
+    @inbounds for e in sec
+        ia = a_index[e]
+        ib = b_index[e]
+        C[pos] = A.A[ia] .+ B.A[ib]
+        num[pos] = e
+        pos += 1
     end
-    if BB.A == []
-        B = nodesToElements(BB)
-    else
-        B = BB
+
+    @inbounds for e in dif1
+        ia = a_index[e]
+        C[pos] = A.A[ia]
+        num[pos] = e
+        pos += 1
     end
-    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F) || true
-        if length(A.A) != length(B.A)
-            error("+(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-        end
-        nsteps = A.nsteps
-        nsteps2 = B.nsteps
-        if nsteps != nsteps2
-            error("+(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-        end
-        sec = intersect(A.numElem, B.numElem)
-        ind1 = []
-        ind2 = []
-        sizehint!(ind1, length(sec))
-        sizehint!(ind2, length(sec))
-        for i in sec
-            append!(ind1, findall(j -> j == i, A.numElem))
-            append!(ind2, findall(j -> j == i, B.numElem))
-        end
-        dif1 = setdiff(A.numElem, B.numElem)
-        ind3 = []
-        sizehint!(ind3, length(dif1))
-        for i in dif1
-            append!(ind3, findall(j -> j == i, A.numElem))
-        end
-        dif2 = setdiff(B.numElem, A.numElem)
-        ind4 = []
-        sizehint!(ind4, length(dif2))
-        for i in dif2
-            append!(ind4, findall(j -> j == i, B.numElem))
-        end
-        C = []
-        num = []
-        sizehint!(C, length(sec) + length(dif1) + length(dif2))
-        sizehint!(num, length(sec) + length(dif1) + length(dif2))
-        for i in eachindex(sec)
-            #n = length(A.A[i]) ÷ 9
-            #m = length(B.A[i]) ÷ 9
-            #if n != m
-            #    error("+(A::TensorField, B::TensorField): size of A.A[$i]=$(9n) != size of B.A[$j]=$(9m)")
-            #end
-            D = A.A[i] + B.A[i]
-            append!(num, sec[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif1)
-            D = A.A[i]
-            append!(num, dif1[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif2)
-            D = B.A[i]
-            append!(num, dif2[i])
-            push!(C, D)
-        end
-        a = [;;]
-        return TensorField(C, a, A.t, num, A.nsteps, :e, A.model)
-    else
-        error("+(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+
+    @inbounds for e in dif2
+        ib = b_index[e]
+        C[pos] = B.A[ib]
+        num[pos] = e
+        pos += 1
     end
+
+    return TensorField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
 end
 
 function -(AA::TensorField, BB::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    A.nsteps == B.nsteps || error("-(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
+    sec = intersect(A.numElem, B.numElem)
+    dif1 = setdiff(A.numElem, B.numElem)
+    dif2 = setdiff(B.numElem, A.numElem)
+
+    total = length(sec) + length(dif1) + length(dif2)
+    C = Vector{Matrix{Float64}}(undef, total)
+    num = Vector{Int}(undef, total)
+
+    pos = 1
+
+    @inbounds for e in sec
+        ia = a_index[e]
+        ib = b_index[e]
+        C[pos] = A.A[ia] .- B.A[ib]
+        num[pos] = e
+        pos += 1
     end
-    if BB.A == []
-        B = nodesToElements(BB)
-    else
-        B = BB
+
+    @inbounds for e in dif1
+        ia = a_index[e]
+        C[pos] = A.A[ia]
+        num[pos] = e
+        pos += 1
     end
-    if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F) || true
-        if length(A.A) != length(B.A)
-            error("-(A::TensorField, B::TensorField): size of A=$(length(A.A)) != size of B=$(length(B.A))")
-        end
-        nsteps = A.nsteps
-        nsteps2 = B.nsteps
-        if nsteps != nsteps2
-            error("-(A::TensorField, B::TensorField): nsteps of A=$(A.nsteps) != nsteps of B=$(B.nsteps)")
-        end
-        sec = intersect(A.numElem, B.numElem)
-        ind1 = []
-        ind2 = []
-        sizehint!(ind1, length(sec))
-        sizehint!(ind2, length(sec))
-        for i in sec
-            append!(ind1, findall(j -> j == i, A.numElem))
-            append!(ind2, findall(j -> j == i, B.numElem))
-        end
-        dif1 = setdiff(A.numElem, B.numElem)
-        ind3 = []
-        sizehint!(ind3, length(dif1))
-        for i in dif1
-            append!(ind3, findall(j -> j == i, A.numElem))
-        end
-        dif2 = setdiff(B.numElem, A.numElem)
-        ind4 = []
-        sizehint!(ind4, length(dif2))
-        for i in dif2
-            append!(ind4, findall(j -> j == i, B.numElem))
-        end
-        C = []
-        num = []
-        sizehint!(C, length(sec) + length(dif1) + length(dif2))
-        sizehint!(num, length(sec) + length(dif1) + length(dif2))
-        for i in eachindex(sec)
-            D = A.A[i] - B.A[i]
-            append!(num, sec[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif1)
-            D = A.A[i]
-            append!(num, dif1[i])
-            push!(C, D)
-        end
-        for i in eachindex(dif2)
-            D = -B.A[i]
-            append!(num, dif2[i])
-            push!(C, D)
-        end
-        a = [;;]
-        return TensorField(C, a, A.t, num, A.nsteps, :e, A.model)
-    else
-        error("-(A::TensorField, B::TensorField): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+
+    @inbounds for e in dif2
+        ib = b_index[e]
+        C[pos] = -B.A[ib]
+        num[pos] = e
+        pos += 1
     end
+
+    return TensorField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
 end
 
 function -(A::TensorField)
@@ -1479,291 +1279,253 @@ function -(A::TensorField)
 end
 
 function *(AA::TensorField, BB::VectorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if BB.A == []
-        b = nodesToElements(BB)
-    else
-        b = BB
-    end
-    #if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-    #if b.model.dim == 3
-    if b.type == :v3D
-        if length(A.A) != length(b.A)
-            error("*(A::TensorField, b::VectorField): size of A=$(length(A.A)) != size of b=$(length(b.A))")
-        end
-        if A.numElem != b.numElem
-            error("*(A::TensorField, b::VectorField): tensor fields are not compatible.")
-        end
-        nsteps = A.nsteps
-        nsteps2 = b.nsteps
-        if nsteps != nsteps2
-            error("*(A::TensorField, b::VectorField): nsteps of A=$(A.nsteps) != nsteps of b=$(b.nsteps)")
-        end
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            m = length(b.A[i]) ÷ 3
-            if n != m
-                error("*(A::TensorField, b::VectorField): size of A.A[$i]=$(9n) != size of 3*b.A[$j]=$(3m)")
-            end
-            D = zeros(3n, nsteps)
-            for j in 1:n
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    b = isNodal(BB) ? nodesToElements(BB) : BB
+
+    b.type == :v3D || error("*(A::TensorField, b::VectorField): Multiply by 2D vector is not yet implemented.")
+    A.nsteps == b.nsteps || error("*(A::TensorField, b::VectorField): nsteps of A=$(A.nsteps) != nsteps of b=$(b.nsteps)")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(b.numElem))
+
+    sec = intersect(A.numElem, b.numElem)
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = A.nsteps
+
+    @inbounds @views for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = b.A[ib]
+
+        rowsA = size(AAi, 1)
+        rowsB = size(BBi, 1)
+        nblocks = min(fld(rowsA, 9), fld(rowsB, 3))
+        usedA = 9nblocks
+        usedB = 3nblocks
+
+        result = Matrix{Float64}(undef, usedB, nsteps)
+
+        if nblocks > 0
+            Ab = AAi[1:usedA, 1:nsteps]
+            Bb = BBi[1:usedB, 1:nsteps]
+            @inbounds for j in 1:nblocks
+                blockA = Ab[9j-8:9j, :]
+                blockB = Bb[3j-2:3j, :]
+                dest = view(result, 3j-2:3j, :)
                 for k in 1:nsteps
-                    D[3j-2:3j, k] = reshape(reshape(A.A[i][9j-8:9j, k], 3, 3) * reshape(b.A[i][3j-2:3j, k], 3, 1), 3, 1)
+                    MA = SMatrix{3,3}(reshape(blockA[:, k], 3, 3))
+                    v = SVector{3}(blockB[:, k])
+                    dest[:, k] = MA * v
                 end
             end
-            push!(C, D)
         end
-        a = [;;]
-        return VectorField(C, a, A.t, A.numElem, A.nsteps, b.type, A.model)
-    else
-        error("*(A::TensorField, b::VectorField): Multiply by 2D vector is not yet implemented.")
+
+        C[ii] = result
+        num[ii] = e
     end
+
+    return VectorField(C, [;;], A.t, num, A.nsteps, b.type, A.model)
 end
 
 function *(BB::VectorField, AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if BB.A == []
-        b = nodesToElements(BB)
-    else
-        b = BB
-    end
-    #if (A.type == :s || A.type == :e || A.type == :F) && (B.type == :s || B.type == :e || B.type == :F)
-    #if b.model.dim == 3
-    if b.type == :v3D
-        if length(A.A) != length(b.A)
-            error("*(A::TensorField, b::VectorField): size of A=$(length(A.A)) != size of b=$(length(b.A))")
-        end
-        if A.numElem != b.numElem
-            error("*(A::TensorField, b::VectorField): tensor fields are not compatible.")
-        end
-        nsteps = A.nsteps
-        nsteps2 = b.nsteps
-        if nsteps != nsteps2
-            error("*(A::TensorField, b::VectorField): nsteps of A=$(A.nsteps) != nsteps of b=$(b.nsteps)")
-        end
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            m = length(b.A[i]) ÷ 3
-            if n != m
-                error("*(A::TensorField, b::VectorField): size of A.A[$i]=$(9n) != size of 3*b.A[$j]=$(3m)")
-            end
-            D = zeros(3n, nsteps)
-            for j in 1:n
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    b = isNodal(BB) ? nodesToElements(BB) : BB
+
+    b.type == :v3D || error("*(A::TensorField, b::VectorField): Multiply by 2D vector is not yet implemented.")
+    A.nsteps == b.nsteps || error("*(A::TensorField, b::VectorField): nsteps of A=$(A.nsteps) != nsteps of b=$(b.nsteps)")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(b.numElem))
+
+    sec = intersect(A.numElem, b.numElem)
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = A.nsteps
+
+    @inbounds @views for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = b.A[ib]
+
+        rowsA = size(AAi, 1)
+        rowsB = size(BBi, 1)
+        nblocks = min(fld(rowsA, 9), fld(rowsB, 3))
+        usedA = 9nblocks
+        usedB = 3nblocks
+
+        result = Matrix{Float64}(undef, usedB, nsteps)
+
+        if nblocks > 0
+            Ab = AAi[1:usedA, 1:nsteps]
+            Bb = BBi[1:usedB, 1:nsteps]
+            @inbounds for j in 1:nblocks
+                blockA = Ab[9j-8:9j, :]
+                blockB = Bb[3j-2:3j, :]
+                dest = view(result, 3j-2:3j, :)
                 for k in 1:nsteps
-                    D[3j-2:3j, k] = reshape(reshape(b.A[i][3j-2:3j, k], 3, 1)' * reshape(A.A[i][9j-8:9j, k], 3, 3), 3, 1)'
+                    M = SMatrix{3,3}(reshape(blockA[:, k], 3, 3))
+                    v = SVector{3}(blockB[:, k])
+                    dest[:, k] = M' * v
                 end
             end
-            push!(C, D)
         end
-        a = [;;]
-        return VectorField(C, a, A.t, A.numElem, A.nsteps, b.type, A.model)
-    else
-        error("*(A::TensorField, b::VectorField): Multiply by 2D vector is not yet implemented.")
+
+        C[ii] = result
+        num[ii] = e
     end
+
+    return VectorField(C, [;;], A.t, num, A.nsteps, b.type, A.model)
 end
 
 function *(AA::TensorField, b::Number)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A.type == :s || A.type == :e || true
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] * b
-            push!(C, D)
+    if isElementwise(AA)
+        n = length(AA.A)
+        C = Vector{Matrix{Float64}}(undef, n)
+        @inbounds for i in 1:n
+            C[i] = AA.A[i] .* b
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+        return TensorField(C, [;;], AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
+    elseif AA.a != [;;]
+        return TensorField(AA.A, AA.a .* b, AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
     else
-        error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        error("*(A::TensorField, b): TensorField type ($(AA.type)) is not yet implemented.")
     end
 end
 
 function *(b::Number, AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A.type == :s || A.type == :e || true
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] * b
-            push!(C, D)
-        end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("*(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
-    end
+    return AA * b
 end
 
 function /(AA::TensorField, b::Number)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A.type == :s || A.type == :e || true
-        C = []
-        for i in 1:length(A.A)
-            D = A.A[i] / b
-            push!(C, D)
+    if isElementwise(AA)
+        n = length(AA.A)
+        C = Vector{Matrix{Float64}}(undef, n)
+        @inbounds for i in 1:n
+            C[i] = AA.A[i] ./ b
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
+        return TensorField(C, [;;], AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
+    elseif AA.a != [;;]
+        return TensorField(AA.A, AA.a ./ b, AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
     else
-        error("/(A::TensorField, b): TensorField type ($(A.type) or $(B.type)) is not yet implemented.")
+        error("/(A::TensorField, b): TensorField type ($(AA.type)) is not yet implemented.")
     end
 end
 
 function *(AA::ScalarField, BB::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if BB.A == []
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
-    nsteps = B.nsteps
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    (A.nsteps == 1 || A.nsteps == B.nsteps) || error("*(ScalarField, TensorField): nsteps of ScalarField ($(A.nsteps)) must be one or equal to TensorField ($(B.nsteps))")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
     sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 9
-        if n != sz
-            D = zeros(9n, nsteps)
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                D[9j-8:9j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][9j-8:9j, k]
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = B.nsteps
+    a_has_single_step = (A.nsteps == 1)
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        rows = size(BBi, 1)
+        nblocks = fld(rows, 9)
+        used_rows = 9nblocks
+
+        result = Matrix{Float64}(undef, used_rows, nsteps)
+
+        if nblocks > 0
+            Bb = view(BBi, 1:used_rows, 1:nsteps)
+            @inbounds for j in 1:nblocks
+                dest = view(result, 9j-8:9j, :)
+                blockB = view(Bb, 9j-8:9j, :)
+                if a_has_single_step
+                    dest .= blockB .* AAi[j, 1]
+                else
+                    dest .= blockB .* AAi[j, :]
+                end
             end
         end
-        append!(num, sec[i])
-        push!(C, D)
+
+        C[ii] = result
+        num[ii] = e
     end
-    a = [;;]
-    return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
+
+    return TensorField(C, [;;], B.t, num, B.nsteps, B.type, B.model)
 end
 
 function *(BB::TensorField, AA::ScalarField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if BB.A == []
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
-    nsteps = B.nsteps
-    sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 9
-        if n != sz
-            D = zeros(9n, nsteps)
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                D[9j-8:9j, k] = A.A[indS[i]][j, k] * B.A[indT[i]][9j-8:9j, k]
-            end
-        end
-        append!(num, sec[i])
-        push!(C, D)
-    end
-    a = [;;]
-    return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
+    return AA * BB
 end
 
 function /(BB::TensorField, AA::ScalarField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if BB.A == []
-        B = nodesToElements(BB)
-    else
-        B = BB
-    end
-    sz = 0
-    nsteps = B.nsteps
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    B = isNodal(BB) ? nodesToElements(BB) : BB
+
+    (A.nsteps == 1 || A.nsteps == B.nsteps) || error("/(TensorField, ScalarField): nsteps of ScalarField ($(A.nsteps)) must be one or equal to TensorField ($(B.nsteps))")
+
+    a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
+    b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
+
     sec = intersect(B.numElem, A.numElem)
-    indS = []
-    indT = []
-    sizehint!(indS, length(sec))
-    sizehint!(indT, length(sec))
-    for i in sec
-        append!(indS, findall(j -> j == i, A.numElem))
-        append!(indT, findall(j -> j == i, B.numElem))
-    end
-    C = []
-    num = []
-    sizehint!(C, length(sec))
-    sizehint!(num, length(sec))
-    D = []
-    for i in eachindex(sec)
-        n = length(B.A[i]) ÷ 9
-        if n != sz
-            D = zeros(9n, nsteps)
-            sz = n
-        end
-        for j in 1:n
-            for k in 1:nsteps
-                D[9j-8:9j, k] = B.A[indT[i]][9j-8:9j, k] / A.A[indS[i]][j, k]
+    nsec = length(sec)
+
+    C = Vector{Matrix{Float64}}(undef, nsec)
+    num = Vector{Int}(undef, nsec)
+
+    nsteps = B.nsteps
+    a_has_single_step = (A.nsteps == 1)
+
+    @inbounds for (ii, e) in enumerate(sec)
+        ia = a_index[e]
+        ib = b_index[e]
+
+        AAi = A.A[ia]
+        BBi = B.A[ib]
+
+        rows = size(BBi, 1)
+        nblocks = fld(rows, 9)
+        used_rows = 9nblocks
+
+        result = Matrix{Float64}(undef, used_rows, nsteps)
+
+        if nblocks > 0
+            Bb = view(BBi, 1:used_rows, 1:nsteps)
+            @inbounds for j in 1:nblocks
+                dest = view(result, 9j-8:9j, :)
+                blockB = view(Bb, 9j-8:9j, :)
+                if a_has_single_step
+                    dest .= blockB ./ AAi[j, 1]
+                else
+                    dest .= blockB ./ AAi[j, :]
+                end
             end
         end
-        append!(num, sec[i])
-        push!(C, D)
+
+        C[ii] = result
+        num[ii] = e
     end
-    a = [;;]
-    return TensorField(C, a, B.t, num, B.nsteps, :e, B.model)
+
+    return TensorField(C, [;;], B.t, num, B.nsteps, B.type, B.model)
 end
 
 """
@@ -1773,31 +1535,31 @@ Transposes each 3×3 tensor block.
 
 Returns: `TensorField`
 """
-function transpose(A::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    #if A.type == :s || A.type == :e || A.type == :F
-    if true
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(transpose(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
+function transpose(AA::TensorField)
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, 9nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            dest = result[9j-8:9j, :]
+            for k in 1:nsteps
+                M = reshape(block[:, k], 3, 3)
+                dest[:, k] .= transpose(M)[:]
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("transpose(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
 """
@@ -1808,29 +1570,30 @@ Adjoint (conjugate transpose) of each 3×3 tensor block.
 Returns: `TensorField`
 """
 function adjoint(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if true
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(adjoint(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, 9nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            dest = result[9j-8:9j, :]
+            for k in 1:nsteps
+                M = reshape(block[:, k], 3, 3)
+                dest[:, k] .= adjoint(M)[:]
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("adjoint(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
 """
@@ -1841,29 +1604,29 @@ Creates an identity tensor field (I) with the same element structure and time st
 Returns: `TensorField`
 """
 function unitTensor(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if true #A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape([1 0 0; 0 1 0; 0 0 1], 9, 1)
-                end
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    ident = SMatrix{3,3}(I)
+
+    @inbounds for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, 9nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            dest = view(result, 9j-8:9j, :)
+            for k in 1:nsteps
+                dest[:, k] .= ident[:]
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("unit(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
 """
@@ -1874,35 +1637,29 @@ Computes the trace of each 3×3 tensor block.
 Returns: `ScalarField`
 """
 function trace(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    sz = 0
-    if true #A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        D = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            if sz != n
-                D = zeros(n, nsteps)
-                sz = n
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            row = result[j, :]
+            for k in 1:nsteps
+                row[k] = block[1, k] + block[5, k] + block[9, k]
             end
-            for j in 1:n
-                for k in 1:nsteps
-                    trace = A.A[i][9j-8, k] + A.A[i][9j-4, k] + A.A[i][9j, k]
-                    D[j, k] = trace
-                end
-            end
-            push!(C, D)
         end
-        a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
-    else
-        error("trace(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -1913,35 +1670,30 @@ Computes the determinant of each 3×3 tensor block.
 Returns: `ScalarField`
 """
 function det(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    sz = 0
-    if true #A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        D = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            if sz != n
-                D = zeros(n, nsteps)
-                sz = n
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            row = result[j, :]
+            for k in 1:nsteps
+                M = SMatrix{3,3}(reshape(block[:, k], 3, 3))
+                row[k] = det(M)
             end
-            for j in 1:n
-                for k in 1:nsteps
-                    d = LinearAlgebra.det(reshape(A.A[i][9j-8:9j, k], 3, 3))
-                    D[j, k] = d
-                end
-            end
-            push!(C, D)
         end
-        a = [;;]
-        return ScalarField(C, a, A.t, A.numElem, A.nsteps, :scalar, A.model)
-    else
-        error("det(A::TensorField): TensorField type ($(A.type) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, :scalar, A.model)
 end
 
 """
@@ -1952,29 +1704,30 @@ Matrix inverse of each 3×3 tensor block.
 Returns: `TensorField`
 """
 function inv(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A isa TensorField
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(inv(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, 9nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            dest = result[9j-8:9j, :]
+            for k in 1:nsteps
+                M = SMatrix{3,3}(reshape(block[:, k], 3, 3))
+                dest[:, k] .= inv(M)[:]
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("inv(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
 function eigen(AA::TensorField)
@@ -1985,110 +1738,116 @@ function eigen(AA::TensorField)
     end
     if A isa TensorField
         nsteps = A.nsteps
-        C = []
-        c = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            h = zeros(3n, nsteps)
-            for j in 1:n
+        C = Vector{Matrix{Float64}}(undef, length(A.A))
+        c = Vector{Matrix{Float64}}(undef, length(A.A))
+        @inbounds @views for (idx, Ai) in enumerate(A.A)
+            nblocks = fld(size(Ai, 1), 9)
+            eigenvectors = Matrix{Float64}(undef, 9nblocks, nsteps)
+            eigenvalues = Matrix{Float64}(undef, 3nblocks, nsteps)
+            @inbounds for j in 1:nblocks
+                block = Ai[9j-8:9j, :]
+                vec_dest = eigenvectors[9j-8:9j, :]
+                val_dest = eigenvalues[3j-2:3j, :]
                 for k in 1:nsteps
-                    E = reshape(A.A[i][9j-8:9j, k], 3, 3)
-                    f, G = eigen(E, sortby=-)
-                    #GG = mapslices(v -> v ./ norm(v), G, dims=1)
-                    G[:,1] ./= norm(G[:,1]) > 1e-8 ? norm(G[:,1]) : 1
-                    G[:,2] ./= norm(G[:,2]) > 1e-8 ? norm(G[:,2]) : 1
-                    G[:,3] ./= norm(G[:,3]) > 1e-8 ? norm(G[:,3]) : 1
-                    D[9j-8:9j, k] = reshape(G, 9, 1)
-                    h[3j-2:3j, k] = reshape(f, 3, 1)
+                    E = reshape(block[:, k], 3, 3)
+                    vals, vecs = eigen(E, sortby=-)
+                    for col in 1:3
+                        v = view(vecs, :, col)
+                        nrm = norm(v)
+                        vecs[:, col] .= v ./ (nrm > 1e-8 ? nrm : 1.0)
+                    end
+                    vec_dest[:, k] .= vecs[:]
+                    val_dest[:, k] .= vals
                 end
             end
-            push!(C, D)
-            push!(c, h)
+            C[idx] = eigenvectors
+            c[idx] = eigenvalues
         end
-        a = [;;]
-        return VectorField(c, a, A.t, A.numElem, A.nsteps, :v3D, A.model), TensorField(C, a, A.t, A.numElem, A.nsteps, :tensor, A.model)
+        return VectorField(c, [;;], A.t, A.numElem, A.nsteps, :v3D, A.model), TensorField(C, [;;], A.t, A.numElem, A.nsteps, :tensor, A.model)
     else
         error("eigen(A::TensorField): A is not a TensorField.")
     end
 end
 
 function sqrt(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(sqrt(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, 9nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            dest = result[9j-8:9j, :]
+            for k in 1:nsteps
+                M = reshape(block[:, k], 3, 3)
+                dest[:, k] .= sqrt(M)[:]
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("sqrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
 function cbrt(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A.type == :s || A.type == :e || A.type == :F
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(cbrt(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, 9nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            dest = result[9j-8:9j, :]
+            for k in 1:nsteps
+                M = reshape(block[:, k], 3, 3)
+                dest[:, k] .= cbrt(M)[:]
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("cbrt(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
 function log(AA::TensorField)
-    if AA.A == []
-        A = nodesToElements(AA)
-    else
-        A = AA
-    end
-    if A.type == :s || A.type == :e
-        nsteps = A.nsteps
-        C = []
-        for i in 1:length(A.A)
-            n = length(A.A[i]) ÷ 9
-            D = zeros(9n, nsteps)
-            for j in 1:n
-                for k in 1:nsteps
-                    D[9j-8:9j, k] = reshape(log(reshape(A.A[i][9j-8:9j, k], 3, 3)), 9, 1)
-                end
+    A = AA.A == [] ? nodesToElements(AA) : AA
+
+    nsteps = A.nsteps
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+
+    @inbounds @views for i in 1:n
+        Ai = A.A[i]
+        nblocks = fld(size(Ai, 1), 9)
+        result = Matrix{Float64}(undef, 9nblocks, nsteps)
+
+        @inbounds for j in 1:nblocks
+            block = Ai[9j-8:9j, :]
+            dest = result[9j-8:9j, :]
+            for k in 1:nsteps
+                M = reshape(block[:, k], 3, 3)
+                dest[:, k] .= log(M)[:]
             end
-            push!(C, D)
         end
-        a = [;;]
-        return TensorField(C, a, A.t, A.numElem, A.nsteps, :e, A.model)
-    else
-        error("log(A::TensorField): TensorField type ($(A.type)) is not yet implemented.")
+
+        C[i] = result
     end
+
+    return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
 ###############################################################################
@@ -2148,8 +1907,8 @@ function \(A::Union{SystemMatrix,Matrix}, BB::ScalarField)
     if B.a != [;;] && B.nsteps == 1
         type = :scalar
         C = A isa Matrix ? A \ B.a : A.A \ B.a
-        B = nothing
-        GC.gc()
+        #B = nothing
+        #GC.gc()
         return ScalarField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
     else
         error("\\(A::SystemMatrix, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
@@ -2174,8 +1933,8 @@ function \(A::Union{SystemMatrix,Matrix}, BB::VectorField)
             error("\\(A::SystemMatrix, B::VectorField): ")
         end
         C = A isa Matrix ? A \ B.a : A.A \ B.a
-        B = nothing
-        GC.gc()
+        #B = nothing
+        #GC.gc()
         return VectorField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
     else
         error("\\(A::SystemMatrix, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")

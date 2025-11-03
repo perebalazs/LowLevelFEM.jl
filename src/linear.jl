@@ -3691,7 +3691,7 @@ function solveDisplacement(problem, load, supp, elSupp;
         elseif ordering == false
             u.a .= lu(K.A, q=nothing) \ (f.a - f_kin)
         else
-            K.A \ (f.a - f_kin)
+            u.a .= K.A \ (f.a - f_kin)
         end
         return u
 

@@ -1,5 +1,5 @@
 export pressureConstraint, flowRate
-export solvePressure
+export solvePressure, pressureInVolume
 
 
 function showGapThickness(phName; name=phName, visible=false)
@@ -90,6 +90,24 @@ function initialize(problem::Problem)
     gmsh.view.remove(problem.geometry.tagTop)
 end
 
+function pressureInVolume(p::ScalarField)
+    if p.model.geometry.nameVolume == ""
+        error("initializePressure: no volume for lubricant has been defined.")
+    end
+    if p.model.geometry.hh == nothing
+        view_h = showDoFResults(p.model.geometry.h)
+        fh(x, y, z) = gmsh.view.probe(view_h, x, y, 0, -1, -1, false, -1)[1][1]
+        p.model.geometry.hh = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fh)])
+        gmsh.view.remove(view_h)
+    end
+    view_p = showDoFResults(p)
+    fp(x, y, z) = gmsh.view.probe(view_p, x, y, 0, -1, -1, false, -1)[1][1]
+    pp = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
+    gmsh.view.remove(view_p)
+    return pp
+end
+
+#=
 function initializePressure(p::ScalarField)
     if p.model.geometry.nameVolume == ""
         error("initializePressure: no volume for lubricant has been defined.")
@@ -105,6 +123,7 @@ function initializePressure(p::ScalarField)
     p.model.geometry.p = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
     gmsh.view.remove(view_p)
 end
+=#
 
 #function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
 function systemMatrix(problem, velocity::Number)
@@ -376,6 +395,7 @@ function flowRateVector(problem, loads)
     return ScalarField([], reshape(fp, :,1), [0.0], [], 1, type, problem)
 end
 
+#=
 function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", periodicMaster="")
     if problem.type == :dummy
         return nothing
@@ -534,5 +554,180 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
         #return α, αcav # log.(α), αcav
         pret[fluid] =  p0 .+ κ * g .* log.(α)
         return ScalarField([], reshape(pret, :,1), [0], [], 1, :other, problem), ScalarField([], reshape(αcav, :,1), [0], [], 1, :p, problem)
+    end
+end
+=#
+
+function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", periodicMaster="")
+    if problem.type == :dummy
+        return nothing
+    end
+    if problem.type != :Reynolds
+        error("solvePressure: bad problem type '$type'.")
+    end
+    p0 = problem.material[1].p₀
+    κ = problem.material[1].κ
+    if problem.geometry.h == nothing
+        initialize(problem)
+    end
+    fluid = constrainedDoFs(problem, [pressureConstraint(problem.material[1].phName, p=0)])
+    bc = constrainedDoFs(problem, BC)
+    free = setdiff(fluid, bc)
+    #one = zeros(problem.non * problem.pdim) .+ 1
+    #type = :none
+    #if problem.dim == 1
+    #    type = :scalar
+    #elseif problem.dim == 2
+    #    type = :scalar
+    #else
+    #    error("problem.dim = $(problem.dim)")
+    #end
+    #α = ScalarField([], reshape(one, :,1), [0.0], [], 1, type, problem)
+    α = scalarField(problem, problem.material[1].phName, 1)
+    α0 = copy(α)
+    f0 = LowLevelFEM.flowRateVector(problem, load)
+    f = copy(f0)
+    err = 1
+    c = 0
+    if problem.dim == 1
+        if length(periodicSlave) != 0
+            pbc1 = LowLevelFEM.getTagForPhysicalName(periodicSlave)
+            nbc1::Int64 = gmsh.model.mesh.getNodesForPhysicalGroup(0, pbc1)[1][1]
+            pbc2 = LowLevelFEM.getTagForPhysicalName(periodicMaster)
+            nbc2::Int64 = gmsh.model.mesh.getNodesForPhysicalGroup(0, pbc2)[1][1]
+
+            G = zeros(1, problem.non)
+            #GT = zeros(problem.non)
+
+            G[nbc1] = 1
+            G[nbc2] = -1
+            GT = G'
+
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                fill!(α.a, 0.0)
+                K, KK = LowLevelFEM.systemMatrix(problem, -V)
+                f = copy(f0)
+                f -= KK * α0
+                applyBoundaryConditions!(α, BC)
+                α.a[bc] .= exp.((α.a[bc] .- p0) ./ κ)
+                p1 = K.A[:, bc] * α.a[bc]
+                #Reynolds.applyBoundaryConditions!(problem, K, f, BC)
+                #a0 = similar(α0.a)
+                a0 = K.A[free, free] \ (f.a[free] - p1[free])
+                KG = K \ GT
+                λ = (G * KG) \ G * a0
+                #a1 = ScalarField([], -KG * λ, [0.0], [], 1, a0.type, a0.model)
+                a1 = -KG * λ
+                α.a[free] = a0 + a1
+
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+        elseif length(periodicSlave) == 0
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                K, KK = LowLevelFEM.systemMatrix(problem, -V)
+                f = copy(f0)
+                f -= KK * α
+                #f .= f0
+                applyBoundaryConditions!(problem, K, f, BC)
+                α = K \ f
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+        end
+    elseif problem.dim == 2
+        if length(periodicSlave) != 0
+            pbc1 = LowLevelFEM.getTagForPhysicalName(periodicSlave) # right0: slave
+            cv1 = (gmsh.model.getEntitiesForPhysicalGroup(1, pbc1))[1]
+            tagMaster, slave::Vector{Int64}, master::Vector{Int64}, affineTransform = gmsh.model.mesh.getPeriodicNodes(1, cv1, true)
+            @info "master = $tagMaster, slave = $cv1"
+
+            G = zeros(length(master), problem.non)
+            #GT = zeros(problem.non, length(master))
+
+            for i in 1:length(master)
+                G[i, master[i]] = 1
+                G[i, slave[i]] = -1
+
+                #GT[master[i], i] = 1
+                #GT[slave[i], i] = -1
+            end
+
+            indG = findall(x -> x in free, master)
+            #indG2 = findall(x -> x in free, slave)
+
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                K, KK = LowLevelFEM.systemMatrix(problem, -V)
+                f = copy(f0)
+                f -= KK * α0
+                applyBoundaryConditions!(α, BC)
+                α.a[bc] .= exp.((α.a[bc] .- p0) ./ κ)
+                p1 = K.A[:, bc] * α.a[bc]
+                a0 = K.A[free, free] \ (f.a[free] - p1[free]) # free × 1
+                KG = K.A[free, free] \ G'[free, indG] # free × master
+                #@disp fluid
+                #@disp bc
+                #@disp free
+                #@disp master
+                #@disp indG
+                #@disp indG2
+                #display(G[indG, master])
+                #display(K.A[free, free])
+                #display(KG)
+                #@disp GT
+                λ = (G[indG, free] * KG) \ G[indG, free] * a0 # master × 1
+                a1 = -KG * λ # free × 1
+                α.a[free] = a0 + a1
+
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+
+        elseif length(periodicSlave) == 0
+
+            while err > 1e-10 && c < 101
+                c += 1
+                α0 = copy(α)
+                K, KK = LowLevelFEM.systemMatrix(problem, -V)
+                f = copy(f0)
+                f -= KK * α
+                applyBoundaryConditions!(α, BC)
+                α.a[bc] .= exp.((α.a[bc] .- p0) ./ κ)
+                p1 = K.A[:, bc] * α.a[bc]
+                a0 = K.A[free, free] \ (f.a[free, 1] - p1[free])
+                α.a[free] = a0
+
+                err = sum(abs, α.a - α0.a) / sum(abs, α0.a)
+                if c == 100
+                    @warn("solvePressure: number of iterations reached step $c.")
+                end
+            end
+        end
+    end
+    @info "solvePressure: number of iterations is $c."
+    pret = zeros(problem.non, 1)
+    αcav = zeros(problem.non, 1)
+    g = [i < 1.0 ? 0.0 : 1.0 for i in α.a[fluid]]
+    αcav[fluid] = 1 .- [i < 1.0 ? i : 1.0 for i in α.a[fluid]]
+    α = [i < 1 ? 1 : i for i in α.a[fluid]]
+    if cav == false
+        pret[fluid] = p0 .+ κ * g .* log.(α)
+        return ScalarField([], reshape(pret, :, 1), [0], [], 1, :other, problem)
+    else
+        #return α, αcav # log.(α), αcav
+        pret[fluid] = p0 .+ κ * g .* log.(α)
+        return ScalarField([], reshape(pret, :, 1), [0], [], 1, :other, problem), ScalarField([], reshape(αcav, :, 1), [0], [], 1, :p, problem)
     end
 end

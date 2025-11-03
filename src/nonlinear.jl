@@ -96,7 +96,7 @@ DV = ∇(T, nabla=:div)  # VectorField
 gmsh.finalize()
 ```
 """
-function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+function ∇_old(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
     if rr.a == [;;]
@@ -359,6 +359,283 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
         elseif r isa TensorField && nabla == :div
             type = :v3D
             return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
+        end
+    end
+end
+
+# --- gyors cache-ek elemtípusra (et) ---
+const _prop_cache = Dict{Int, Tuple{Int,Int,Vector{Float64}}}()   # et => (dim, numNodes, nodeCoord)
+const _basis_cache = Dict{Int, Tuple{Matrix{Float64}, Matrix{Float64}}}()  # et => (∇h, h)
+
+# et tulajdonságok + nodeCoord előállítása és cache-elése
+function _get_props_cached(et::Int)
+    if haskey(_prop_cache, et)
+        return _prop_cache[et]
+    end
+    elementName, dim, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
+        gmsh.model.mesh.getElementProperties(et)
+    # nodeCoord: a Gmsh a lokális csomópont-koordinátákat dim-enként adja,
+    # mi 3-as blokkokba "csomagoljuk", ahogy az eredeti kód is teszi
+    nodeCoord = Vector{Float64}(undef, 3*numNodes)
+    @inbounds for j in 1:numNodes, k in 1:dim
+        nodeCoord[k + (j-1)*3] = localNodeCoord[k + (j-1)*dim]
+    end
+    # a 3-dim közötti maradék komponenseket (ha dim<3) automatikusan 0.0-ként hagyjuk (undef -> később nem olvassuk ki)
+    # de biztonság kedvéért nullázzuk:
+    if dim < 3
+        @inbounds for j in 1:numNodes, k in (dim+1):3
+            nodeCoord[k + (j-1)*3] = 0.0
+        end
+    end
+    _prop_cache[et] = (dim, numNodes, nodeCoord)
+    return _prop_cache[et]
+end
+
+# bázisfüggvények cache-elése (∇h és h már a helyes alakra "reshape-elve")
+function _get_basis_cached(et::Int, nodeCoord::AbstractVector{<:Real}, numNodes::Int)
+    if haskey(_basis_cache, et)
+        return _basis_cache[et]
+    end
+    comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+    ∇h = reshape(dfun, :, numNodes)
+    comp, fun,  ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+    h  = reshape(fun,  :, numNodes)
+    _basis_cache[et] = (Array(∇h), Array(h))  # saját példány, hogy véletlen se alias-oljuk a Gmsh bufferét
+    return _basis_cache[et]
+end
+
+function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+    problem = rr.model
+    gmsh.model.setCurrent(problem.name)
+
+    # nodális -> elemi térre, ha kell
+    r = rr.a == [;;] ? elementsToNodes(rr) : rr
+
+    DoFResults = false
+    nsteps = r.nsteps
+    ε = Vector{Matrix{Float64}}()   # elemenkénti eredmények gyűjtője
+    numElem = Int[]
+
+    # --- getNodes egyszer ---
+    nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+    ncoord2 = zeros(3 * problem.non)
+    @inbounds begin
+        ncoord2[nodeTags .* 3 .- 2] = ncoord[1:3:length(ncoord)]
+        ncoord2[nodeTags .* 3 .- 1] = ncoord[2:3:length(ncoord)]
+        ncoord2[nodeTags .* 3 .- 0] = ncoord[3:3:length(ncoord)]
+    end
+
+    dim_problem = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    type = :e
+
+    # DoFResults ágon: előkészítés (megtartjuk a jelen viselkedést)
+    if DoFResults
+        E1  = zeros(non * 9, nsteps)
+        pcs = zeros(Int, non * dim_problem)
+    end
+
+    # anyagcsoportok (0: teljes térfogat, különben material.phName)
+    for ipg in 0:length(problem.material)
+        phName = ""
+        if ipg == 0
+            if rr.model.geometry.nameVolume ≠ ""
+                phName = rr.model.geometry.nameVolume
+            else
+                continue
+            end
+        else
+            phName = problem.material[ipg].phName
+        end
+
+        # kimenet dimenzió beállítás a bemenet típusa + operátor alapján
+        local_dim = 0
+        local_pdim = pdim
+        rowsOfB = 0
+        sz = 0
+
+        if dim_problem == 3 && r isa VectorField && nabla == :grad
+            local_dim = 3; local_pdim = 3; rowsOfB = 9; sz = 9
+        elseif dim_problem == 3 && r isa VectorField && nabla == :div
+            local_dim = 3; local_pdim = 3; rowsOfB = 9; sz = 1
+        elseif dim_problem == 3 && r isa VectorField && nabla == :curl
+            local_dim = 3; local_pdim = 3; rowsOfB = 9; sz = 3
+        elseif (dim_problem == 1 || dim_problem == 2 || dim_problem == 3) && r isa ScalarField
+            local_dim = 3; local_pdim = 1; rowsOfB = 3; sz = 3
+        elseif r isa TensorField && nabla == :div
+            local_dim = 3; local_pdim = 9; rowsOfB = 3; sz = 3
+        elseif dim_problem == 2 && problem.type == :AxiSymmetric
+            local_dim = 2; rowsOfB = 4
+        else
+            error("∇: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        @inbounds for idm in 1:length(dimTags)
+            edim, etag = dimTags[idm]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+
+            @inbounds for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                et = Int64(et)
+
+                # et-hez cache-elt props + bázis
+                dim_et, numNodes, nodeCoord = _get_props_cached(et)
+                ∇h_all, h_all = _get_basis_cached(et, nodeCoord, numNodes)
+
+                # et-hez igazított munkatömbök
+                invJac = Matrix{Float64}(undef, 3, 3*numNodes)
+                ∂h    = Matrix{Float64}(undef, 3, numNodes*numNodes)
+                B     = Matrix{Float64}(undef, rowsOfB * numNodes, local_pdim * numNodes)
+                nn2   = Vector{Int}(undef, local_pdim * numNodes)
+                rrvec = Vector{Float64}(undef, numNodes)
+                nnet  = Matrix{Int}(undef, length(elemTags[i]), numNodes)
+
+                # elem-ciklus
+                @inbounds for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+
+                    # csomóponttagok betöltése gyors hozzáféréshez
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes + k]
+                    end
+
+                    # Jacobian (elemszint)
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+
+                    # inv(Jac_k)' minden lokális csomópontra
+                    @inbounds for k in 1:numNodes
+                        # 3x3 blokk kivágása és invertálása
+                        Jk = @view Jac[1:3, 3*k-2:3*k]
+                        invJac[1:3, 3*k-2:3*k] = inv(Matrix(Jk))'
+                        # sugár/rr (axi résznél kellhet), az eredeti kód mintájára az x-koordináták lineáris kombinációja
+                        rrvec[k] = (@view h_all[:, k])' * (@view ncoord2[nnet[j, :] .* 3 .- 2])
+                    end
+
+                    # ∂h = invJac * ∇h (csomópontpárokra)
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        # dim_et (1..3) komponenseket vesszük
+                        ∂h[1:local_dim, (k-1)*numNodes + l] =
+                            @view(invJac[1:local_dim, 3*k-2:3*k - (3-local_dim)]) *
+                            @view(∇h_all[l*3-2:l*3 - (3-local_dim), k])
+                    end
+
+                    # B feltöltése
+                    fill!(B, 0.0)
+                    if local_dim == 3 && r isa VectorField
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*9-8, l*3-2] = B[k*9-7, l*3-1] = B[k*9-6, l*3-0] = ∂h[1, (k-1)*numNodes + l]
+                            B[k*9-5, l*3-2] = B[k*9-4, l*3-1] = B[k*9-3, l*3-0] = ∂h[2, (k-1)*numNodes + l]
+                            B[k*9-2, l*3-2] = B[k*9-1, l*3-1] = B[k*9-0, l*3-0] = ∂h[3, (k-1)*numNodes + l]
+                        end
+                    elseif (dim_problem == 1 || dim_problem == 2 || dim_problem == 3) && rowsOfB == 3 && r isa ScalarField
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-2, l] = ∂h[1, (k-1)*numNodes + l]
+                            B[k*3-1, l] = ∂h[2, (k-1)*numNodes + l]
+                            B[k*3-0, l] = ∂h[3, (k-1)*numNodes + l]
+                        end
+                    elseif r isa TensorField && nabla == :div
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-2, l*9-8] = B[k*3-1, l*9-7] = B[k*3-0, l*9-6] = ∂h[1, (k-1)*numNodes + l]
+                            B[k*3-2, l*9-5] = B[k*3-1, l*9-4] = B[k*3-0, l*9-3] = ∂h[2, (k-1)*numNodes + l]
+                            B[k*3-2, l*9-2] = B[k*3-1, l*9-1] = B[k*3-0, l*9-0] = ∂h[3, (k-1)*numNodes + l]
+                        end
+                    elseif local_dim == 2 && rowsOfB == 4
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes + l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes + l]
+                            B[k*4-2, l*2-1] = rrvec[k] < 1e-10 ? 0.0 : h_all[l, k] / rrvec[k]
+                        end
+                    else
+                        error("∇: rowsOfB is $rowsOfB, dimension of the problem is $local_dim.")
+                    end
+
+                    push!(numElem, elem)
+
+                    # globális szabadsági vektor-indexek (nn2)
+                    @inbounds for k in 1:local_pdim
+                        nn2[k:local_pdim:local_pdim*numNodes] = local_pdim .* @view(nnet[j, 1:numNodes]) .- (local_pdim - k)
+                    end
+
+                    # elemi eredmény mátrix (nem DoF-be gyűjtünk)
+                    e = Matrix{Float64}(undef, sz * numNodes, nsteps)
+
+                    @inbounds for k in 1:numNodes
+                        if rowsOfB == 9 && local_dim == 3 && r isa VectorField
+                            B1 = @view B[k*9-8:k*9, 1:3*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * @view r.a[nn2, kk]
+                                if nabla == :grad
+                                    @views e[(k-1)*9+1:k*9, kk] = e0
+                                elseif nabla == :div
+                                    e[k, kk] = e0[1] + e0[5] + e0[9]
+                                elseif nabla == :curl
+                                    @views e[(k-1)*3+1:k*3, kk] = [e0[6] - e0[8], e0[7] - e0[3], e0[2] - e0[4]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && (dim_problem == 1 || dim_problem == 2 || dim_problem == 3) && r isa ScalarField && nabla == :grad
+                            B1 = @view B[k*3-2:k*3, 1:numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * @view r.a[nn2, kk]
+                                @views e[(k-1)*3+1:k*3, kk] = e0
+                            end
+                        elseif r isa TensorField && nabla == :div
+                            B1 = @view B[k*3-2:k*3, 1:9*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * @view r.a[nn2, kk]
+                                @views e[(k-1)*3+1:k*3, kk] = e0
+                            end
+                        elseif rowsOfB == 4 && local_dim == 2 && problem.type == :AxiSymmetric
+                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                e0 = B1 * @view r.a[nn2, kk]
+                                # 3D tensor „beágyazás” a 2D axihoz – változatlanul hagyva a mintát
+                                @views e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0.0,
+                                                                e0[4]/2, e0[3],   0.0,
+                                                                0.0,    0.0,     e0[2]]
+                            end
+                        else
+                            error("∇: rowsOfB is $rowsOfB, dimension of the problem is $local_dim, problem type is $(problem.type).")
+                        end
+                    end
+
+                    push!(ε, e)
+                end # elem loop
+            end # et loop
+        end # idm loop
+    end # ipg loop
+
+    # DoFResults ág változatlanul (most is false)
+    if DoFResults
+        for k in 1:rowsOfB, l in 1:non
+            E1[k + rowsOfB*l - rowsOfB, :] ./= pcs[l]
+        end
+        if r isa VectorField && nabla == :grad
+            return TensorField([], E1, r.t, [], nsteps, :e, problem)
+        elseif r isa VectorField && nabla == :div
+            return ScalarField([], E1, r.t, [], nsteps, :scalar, problem)
+        elseif r isa VectorField && nabla == :curl
+            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
+        elseif r isa ScalarField
+            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
+        elseif r isa TensorField && nabla == :div
+            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
+        end
+    else
+        if r isa VectorField && nabla == :grad
+            return TensorField(ε, [;;], r.t, numElem, nsteps, :tensor, problem)
+        elseif r isa VectorField && nabla == :div
+            return ScalarField(ε, [;;], r.t, numElem, nsteps, :scalar, problem)
+        elseif r isa VectorField && nabla == :curl
+            return VectorField(ε, [;;], r.t, numElem, nsteps, :v3D, problem)
+        elseif r isa ScalarField
+            return VectorField(ε, [;;], r.t, numElem, nsteps, :v3D, problem)
+        elseif r isa TensorField && nabla == :div
+            return VectorField(ε, [;;], r.t, numElem, nsteps, :v3D, problem)
         end
     end
 end
