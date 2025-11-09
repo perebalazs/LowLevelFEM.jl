@@ -40,62 +40,7 @@ function nodePositionVector(problem)
     return VectorField([], reshape(r, :,1), [0], [], 1, :v3D, problem)
 end
 
-"""
-    ∇(r::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
-
-Computes derivatives of `r`.
-- If `r` is a `ScalarField` and `nabla == :grad`, returns the gradient (a `VectorField`).
-- If `r` is a `VectorField` and `nabla == :grad`, returns the gradient (a `TensorField`).
-- If `r` is a `VectorField` and `nabla == :curl`, returns the curl (a `VectorField`).
-- If `r` is a `VectorField` and `nabla == :div`, returns the divergence (a `ScalarField`).
-- If `r` is a `TensorField` and `nabla == :div`, returns the divergence (a `VectorField`).
-
-Returns: `ScalarField`, `VectorField`, or `TensorField`
-
-Types:
-- `r`: `ScalarField`, `VectorField`, or `TensorField`
-- `nabla`: Symbol
-
-# 3D Examples (assumes `problem` is set as in the ∇ doc setup)
-
-```julia
-# One-time 3D setup (assumes examples/Fields/cube.geo exists with physical group "body")
-using LowLevelFEM
-gmsh.initialize()
-gmsh.open("examples/Fields/cube.geo")
-mat = material("body", E=210e3, ν=0.3, ρ=7.85e-9)
-problem = Problem([mat], type=:Solid)
-
-# 1) Gradient of a 3D scalar field: ∇f → VectorField
-f(X,Y,Z) = X^2 + Y*Z
-S = scalarField(problem, [field("body", f=f)])
-G = ∇(S)  # VectorField with 3 components
-
-# 2) Curl of a 3D vector field: ∇ × v → VectorField
-vx(X,Y,Z) = 0
-vy(X,Y,Z) = X
-vz(X,Y,Z) = 0
-V = vectorField(problem, [field("body", fx=vx, fy=vy, fz=vz)])
-C = ∇(V, nabla=:curl)  # approx (0, 0, 1) everywhere
-
-# 3) Divergence of a 3D vector field: ∇ ⋅ v → ScalarField
-v1(X,Y,Z) = X
-v2(X,Y,Z) = Y
-v3(X,Y,Z) = Z
-V2 = vectorField(problem, [field("body", fx=v1, fy=v2, fz=v3)])
-D = ∇(V2, nabla=:div)  # ≈ 3
-
-# 4) Divergence of a 3D tensor field: ∇ · T → VectorField (if T is TensorField)
-# For example, a diagonal tensor T with only Tzz = g(Z): div(T) = (0, 0, ∂g/∂Z)
-g(Z) = 10 - Z
-T = tensorField(problem, [field("body", fz=g)])
-DV = ∇(T, nabla=:div)  # VectorField
-
-# Symmetric displacement gradient via operators
-# A = (u ∘ ∇ + ∇ ∘ u) / 2
-gmsh.finalize()
-```
-"""
+#=
 function ∇_old(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
@@ -362,6 +307,7 @@ function ∇_old(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
         end
     end
 end
+=#
 
 # --- gyors cache-ek elemtípusra (et) ---
 const _prop_cache = Dict{Int, Tuple{Int,Int,Vector{Float64}}}()   # et => (dim, numNodes, nodeCoord)
@@ -404,6 +350,62 @@ function _get_basis_cached(et::Int, nodeCoord::AbstractVector{<:Real}, numNodes:
     return _basis_cache[et]
 end
 
+"""
+    ∇(r::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+
+Computes derivatives of `r`.
+- If `r` is a `ScalarField` and `nabla == :grad`, returns the gradient (a `VectorField`).
+- If `r` is a `VectorField` and `nabla == :grad`, returns the gradient (a `TensorField`).
+- If `r` is a `VectorField` and `nabla == :curl`, returns the curl (a `VectorField`).
+- If `r` is a `VectorField` and `nabla == :div`, returns the divergence (a `ScalarField`).
+- If `r` is a `TensorField` and `nabla == :div`, returns the divergence (a `VectorField`).
+
+Returns: `ScalarField`, `VectorField`, or `TensorField`
+
+Types:
+- `r`: `ScalarField`, `VectorField`, or `TensorField`
+- `nabla`: Symbol
+
+# 3D Examples (assumes `problem` is set as in the ∇ doc setup)
+
+```julia
+# One-time 3D setup (assumes examples/Fields/cube.geo exists with physical group "body")
+using LowLevelFEM
+gmsh.initialize()
+gmsh.open("examples/Fields/cube.geo")
+mat = material("body", E=210e3, ν=0.3, ρ=7.85e-9)
+problem = Problem([mat], type=:Solid)
+
+# 1) Gradient of a 3D scalar field: ∇f → VectorField
+f(X,Y,Z) = X^2 + Y*Z
+S = scalarField(problem, [field("body", f=f)])
+G = ∇(S)  # VectorField with 3 components
+
+# 2) Curl of a 3D vector field: ∇ × v → VectorField
+vx(X,Y,Z) = 0
+vy(X,Y,Z) = X
+vz(X,Y,Z) = 0
+V = vectorField(problem, [field("body", fx=vx, fy=vy, fz=vz)])
+C = ∇(V, nabla=:curl)  # approx (0, 0, 1) everywhere
+
+# 3) Divergence of a 3D vector field: ∇ ⋅ v → ScalarField
+v1(X,Y,Z) = X
+v2(X,Y,Z) = Y
+v3(X,Y,Z) = Z
+V2 = vectorField(problem, [field("body", fx=v1, fy=v2, fz=v3)])
+D = ∇(V2, nabla=:div)  # ≈ 3
+
+# 4) Divergence of a 3D tensor field: ∇ · T → VectorField (if T is TensorField)
+# For example, a diagonal tensor T with only Tzz = g(Z): div(T) = (0, 0, ∂g/∂Z)
+g(Z) = 10 - Z
+T = tensorField(problem, [field("body", fz=g)])
+DV = ∇(T, nabla=:div)  # VectorField
+
+# Symmetric displacement gradient via operators
+# A = (u ∘ ∇ + ∇ ∘ u) / 2
+gmsh.finalize()
+```
+"""
 function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
@@ -754,6 +756,135 @@ T2 = V ∘ ∇
 """
 function grad(r::Union{VectorField,ScalarField})
     return ∇(r)
+end
+
+"""
+    grad_xy(rr::ScalarField)
+
+Számolja a 2D (xy-síkban fekvő) hálón adott skalármező x és y szerinti deriváltját
+az elemi csomópontokban. Eredmény: elemenként eltárolt, 2 komponensű vektormeő
+(∂r/∂x, ∂r/∂y).
+
+Megjegyzés: ha a keretrendszered csak :v3D-t kezel, a kimenet típusát cseréld
+: v3D-re, és egészítsd ki z=0 komponenssel.
+"""
+function grad_xy(rr::ScalarField)
+    problem = rr.model
+    gmsh.model.setCurrent(problem.name)
+
+    # nodális -> elemi térre, ha kell (az eredeti mintát követve)
+    r = isElementwise(rr) ? elementsToNodes(rr) : rr
+
+    ε = Vector{Matrix{Float64}}()   # elemenkénti eredmények
+    numElem = Int[]
+    nsteps = r.nsteps
+
+    # --- getNodes egyszer ---
+    nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+    ncoord2 = zeros(3 * problem.non)
+    @inbounds begin
+        ncoord2[nodeTags .* 3 .- 2] = ncoord[1:3:length(ncoord)]
+        ncoord2[nodeTags .* 3 .- 1] = ncoord[2:3:length(ncoord)]
+        ncoord2[nodeTags .* 3 .- 0] = ncoord[3:3:length(ncoord)]
+    end
+
+    # anyagcsoportok / fizikai csoportok
+    for ipg in 0:length(problem.material)
+        phName = ""
+        if ipg == 0
+            if rr.model.geometry.nameVolume ≠ ""
+                phName = rr.model.geometry.nameVolume
+            else
+                continue
+            end
+        else
+            phName = problem.material[ipg].phName
+        end
+
+        # csak 2D entitások (felületek) – az xy síkban fekvő hálóra
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        @inbounds for idm in 1:length(dimTags)
+            edim, etag = dimTags[idm]
+            if edim != 2
+                continue
+            end
+
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+
+            @inbounds for i in 1:length(elemTypes)
+                et = Int(elemTypes[i])
+
+                # cache-elt geometriapropok + bázis
+                dim_et, numNodes, nodeCoord = _get_props_cached(et)
+                ∇h_all, h_all = _get_basis_cached(et, nodeCoord, numNodes)
+                # ∇h_all: (3 × numNodes) × numNodes – az első két sora kell (x,y)
+
+                # munkatömbök
+                ∂h    = Matrix{Float64}(undef, 2, numNodes*numNodes)                  # dN/dx, dN/dy páronként
+                B     = Matrix{Float64}(undef, 2 * numNodes, 1 * numNodes)            # 2 komponensű grad * 1 skálár
+                nn2   = Vector{Int}(undef, 1 * numNodes)                               # DoF-indexek
+                nnet  = Matrix{Int}(undef, length(elemTags[i]), numNodes)
+
+                # elem-ciklus
+                @inbounds for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+
+                    # csomóponttagok betöltése gyors hozzáféréshez
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes + k]
+                    end
+
+                    # Jacobian a Gmsh-től (lokális pontonként 3×3 blokk), de csak a 2×2 (x,y) részt használjuk
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+
+                    # ∂h = inv(J₂×₂) * ∇h_ref(1:2,:) csomópontpárokra
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes
+                        Jk = @view Jac[1:2, 3*k-2:3*k-1]   # 2×2 rész (xy)
+                        invJ2 = inv(Matrix(Jk))
+                        for l in 1:numNodes
+                            # ∇h_all szűkítése az első két komponensre (ref. deriváltak)
+                            dN_ref = @view ∇h_all[l*3-2:l*3-1, k]   # 2×1
+                            @views ∂h[1:2, (k-1)*numNodes + l] = invJ2 * dN_ref
+                        end
+                    end
+
+                    # B feltöltése (2 komponens: ∂/∂x, ∂/∂y)
+                    fill!(B, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        B[k*2-1, l] = ∂h[1, (k-1)*numNodes + l]   # dN_l/dx a k. lokális ponton
+                        B[k*2-0, l] = ∂h[2, (k-1)*numNodes + l]   # dN_l/dy
+                    end
+
+                    push!(numElem, elem)
+
+                    # globális szabadsági indexek (skálármező -> 1 DoF/csomópont)
+                    @inbounds begin
+                        nn2[1:1:1*numNodes] = @view(nnet[j, 1:numNodes])
+                    end
+
+                    # elemi eredménymátrix: (2*numNodes) × nsteps
+                    e = Matrix{Float64}(undef, 2 * numNodes, nsteps)
+
+                    # node-on-element kiértékelés
+                    @inbounds for k in 1:numNodes
+                        B1 = @view B[k*2-1:k*2, 1:numNodes]   # 2×numNodes
+                        for kk in 1:nsteps
+                            e0 = B1 * @view r.a[nn2, kk]      # 2×1
+                            @views e[(k-1)*2+1:k*2, kk] = e0
+                        end
+                    end
+
+                    push!(ε, e)
+                end # elem
+            end # elemType
+        end # idm
+    end # ipg
+
+    # 2 komponensű vektormező visszaadása (∂x r, ∂y r)
+    return VectorField(ε, [;;], r.t, numElem, nsteps, :v2D, problem)
 end
 
 """

@@ -94,6 +94,35 @@ function pressureInVolume(p::ScalarField)
     if p.model.geometry.nameVolume == ""
         error("initializePressure: no volume for lubricant has been defined.")
     end
+
+    tag = LowLevelFEM.getTagForPhysicalName(p.model.geometry.nameVolume)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(p.model.dim + 1, tag)
+    coord = reshape(coord, 3, :)
+    p1 = nodesToElements(p)
+    val = probe_field_bulk(p1, coord')
+    pp = scalarField(p.model, p.model.geometry.nameVolume, 0)
+    pp.a[nodeTags] .= val
+
+    if isnothing(p.model.geometry.hh)
+        #tag = LowLevelFEM.getTagForPhysicalName(p.model.geometry.nameVolume)
+        #nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(p.model.dim + 1, tag)
+        #coord = reshape(coord, 3, :)
+        h_top = ScalarField(p.model, p.model.geometry.nameGap, (x, y, z) -> z)
+        val = probe_field_bulk(h_top, coord')
+        hh = scalarField(p.model, p.model.geometry.nameVolume, 0)
+        hh.a[nodeTags] .= val
+        hh = nodesToElements(hh, onPhysicalGroup=p.model.geometry.nameVolume)
+        p.model.geometry.hh = nodesToElements(hh)
+    end
+
+    return pp
+
+    #=
+    return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)
+
+    if p.model.geometry.nameVolume == ""
+        error("initializePressure: no volume for lubricant has been defined.")
+    end
     if p.model.geometry.hh == nothing
         view_h = showDoFResults(p.model.geometry.h)
         fh(x, y, z) = gmsh.view.probe(view_h, x, y, 0, -1, -1, false, -1)[1][1]
@@ -105,6 +134,7 @@ function pressureInVolume(p::ScalarField)
     pp = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
     gmsh.view.remove(view_p)
     return pp
+    =#
 end
 
 #=

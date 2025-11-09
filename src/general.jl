@@ -3456,10 +3456,10 @@ function showOnSurface(field::Number, phName::String; grad=false, component=:x, 
     return SS
 end
 
-function showOnSurface(field::ScalarField, phName::String)
+function showOnSurface(field::ScalarField, phName::String; name=phName)
     s = elementsToNodes(field)
     s = nodesToElements(s, onPhysicalGroup=phName)
-    view = showElementResults(s)
+    view = showElementResults(s, name=name)
     return view
 end
 

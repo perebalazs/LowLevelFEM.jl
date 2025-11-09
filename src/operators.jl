@@ -455,7 +455,7 @@ function *(AA::ScalarField, BB::VectorField)
         num[ii] = e
     end
 
-    return VectorField(C, [;;], B.t, num, B.nsteps, BB.type, B.model)
+    return VectorField(C, [;;], B.t, num, B.nsteps, B.type, B.model)
 end
 
 """
