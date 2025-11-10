@@ -2646,10 +2646,12 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
         append!(nodeTags, nT)
     end
     if problem.type == :Reynolds
-        phName = problem.geometry.nameVolume
-        tag = getTagForPhysicalName(phName)
-        nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim + 1, tag)
-        append!(nodeTags, nT)
+        if problem.geometry.nameVolume ≠ ""
+            phName = problem.geometry.nameVolume
+            tag = getTagForPhysicalName(phName)
+            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim + 1, tag)
+            append!(nodeTags, nT)
+        end
     end
     #end #########################################################################
     

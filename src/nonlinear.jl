@@ -461,7 +461,8 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
             local_dim = 3; local_pdim = 3; rowsOfB = 9; sz = 9
         elseif dim_problem == 3 && r isa VectorField && nabla == :div
             local_dim = 3; local_pdim = 3; rowsOfB = 9; sz = 1
-        elseif dim_problem == 3 && r isa VectorField && nabla == :curl
+        #elseif dim_problem == 3 && r isa VectorField && nabla == :curl
+        elseif rr.type == :v3D && r isa VectorField && nabla == :curl
             local_dim = 3; local_pdim = 3; rowsOfB = 9; sz = 3
         elseif (dim_problem == 1 || dim_problem == 2 || dim_problem == 3) && r isa ScalarField
             local_dim = 3; local_pdim = 1; rowsOfB = 3; sz = 3
