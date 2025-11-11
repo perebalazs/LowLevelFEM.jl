@@ -2431,7 +2431,7 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                     end
                     r = x
                     ############### NANSON ######## 3D ###################################
-                    if DIM == 3 && dim == 3
+                    if (DIM == 3 || DIM == 2) && dim == 3
                         Ja = jacDet[j]
                     elseif DIM == 3 && dim == 2
                         xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]

@@ -3,11 +3,187 @@ module FieldTools
 using LinearAlgebra: dot
 using ..LowLevelFEM
 
-export probe_field_bulk
+export probe_field_bulk, build_surface_grid
+export probe_field_bulk_fallback
 
 #using LinearAlgebra
 
 const SUPPORTED_ELEMENT_TYPES = Set([1, 8, 2, 9, 3, 10])
+
+using Polyester
+using Base: @propagate_inbounds
+
+"""
+    build_surface_grid(rr; nx::Int=0, ny::Int=0)
+
+2D-s (alsó/felső) felülethez rács-alapú térindex. A rács celláiba az elemek
+xy-bbox alapján kerülnek. Visszaad egy `grid` named tuple-t.
+"""
+function build_surface_grid(rr; nx::Int=0, ny::Int=0)
+    gmsh.model.setCurrent(rr.model.name)
+
+    # -- egyszeri beolvasás Gmsh-ból
+    nodeTags, coords, _ = gmsh.model.mesh.getNodes()
+    Xf = Float32.(coords[1:3:end]); Yf = Float32.(coords[2:3:end]); Zf = Float32.(coords[3:3:end])
+    node_index = Dict{Int32,Int32}(Int32(tag)=>Int32(i) for (i,tag) in enumerate(nodeTags))
+
+    # csak a 2D-s mező elemei (tri/quad)
+    elem_tags = Int.(collect(rr.numElem))
+    isempty(elem_tags) && error("surface grid: üres mező")
+    _, _, dim, _ = gmsh.model.mesh.getElement(elem_tags[1])
+    dim == 2 || error("surface grid: a rr mező 2D felületen legyen (dim=2)")
+
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(2, -1)
+
+    # --- elemlisták (csak azok, amelyek a rr.numElem-ben vannak)
+    elem_nodes = Vector{Vector{Int32}}()
+    elem_types = Int[]
+    elem_coords = Vector{NTuple{3,Vector{Float32}}}()
+    elem_bboxes = NTuple{4,Float32}[]
+
+    # bbox globális tartomány XY-ben
+    gxmin = typemax(Float32); gxmax = typemin(Float32)
+    gymin = typemax(Float32); gymax = typemin(Float32)
+
+    rrset = Set(rr.numElem)
+    for (t, et) in enumerate(elemTypes)
+        # csak tri3/tri6/quad4/quad9
+        et in (2,9,3,10) || continue
+        # elem tulajdonság: csomópont/elem
+        _, _, _, nper, _, _ = gmsh.model.mesh.getElementProperties(et)
+        tags = elemTags[t]; nlist = elemNodeTags[t]
+        @inbounds for j in 1:length(tags)
+            tag = tags[j]
+            tag ∈ rrset || continue
+            offs = (j-1)*nper + 1
+            nodes = Int32.(nlist[offs:offs+nper-1])
+            xs = Vector{Float32}(undef, nper)
+            ys = similar(xs); zs = similar(xs)
+            for (k,nid) in enumerate(nodes)
+                idx = node_index[nid]
+                xs[k] = Xf[idx]; ys[k] = Yf[idx]; zs[k] = Zf[idx]
+            end
+            xmin = minimum(xs); xmax = maximum(xs)
+            ymin = minimum(ys); ymax = maximum(ys)
+            push!(elem_nodes, nodes)
+            push!(elem_types, et)
+            push!(elem_coords, (xs,ys,zs))
+            push!(elem_bboxes, (xmin, xmax, ymin, ymax))
+            gxmin = min(gxmin, xmin); gxmax = max(gxmax, xmax)
+            gymin = min(gymin, ymin); gymax = max(gymax, ymax)
+        end
+    end
+
+    ne = length(elem_nodes)
+    ne == length(rr.A) || error("surface grid: eltér az elemek és rr.A száma")
+
+    # --- rács felbontás (heuriszta: ~10-20 elem/bin átlag)
+    if nx == 0 || ny == 0
+        sidex = gxmax - gxmin
+        sidey = gymax - gymin
+        # cél elemsűrűség ~ 16 elem/bin
+        bins = max(1, round(Int, sqrt(ne/16)))
+        ar = sidex / max(sidey, eps(Float32))
+        nx = max(8, round(Int, bins*sqrt(Float64(ar))))
+        ny = max(8, round(Int, bins/sqrt(Float64(ar))))
+    end
+    dx = (gxmax - gxmin + eps(Float32)) / nx
+    dy = (gymax - gymin + eps(Float32)) / ny
+
+    # --- bin lista: minden cellához elemindexek
+    bins = [Int32[] for _ in 1:(nx*ny)]
+
+    @inline cellid(ix,iy) = (iy-1)*nx + ix
+
+    # elemek bepakolása a lefedett bin(ek)be
+    for i in 1:ne
+        (xmin,xmax,ymin,ymax) = elem_bboxes[i]
+        ix0 = max(1, floor(Int, (xmin-gxmin)/dx)+1)
+        ix1 = min(nx,  ceil(Int, (xmax-gxmin)/dx)+1)
+        iy0 = max(1, floor(Int, (ymin-gymin)/dy)+1)
+        iy1 = min(ny,  ceil(Int, (ymax-gymin)/dy)+1)
+        for iy in iy0:iy1, ix in ix0:ix1
+            push!(bins[cellid(ix,iy)], Int32(i))
+        end
+    end
+
+    return (
+        elem_nodes=elem_nodes,
+        elem_types=elem_types,
+        elem_coords=elem_coords,
+        elem_bboxes=elem_bboxes,
+        # rács
+        bins=bins, nx=nx, ny=ny,
+        gxmin=gxmin, gymin=gymin, dx=dx, dy=dy
+    )
+end
+
+
+"""
+    probe_field_bulk_binned(rr, points, grid) -> Vector{Float64}
+
+Rács-indexelt, többszálú lekérdezés. `points` alakja: N×3 (Float64).
+Csak xy-ban keresünk (vékony szilárd), majd a rr (2D) alakfüggvényeivel interpolálunk.
+"""
+function probe_field_bulk_binned(rr, points::AbstractMatrix{<:Real}, grid)
+    gmsh.model.setCurrent(rr.model.name)
+    npts = size(points,1)
+    vals = fill(NaN, npts)
+
+    elem_nodes   = grid.elem_nodes
+    elem_types   = grid.elem_types
+    elem_coords  = grid.elem_coords
+    bins         = grid.bins
+    nx=grid.nx; ny=grid.ny
+    gxmin=grid.gxmin; gymin=grid.gymin; dx=grid.dx; dy=grid.dy
+
+    @inline function bin_of_point(x::Float64, y::Float64)
+        ix = clamp(Int(floor((x - gxmin) / dx)) + 1, 1, nx)
+        iy = clamp(Int(floor((y - gymin) / dy)) + 1, 1, ny)
+        return ix, iy
+    end
+
+    #@inline function bin_of_point(x::Float64, y::Float64)
+    #    ix = clamp(fld(Int, floor((x - gxmin)/dx), 1) + 1, 1, nx)
+    #    iy = clamp(fld(Int, floor((y - gymin)/dy), 1) + 1, 1, ny)
+    #    return ix, iy
+    #end
+    @inline function neigh_bins(ix::Int, iy::Int)
+        # aktuális + szomszédos 8 cella (robosztus a bbox határán)
+        I = (max(1,ix-1)):(min(nx,ix+1))
+        J = (max(1,iy-1)):(min(ny,iy+1))
+        return I, J
+    end
+    @inline cellid(ix,iy) = (iy-1)*nx + ix
+
+    # --- TÖBBSZÁLÚ kiértékelés
+    @batch for ipt in 1:npts
+        x = Float64(points[ipt,1]); y = Float64(points[ipt,2]); z = Float64(points[ipt,3])
+        ix, iy = bin_of_point(x,y)
+        I, J = neigh_bins(ix,iy)
+
+        found = false
+        @inbounds for j in J, i in I
+            for ei in bins[cellid(i,j)]
+                et = elem_types[ei]
+                xs, ys, zs = elem_coords[ei]
+                ξηζ = natural_coordinates_generic(x, y, z, xs, ys, zs, et)
+                ξηζ === nothing && continue
+                ξ, η, ζ = ξηζ
+                N = lagrange_shape_generic(ξ, η, ζ, et)
+                length(N) == length(elem_nodes[ei]) || continue
+                # mezőérték az adott elemhez rr.A[ei]
+                vals[ipt] = dot(N, rr.A[ei][:,1])    # Float64 eredmény
+                found = true
+                break
+            end
+            found && break
+        end
+        # ha nem talált elemet: vals[ipt] marad NaN
+    end
+
+    return vals
+end
 
 """
     build_bbox(rr::ScalarField)
@@ -90,17 +266,15 @@ function build_bbox(rr::ScalarField)
     )
 end
 
-
-
 """
-    probe_field_bulk(rr::ScalarField, points::AbstractMatrix{Float64})
+    probe_field_bulk_fallback(rr::ScalarField, points::AbstractMatrix{Float64})
 
 Gyors, tisztán Julia-alapú tömeges lekérdezés (`(x,y,z)` pontok → mezőértékek)
 1D (line2/line3) és 2D (tri3/tri6/quad4/quad9) elemekre.
 A kereséshez csak az `(x, y)` koordinátákat használjuk, a mezőt ezt
 követően interpoláljuk a lokális természetes koordináták alapján.
 """
-function probe_field_bulk(rr::ScalarField, points::AbstractMatrix{Float64})
+function probe_field_bulk_fallback(rr::ScalarField, points::AbstractMatrix{Float64})
     gmsh.model.setCurrent(rr.model.name)
     npts = size(points, 1)
     vals = fill(NaN, npts)
@@ -209,7 +383,83 @@ function probe_field(rr::ScalarField, x::Float64, y::Float64, z::Float64)
     return NaN
 end
 
+"""
+    probe_field_bulk(rr::ScalarField, points::Matrix{<:Real}; grid=nothing)
 
+Ha a `grid` argumentum nincs megadva, a hagyományos (lassabb) módszert használja,
+amely minden elemet végigvizsgál.  
+Ha `grid` meg van adva (`build_surface_grid` kimenete), akkor a gyors,
+rács-indexelt (Polyester) verziót hívja.
+"""
+function probe_field_bulk(rr::ScalarField, points::AbstractMatrix{<:Real}; grid=nothing)
+    if grid === nothing
+    @info "probe_field_bulk: running legacy slow mode"
+
+    # --- építsük fel a bbox adatokat (mint eddig a build_bbox-ban) ---
+    bboxdata = build_bbox(rr)
+    elem_nodes = bboxdata.elem_nodes
+    elem_types = bboxdata.elem_types
+    elem_coords = bboxdata.elem_coords
+
+    npts = size(points, 1)
+    vals = fill(NaN, npts)
+
+    for ipt in 1:npts
+        x, y, z = points[ipt, 1], points[ipt, 2], points[ipt, 3]
+        found = false
+        for (ei, et) in enumerate(elem_types)
+            xs, ys, zs = elem_coords[ei]
+            ξηζ = natural_coordinates_generic(x, y, z, xs, ys, zs, et)
+            ξηζ === nothing && continue
+            ξ, η, ζ = ξηζ
+            N = lagrange_shape_generic(ξ, η, ζ, et)
+            if length(N) == length(elem_nodes[ei])
+                vals[ipt] = dot(N, rr.A[ei][:,1])
+                found = true
+                break
+            end
+        end
+        found || (vals[ipt] = NaN)
+    end
+
+    return vals
+    #=
+    if grid === nothing
+        # --- fallback a régi, lassabb módszerre ---
+        gmsh.model.setCurrent(rr.model.name)
+        npts = size(points, 1)
+        vals = fill(NaN, npts)
+        elem_nodes, elem_types, elem_coords = rr.elem_nodes, rr.elem_types, rr.elem_coords
+
+        @info "probe_field_bulk: running legacy slow mode on $(length(elem_nodes)) elements"
+
+        for ipt in 1:npts
+            x, y, z = points[ipt, 1], points[ipt, 2], points[ipt, 3]
+            found = false
+            for (ei, et) in enumerate(elem_types)
+                xs, ys, zs = elem_coords[ei]
+                ξηζ = natural_coordinates_generic(x, y, z, xs, ys, zs, et)
+                ξηζ === nothing && continue
+                ξ, η, ζ = ξηζ
+                N = lagrange_shape_generic(ξ, η, ζ, et)
+                if length(N) == length(elem_nodes[ei])
+                    vals[ipt] = dot(N, rr.A[ei][:,1])
+                    found = true
+                    break
+                end
+            end
+            found || (vals[ipt] = NaN)
+        end
+
+        return vals
+        =#
+
+    else
+        # --- gyors, binninges verzió ---
+        @info "probe_field_bulk: using binned grid with $(length(grid.elem_nodes)) elements and $(length(grid.bins)) bins"
+        return probe_field_bulk_binned(rr, points, grid)
+    end
+end
 
 # ---------------------------------------------------------------------
 # Shape függvények
