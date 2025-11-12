@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0">
+  <channel>
+    <title>LowLevelFEM.jl – News</title>
+    <link>https://perebalazs.github.io/LowLevelFEM.jl/news/</link>
+    <description>Announcements, examples, and updates for the LowLevelFEM Julia package</description>
+    <language>en</language>
+    <lastBuildDate>2025-11-12</lastBuildDate>
+    <item>
+  <title>November 2025 – Package Announcement</title>
+  <link>https://perebalazs.github.io/LowLevelFEM.jl/news/2025-11-12_announcement.html</link>
+  <pubDate>2025-11-12</pubDate>
+</item>
+
+  </channel>
+</rss>
