@@ -27,6 +27,4 @@ If you use **LowLevelFEM.jl** in teaching, research, or a student project and wo
 
 ---
 
-
-
-📡 **RSS Feed:** [https://perebalazs.github.io/LowLevelFEM.jl/news/feed.xml](https://perebalazs.github.io/LowLevelFEM.jl/news/feed.xml)
+📡 **RSS Feed:** [https://perebalazs.github.io/LowLevelFEM.jl/dev/news/feed.xml](https://perebalazs.github.io/LowLevelFEM.jl/dev/news/feed.xml)

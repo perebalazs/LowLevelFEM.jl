@@ -1,5 +1,5 @@
 export pressureConstraint, flowRate
-export solvePressure, pressureInVolume
+export solvePressure, pressureInVolume, solveShearStress
 
 
 function showGapThickness(phName; name=phName, visible=false)
@@ -88,7 +88,7 @@ function initialize(problem::Problem)
     h1 = scalarField(problem, problem.material[1].phName, (x,y,z)->z)
     h1.a[nodeTags] .-= val
     h1.a .*= -1.0
-    h = h1 # nodesToElements(h1, onPhysicalGroup="bottom");
+    h = h1 # nodesToElements(h1, onPhysicalGroup="bottom")
 
     #fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0)[1][1] - z
     #h = scalarField(problem, problem.material[1].phName, fh)
@@ -774,5 +774,30 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
         #return α, αcav # log.(α), αcav
         pret[fluid] = p0 .+ κ * g .* log.(α)
         return ScalarField([], reshape(pret, :, 1), [0], [], 1, :other, problem), ScalarField([], reshape(αcav, :, 1), [0], [], 1, :p, problem)
+    end
+end
+
+function solveShearStress(p, V; component=:xz)
+    grad_p = grad_xy(p)
+    grad_p = expandTo3D(grad_p)
+
+    ex = VectorField(p.model, p.model.material[1].phName, [1, 0, 0])
+    ey = VectorField(p.model, p.model.material[1].phName, [0, 1, 0])
+
+    px = grad_p ⋅ ex
+    py = grad_p ⋅ ey
+
+    h = p.model.geometry.h;
+
+    η = p.model.material[1].η
+
+    if component == :xz
+        τxz = -px * h / 2 - η / h * V
+        return τxz
+    elseif component == :yz
+        τyz = -py * h / 2
+        return τyz
+    else
+        error("solveShearStress: wrong component name ($(component)), use :xz or :yz.")
     end
 end
