@@ -80,14 +80,24 @@ function flowRate(name::String; q=0)
 end
 
 function initialize(problem::Problem)
-    fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0)[1][1] - z
-    h = scalarField(problem, problem.material[1].phName, fh)
+    h0 = ScalarField(problem, problem.geometry.nameGap, (x, y, z) -> z)
+    tag = getTagForPhysicalName(problem.material[1].phName)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(problem.dim, tag)
+    coord = reshape(coord, 3, :)
+    val = probe_field_bulk_fallback(h0, coord')
+    h1 = scalarField(problem, problem.material[1].phName, (x,y,z)->z)
+    h1.a[nodeTags] .-= val
+    h1.a .*= -1.0
+    h = h1 # nodesToElements(h1, onPhysicalGroup="bottom");
+
+    #fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0)[1][1] - z
+    #h = scalarField(problem, problem.material[1].phName, fh)
     grad_h = ∇(h)
     ex = VectorField(problem, problem.material[1].phName, [1,0,0])
     dhdx = grad_h * ex
     problem.geometry.h = h
     problem.geometry.dhdx = elementsToNodes(dhdx)
-    gmsh.view.remove(problem.geometry.tagTop)
+    #gmsh.view.remove(problem.geometry.tagTop)
 end
 
 function pressureInVolume(p::ScalarField)
