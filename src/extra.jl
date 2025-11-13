@@ -171,7 +171,7 @@ end
 =#
 
 #function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
-function systemMatrix(problem, velocity::Number)
+function systemMatrix_old(problem, velocity::Number)
     gmsh.model.setCurrent(problem.name)
     if problem.type ≠ :Reynolds && problem.material[1].type ≠ :JFO
         error("systemMatrix: only Reynolds equation with JFO cavitation model is implemented.")
@@ -339,6 +339,254 @@ function systemMatrix(problem, velocity::Number)
     dropzeros!(KK)
     return SystemMatrix(K, problem), SystemMatrix(KK, problem)
     GC.gc()
+end
+
+function systemMatrix(problem, velocity::Number)
+    gmsh.model.setCurrent(problem.name)
+
+    if problem.type ≠ :Reynolds && problem.material[1].type ≠ :JFO
+        error("systemMatrix: only Reynolds equation with JFO cavitation model is implemented.")
+    end
+    if length(problem.material) ≠ 1
+        error("systemMatrix: only one material is permitted.")
+    end
+    if problem.geometry.h === nothing
+        initialize(problem)
+    end
+
+    # --- becslés az I,J,V,V2 méretére ---
+    elemTypes_all, elemTags_all, elemNodeTags_all = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum((div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 * length(elemTags_all[i]) for i in 1:length(elemTags_all))
+
+    # --- index és érték vektorok, típusosan ---
+    I  = Int[]
+    J  = Int[]
+    V  = Float64[]
+    V2 = Float64[]
+    sizehint!(I,  lengthOfIJV)
+    sizehint!(J,  lengthOfIJV)
+    sizehint!(V,  lengthOfIJV)
+    sizehint!(V2, lengthOfIJV)
+
+    # csak akkor kell, ha tényleg használod valahol:
+    nn = Vector{Matrix{Int}}()
+
+    ncoord2 = zeros(3 * problem.non)
+    phName  = problem.material[1].phName
+    η       = problem.material[1].η
+    κ       = problem.material[1].κ
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    rowsOfB = dim  # 1D → 1, 2D → 2; az eredeti logika is ez volt
+
+    # (most csak egy anyagot engedünk továbbra is)
+    for ipg in 1:1
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        tag     = getTagForPhysicalName(phName)
+
+        # node koordináták egyszer / physical group-onként
+        nodeTags, ncoord = gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)
+        @inbounds begin
+            ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
+        end
+
+        for idm in 1:length(dimTags)
+            edim, etag = dimTags[idm]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+
+                elementName, dim_el, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+
+                # GradLagrange
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+
+                # Lagrange
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+
+                # --- preallocáció elem-típus szinten ---
+                numElem_i = length(elemTags[i])
+                nnet  = Matrix{Int}(undef, numElem_i, numNodes)
+                invJac = Matrix{Float64}(undef, 3, 3 * numIntPoints)
+
+                nloc  = numNodes * pdim
+                Iidx  = Vector{Int}(undef, nloc * nloc)
+                Jidx  = Vector{Int}(undef, nloc * nloc)
+
+                # Iidx, Jidx mátrix-séma (egyszer per elem-típus)
+                idx = 1
+                @inbounds for k in 1:nloc, l in 1:nloc
+                    Iidx[idx] = l
+                    Jidx[idx] = k
+                    idx += 1
+                end
+
+                ∂h  = Matrix{Float64}(undef, dim, numNodes * numIntPoints)
+                H   = Matrix{Float64}(undef, pdim * numIntPoints, pdim * numNodes)
+                B   = Matrix{Float64}(undef, rowsOfB * numIntPoints, pdim * numNodes)
+                K1  = Matrix{Float64}(undef, nloc, nloc)
+                K2  = Matrix{Float64}(undef, nloc, nloc)
+                nn2 = Vector{Int}(undef, nloc)
+
+                x     = Vector{Float64}(undef, numIntPoints)
+                y     = Vector{Float64}(undef, numIntPoints)  # dim==1 esetén nem használjuk
+                hh    = Vector{Float64}(undef, numIntPoints)
+                dhhdx = Vector{Float64}(undef, numIntPoints)
+
+                # H mátrix: blokk-diagonális ismétlés (eredeti logika tisztábban)
+                @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                    val = h[(k-1)*numNodes + l]
+                    for kk in 1:pdim
+                        row = (k-1)*pdim + kk
+                        col = (l-1)*pdim + kk
+                        H[row, col] = val
+                    end
+                end
+
+                # --- elemenkénti ciklus ugyanazon elem-típusra ---
+                for j in 1:numElem_i
+                    elem = elemTags[i][j]
+
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes + k]
+                    end
+
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+
+                    # inverz Jacobian és x,y,hh,dhhdx
+                    @inbounds for k in 1:numIntPoints
+                        # 3×3 blokk
+                        jstart = 3k - 2
+                        @views Jblk = Jac[1:3, jstart:jstart+2]
+                        @views invJblk = inv(Jblk)'   # ha kell, később lehet kézi 3×3 inverzre cserélni
+                        invJac[1:3, jstart:jstart+2] .= invJblk
+
+                        # x, y, hh, dhhdx interpoláció
+                        # shape: h[k] ∈ R^{numNodes}
+                        # nnet[j, :] node indexek
+                        xk = 0.0
+                        yk = 0.0
+                        hhk = 0.0
+                        dhdxk = 0.0
+                        for l in 1:numNodes
+                            w = h[l, k]
+                            nd = nnet[j, l]
+                            idx3 = 3nd
+                            xk    += w * ncoord2[idx3 - 2]
+                            if dim == 2
+                                yk += w * ncoord2[idx3 - 1]
+                            end
+                            hhk   += w * problem.geometry.h.a[nd]
+                            dhdxk += w * problem.geometry.dhdx.a[nd]
+                        end
+                        x[k]     = xk
+                        if dim == 2
+                            y[k] = yk
+                        end
+                        hh[k]    = hhk
+                        dhhdx[k] = dhdxk
+                    end
+
+                    # ∂h kinullázása és kiszámítása
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                        # grad shape in fizikai tér: invJac * ∇h
+                        # ∇h indexeléssel óvatosan: [l*3-2 : l*3-(3-dim)] × k
+                        col_grad_start = 3l - 2
+                        col_grad_end   = 3l - (3-dim)
+                        jstart = 3k - 2
+                        jend   = 3k - (3-dim)
+                        @views g_ref = ∇h[col_grad_start:col_grad_end, k]
+                        @views invJd = invJac[1:dim, jstart:jend]
+                        ∂h[:, (k-1)*numNodes + l] .= invJd * g_ref
+                    end
+
+                    # B kinullázása és kitöltése
+                    fill!(B, 0.0)
+                    if dim == 2 && rowsOfB == 2
+                        @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                            row1 = (k-1)*rowsOfB + 1
+                            row2 = row1 + 1
+                            col  = l*pdim
+                            B[row1, col] = ∂h[1, (k-1)*numNodes + l]
+                            B[row2, col] = ∂h[2, (k-1)*numNodes + l]
+                        end
+                    elseif dim == 1 && rowsOfB == 1
+                        @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                            row = k
+                            col = l*pdim
+                            B[row, col] = ∂h[1, (k-1)*numNodes + l]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+
+                    # K1, K2 kinullázása
+                    fill!(K1, 0.0)
+                    fill!(K2, 0.0)
+
+                    # integráció pontonként
+                    @inbounds for k in 1:numIntPoints
+                        jac_k = jacDet[k]
+                        w_k   = intWeights[k]
+
+                        # lokális blokkok
+                        @views H1    = H[(k-1)*pdim+1 : k*pdim, :]
+                        @views B1    = B[(k-1)*rowsOfB+1 : k*rowsOfB, :]
+                        @views dHdx1 = B[(k-1)*rowsOfB+1 : (k-1)*rowsOfB+1, :]  # eredetiben ez volt
+
+                        # skálák
+                        fac1 = hh[k]^3 * κ * jac_k * w_k
+                        fac2 = 6.0 * velocity * η / 2 * jac_k * w_k
+
+                        # K1 += (B1' * B1) * fac1
+                        K1 .+= (B1' * B1) .* fac1
+
+                        # K2 -= (H1' * H1) * fac2 * dhhdx[k]
+                        # K2 += (H1' * dHdx1) * fac2 * hh[k]
+                        K2 .-= (H1' * H1)    .* (fac2 * dhhdx[k])
+                        K2 .+= (H1' * dHdx1) .* (fac2 * hh[k])
+                    end
+
+                    # globális szabadsági fok indexek (nn2)
+                    @inbounds for k in 1:pdim
+                        # k-adik komponens: k, k+pdim, ...
+                        start = k
+                        for (idx_node, nd) in enumerate(nnet[j, :])
+                            nn2[start + (idx_node-1)*pdim] = pdim * nd - (pdim - k)
+                        end
+                    end
+
+                    # I, J, V, V2 bővítése
+                    append!(I, nn2[Iidx])
+                    append!(J, nn2[Jidx])
+                    append!(V,  K1[:])
+                    append!(V2, K2[:])
+                end
+
+                push!(nn, nnet)
+            end
+        end
+    end
+
+    dof = problem.pdim * problem.non
+    K   = sparse(I, J, V,  dof, dof)
+    KK  = sparse(I, J, V2, dof, dof)
+    dropzeros!(K)
+    dropzeros!(KK)
+
+    return SystemMatrix(K, problem), SystemMatrix(KK, problem)
 end
 
 function flowRateVector(problem, loads)
