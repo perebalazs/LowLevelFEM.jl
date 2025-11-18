@@ -339,7 +339,7 @@ struct ScalarField <: AbstractField
     numElem = Int[]
 
     @inbounds for data in dataField
-        phName, f, fx, fy, fz, fxy, fyz, fzx = data
+        phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
         for (edim, etag) in dimTags
@@ -487,7 +487,7 @@ struct VectorField <: AbstractField
         ff = 0
         pdim = 1
         for i in 1:length(dataField)
-            phName, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -609,7 +609,7 @@ struct TensorField <: AbstractField
         ff = 0
         pdim = 1
         for i in 1:length(dataField)
-            phName, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -659,7 +659,6 @@ struct TensorField <: AbstractField
                                 else
                                     ff = fxy
                                 end
-                                ten1[9k-7, 1] = ff
                                 ten1[9k-5, 1] = ff
                             end
                             if fyz ≠ :no
@@ -668,7 +667,6 @@ struct TensorField <: AbstractField
                                 else
                                     ff = fyz
                                 end
-                                ten1[9k-3, 1] = ff
                                 ten1[9k-1, 1] = ff
                             end
                             if fzx ≠ :no
@@ -678,6 +676,29 @@ struct TensorField <: AbstractField
                                     ff = fzx
                                 end
                                 ten1[9k-6, 1] = ff
+                            end
+                            if fyx ≠ :no
+                                if fyx isa Function
+                                    ff = fyx(x, y, z)
+                                else
+                                    ff = fyx
+                                end
+                                ten1[9k-7, 1] = ff
+                            end
+                            if fzy ≠ :no
+                                if fzy isa Function
+                                    ff = fzy(x, y, z)
+                                else
+                                    ff = fzy
+                                end
+                                ten1[9k-3, 1] = ff
+                            end
+                            if fxz ≠ :no
+                                if fxz isa Function
+                                    ff = fxz(x, y, z)
+                                else
+                                    ff = fxz
+                                end
                                 ten1[9k-2, 1] = ff
                             end
                         end
@@ -693,7 +714,7 @@ struct TensorField <: AbstractField
     function TensorField(problem::Problem, phName::String, data::Matrix)
         if size(data) == (3,3)
             g = [x isa Function ? x : ((_,_,_)->x) for x in data]
-            f = field(phName, fx=g[1], fy=g[5], fz=g[9], fxy=g[2], fyz=g[6], fzx=g[3])
+            f = field(phName, fx=g[1], fy=g[5], fz=g[9], fxy=g[4], fyz=g[8], fzx=g[3], fyx=g[2], fzy=g[6], fxz=g[7])
             #f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
             return TensorField(problem, [f])
         else
@@ -1272,10 +1293,10 @@ qqq = showDoFResults(qq, :scalar)
 ```
 """
 function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, fzy=:no, fzx=:no, fxz=:no)
-    fxy = fyx != :no ? fyx : fxy
-    fyz = fzy != :no ? fzy : fyz
-    fzx = fxz != :no ? fxz : fzx
-    ld0 = name, f, fx, fy, fz, fxy, fyz, fzx
+    fyx = fyx != :no ? fyx : fxy
+    fzy = fzy != :no ? fzy : fyz
+    fxz = fxz != :no ? fxz : fzx
+    ld0 = name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz
     return ld0
 end
 
@@ -1313,7 +1334,7 @@ function scalarField(problem, dataField)
     field = zeros(non)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(f, Function)
@@ -1379,7 +1400,7 @@ function vectorField(problem, dataField)
     field = zeros(non * pdim)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
@@ -1477,7 +1498,7 @@ function tensorField(problem, dataField; type=:e)
     field = zeros(non * pdim)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
+        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function) || isa(fxy, Function) || isa(fyz, Function) || isa(fzx, Function)
@@ -1528,15 +1549,15 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsXY,:] .= fxy
             end
         end
-        if fxy != :no
+        if fyx != :no
             nodeTagsYX = copy(nodeTags)
             nodeTagsYX *= pdim
             nodeTagsYX .-= (pdim - 2)
-            if isa(fxy, Function)
-                ffxy = fxy.(xx, yy, zz)
-                field[nodeTagsYX,:] .= ffxy
+            if isa(fyx, Function)
+                ffyx = fyx.(xx, yy, zz)
+                field[nodeTagsYX,:] .= ffyx
             else
-                field[nodeTagsYX,:] .= fxy
+                field[nodeTagsYX,:] .= fyx
             end
         end
         if fyz != :no
@@ -1550,37 +1571,37 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsYZ,:] .= fyz
             end
         end
-        if fyz != :no
+        if fzy != :no
             nodeTagsZY = copy(nodeTags)
             nodeTagsZY *= pdim
             nodeTagsZY .-= (pdim - 6)
-            if isa(fyz, Function)
-                ffyz = fyz.(xx, yy, zz)
-                field[nodeTagsZY,:] .= ffyz
+            if isa(fzy, Function)
+                ffzy = fzy.(xx, yy, zz)
+                field[nodeTagsZY,:] .= ffzy
             else
-                field[nodeTagsZY,:] .= fyz
+                field[nodeTagsZY,:] .= fzy
             end
         end
         if fzx != :no
             nodeTagsZX = copy(nodeTags)
             nodeTagsZX *= pdim
             nodeTagsZX .-= (pdim - 3)
-            if isa(fyz, Function)
-                ffyz = fyz.(xx, yy, zz)
-                field[nodeTagsZX,:] .= ffyz
+            if isa(fzx, Function)
+                ffzx = fzx.(xx, yy, zz)
+                field[nodeTagsZX,:] .= ffzx
             else
-                field[nodeTagsZX,:] .= fyz
+                field[nodeTagsZX,:] .= fzx
             end
         end
-        if fzx != :no
+        if fxz != :no
             nodeTagsXZ = copy(nodeTags)
             nodeTagsXZ *= pdim
             nodeTagsXZ .-= (pdim - 7)
-            if isa(fyz, Function)
-                ffyz = fyz.(xx, yy, zz)
-                field[nodeTagsXZ,:] .= ffyz
+            if isa(fxz, Function)
+                ffxz = fxz.(xx, yy, zz)
+                field[nodeTagsXZ,:] .= ffxz
             else
-                field[nodeTagsXZ,:] .= fyz
+                field[nodeTagsXZ,:] .= fxz
             end
         end
     end
@@ -1589,7 +1610,7 @@ end
 
 function tensorField(problem::Problem, phName::String, data::Matrix)
     if size(data) == (3,3)
-        f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
+        f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[4], fyz=data[8], fzx=data[3], fyx=data[2], fzy=data[6], fxz=data[7])
         return tensorField(problem, [f])
     else
         error("tensorField: size of data is $(size(data)).")
@@ -2850,12 +2871,18 @@ function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
                 k = 4
             elseif comp == :ez
                 k = 0
-            elseif comp == :exy || comp == :eyx
-                k = 7
-            elseif comp == :eyz || comp == :ezy
-                k = 3
-            elseif comp == :ezx || comp == :exz
+            elseif comp == :exy
+                k = 5
+            elseif comp == :eyz
+                k = 1
+            elseif comp == :ezx
                 k = 6
+            elseif comp == :eyx
+                k = 7
+            elseif comp == :ezy
+                k = 3
+            elseif comp == :exz
+                k = 2
             else
                 error("ShowStrainResults: component is $comp ????")
             end
@@ -2916,7 +2943,7 @@ function showElementResults(F::Union{ScalarField,VectorField,TensorField}, comp;
     elseif F isa ScalarField && isElementwise(F)
         return showScalarResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
     elseif isNodal(F)
-        return showDoFResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
+        return showDoFResults(F, comp, name=name, visible=visible, smooth=smooth, factor=factor)
     else
         error("showElementResults: type is '$(F.type)'")
     end
