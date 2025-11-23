@@ -29,7 +29,12 @@ makedocs(
         # thresholds are in BYTES (integers)
         size_threshold_warn = 300_000,  # ~293 KiB
         size_threshold = 600_000,       # ~586 KiB
-        assets = ["assets/analytics.html"],
+        #assets = ["assets/analytics.html"],
+        assets = [
+         "assets/ga_loader.js",
+         "assets/analytics.js",
+        ]
+
     ),
     pages = DOC_PAGES,
     doctest = false,
