@@ -30,8 +30,7 @@ makedocs(
         size_threshold_warn = 300_000,  # ~293 KiB
         size_threshold = 600_000,       # ~586 KiB
         assets = [
-         "assets/ga_loader.js",
-         "assets/analytics.js",
+         "assets/plausible.js",
         ]
 
     ),
