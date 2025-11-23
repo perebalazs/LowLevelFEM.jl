@@ -50,6 +50,17 @@ catch err
     @warn "RSS feed generation failed" err
 end
 
+# --- Copy RSS feed into the build directory ---
+try
+    src_feed = joinpath(@__DIR__, "src/news/feed.xml")
+    dest_dir = joinpath(@__DIR__, "build/news")
+    mkpath(dest_dir)
+    cp(src_feed, joinpath(dest_dir, "feed.xml"); force=true)
+    @info "Copied feed.xml to build/news/"
+catch err
+    @warn "Could not copy feed.xml to build directory" err
+end
+# ----------------------------------------------
 
 deploydocs(
     repo = "github.com/perebalazs/LowLevelFEM.jl.git",
