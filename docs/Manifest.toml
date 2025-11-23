@@ -444,7 +444,7 @@ version = "1.11.0"
 deps = ["Arpack", "IterativeSolvers", "JLD2", "LinearAlgebra", "Polyester", "PrecompileTools", "SparseArrays", "StaticArrays", "gmsh_jll"]
 path = "/home/perebal/Dokumentumok/GitHub/LowLevelFEM.jl/docs/.."
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
-version = "1.10.12"
+version = "1.10.14"
 
 [[deps.METIS_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
