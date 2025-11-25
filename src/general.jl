@@ -4,7 +4,7 @@ export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export constrainedDoFs, freeDoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
-export fieldError, resultant, integrate, normalVector
+export fieldError, resultant, integrate, normalVector, tangentVector
 export rotateNodes, CoordinateSystem
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
@@ -1679,7 +1679,7 @@ function normalVector(problem::Problem, phName::String)
     for dimTag in dimTags
         edim, etag = dimTag
         if edim != 2
-            error("normalVector: physical group is not a surface.")
+            error("normalVector: physical group is not a surface (2D).")
         end
 
         elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
@@ -1752,6 +1752,225 @@ function normalVector(problem::Problem, phName::String)
     end
 
     return VectorField(normalvectors, [;;], [0.0], numElem, 1, :v3D, problem)
+end
+
+"""
+    tangentVector(problem::Problem, phName::String) -> VectorField
+
+Compute unit tangent vectors for all nodes of a curve-type physical group
+in a 3D Gmsh model.
+
+# Arguments
+- `problem::Problem`: A `Problem` structure containing the current Gmsh model
+  (name, dimension, number of nodes, etc.).
+- `phName::String`: The name of a physical curve group in Gmsh for which the
+  tangent vectors are computed.
+
+# Description
+The function sets the current model, queries the elements and nodes that belong
+to the given 1D physical group, and evaluates the gradients of the Lagrange
+basis functions to determine the local mapping derivative ∂x/∂ξ. Since this
+derivative represents the geometric tangent direction of the curve at each
+evaluation point, it is normalized to produce a unit tangent vector.
+
+Each node belonging to the physical curve group is assigned the corresponding
+3D unit tangent vector aligned with the parametric direction of the curve.
+
+# Returns
+- `VectorField`: A `VectorField` structure that stores the nodal tangent vectors
+  on the given physical curve.
+
+# Errors
+- Throws an error if the provided physical group is not of curve type (`dim != 1`).
+
+# Example
+```julia
+using LowLevelFEM
+
+# Load a 3D geometry containing a curved edge
+gmsh.initialize()
+gmsh.open("curve_geometry.msh")
+
+# Create a problem structure
+mat = material("body")
+prob = Problem([mat])
+
+# Compute tangent vectors along the curve named "leadingEdge"
+tv = tangentVector(prob, "leadingEdge")
+
+# Visualize the tangent field
+showDoFResults(tv)
+openPostProcessor()
+```
+"""
+function tangentVectorOld(problem::Problem, phName::String)
+    gmsh.model.setCurrent(problem.name)
+
+    non = problem.non
+    ncoord2 = zeros(3 * non)
+    numElem = Int[]
+    tangentvectors = Vector{Matrix{Float64}}()
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    for dimTag in dimTags
+        edim, etag = dimTag
+        if edim != 1
+            error("tangentVector: physical group is not a curve (1D).")
+        end
+
+        elemTypes, elemTags, elemNodeTags =
+            gmsh.model.mesh.getElements(edim, etag)
+
+        nodeTags, ncoord, _ =
+            gmsh.model.mesh.getNodes(edim, etag, true, false)
+
+        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:end]
+        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:end]
+        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:end]
+
+        # --- Elemciklus ---
+        for i in 1:length(elemTypes)
+            et = elemTypes[i]
+
+            elementName, eldim, order, numNodes, localNodeCoord, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            # 1D: nincs 3D kiterjesztés!
+            localNodeCoord2 = localNodeCoord
+
+            # ∂N/∂ξ értékek
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
+            dN_dξ = reshape(dfun, :, numNodes)
+
+            nnet = zeros(Int, length(elemTags[i]), numNodes)
+
+            for j in 1:length(elemTags[i])
+                elem = elemTags[i][j]
+
+                @inbounds for k in 1:numNodes
+                    nnet[j,k] = elemNodeTags[i][(j-1)*numNodes + k]
+                end
+
+                xx = ncoord2[nnet[j,:]*3 .- 2]
+                yy = ncoord2[nnet[j,:]*3 .- 1]
+                zz = ncoord2[nnet[j,:]*3 .- 0]
+
+                tang_elem = zeros(3 * numNodes)
+
+                for k in 1:numNodes
+                    dNk = dN_dξ[1,:]
+
+                    dx_dξ = dot(dNk, xx)
+                    dy_dξ = dot(dNk, yy)
+                    dz_dξ = dot(dNk, zz)
+
+                    vnorm = √(dx_dξ^2 + dy_dξ^2 + dz_dξ^2)
+                    vnorm = 1
+
+                    tang_elem[3k-2] = dx_dξ / vnorm
+                    tang_elem[3k-1] = dy_dξ / vnorm
+                    tang_elem[3k]   = dz_dξ / vnorm
+                end
+
+                push!(numElem, elem)
+                push!(tangentvectors, reshape(tang_elem, :, 1))
+            end
+        end
+    end
+
+    return VectorField(tangentvectors, [;;], [0.0], numElem, 1, :v3D, problem)
+end
+
+function tangentVector(problem::Problem, phName::String)
+    gmsh.model.setCurrent(problem.name)
+
+    non = problem.non
+    ncoord2 = zeros(3 * non)
+    numElem = Int[]
+    tangentvectors = Vector{Matrix{Float64}}()
+
+    # Fizikai csoport (1D görbe)
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    for (edim, etag) in dimTags
+        if edim != 1
+            error("tangentVector: physical group is not 1D (curve).")
+        end
+
+        elemTypes, elemTags, elemNodeTags =
+            gmsh.model.mesh.getElements(edim, etag)
+
+        # Csomópontok és 3D koordináták
+        nodeTags, ncoord, _ =
+            gmsh.model.mesh.getNodes(edim, etag, true, false)
+
+        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:end]
+        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:end]
+        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:end]
+
+        # ----- Elemciklus -----
+        for i in 1:length(elemTypes)
+            et = elemTypes[i]
+
+            elementName, eldim, order, numNodes, localNodeCoord, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            # 1D → nincs 3D kiterjesztés, közvetlenül használható
+            localNodeCoord2 = zeros(length(localNodeCoord) * 3)
+            localNodeCoord2[1:3:end] .= localNodeCoord[1:end]
+            #localNodeCoord2[2:3:end] .= localNodeCoord[2:end]
+
+            # ∂N/∂ξ a lokális pontokban
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
+            dN_dξ = reshape(dfun, :, numNodes)  # (1*numEval × numNodes)
+
+            nnet = zeros(Int, length(elemTags[i]), numNodes)
+
+            for j in 1:length(elemTags[i])
+                elem = elemTags[i][j]
+
+                @inbounds for k in 1:numNodes
+                    nnet[j,k] = elemNodeTags[i][(j-1)*numNodes + k]
+                end
+
+                xx = ncoord2[nnet[j,:]*3 .- 2]
+                yy = ncoord2[nnet[j,:]*3 .- 1]
+                zz = ncoord2[nnet[j,:]*3 .- 0]
+
+                tang_elem = zeros(3 * numNodes)
+
+                # ----- Csomópontonként -----
+                for k in 1:numNodes
+                    dNk = dN_dξ[1:3:end,k]    # ∂Nk/∂ξ (numNodes hosszú sor)
+
+                    # ∂x/∂ξ, ∂y/∂ξ, ∂z/∂ξ
+                    dx_dξ = dot(dNk, xx)
+                    dy_dξ = dot(dNk, yy)
+                    dz_dξ = dot(dNk, zz)
+
+                    # normalizált érintő
+                    vnorm = √(dx_dξ^2 + dy_dξ^2 + dz_dξ^2)
+                    if vnorm > 0
+                        dx = dx_dξ / vnorm
+                        dy = dy_dξ / vnorm
+                        dz = dz_dξ / vnorm
+                    else
+                        dx = dy = dz = 0.0
+                    end
+
+                    tang_elem[3*k-2] = dx
+                    tang_elem[3*k-1] = dy
+                    tang_elem[3*k]   = dz
+                end
+
+                push!(numElem, elem)
+                push!(tangentvectors, reshape(tang_elem, :, 1))
+            end
+        end
+    end
+
+    return VectorField(tangentvectors, [;;], [0.0], numElem, 1, :v3D, problem)
 end
 
 """
@@ -2448,7 +2667,7 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                         ff = h[:, j]' * f2.a[nnet[l, :]]
                         #@disp ff
                     else
-                        error("integrate: internal error.")
+                        error("integrate: 3rd argument must be a Function or a ScalarField")
                     end
                     r = x
                     ############### NANSON ######## 3D ###################################
@@ -2478,7 +2697,7 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                     elseif DIM == 1 && dim == 1
                         Ja = (Jac[1, 3*j-2]) * b
                     else
-                        error("resultant: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                        error("integrate: dimension of the problem is $(problem.dim), dimension of ? is $dim.")
                     end
                     #@disp ff
                     s1 += ff * Ja * intWeights[j]

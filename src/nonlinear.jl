@@ -514,8 +514,25 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                     # inv(Jac_k)' minden lokális csomópontra
                     @inbounds for k in 1:numNodes
                         # 3x3 blokk kivágása és invertálása
-                        Jk = @view Jac[1:3, 3*k-2:3*k]
-                        invJac[1:3, 3*k-2:3*k] = inv(Matrix(Jk))'
+                        #Jk = @view Jac[1:3, 3*k-2:3*k]
+                        #invJac[1:3, 3*k-2:3*k] = inv(Matrix(Jk))'
+                        ###################################################################
+                        # lokális dimenzió (1 a vonal, 2 a felület, 3 a térfogat)
+                        dimJ = dim_et
+
+                        # Jk = 3 × dimJ mátrix
+                        #Jk = @view Jac[1:3, (k-1)*dimJ+1 : k*dimJ]
+                        Jk = @view Jac[1:dimJ, (k-1)*3+1 : k*3]
+
+                        # inv(Jk) = dimJ × 3 (transzponált mapping)
+                        invJk = pinv(Matrix(Jk))        # stabil Moore–Penrose inverz
+
+                        # 3×3 blokkba másolás (extra oszlopok nullák)
+                        fill!(@view(invJac[1:3, 3*k-2:3*k]), 0.0)
+                        #@views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk'
+                        @views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk'
+                        ####################################################################
+
                         # sugár/rr (axi résznél kellhet), az eredeti kód mintájára az x-koordináták lineáris kombinációja
                         rrvec[k] = (@view h_all[:, k])' * (@view ncoord2[nnet[j, :] .* 3 .- 2])
                     end
@@ -524,11 +541,25 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                     fill!(∂h, 0.0)
                     @inbounds for k in 1:numNodes, l in 1:numNodes
                         # dim_et (1..3) komponenseket vesszük
-                        ∂h[1:local_dim, (k-1)*numNodes + l] =
-                            @view(invJac[1:local_dim, 3*k-2:3*k - (3-local_dim)]) *
-                            @view(∇h_all[l*3-2:l*3 - (3-local_dim), k])
-                    end
+                        #∂h[1:local_dim, (k-1)*numNodes + l] =
+                        #    @view(invJac[1:local_dim, 3*k-2:3*k - (3-local_dim)]) *
+                        #    @view(∇h_all[l*3-2:l*3 - (3-local_dim), k])
+                        ########################################################################
+                            # dim_et = element topological dimension (1,2,3)
 
+                        # local derivatives: (dim_et × 1)
+                        g = @view ∇h_all[(l-1)*3+1 : (l-1)*3+dim_et, k]
+
+                        # spatial derivatives: (3 × 1)
+                        Jslice = @view invJac[:, 3*k-2 : 3*k-2+dim_et-1]
+                        dφdx = Jslice * g
+
+                        # store in ∂h
+                        @views ∂h[:, (k-1)*numNodes + l] .= dφdx
+                        ########################################################################
+                        
+                    end
+                    
                     # B feltöltése
                     fill!(B, 0.0)
                     if local_dim == 3 && r isa VectorField
@@ -563,7 +594,8 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
 
                     # globális szabadsági vektor-indexek (nn2)
                     @inbounds for k in 1:local_pdim
-                        nn2[k:local_pdim:local_pdim*numNodes] = local_pdim .* @view(nnet[j, 1:numNodes]) .- (local_pdim - k)
+                        vnn = @view nnet[j, 1:numNodes]
+                        nn2[k:local_pdim:local_pdim*numNodes] = local_pdim .* vnn .- (local_pdim - k)
                     end
 
                     # elemi eredmény mátrix (nem DoF-be gyűjtünk)
