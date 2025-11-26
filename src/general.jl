@@ -1620,8 +1620,12 @@ end
 """
     normalVector(problem::Problem, phName::String) -> VectorField
 
-Compute outward unit normal vectors for all nodes of a surface-type physical group
-in a 3D Gmsh model.
+Compute outward unit normal vectors for all nodes belonging to a surface-type
+physical group in a 3D Gmsh model.
+
+For curve-type physical groups, the function returns normal curvature vectors:
+the direction corresponds to the unit normal within the curve’s osculating
+plane, and the vector magnitude equals the local curvature of the curve.
 
 # Arguments
 - `problem::Problem`: A `Problem` structure containing the current Gmsh model 
@@ -1678,8 +1682,10 @@ function normalVector(problem::Problem, phName::String)
 
     for dimTag in dimTags
         edim, etag = dimTag
-        if edim != 2
-            error("normalVector: physical group is not a surface (2D).")
+        if edim == 1
+            normalVector1D(problem, phName)
+        elseif edim ≠ 2
+            error("normalVector: physical group is niether a curve (1D) nor a surface (2D).")
         end
 
         elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
@@ -1803,85 +1809,6 @@ showDoFResults(tv)
 openPostProcessor()
 ```
 """
-function tangentVectorOld(problem::Problem, phName::String)
-    gmsh.model.setCurrent(problem.name)
-
-    non = problem.non
-    ncoord2 = zeros(3 * non)
-    numElem = Int[]
-    tangentvectors = Vector{Matrix{Float64}}()
-
-    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-
-    for dimTag in dimTags
-        edim, etag = dimTag
-        if edim != 1
-            error("tangentVector: physical group is not a curve (1D).")
-        end
-
-        elemTypes, elemTags, elemNodeTags =
-            gmsh.model.mesh.getElements(edim, etag)
-
-        nodeTags, ncoord, _ =
-            gmsh.model.mesh.getNodes(edim, etag, true, false)
-
-        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:end]
-        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:end]
-        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:end]
-
-        # --- Elemciklus ---
-        for i in 1:length(elemTypes)
-            et = elemTypes[i]
-
-            elementName, eldim, order, numNodes, localNodeCoord, _ =
-                gmsh.model.mesh.getElementProperties(et)
-
-            # 1D: nincs 3D kiterjesztés!
-            localNodeCoord2 = localNodeCoord
-
-            # ∂N/∂ξ értékek
-            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
-            dN_dξ = reshape(dfun, :, numNodes)
-
-            nnet = zeros(Int, length(elemTags[i]), numNodes)
-
-            for j in 1:length(elemTags[i])
-                elem = elemTags[i][j]
-
-                @inbounds for k in 1:numNodes
-                    nnet[j,k] = elemNodeTags[i][(j-1)*numNodes + k]
-                end
-
-                xx = ncoord2[nnet[j,:]*3 .- 2]
-                yy = ncoord2[nnet[j,:]*3 .- 1]
-                zz = ncoord2[nnet[j,:]*3 .- 0]
-
-                tang_elem = zeros(3 * numNodes)
-
-                for k in 1:numNodes
-                    dNk = dN_dξ[1,:]
-
-                    dx_dξ = dot(dNk, xx)
-                    dy_dξ = dot(dNk, yy)
-                    dz_dξ = dot(dNk, zz)
-
-                    vnorm = √(dx_dξ^2 + dy_dξ^2 + dz_dξ^2)
-                    vnorm = 1
-
-                    tang_elem[3k-2] = dx_dξ / vnorm
-                    tang_elem[3k-1] = dy_dξ / vnorm
-                    tang_elem[3k]   = dz_dξ / vnorm
-                end
-
-                push!(numElem, elem)
-                push!(tangentvectors, reshape(tang_elem, :, 1))
-            end
-        end
-    end
-
-    return VectorField(tangentvectors, [;;], [0.0], numElem, 1, :v3D, problem)
-end
-
 function tangentVector(problem::Problem, phName::String)
     gmsh.model.setCurrent(problem.name)
 
@@ -1971,6 +1898,124 @@ function tangentVector(problem::Problem, phName::String)
     end
 
     return VectorField(tangentvectors, [;;], [0.0], numElem, 1, :v3D, problem)
+end
+
+function normalVector1D(problem::Problem, phName::String)
+    gmsh.model.setCurrent(problem.name)
+
+    non = problem.non
+    ncoord2 = zeros(3 * non)
+    numElem = Int[]
+    normalvectors = Vector{Matrix{Float64}}()
+
+    # Fizikai csoport (1D görbe)
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    for (edim, etag) in dimTags
+        if edim != 1
+            error("tangentVector: physical group is not 1D (curve).")
+        end
+
+        elemTypes, elemTags, elemNodeTags =
+            gmsh.model.mesh.getElements(edim, etag)
+
+        # Csomópontok és 3D koordináták
+        nodeTags, ncoord, _ =
+            gmsh.model.mesh.getNodes(edim, etag, true, false)
+
+        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:end]
+        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:end]
+        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:end]
+
+        # ----- Elemciklus -----
+        for i in 1:length(elemTypes)
+            et = elemTypes[i]
+
+            elementName, eldim, order, numNodes, localNodeCoord, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            # 1D → nincs 3D kiterjesztés, közvetlenül használható
+            localNodeCoord2 = zeros(length(localNodeCoord) * 3)
+            localNodeCoord2[1:3:end] .= localNodeCoord[1:end]
+            #localNodeCoord2[2:3:end] .= localNodeCoord[2:end]
+
+            # ∂N/∂ξ a lokális pontokban
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, localNodeCoord2, "GradLagrange")
+            dN_dξ = reshape(dfun, :, numNodes)  # (1*numEval × numNodes)
+
+            nnet = zeros(Int, length(elemTags[i]), numNodes)
+
+            for j in 1:length(elemTags[i])
+                elem = elemTags[i][j]
+
+                @inbounds for k in 1:numNodes
+                    nnet[j,k] = elemNodeTags[i][(j-1)*numNodes + k]
+                end
+
+                xx = ncoord2[nnet[j,:]*3 .- 2]
+                yy = ncoord2[nnet[j,:]*3 .- 1]
+                zz = ncoord2[nnet[j,:]*3 .- 0]
+
+                tang_elem = zeros(3 * numNodes)
+                norm_elem = zeros(3 * numNodes)
+
+                # ----- Csomópontonként -----
+                for k in 1:numNodes
+                    dNk = dN_dξ[1:3:end,k]    # ∂Nk/∂ξ (numNodes hosszú sor)
+
+                    # ∂x/∂ξ, ∂y/∂ξ, ∂z/∂ξ
+                    dx_dξ = dot(dNk, xx)
+                    dy_dξ = dot(dNk, yy)
+                    dz_dξ = dot(dNk, zz)
+
+                    # normalizált érintő
+                    vnorm = √(dx_dξ^2 + dy_dξ^2 + dz_dξ^2)
+                    if vnorm > 0
+                        dx = dx_dξ / vnorm
+                        dy = dy_dξ / vnorm
+                        dz = dz_dξ / vnorm
+                    else
+                        dx = dy = dz = 0.0
+                    end
+
+                    tang_elem[3*k-2] = dx
+                    tang_elem[3*k-1] = dy
+                    tang_elem[3*k]   = dz
+                end
+
+                for k in 1:numNodes
+                    dNk = dN_dξ[1:3:end,k]    # ∂Nk/∂ξ (numNodes hosszú sor)
+
+                    # ∂x/∂ξ, ∂y/∂ξ, ∂z/∂ξ
+                    dtx_dξ = dot(dNk, tang_elem[1:3:end])
+                    dty_dξ = dot(dNk, tang_elem[2:3:end])
+                    dtz_dξ = dot(dNk, tang_elem[3:3:end])
+                    dx_dξ = dot(dNk, xx)
+                    dy_dξ = dot(dNk, yy)
+                    dz_dξ = dot(dNk, zz)
+
+                    # normalizált érintő
+                    vnorm = √(dx_dξ^2 + dy_dξ^2 + dz_dξ^2)
+                    if vnorm > 0
+                        dx = dtx_dξ / vnorm
+                        dy = dty_dξ / vnorm
+                        dz = dtz_dξ / vnorm
+                    else
+                        dx = dy = dz = 0.0
+                    end
+
+                    norm_elem[3*k-2] = dx
+                    norm_elem[3*k-1] = dy
+                    norm_elem[3*k]   = dz
+                end
+
+                push!(numElem, elem)
+                push!(normalvectors, reshape(norm_elem, :, 1))
+            end
+        end
+    end
+
+    return VectorField(normalvectors, [;;], [0.0], numElem, 1, :v3D, problem)
 end
 
 """
