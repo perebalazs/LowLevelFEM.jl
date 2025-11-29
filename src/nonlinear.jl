@@ -488,6 +488,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
 
                 # et-hez cache-elt props + bázis
                 dim_et, numNodes, nodeCoord = _get_props_cached(et)
+                #@disp dim_et
                 ∇h_all, h_all = _get_basis_cached(et, nodeCoord, numNodes)
 
                 # et-hez igazított munkatömbök
@@ -525,12 +526,14 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                         Jk = @view Jac[1:dimJ, (k-1)*3+1 : k*3]
 
                         # inv(Jk) = dimJ × 3 (transzponált mapping)
-                        invJk = pinv(Matrix(Jk))        # stabil Moore–Penrose inverz
+                        invJk = pinv(Matrix(Jk'))        # stabil Moore–Penrose inverz
 
                         # 3×3 blokkba másolás (extra oszlopok nullák)
                         fill!(@view(invJac[1:3, 3*k-2:3*k]), 0.0)
                         #@views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk'
-                        @views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk'
+                        #@disp (size(invJac[1:3, 3*k-2 : 3*k-3+dimJ]))
+                        #@disp (size(invJk'))
+                        @views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk
                         ####################################################################
 
                         # sugár/rr (axi résznél kellhet), az eredeti kód mintájára az x-koordináták lineáris kombinációja
