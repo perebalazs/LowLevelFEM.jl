@@ -107,6 +107,21 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
         end
     end
 
+    # --- elem-szomszédsági mátrix építése (tri/quad)
+    elem_neighbors = build_surface_neighbors(elem_nodes, elem_types)
+
+    return (
+        elem_nodes=elem_nodes,
+        elem_types=elem_types,
+        elem_coords=elem_coords,
+        elem_bboxes=elem_bboxes,
+        # rács
+        bins=bins, nx=nx, ny=ny,
+        gxmin=gxmin, gymin=gymin, dx=dx, dy=dy,
+        # szomszédok
+        elem_neighbors=elem_neighbors,
+    )
+#=
     return (
         elem_nodes=elem_nodes,
         elem_types=elem_types,
@@ -116,8 +131,68 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
         bins=bins, nx=nx, ny=ny,
         gxmin=gxmin, gymin=gymin, dx=dx, dy=dy
     )
+=#
 end
 
+# ---------------------------------------------------------------------
+# Elem-szomszédsági mátrix építése 2D tri/quad felületre
+# ---------------------------------------------------------------------
+
+"""
+    build_surface_neighbors(elem_nodes, elem_types) -> Matrix{Int32}
+
+Elem-szomszédsági mátrixot épít tri3/tri6 (et=2,9) és quad4/quad9 (et=3,10)
+elemekre. A visszatérő `neighbors` mátrix mérete (nelem × 4):
+
+- háromszögeknél az első 3 oszlopban a 3 él szomszédja (4. oszlop = 0),
+- négyszögeknél mind a 4 oszlopban szomszéd, ha van (különben 0).
+
+Az éleket a csúcs-csomópontok alapján azonosítjuk, a gmsh töltési
+sorrendjét feltételezve (tri6: első 3 a csúcsok, quad9: első 4 a csúcsok).
+"""
+function build_surface_neighbors(elem_nodes::Vector{Vector{Int32}},
+                                 elem_types::Vector{Int})
+    nelem = length(elem_nodes)
+    nelem == length(elem_types) ||
+        error("build_surface_neighbors: elem_nodes and elem_types length mismatch")
+
+    neighbors = fill(Int32(0), nelem, 4)
+
+    # él -> (elem_index, local_edge_index)
+    edge_map = Dict{Tuple{Int32,Int32},Tuple{Int32,Int32}}()
+
+    for e in 1:nelem
+        nodes = elem_nodes[e]
+        et    = elem_types[e]
+
+        # csúcs-indexek és lokális él-lista
+        if et == 2 || et == 9  # tri3 / tri6
+            # csúcsok: 1,2,3
+            edges = ((1,2), (2,3), (3,1))
+        elseif et == 3 || et == 10 # quad4 / quad9
+            # csúcsok: 1,2,3,4
+            edges = ((1,2), (2,3), (3,4), (4,1))
+        else
+            error("build_surface_neighbors: unsupported element type $et (only tri/quad surface)")
+        end
+
+        for (le, (i1,i2)) in enumerate(edges)
+            n1 = nodes[i1]
+            n2 = nodes[i2]
+            key = n1 < n2 ? (n1, n2) : (n2, n1)
+
+            if haskey(edge_map, key)
+                e2, le2 = edge_map[key]
+                neighbors[e, le]   = e2
+                neighbors[e2, le2] = Int32(e)
+            else
+                edge_map[key] = (Int32(e), Int32(le))
+            end
+        end
+    end
+
+    return neighbors
+end
 
 """
     probe_field_bulk_binned(rr, points, grid) -> Vector{Float64}
@@ -649,6 +724,93 @@ function natural_coordinates_generic(x, y, z, xnodes, ynodes, znodes, et)
     end
 end
 
+# ---------------------------------------------------------------------
+# Lokális koordináták walking algoritmushoz (tri / quad, clip nélkül)
+# ---------------------------------------------------------------------
+
+"""
+    tri_reference_coordinates_raw(x, y, xnodes, ynodes)
+
+Visszaadja a (ξ, η) referenciakoordinátákat tri3/tri6 elem esetén
+CLIP NÉLKÜL, azaz akkor is, ha a pont az elemen kívül esik.
+A gmsh tri3/tri6 esetén az első 3 csomópontot tekintjük csúcsnak.
+"""
+function tri_reference_coordinates_raw(x::Float64, y::Float64,
+                                       xnodes::AbstractVector{<:Real},
+                                       ynodes::AbstractVector{<:Real})
+    # csak a 3 csúcs
+    x1, x2, x3 = xnodes[1], xnodes[2], xnodes[3]
+    y1, y2, y3 = ynodes[1], ynodes[2], ynodes[3]
+
+    A = @inbounds [
+        x2 - x1  x3 - x1;
+        y2 - y1  y3 - y1
+    ]
+    b = @inbounds [x - x1, y - y1]
+    ξη = A \ b
+    return (Float64(ξη[1]), Float64(ξη[2]))
+end
+
+"""
+    quad_reference_coordinates_raw(x, y, xnodes, ynodes, et)
+
+Négyszögekre (quad4/quad9) Newton-iterációval becsli a (ξ, η) koordinátákat,
+CLIP NÉLKÜL. A gmsh quad4/quad9 elemein az első 4 csomópontot tekintjük
+csúcsnak, de a shape függvények használják a többit is.
+"""
+function quad_reference_coordinates_raw(x::Float64, y::Float64,
+                                        xnodes::AbstractVector{<:Real},
+                                        ynodes::AbstractVector{<:Real},
+                                        et::Int)
+    ξ = 0.0
+    η = 0.0
+    tol = 1e-10
+    fd  = 1e-6
+
+    for _ in 1:15
+        # Alakfüggvények
+        N = lagrange_shape_generic(ξ, η, 0.0, et)
+
+        xe = dot(N, xnodes)
+        ye = dot(N, ynodes)
+
+        rx = x - xe
+        ry = y - ye
+
+        if abs(rx) + abs(ry) < tol
+            break
+        end
+
+        # Newton-jacobi deriváltak numerikus differenciával
+        dN_dξ = (lagrange_shape_generic(ξ + fd, η, 0.0, et) .-
+                 lagrange_shape_generic(ξ - fd, η, 0.0, et)) ./ (2fd)
+
+        dN_dη = (lagrange_shape_generic(ξ, η + fd, 0.0, et) .-
+                 lagrange_shape_generic(ξ, η - fd, 0.0, et)) ./ (2fd)
+
+        dxdξ = dot(dN_dξ, xnodes)
+        dydξ = dot(dN_dξ, ynodes)
+        dxdη = dot(dN_dη, xnodes)
+        dydη = dot(dN_dη, ynodes)
+
+        detJ = dxdξ * dydη - dxdη * dydξ
+        if abs(detJ) < 1e-14
+            break
+        end
+
+        Δξ = (rx * dydη - ry * dxdη) / detJ
+        Δη = (-rx * dydξ + ry * dxdξ) / detJ
+
+        ξ += Δξ
+        η += Δη
+
+        if abs(Δξ) + abs(Δη) < tol
+            break
+        end
+    end
+
+    return (ξ, η)
+end
 
 function quad_reference_coordinates(x, y, xnodes, ynodes, et)
     ξ = 0.0
@@ -695,7 +857,223 @@ function quad_reference_coordinates(x, y, xnodes, ynodes, et)
     end
 end
 
+# ---------------------------------------------------------------------
+# Walking alapú elem-keresés 2D tri/quad felületen
+# ---------------------------------------------------------------------
 
+"""
+    find_element_walking_2d(x, y, z, grid, start_elem;
+                            max_steps=50, tol=1e-8) -> Int32
+
+Megpróbálja megtalálni azt az elemet, amely a (x,y) pontot tartalmazza
+(a z koordinátát csak a természetes koordinátákhoz továbbadjuk, de
+a keresés xy-ban történik), tri3/tri6/quad4/quad9 elemekből álló
+2D felületen.
+
+- `grid` a `build_surface_grid` kimenete, kibővítve `elem_neighbors` mezővel.
+- `start_elem` egy kiinduló elem indexe (1-alapú).
+- Siker esetén az elem indexét adja vissza (Int32),
+- sikertelenség esetén `Int32(0)`-t (pl. túl sok lépés vagy nincs szomszéd).
+
+A végtelen ciklus ellen `max_steps` véd: ennyi lépés után feladja.
+"""
+function find_element_walking_2d(x::Float64, y::Float64, z::Float64,
+                                 grid;
+                                 start_elem::Int32=Int32(1),
+                                 max_steps::Int=50,
+                                 tol::Float64=1e-8)
+    elem_nodes   = grid.elem_nodes
+    elem_types   = grid.elem_types
+    elem_coords  = grid.elem_coords
+    elem_neighbors = grid.elem_neighbors
+
+    nelem = length(elem_nodes)
+    nelem == size(elem_neighbors, 1) ||
+        error("find_element_walking_2d: neighbors/elem_nodes size mismatch")
+
+    e = start_elem
+    if e < 1 || e > nelem
+        return Int32(0)
+    end
+
+    @inbounds for step in 1:max_steps
+        et = elem_types[e]
+        xs, ys, zs = elem_coords[e]
+
+        # --- lokális koordináták (ξ,η) CLIP nélkül ---
+        ξ = 0.0
+        η = 0.0
+
+        if et == 2 || et == 9      # tri3 / tri6
+            ξ, η = tri_reference_coordinates_raw(x, y, xs, ys)
+            # barycentrikus:
+            L1 = 1.0 - ξ - η
+            L2 = ξ
+            L3 = η
+            if L1 >= -tol && L2 >= -tol && L3 >= -tol
+                # belül vagy nagyon közel → megtaláltuk
+                return Int32(e)
+            end
+            # melyik él felé lépjünk? a legnegatívabb L_i szerint
+            if L1 <= L2 && L1 <= L3   # L1 a legnegatívabb
+                edge = 1
+            elseif L2 <= L1 && L2 <= L3
+                edge = 2
+            else
+                edge = 3
+            end
+
+        elseif et == 3 || et == 10  # quad4 / quad9
+            ξ, η = quad_reference_coordinates_raw(x, y, xs, ys, et)
+            if abs(ξ) <= 1.0 + tol && abs(η) <= 1.0 + tol
+                return Int32(e)
+            end
+            # négyzet esetén: amelyik komponens jobban kilóg, arra lépünk
+            if abs(ξ) >= abs(η)
+                if ξ > 1.0
+                    edge = 2  # "jobb" él (1-2-3-4 körbeforgó sorrend szerint: 1-2,2-3,3-4,4-1)
+                elseif ξ < -1.0
+                    edge = 4  # "bal" él
+                else
+                    # egyik irány se egyértelmű, próbáljuk az η alapján
+                    if η > 1.0
+                        edge = 3
+                    else
+                        edge = 1
+                    end
+                end
+            else
+                if η > 1.0
+                    edge = 3  # "felső" él
+                elseif η < -1.0
+                    edge = 1  # "alsó" él
+                else
+                    # egyik irány se egyértelmű, próbáljuk ξ alapján
+                    if ξ > 0
+                        edge = 2
+                    else
+                        edge = 4
+                    end
+                end
+            end
+
+        else
+            # csak tri/quad 2D felületre van most implementálva
+            return Int32(0)
+        end
+
+        # --- továbblépés a kiválasztott élen ---
+        nb = elem_neighbors[e, edge]
+        if nb == 0
+            # nincs szomszéd azon az élen → a háló szélén vagyunk
+            return Int32(0)
+        end
+
+        e = nb
+    end
+
+    # túl sok lépés → nem talált megfelelő elemet
+    return Int32(0)
+end
+
+"""
+    probe_field_bulk_walking(rr, points, grid) -> Vector{Float64}
+
+Walking-alapú, rács-indexelt, többszálú lekérdezés 2D felületre vetített
+pontokra (x,y,z). A `grid` a `build_surface_grid(rr)` kimenete (elem_neighbors-szel).
+Ha a walking nem talál elemet, fallback-ként a meglévő binned brute-force-ot
+használja a lokális binen belül.
+"""
+function probe_field_bulk_walking(rr, points::AbstractMatrix{<:Real}, grid)
+    gmsh.model.setCurrent(rr.model.name)
+    npts = size(points,1)
+    vals = fill(NaN, npts)
+
+    elem_nodes   = grid.elem_nodes
+    elem_types   = grid.elem_types
+    elem_coords  = grid.elem_coords
+    elem_neighbors = grid.elem_neighbors
+    bins         = grid.bins
+    nx=grid.nx; ny=grid.ny
+    gxmin=grid.gxmin; gymin=grid.gymin; dx=grid.dx; dy=grid.dy
+
+    @inline function bin_of_point(x::Float64, y::Float64)
+        ix = clamp(Int(floor((x - gxmin) / dx)) + 1, 1, nx)
+        iy = clamp(Int(floor((y - gymin) / dy)) + 1, 1, ny)
+        return ix, iy
+    end
+
+    @inline function neigh_bins(ix::Int, iy::Int)
+        I = (max(1,ix-1)):(min(nx,ix+1))
+        J = (max(1,iy-1)):(min(ny,iy+1))
+        return I, J
+    end
+
+    @inline cellid(ix,iy) = (iy-1)*nx + ix
+
+    # opcionális: "anchor" elem binenként (itt most lokális vektorban)
+    bin_anchor = fill(Int32(0), nx*ny)
+
+    @batch for ipt in 1:npts
+        x = Float64(points[ipt,1])
+        y = Float64(points[ipt,2])
+        z = Float64(points[ipt,3])
+
+        ix, iy = bin_of_point(x,y)
+        cid = cellid(ix,iy)
+
+        start_e = bin_anchor[cid]
+
+        found_elem = Int32(0)
+
+        # --- ha van anchor, először onnan próbálunk walkinggel ---
+        if start_e != 0
+            e = find_element_walking_2d(x, y, z, grid; start_elem=start_e)
+            if e != 0
+                found_elem = e
+            end
+        end
+
+        # --- ha nincs anchor vagy nem talált, próbáljuk a bin elemeit walkinggel ---
+        if found_elem == 0
+            # először a saját bin, aztán a szomszédosak
+            I, J = neigh_bins(ix,iy)
+            @inbounds for jj in J, ii in I
+                for e in bins[cellid(ii,jj)]
+                    ee = find_element_walking_2d(x, y, z, grid; start_elem=e)
+                    if ee != 0
+                        found_elem = ee
+                        bin_anchor[cid] = ee # frissítjük az anchor-t
+                        break
+                    end
+                end
+                found_elem != 0 && break
+            end
+        end
+
+        if found_elem != 0
+            # normál természetes koordináta + interpoláció
+            e = Int(found_elem)
+            et = elem_types[e]
+            xs, ys, zs = elem_coords[e]
+            ξηζ = natural_coordinates_generic(x, y, z, xs, ys, zs, et)
+            if ξηζ !== nothing
+                ξ, η, ζ = ξηζ
+                N = lagrange_shape_generic(ξ, η, ζ, et)
+                if length(N) == length(elem_nodes[e])
+                    vals[ipt] = dot(N, rr.A[e][:,1])
+                    continue
+                end
+            end
+        end
+
+        # --- Fallback: ha idáig eljutottunk, nem talált elem / nem sikerült a lokális koordináta ---
+        # (egyszerűen meghagyjuk NaN-nak, vagy ide beteheted a régi brute-force binned keresést)
+        vals[ipt] = NaN
+    end
+
+    return vals
+end
 
 
 

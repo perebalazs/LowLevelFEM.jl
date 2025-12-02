@@ -519,6 +519,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                         #invJac[1:3, 3*k-2:3*k] = inv(Matrix(Jk))'
                         ###################################################################
                         # lokális dimenzió (1 a vonal, 2 a felület, 3 a térfogat)
+                        dim_et = 3
                         dimJ = dim_et
 
                         # Jk = 3 × dimJ mátrix
@@ -532,7 +533,7 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                         fill!(@view(invJac[1:3, 3*k-2:3*k]), 0.0)
                         #@views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk'
                         #@disp (size(invJac[1:3, 3*k-2 : 3*k-3+dimJ]))
-                        #@disp (size(invJk'))
+                        #@disp (size(invJk))
                         @views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk
                         ####################################################################
 
