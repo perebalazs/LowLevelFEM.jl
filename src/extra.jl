@@ -85,6 +85,8 @@ function initialize(problem::Problem)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(problem.dim, tag)
     coord = reshape(coord, 3, :)
     val = probe_field_bulk_fallback(h0, coord')
+    #grid = build_surface_grid(h0)
+    #val = probe_field(h0, coord', grid)
     h1 = scalarField(problem, problem.material[1].phName, (x,y,z)->z)
     h1.a[nodeTags] .-= val
     h1.a .*= -1.0
@@ -112,7 +114,8 @@ function pressureInVolume(p::ScalarField)
     p1 = nodesToElements(p)
     grid = build_surface_grid(p1)
     #val = probe_field_bulk(p1, coord_mat, grid=grid)
-    val = probe_field_bulk_fallback(p1, coord_mat)
+    #val = probe_field_bulk_fallback(p1, coord_mat)
+    val = probe_field_bulk_walking(p1, coord_mat)
     pp = scalarField(p.model, p.model.geometry.nameVolume, 0)
     pp.a[nodeTags] .= val
 
@@ -123,7 +126,8 @@ function pressureInVolume(p::ScalarField)
         h_top = ScalarField(p.model, p.model.geometry.nameGap, (x, y, z) -> z)
         grid = build_surface_grid(h_top)
         #val = probe_field_bulk(h_top, coord_mat, grid=grid)
-        val = probe_field_bulk_fallback(h_top, coord_mat)
+        #val = probe_field_bulk_fallback(h_top, coord_mat)
+        val = probe_field_bulk_walking(h_top, coord_mat)
         hh = scalarField(p.model, p.model.geometry.nameVolume, 0)
         hh.a[nodeTags] .= val
         hh = nodesToElements(hh, onPhysicalGroup=p.model.geometry.nameVolume)

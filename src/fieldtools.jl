@@ -877,45 +877,62 @@ a keresés xy-ban történik), tri3/tri6/quad4/quad9 elemekből álló
 
 A végtelen ciklus ellen `max_steps` véd: ennyi lépés után feladja.
 """
-function find_element_walking_2d(x::Float64, y::Float64, z::Float64,
-                                 grid;
-                                 start_elem::Int32=Int32(1),
-                                 max_steps::Int=50,
-                                 tol::Float64=1e-8)
-    elem_nodes   = grid.elem_nodes
-    elem_types   = grid.elem_types
-    elem_coords  = grid.elem_coords
+function find_element_walking_2d(
+    x::Float64, y::Float64, z::Float64,
+    grid;
+    start_elem::Int32=Int32(1),
+    max_steps::Int=50,
+    tol::Float64=1e-8
+)
+    elem_nodes     = grid.elem_nodes
+    elem_types     = grid.elem_types
+    elem_coords    = grid.elem_coords
     elem_neighbors = grid.elem_neighbors
 
     nelem = length(elem_nodes)
-    nelem == size(elem_neighbors, 1) ||
-        error("find_element_walking_2d: neighbors/elem_nodes size mismatch")
-
-    e = start_elem
-    if e < 1 || e > nelem
+    if start_elem < 1 || start_elem > nelem
         return Int32(0)
     end
 
+    e = start_elem
+
+    # --- Visited buffer (8 elem méretű körkörös tároló) ---
+    visited = ntuple(_ -> Int32(0), 8)
+    vis_pos = 1  # 1..8 között lépked
+
     @inbounds for step in 1:max_steps
+
+        # --- Ciklusdetektálás visited bufferrel ---
+        @inbounds for v in visited
+            if v == e
+                return Int32(0)   # ciklus → walking sikertelen
+            end
+        end
+        visited = Base.setindex(visited, e, vis_pos)
+        vis_pos = (vis_pos == 8) ? 1 : (vis_pos + 1)
+
+        # --- Elem adatai ---
         et = elem_types[e]
         xs, ys, zs = elem_coords[e]
 
-        # --- lokális koordináták (ξ,η) CLIP nélkül ---
+        # --- Lokális (ξ,η) koordináták CLIP nélkül ---
         ξ = 0.0
         η = 0.0
 
-        if et == 2 || et == 9      # tri3 / tri6
+        if et == 2 || et == 9
+            # tri3 / tri6
             ξ, η = tri_reference_coordinates_raw(x, y, xs, ys)
-            # barycentrikus:
+
             L1 = 1.0 - ξ - η
             L2 = ξ
             L3 = η
+
             if L1 >= -tol && L2 >= -tol && L3 >= -tol
-                # belül vagy nagyon közel → megtaláltuk
-                return Int32(e)
+                return Int32(e)   # megtaláltuk az elemet
             end
-            # melyik él felé lépjünk? a legnegatívabb L_i szerint
-            if L1 <= L2 && L1 <= L3   # L1 a legnegatívabb
+
+            # legnegatívabb barycentrikus komponens → melyik él?
+            if L1 <= L2 && L1 <= L3
                 edge = 1
             elseif L2 <= L1 && L2 <= L3
                 edge = 2
@@ -923,56 +940,46 @@ function find_element_walking_2d(x::Float64, y::Float64, z::Float64,
                 edge = 3
             end
 
-        elseif et == 3 || et == 10  # quad4 / quad9
+        elseif et == 3 || et == 10
+            # quad4 / quad9
             ξ, η = quad_reference_coordinates_raw(x, y, xs, ys, et)
+
             if abs(ξ) <= 1.0 + tol && abs(η) <= 1.0 + tol
                 return Int32(e)
             end
-            # négyzet esetén: amelyik komponens jobban kilóg, arra lépünk
+
             if abs(ξ) >= abs(η)
                 if ξ > 1.0
-                    edge = 2  # "jobb" él (1-2-3-4 körbeforgó sorrend szerint: 1-2,2-3,3-4,4-1)
+                    edge = 2    # jobb oldal (1-2)
                 elseif ξ < -1.0
-                    edge = 4  # "bal" él
+                    edge = 4    # bal oldal (4-1)
                 else
-                    # egyik irány se egyértelmű, próbáljuk az η alapján
-                    if η > 1.0
-                        edge = 3
-                    else
-                        edge = 1
-                    end
+                    edge = (η > 0 ? 3 : 1)  # fallback irány
                 end
             else
                 if η > 1.0
-                    edge = 3  # "felső" él
+                    edge = 3    # felső
                 elseif η < -1.0
-                    edge = 1  # "alsó" él
+                    edge = 1    # alsó
                 else
-                    # egyik irány se egyértelmű, próbáljuk ξ alapján
-                    if ξ > 0
-                        edge = 2
-                    else
-                        edge = 4
-                    end
+                    edge = (ξ > 0 ? 2 : 4)
                 end
             end
 
         else
-            # csak tri/quad 2D felületre van most implementálva
             return Int32(0)
         end
 
-        # --- továbblépés a kiválasztott élen ---
+        # --- Lépés a kiválasztott él szomszédjába ---
         nb = elem_neighbors[e, edge]
         if nb == 0
-            # nincs szomszéd azon az élen → a háló szélén vagyunk
-            return Int32(0)
+            return Int32(0)   # nincs szomszéd → walking vége
         end
 
         e = nb
     end
 
-    # túl sok lépés → nem talált megfelelő elemet
+    # max_steps → walking nem talált semmit
     return Int32(0)
 end
 
