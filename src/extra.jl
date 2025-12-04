@@ -84,9 +84,9 @@ function initialize(problem::Problem)
     tag = getTagForPhysicalName(problem.material[1].phName)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(problem.dim, tag)
     coord = reshape(coord, 3, :)
-    val = probe_field_bulk_fallback(h0, coord')
-    #grid = build_surface_grid(h0)
-    #val = probe_field(h0, coord', grid)
+    #val = probe_field_bulk_fallback(h0, coord')
+    grid = build_surface_grid(h0, nx=0, ny=0)
+    val = probe_field_bulk_walking(h0, coord', grid)
     h1 = scalarField(problem, problem.material[1].phName, (x,y,z)->z)
     h1.a[nodeTags] .-= val
     h1.a .*= -1.0

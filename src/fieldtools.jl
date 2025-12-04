@@ -4,7 +4,7 @@ using LinearAlgebra: dot
 using ..LowLevelFEM
 
 export probe_field_bulk, build_surface_grid
-export probe_field_bulk_fallback
+export probe_field_bulk_fallback, probe_field_bulk_walking
 
 #using LinearAlgebra
 
@@ -24,7 +24,7 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
 
     # -- egyszeri beolvasás Gmsh-ból
     nodeTags, coords, _ = gmsh.model.mesh.getNodes()
-    Xf = Float32.(coords[1:3:end]); Yf = Float32.(coords[2:3:end]); Zf = Float32.(coords[3:3:end])
+    Xf = Float64.(coords[1:3:end]); Yf = Float64.(coords[2:3:end]); Zf = Float64.(coords[3:3:end])
     node_index = Dict{Int32,Int32}(Int32(tag)=>Int32(i) for (i,tag) in enumerate(nodeTags))
 
     # csak a 2D-s mező elemei (tri/quad)
@@ -38,12 +38,12 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
     # --- elemlisták (csak azok, amelyek a rr.numElem-ben vannak)
     elem_nodes = Vector{Vector{Int32}}()
     elem_types = Int[]
-    elem_coords = Vector{NTuple{3,Vector{Float32}}}()
-    elem_bboxes = NTuple{4,Float32}[]
+    elem_coords = Vector{NTuple{3,Vector{Float64}}}()
+    elem_bboxes = NTuple{4,Float64}[]
 
     # bbox globális tartomány XY-ben
-    gxmin = typemax(Float32); gxmax = typemin(Float32)
-    gymin = typemax(Float32); gymax = typemin(Float32)
+    gxmin = typemax(Float64); gxmax = typemin(Float64)
+    gymin = typemax(Float64); gymax = typemin(Float64)
 
     rrset = Set(rr.numElem)
     for (t, et) in enumerate(elemTypes)
@@ -57,7 +57,7 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
             tag ∈ rrset || continue
             offs = (j-1)*nper + 1
             nodes = Int32.(nlist[offs:offs+nper-1])
-            xs = Vector{Float32}(undef, nper)
+            xs = Vector{Float64}(undef, nper)
             ys = similar(xs); zs = similar(xs)
             for (k,nid) in enumerate(nodes)
                 idx = node_index[nid]
@@ -83,12 +83,12 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
         sidey = gymax - gymin
         # cél elemsűrűség ~ 16 elem/bin
         bins = max(1, round(Int, sqrt(ne/16)))
-        ar = sidex / max(sidey, eps(Float32))
+        ar = sidex / max(sidey, eps(Float64))
         nx = max(8, round(Int, bins*sqrt(Float64(ar))))
         ny = max(8, round(Int, bins/sqrt(Float64(ar))))
     end
-    dx = (gxmax - gxmin + eps(Float32)) / nx
-    dy = (gymax - gymin + eps(Float32)) / ny
+    dx = (gxmax - gxmin + eps(Float64)) / nx
+    dy = (gymax - gymin + eps(Float64)) / ny
 
     # --- bin lista: minden cellához elemindexek
     bins = [Int32[] for _ in 1:(nx*ny)]
@@ -729,12 +729,92 @@ end
 # ---------------------------------------------------------------------
 
 """
-    tri_reference_coordinates_raw(x, y, xnodes, ynodes)
+    tri_reference_coordinates_raw(x, y, xnodes, ynodes, et)
 
 Visszaadja a (ξ, η) referenciakoordinátákat tri3/tri6 elem esetén
 CLIP NÉLKÜL, azaz akkor is, ha a pont az elemen kívül esik.
-A gmsh tri3/tri6 esetén az első 3 csomópontot tekintjük csúcsnak.
+
+`et` = 2 (tri3) vagy 9 (tri6). A teljes (isoparametrikus) alakfüggvényeket
+használjuk, így tri6 görbült elemeknél is működik.
 """
+function tri_reference_coordinates_raw(x::Float64, y::Float64,
+                                       xnodes::AbstractVector{<:Real},
+                                       ynodes::AbstractVector{<:Real},
+                                       et::Int)
+    @assert et == 2 || et == 9 "tri_reference_coordinates_raw: csak tri3 (2) / tri6 (9) támogatott"
+
+    # --- Kezdő tipp: lineáris barycentrikus megoldás a 3 csúcs alapján ---
+    x1, x2, x3 = xnodes[1], xnodes[2], xnodes[3]
+    y1, y2, y3 = ynodes[1], ynodes[2], ynodes[3]
+
+    A = @inbounds [
+        x2 - x1   x3 - x1;
+        y2 - y1   y3 - y1
+    ]
+    b = @inbounds [x - x1, y - y1]
+
+    ξ = 1/3
+    η = 1/3
+    # próbáljuk meg az A\b-t kezdőértéknek (ha nem szinguláris)
+    detA = (A[1,1]*A[2,2] - A[1,2]*A[2,1])
+    if abs(detA) > 1e-20
+        ξη_lin = A \ b
+        ξ = Float64(ξη_lin[1])
+        η = Float64(ξη_lin[2])
+    end
+
+    # --- Newton-iteráció az isoparametrikus leképezésre ---
+    tol = 1e-10
+    fd  = 1e-6
+
+    for _ in 1:15
+        # Alakfüggvények a tri3/tri6 elemre
+        N = lagrange_shape_generic(ξ, η, 0.0, et)
+
+        xe = dot(N, xnodes)
+        ye = dot(N, ynodes)
+
+        rx = x - xe
+        ry = y - ye
+
+        # reziduum elég kicsi → kész
+        if abs(rx) + abs(ry) < tol
+            break
+        end
+
+        # Numerikus deriváltak ξ, η szerint
+        dN_dξ = (lagrange_shape_generic(ξ + fd, η, 0.0, et) .-
+                 lagrange_shape_generic(ξ - fd, η, 0.0, et)) ./ (2fd)
+
+        dN_dη = (lagrange_shape_generic(ξ, η + fd, 0.0, et) .-
+                 lagrange_shape_generic(ξ, η - fd, 0.0, et)) ./ (2fd)
+
+        dxdξ = dot(dN_dξ, xnodes)
+        dydξ = dot(dN_dξ, ynodes)
+        dxdη = dot(dN_dη, xnodes)
+        dydη = dot(dN_dη, ynodes)
+
+        detJ = dxdξ * dydη - dxdη * dydξ
+        if abs(detJ) < 1e-14
+            # Jacobian majdnem szinguláris → nem erőltetjük tovább
+            break
+        end
+
+        # Newton-lépés: [Δξ; Δη] = J^{-1} * [rx; ry]
+        Δξ = (rx * dydη - ry * dxdη) / detJ
+        Δη = (-rx * dydξ + ry * dxdξ) / detJ
+
+        ξ += Δξ
+        η += Δη
+
+        if abs(Δξ) + abs(Δη) < tol
+            break
+        end
+    end
+
+    return (ξ, η)
+end
+#=
 function tri_reference_coordinates_raw(x::Float64, y::Float64,
                                        xnodes::AbstractVector{<:Real},
                                        ynodes::AbstractVector{<:Real})
@@ -750,6 +830,7 @@ function tri_reference_coordinates_raw(x::Float64, y::Float64,
     ξη = A \ b
     return (Float64(ξη[1]), Float64(ξη[2]))
 end
+=#
 
 """
     quad_reference_coordinates_raw(x, y, xnodes, ynodes, et)
@@ -921,7 +1002,7 @@ function find_element_walking_2d(
 
         if et == 2 || et == 9
             # tri3 / tri6
-            ξ, η = tri_reference_coordinates_raw(x, y, xs, ys)
+            ξ, η = tri_reference_coordinates_raw(x, y, xs, ys, et)
 
             L1 = 1.0 - ξ - η
             L2 = ξ
@@ -996,6 +1077,11 @@ function probe_field_bulk_walking(rr, points::AbstractMatrix{<:Real}, grid)
     npts = size(points,1)
     vals = fill(NaN, npts)
 
+    # --- TRI elemek esetén kapcsoljuk ki a walkingot ---
+    if any(et -> et == 2 || et == 9, grid.elem_types)
+        @info "probe_field_bulk_walking: triangular mesh → using binned fast search"
+        return probe_field_bulk_binned(rr, points, grid)
+    end
     elem_nodes   = grid.elem_nodes
     elem_types   = grid.elem_types
     elem_coords  = grid.elem_coords
@@ -1076,8 +1162,65 @@ function probe_field_bulk_walking(rr, points::AbstractMatrix{<:Real}, grid)
 
         # --- Fallback: ha idáig eljutottunk, nem talált elem / nem sikerült a lokális koordináta ---
         # (egyszerűen meghagyjuk NaN-nak, vagy ide beteheted a régi brute-force binned keresést)
-        vals[ipt] = NaN
+                # --- Fallback: ha walking sem talált elemet ---
+        #=
+        if found_elem == 0
+            vals[ipt] = 0
+            continue
+            # 1) Keressük a legközelebbi elemet a binben brute-force módszerrel
+            best_e = 0
+            best_dist2 = Inf
+
+            I, J = neigh_bins(ix, iy)
+            @inbounds for jj in J, ii in I
+                for e in bins[cellid(ii,jj)]
+                    xs, ys, zs = elem_coords[e]
+
+                    # minimális távolság az elem bounding boxától
+                    xmin, xmax, ymin, ymax = grid.elem_bboxes[e]
+                    dx = max(xmin - x, 0, x - xmax)
+                    dy = max(ymin - y, 0, y - ymax)
+                    dist2 = dx*dx + dy*dy
+
+                    if dist2 < best_dist2
+                        best_dist2 = dist2
+                        best_e = e
+                    end
+                end
+            end
+
+            # Ha még így sincs elem (elvileg ritka), maradjon NaN
+            if best_e != 0
+                xs, ys, zs = elem_coords[best_e]
+                et = elem_types[best_e]
+
+                # Extrapolációs koordináták → engedélyezett kilépés
+                ξηζ = natural_coordinates_generic(x, y, 0.0, xs, ys, zs, et)
+                if ξηζ !== nothing
+                    ξ, η, ζ = ξηζ
+                else
+                    # ha nincs gyök → numerikus extrapolációval
+                    ξ, η = quad_reference_coordinates_raw(x, y, xs, ys, et)
+                    ζ = 0.0
+                end
+
+                # Interpoláció (extrapolációval)
+                N = lagrange_shape_generic(ξ, η, ζ, et)
+                if length(N) == length(elem_nodes[best_e])
+                    vals[ipt] = dot(N, rr.A[best_e][:,1])
+                else
+                    vals[ipt] = NaN   # elvileg sosem kéne
+                end
+            else
+                vals[ipt] = NaN  # végső fallback
+            end
+
+            continue
+        end
+        =#
+        vals[ipt] = 0
     end
+    #vals[ipt] = 0
 
     return vals
 end
