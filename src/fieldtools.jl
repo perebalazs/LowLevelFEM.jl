@@ -13,6 +13,27 @@ const SUPPORTED_ELEMENT_TYPES = Set([1, 8, 2, 9, 3, 10])
 using Polyester
 using Base: @propagate_inbounds
 
+# Heurisztika: adaptív rácsfelbontás elemszám és aspektusarány alapján
+@inline function _adaptive_grid_resolution(ne::Int, gxmin::Float64, gxmax::Float64,
+                                           gymin::Float64, gymax::Float64;
+                                           target_per_bin::Int = 8,
+                                           min_bins::Int = 64,
+                                           max_bins::Int = 200_000)
+
+    sidex = gxmax - gxmin
+    sidey = gymax - gymin
+    ar = sidex / max(sidey, eps(Float64))  # aspektusarány (x/y)
+
+    # Cél: ~target_per_bin elem/bin
+    total_bins = clamp(div(ne, target_per_bin), min_bins, max_bins)
+
+    # x irányban több bin, ha a tartomány "hosszúkás"
+    nx = max(8, Int(round(sqrt(total_bins * max(ar, 0.05)))))
+    ny = max(4, Int(clamp(round(total_bins / nx), 4, total_bins)))
+
+    return nx, ny
+end
+
 """
     build_surface_grid(rr; nx::Int=0, ny::Int=0)
 
@@ -24,7 +45,9 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
 
     # -- egyszeri beolvasás Gmsh-ból
     nodeTags, coords, _ = gmsh.model.mesh.getNodes()
-    Xf = Float64.(coords[1:3:end]); Yf = Float64.(coords[2:3:end]); Zf = Float64.(coords[3:3:end])
+    Xf = Float64.(coords[1:3:end])
+    Yf = Float64.(coords[2:3:end])
+    Zf = Float64.(coords[3:3:end])
     node_index = Dict{Int32,Int32}(Int32(tag)=>Int32(i) for (i,tag) in enumerate(nodeTags))
 
     # csak a 2D-s mező elemei (tri/quad)
@@ -77,34 +100,62 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
     ne = length(elem_nodes)
     ne == length(rr.A) || error("surface grid: eltér az elemek és rr.A száma")
 
-    # --- rács felbontás (heuriszta: ~10-20 elem/bin átlag)
+    # --- ha nincs explicit nx,ny → adaptív választás
     if nx == 0 || ny == 0
-        sidex = gxmax - gxmin
-        sidey = gymax - gymin
-        # cél elemsűrűség ~ 16 elem/bin
-        bins = max(1, round(Int, sqrt(ne/16)))
-        ar = sidex / max(sidey, eps(Float64))
-        nx = max(8, round(Int, bins*sqrt(Float64(ar))))
-        ny = max(8, round(Int, bins/sqrt(Float64(ar))))
+        nx, ny = _adaptive_grid_resolution(ne, gxmin, gxmax, gymin, gymax;
+                                           target_per_bin=4, # tetszőlegesen hangolható
+                                           min_bins=16,
+                                           max_bins=200_000)
     end
-    dx = (gxmax - gxmin + eps(Float64)) / nx
-    dy = (gymax - gymin + eps(Float64)) / ny
 
-    # --- bin lista: minden cellához elemindexek
-    bins = [Int32[] for _ in 1:(nx*ny)]
+    @info "nx=$nx, ny=$ny"
 
-    @inline cellid(ix,iy) = (iy-1)*nx + ix
+    # belső kis segédfüggvény a binninghez, hogy adaptálni tudjunk ha kell
+    function _build_bins(nx::Int, ny::Int)
+        dx = (gxmax - gxmin + eps(Float64)) / nx
+        dy = (gymax - gymin + eps(Float64)) / ny
+        bins = [Int32[] for _ in 1:(nx*ny)]
+        @inline cellid(ix,iy) = (iy-1)*nx + ix
 
-    # elemek bepakolása a lefedett bin(ek)be
-    for i in 1:ne
-        (xmin,xmax,ymin,ymax) = elem_bboxes[i]
-        ix0 = max(1, floor(Int, (xmin-gxmin)/dx)+1)
-        ix1 = min(nx,  ceil(Int, (xmax-gxmin)/dx)+1)
-        iy0 = max(1, floor(Int, (ymin-gymin)/dy)+1)
-        iy1 = min(ny,  ceil(Int, (ymax-gymin)/dy)+1)
-        for iy in iy0:iy1, ix in ix0:ix1
-            push!(bins[cellid(ix,iy)], Int32(i))
+        for i in 1:ne
+            (xmin,xmax,ymin,ymax) = elem_bboxes[i]
+            ix0 = max(1, floor(Int, (xmin-gxmin)/dx)+1)
+            ix1 = min(nx,  ceil(Int, (xmax-gxmin)/dx)+1)
+            iy0 = max(1, floor(Int, (ymin-gymin)/dy)+1)
+            iy1 = min(ny,  ceil(Int, (ymax-gymin)/dy)+1)
+            for iy in iy0:iy1, ix in ix0:ix1
+                push!(bins[cellid(ix,iy)], Int32(i))
+            end
         end
+
+        return dx, dy, bins
+    end
+
+    # --- első binning
+    dx, dy, bins = _build_bins(nx, ny)
+
+    # --- adaptív finomítás: ha túl sok elem esik egy binbe, próbálunk finomítani egyszer
+    lens = map(length, bins)
+    maxbin = maximum(lens)
+    avg    = ne / max(1, length(bins))
+
+    # threshold-ok: hangolhatóak
+    max_ok  = 16   # ha ennél több elem van egy binben, túl "durva" a rács
+    target  = 8    # cél átlag elemszám/bin
+
+    if maxbin > max_ok && (nx == 0 || ny == 0)
+        # Becsült skála: mennyivel kell több bint használni
+        scale = sqrt(maxbin / target)
+        new_nx = clamp(Int(round(nx * scale)), nx, 4*nx)
+        new_ny = clamp(Int(round(ny * scale)), ny, 4*ny)
+        @info "build_surface_grid: refining grid ($nx×$ny → $new_nx×$new_ny), " *
+              "avg elems/bin=$(round(avg, digits=2)), max bin size=$maxbin"
+        nx, ny = new_nx, new_ny
+        dx, dy, bins = _build_bins(nx, ny)
+        lens = map(length, bins)
+        maxbin = maximum(lens)
+        avg    = ne / max(1, length(bins))
+        @info "build_surface_grid: refined grid avg elems/bin=$(round(avg,digits=2)), max bin size=$maxbin"
     end
 
     # --- elem-szomszédsági mátrix építése (tri/quad)
@@ -121,17 +172,6 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
         # szomszédok
         elem_neighbors=elem_neighbors,
     )
-#=
-    return (
-        elem_nodes=elem_nodes,
-        elem_types=elem_types,
-        elem_coords=elem_coords,
-        elem_bboxes=elem_bboxes,
-        # rács
-        bins=bins, nx=nx, ny=ny,
-        gxmin=gxmin, gymin=gymin, dx=dx, dy=dy
-    )
-=#
 end
 
 # ---------------------------------------------------------------------
