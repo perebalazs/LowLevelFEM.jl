@@ -1120,11 +1120,28 @@ function probe_field_bulk_walking(rr, points::AbstractMatrix{<:Real}, grid)
     npts = size(points,1)
     vals = fill(NaN, npts)
 
-    # --- TRI elemek esetén kapcsoljuk ki a walkingot ---
-    if any(et -> et == 2 || et == 9, grid.elem_types)
-        @info "probe_field_bulk_walking: triangular mesh → using binned fast search"
+    # --- Disable walking on mixed meshes (tri + quad together) ---
+    has_tri  = any(et -> et == 2 || et == 9, grid.elem_types)
+    has_quad = any(et -> et == 3 || et == 10, grid.elem_types)
+
+    if (has_tri && has_quad)
+        @info "probe_field_bulk_walking: mixed tri+quad mesh → walking disabled, using binned search"
         return probe_field_bulk_binned(rr, points, grid)
     end
+
+    # --- If only triangular → walking disabled ---
+    if has_tri && !has_quad
+        @info "probe_field_bulk_walking: triangular mesh → walking disabled, using binned search"
+        return probe_field_bulk_binned(rr, points, grid)
+    end
+
+    # --- TRI elemek esetén kapcsoljuk ki a walkingot ---
+    #if any(et -> et == 2 || et == 9, grid.elem_types)
+    #    @info "probe_field_bulk_walking: triangular mesh → using binned fast search"
+    #    return probe_field_bulk_binned(rr, points, grid)
+    #end
+    
+    # --- If only quad → walking is safe, continue ---
     elem_nodes   = grid.elem_nodes
     elem_types   = grid.elem_types
     elem_coords  = grid.elem_coords

@@ -2682,35 +2682,60 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
         tag = dimTag[2]
         elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
         nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
-        ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-        ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-        ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+        #ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+        #ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+        #ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+        @inbounds for (local_idx, nd) in enumerate(nodeTags)
+            ci = 3*(nd-1)
+            cn = 3*(local_idx-1)
+            ncoord2[ci+1] = ncoord[cn+1]
+            ncoord2[ci+2] = ncoord[cn+2]
+            ncoord2[ci+3] = ncoord[cn+3]
+        end
+
         for ii in 1:length(elementTypes)
             elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
-            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order+1))
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order))
             numIntPoints = length(intWeights)
             comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
             h = reshape(fun, :, numIntPoints)
             nnet = zeros(Int, length(elementTags[ii]), numNodes)
-            for l in 1:length(elementTags[ii])
+            @inbounds for l in 1:length(elementTags[ii])
                 elem = elementTags[ii][l]
-                for k in 1:numNodes
-                    nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
-                end
+                #for k in 1:numNodes
+                #    nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                #end
+                nodes = elemNodeTags[ii]
+                offset = (l - 1) * numNodes
+                nodeids = nodes[offset + 1 : offset + numNodes]
                 jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                 Jac = reshape(jac, 3, :)
                 s1 = 0
-                for j in 1:numIntPoints
-                    x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
-                    y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
-                    z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                first = (l - 1) * numNodes + 1
+                @inbounds for j in 1:numIntPoints
+                    #x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                    #y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                    #z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                    ##x = h[:, j]' * ncoord2[nodeids * 3 .- 2]
+                    ##y = h[:, j]' * ncoord2[nodeids * 3 .- 1]
+                    ##z = h[:, j]' * ncoord2[nodeids * 3 .- 0]
+                    x = 0.0
+                    y = 0.0
+                    z = 0.0
+                    @inbounds for nk in 1:numNodes
+                        nd    = nodes[first + nk - 1]      # globális csomópont index
+                        baseg = 3 * (nd - 1)
+                        hk    = h[nk, j]
+                        x += hk * ncoord2[baseg + 1]
+                        y += hk * ncoord2[baseg + 2]
+                        z += hk * ncoord2[baseg + 3]
+                    end
                     ff = 0
                     if f isa Function
                         ff = f(x, y, z)
-                        #@disp ff
                     elseif f isa ScalarField
-                        ff = h[:, j]' * f2.a[nnet[l, :]]
-                        #@disp ff
+                        #ff = h[:, j]' * f2.a[nnet[l, :]]
+                        ff = h[:, j]' * f2.a[nodeids]
                     else
                         error("integrate: 3rd argument must be a Function or a ScalarField")
                     end
