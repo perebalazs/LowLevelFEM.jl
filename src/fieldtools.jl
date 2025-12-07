@@ -108,6 +108,9 @@ function build_surface_grid(rr; nx::Int=0, ny::Int=0)
                                            max_bins=200_000)
     end
 
+    nx *= 5
+    ny *= 5
+
     @info "nx=$nx, ny=$ny"
 
     # belső kis segédfüggvény a binninghez, hogy adaptálni tudjunk ha kell

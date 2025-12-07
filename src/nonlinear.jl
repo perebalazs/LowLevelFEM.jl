@@ -3,6 +3,7 @@ export tangentMatrixConstitutive, tangentMatrixInitialStress
 export equivalentNodalForce, nonFollowerLoadVector
 export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, suppressDeformationAtBoundaries
 export solveDeformation, showDeformationResults
+export grad_xy
 
 """
     nodePositionVector(problem)
@@ -807,6 +808,7 @@ az elemi csomópontokban. Eredmény: elemenként eltárolt, 2 komponensű vektor
 Megjegyzés: ha a keretrendszered csak :v3D-t kezel, a kimenet típusát cseréld
 : v3D-re, és egészítsd ki z=0 komponenssel.
 """
+
 function grad_xy(rr::ScalarField)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)

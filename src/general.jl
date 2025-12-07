@@ -2914,6 +2914,7 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     end
     pdim = problem.pdim
     pdim = div(size(q.a,1), problem.non)
+    #display("showDoFResults: dim=$pdim, type=$(q.type).")
     nodeTags = []
     u = []
     ##############################################################################
@@ -3384,6 +3385,13 @@ function showHeatFluxResults(S::VectorField, comp; name=comp, visible=false, smo
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
     dim = problem.dim
+    if S.type == :v3D
+        dim = 3
+    elseif S.type == :v2D
+        dim = 2
+    else
+        error("showHeatFluxResults: type is $(S.type)")
+    end
     t = S.t
     #elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(dim, -1)
     #elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elemTypes[1])
