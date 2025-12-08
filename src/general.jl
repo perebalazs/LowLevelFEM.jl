@@ -80,7 +80,7 @@ mutable struct Geometry
                 error("Geometry: different surface dimensions $dim <==> $(dimTags[i][1])")
             end
         end
-        tagTop = 0 #showGapThickness(nameGap)
+        tagTop = showGapThickness(nameGap)
         #tagBottom = 0 #showGapThickness(nameGeo)
         return new(nameGap, nameVolume, dim, tagTop, nothing, nothing, nothing, nothing)
     end
@@ -474,7 +474,7 @@ struct VectorField <: AbstractField
     function VectorField(A0, a0, t0, numElem0, nsteps0, type0, model)
         return new(A0, a0, t0, numElem0, nsteps0, type0, model)
     end
-    function VectorField(problem, dataField)
+    function VectorField(problem::Problem, dataField)
         if !isa(dataField, Vector)
             error("VectorField: dataField are not arranged in a vector. Put them in [...]")
         end
@@ -548,6 +548,43 @@ struct VectorField <: AbstractField
         else
             error("VectorField: size of data is $(size(data)).")
         end
+    end
+    function VectorField(problem::Problem, phName::String, func::Function)
+        gmsh.model.setCurrent(problem.name)
+        
+        type = :v3D
+        nsteps = 1
+        A = []
+        numElem = Int[]
+        ff = 0
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                for j in 1:length(elemTags[i])
+                    vec1 = zeros(3numNodes, nsteps)
+                    elem = elemTags[i][j]
+                    push!(numElem, elem)
+                    for k in 1:numNodes
+                        nodeTag = elemNodeTags[i][(j-1)*numNodes+k]
+                        coord, parametricCoord, dim, tag = gmsh.model.mesh.getNode(nodeTag)
+                        x = coord[1]
+                        y = coord[2]
+                        z = coord[3]
+                        vec1[3k-2:3k] = func(x, y, z)
+                    end
+                    push!(A, vec1)
+                end
+            end
+        end
+        a = [;;]
+        t = [0.0]
+        return new(A, a, t, numElem, nsteps, type, problem)
     end
 end
 

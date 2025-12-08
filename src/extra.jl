@@ -13,6 +13,20 @@ function showGapThickness(phName; name=phName, visible=false)
     ret2 = []
     ret3 = []
     ret4 = []
+    c = 0
+    for idm in 1:length(dimTags)
+        dimTag = dimTags[idm]
+        edim = dimTag[1]
+        etag = dimTag[2]
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+        @inbounds for i in 1:length(elemTags)
+            c += length(elemTags[i])
+        end
+    end
+    sizehint!(ret2, c)
+    sizehint!(ret3, c)
+    sizehint!(ret4, c)
+
     el2 = 0
     el3 = 0
     el4 = 0
@@ -25,9 +39,9 @@ function showGapThickness(phName; name=phName, visible=false)
             et = elemTypes[i]
             elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
             nn = zeros(numPrimaryNodes * 4)
-            for j in 1:length(elemTags[i])
-                elem = elemTags[i][j]
-                for l in 1:numPrimaryNodes
+            @inbounds for j in 1:length(elemTags[i])
+                #elem = elemTags[i][j]
+                @inbounds for l in 1:numPrimaryNodes
                     for k in 1:2
                         nn[k*numPrimaryNodes-numPrimaryNodes + l] = ncoord2[elemNodeTags[i][j*numNodes-(numNodes-l)]*3-(3-k)]
                     end
@@ -80,6 +94,21 @@ function flowRate(name::String; q=0)
 end
 
 function initialize(problem::Problem)
+    fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0, -1, 1, false, -1, [], [], [], 2)[1][1] - z # az alsó felületnek síknak kell lennie!
+    fdhdx(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0, -1, 1, true, -1, [], [], [], 2)[1][1]
+    h = scalarField(problem, problem.material[1].phName, fh)
+    dhdx = scalarField(problem, problem.material[1].phName, fdhdx)
+
+    #grad_h = ∇(h)
+    #ex = VectorField(problem, problem.material[1].phName, [1,0,0])
+    #dhdx = grad_h * ex
+    problem.geometry.h = h
+    #problem.geometry.dhdx = elementsToNodes(dhdx)
+    problem.geometry.dhdx = dhdx
+    gmsh.view.remove(problem.geometry.tagTop)
+end
+
+function initialize_old(problem::Problem)
     h0 = ScalarField(problem, problem.geometry.nameGap, (x, y, z) -> z)
     tag = getTagForPhysicalName(problem.material[1].phName)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(problem.dim, tag)
