@@ -12,6 +12,7 @@ export plotOnPath, showOnSurface
 export openPreProcessor, openPostProcessor, setParameter, setParameters
 export probe
 export saveField, loadField, isSaved
+export ∂x, ∂y, ∂z
 
 """
     Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
@@ -474,6 +475,44 @@ struct VectorField <: AbstractField
     function VectorField(A0, a0, t0, numElem0, nsteps0, type0, model)
         return new(A0, a0, t0, numElem0, nsteps0, type0, model)
     end
+    function VectorField(comps::Vector{ScalarField})
+        s1 = nodesToElements(comps[1])
+        s2 = nodesToElements(comps[2])
+        s3 = nodesToElements(comps[3])
+        comps1 = [s1, s2, s3]
+        n = length(comps1)
+        @assert n == 3 "VectorField must have exactly 3 scalar components."
+
+        # check same problem
+        prob = comps1[1].model
+        for s in comps1
+            @assert s.model === prob "All scalar fields must belong to the same problem."
+        end
+
+        # check element ordering
+        elems = comps1[1].numElem
+        nsteps = comps1[1].nsteps
+        for s in comps1
+            @assert s.numElem == elems "ScalarField element numbering mismatch."
+            @assert s.nsteps == nsteps "ScalarField time steps mismatch."
+        end
+
+        @disp comps1[1]
+        @disp s1
+
+        # assemble elementwise vector field
+        ε0 = Vector{Matrix{Float64}}(undef, length(elems))
+        #ε = zeros(Matrix{Float64}, length(elems))
+        for i in 1:length(elems)
+            # comps1[j].a[i] is a (numNodes × nsteps) matrix
+            blocks = [comps1[j].A[i] for j in 1:3]
+            ε0[i] = vcat(blocks...)   # 3*numNodes × nsteps
+        end
+        @disp ε0
+
+        a = [;;]
+        return new(copy(ε0), a, comps1[1].t, elems, comps1[1].nsteps, :v3D, prob)
+    end
     function VectorField(problem::Problem, dataField)
         if !isa(dataField, Vector)
             error("VectorField: dataField are not arranged in a vector. Put them in [...]")
@@ -818,6 +857,130 @@ function Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
         display(M.A)
     end
 end
+
+function ∂(rr::ScalarField, dir::Int)
+    problem = rr.model
+    gmsh.model.setCurrent(problem.name)
+
+    @assert dir ∈ 1:3 "d(rr,dir): dir must be 1 (x), 2 (y), or 3 (z)."
+
+    # ha nodális tér, konvertáljuk elemisre
+    r = rr.a == [;;] ? elementsToNodes(rr) : rr
+    nsteps = r.nsteps
+
+    # globális node koordináták gyors elérése
+    nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+    non = problem.non
+
+    ncoord2 = zeros(3 * non)
+    @inbounds begin
+        ncoord2[nodeTags .* 3 .- 2] = ncoord[1:3:end]
+        ncoord2[nodeTags .* 3 .- 1] = ncoord[2:3:end]
+        ncoord2[nodeTags .* 3 .- 0] = ncoord[3:3:end]
+    end
+
+    ε = Vector{Matrix{Float64}}()    # elemi eredmények
+    numElem = Int[]                  # elem azonosítók
+
+    # anyagcsoportok végigjárása
+    for ipg in 0:length(problem.material)
+        phName = ""
+        if ipg == 0
+            if rr.model.geometry.nameVolume ≠ ""
+                phName = rr.model.geometry.nameVolume
+            else
+                continue
+            end
+        else
+            phName = problem.material[ipg].phName
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        @inbounds for (edim, etag) in dimTags
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            @inbounds for it in 1:length(elemTypes)
+                et = Int(elemTypes[it])
+
+                # elem adatok cache-ből
+                dim_et, numNodes, nodeCoord = _get_props_cached(et)
+                ∇h_all, h_all = _get_basis_cached(et, nodeCoord, numNodes)
+
+                # munkatömbök
+                invJac = Matrix{Float64}(undef, 3, 3*numNodes)
+                ∂h    = Matrix{Float64}(undef, 1, numNodes*numNodes)  # ∂/∂dir
+                nn2   = Vector{Int}(undef, numNodes)
+                nnet  = Matrix{Int}(undef, length(elemTags[it]), numNodes)
+
+                dim_et = 3
+                # elem ciklus
+                for j in 1:length(elemTags[it])
+                    elem = elemTags[it][j]
+
+                    # node tags → gyors index
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[it][(j-1)*numNodes + k]
+                    end
+
+                    # Jacobian
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+
+                    # invJac minden lokális csomópontra
+                    for k in 1:numNodes
+                        Jk = @view Jac[1:dim_et, (k-1)*3+1 : k*3]
+                        invJk = pinv(Matrix(Jk'))       # stabil
+
+                        fill!(@view(invJac[1:3, 3*k-2:3*k]), 0.0)
+                        @views invJac[1:dim_et, 3*k-2:3*k-3+dim_et] .= invJk
+                    end
+
+                    # --- ∂h = ∂/∂dir (shape-derivált) ---
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        g = @view ∇h_all[(l-1)*3+1 : (l-1)*3+dim_et, k]
+                        Jslice = @view invJac[:, 3*k-2 : 3*k-2+dim_et-1]
+
+                        dphi = (Jslice * g)[dir]   # dir=1,2,3 → x,y,z irány
+                        ∂h[1, (k-1)*numNodes + l] = dphi
+                    end
+
+                    # globális scalar DoF indexek
+                    @inbounds for k in 1:numNodes
+                        nn2[k] = nnet[j, k]        # scalar → csak 1 szabadságfok
+                    end
+
+                    # elem eredmény (numNodes × nsteps)
+                    e = Matrix{Float64}(undef, numNodes, nsteps)
+
+                    @inbounds for k in 1:numNodes
+                        idx = (k-1)*numNodes
+                        for kk in 1:nsteps
+                            s = 0.0
+                            for l in 1:numNodes
+                                s += ∂h[1, idx + l] * r.a[nn2[l], kk]
+                            end
+                            e[k, kk] = s
+                        end
+                    end
+
+                    push!(ε, e)
+                    push!(numElem, elem)
+                end
+            end
+        end
+    end
+
+    return ScalarField(ε, [;;], r.t, numElem, nsteps, :scalar, problem)
+end
+
+∂x(r::ScalarField) = ∂(r, 1)
+∂y(r::ScalarField) = ∂(r, 2)
+∂z(r::ScalarField) = ∂(r, 3)
+
+
 
 """
     CoordinateSystem(vec1, vec2)
@@ -2317,6 +2480,7 @@ isNodal(strain_field)         # returns false
 ```
 """
 function isNodal(a::Union{ScalarField,VectorField,TensorField})
+    return !(a.a == [;;])
     if a.a != [;;] && a.A == []
         return true
     elseif a.a == [;;] && a.A != []
@@ -2341,6 +2505,7 @@ isElementwise(strain_field)         # returns true
 ```
 """
 function isElementwise(a::Union{ScalarField,VectorField,TensorField})
+    return !(a.A == [])
     if a.a == [;;] && a.A != []
         return true
     elseif a.a != [;;] && a.A == []

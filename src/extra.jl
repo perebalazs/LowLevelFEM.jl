@@ -99,11 +99,8 @@ function initialize(problem::Problem)
     h = scalarField(problem, problem.material[1].phName, fh)
     dhdx = scalarField(problem, problem.material[1].phName, fdhdx)
 
-    #grad_h = ∇(h)
-    #ex = VectorField(problem, problem.material[1].phName, [1,0,0])
-    #dhdx = grad_h * ex
+    #dhdx = elementsToNodes(∂x(h))
     problem.geometry.h = h
-    #problem.geometry.dhdx = elementsToNodes(dhdx)
     problem.geometry.dhdx = dhdx
     gmsh.view.remove(problem.geometry.tagTop)
 end

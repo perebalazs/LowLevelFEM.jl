@@ -928,6 +928,121 @@ function grad_xy(rr::ScalarField)
     return VectorField(ε, [;;], r.t, numElem, nsteps, :v2D, problem)
 end
 
+function dx(rr::ScalarField)
+    problem = rr.model
+    gmsh.model.setCurrent(problem.name)
+
+    # ha nodális tér, konvertáljuk elemisre
+    r = rr.a == [;;] ? elementsToNodes(rr) : rr
+    nsteps = r.nsteps
+
+    # globális node koordináták gyors elérése
+    nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+    non = problem.non
+
+    ncoord2 = zeros(3 * non)
+    @inbounds begin
+        ncoord2[nodeTags .* 3 .- 2] = ncoord[1:3:end]
+        ncoord2[nodeTags .* 3 .- 1] = ncoord[2:3:end]
+        ncoord2[nodeTags .* 3 .- 0] = ncoord[3:3:end]
+    end
+
+    ε = Vector{Matrix{Float64}}()    # elemi eredmények
+    numElem = Int[]                  # elem azonosítók
+
+    # anyagcsoportok végigjárása
+    for ipg in 0:length(problem.material)
+        phName = ""
+        if ipg == 0
+            if rr.model.geometry.nameVolume ≠ ""
+                phName = rr.model.geometry.nameVolume
+            else
+                continue
+            end
+        else
+            phName = problem.material[ipg].phName
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        @inbounds for (edim, etag) in dimTags
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            @inbounds for it in 1:length(elemTypes)
+                et = Int(elemTypes[it])
+
+                # elem adatok cache-ből
+                dim_et, numNodes, nodeCoord = _get_props_cached(et)
+                ∇h_all, h_all = _get_basis_cached(et, nodeCoord, numNodes)
+
+                # munkaváltozók
+                invJac = Matrix{Float64}(undef, 3, 3*numNodes)
+                ∂h    = Matrix{Float64}(undef, 1, numNodes*numNodes)  # csak ∂/∂x
+                nn2   = Vector{Int}(undef, numNodes)                   # scalar → 1 DoF/node
+                nnet  = Matrix{Int}(undef, length(elemTags[it]), numNodes)
+
+                # elem ciklus
+                for j in 1:length(elemTags[it])
+                    elem = elemTags[it][j]
+
+                    # node tags → gyors index
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[it][(j-1)*numNodes + k]
+                    end
+
+                    # Jacobian
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+
+                    # invJac minden lokális csomópontra
+                    for k in 1:numNodes
+                        Jk = @view Jac[1:dim_et, (k-1)*3+1 : k*3]
+                        invJk = pinv(Matrix(Jk'))        # stabil
+
+                        fill!(@view(invJac[1:3, 3*k-2:3*k]), 0.0)
+                        @views invJac[1:dim_et, 3*k-2:3*k-3+dim_et] .= invJk
+                    end
+
+                    # ∂h = ∂/∂x shape-deriváltak
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        g = @view ∇h_all[(l-1)*3+1 : (l-1)*3+dim_et, k]
+                        Jslice = @view invJac[:, 3*k-2 : 3*k-2+dim_et-1]
+
+                        dphidx = (Jslice * g)[1]   # CSAK ∂/∂x
+                        ∂h[1, (k-1)*numNodes + l] = dphidx
+                    end
+
+                    # globális scalar DoF indexek
+                    @inbounds for k in 1:numNodes
+                        nn2[k] = nnet[j, k]        # scalar → csak 1 szabadságfok
+                    end
+
+                    # elem eredmény (numNodes × nsteps)
+                    e = Matrix{Float64}(undef, numNodes, nsteps)
+
+                    @inbounds for k in 1:numNodes
+                        idx = (k-1)*numNodes
+                        for kk in 1:nsteps
+                            s = 0.0
+                            for l in 1:numNodes
+                                s += ∂h[1, idx + l] * r.a[nn2[l], kk]
+                            end
+                            e[k, kk] = s
+                        end
+                    end
+
+                    push!(ε, e)
+                    push!(numElem, elem)
+                end
+            end
+        end
+    end
+
+    return ScalarField(ε, [;;], r.t, numElem, nsteps, :scalar, problem)
+end
+
 """
     tangentMatrixConstitutive(r::VectorField)
 
