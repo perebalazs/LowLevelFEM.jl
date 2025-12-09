@@ -371,7 +371,6 @@ struct ScalarField <: AbstractField
 
     return ScalarField(A, [;;], [0.0], numElem, nsteps, type, problem)
 end
-#=
 function ScalarField(problem, dataField)
         if !isa(dataField, Vector)
             error("ScalarField: dataField are not arranged in a vector. Put them in [...]")
@@ -423,7 +422,6 @@ function ScalarField(problem, dataField)
         t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
     end
-    =#
     function ScalarField(problem::Problem, phName::String, data::Union{Number,Function})
         f = field(phName, f=data)
         return ScalarField(problem, [f])
@@ -434,6 +432,7 @@ end
     VectorField(A, a, t, numElem, nsteps, type, model)
     VectorField(problem, dataField)
     VectorField(problem::Problem, phName::String, data::Vector)
+    VectorField(Vector{ScalarField})
 
 Structure containing the data of a vector field (e.g., displacement or heat flux).
 - A: vector of element-wise vector data
@@ -631,6 +630,7 @@ end
     TensorField(A, a, t, numElem, nsteps, type, model)
     TensorField(problem, dataField)
     TensorField(problem::Problem, phName::String, data::Matrix)
+    TensorField(Matrix{ScalarField})
 
 Structure containing the data of a tensor field (e.g., stress or strain).
 - A: tensor of element-wise tensor data
@@ -797,39 +797,44 @@ struct TensorField <: AbstractField
             error("TensorField: size of data is $(size(data)).")
         end
     end
+    function TensorField(comps::Matrix{ScalarField})
+        @assert size(comps) == (3,3) "TensorField requires a 3×3 matrix of ScalarFields."
+   
+        # --- 1) Konvertálás elementwise alakra (nodesToElements) ---
+        comps2 = Matrix{ScalarField}(undef, 3, 3)
+        for i in 1:3, j in 1:3
+            comps2[i,j] = nodesToElements(comps[i,j])
+        end
+   
+        # --- 2) Ellenőrzés: minden komponens ugyanahhoz a problémához tartozik ---
+        prob   = comps2[1,1].model
+        numElem = comps2[1,1].numElem
+        nsteps = comps2[1,1].nsteps
+        t      = comps2[1,1].t
+   
+        for i in 1:3, j in 1:3
+            s = comps2[i,j]
+            @assert s.model === prob        "TensorField: ScalarFields must share same Problem."
+            @assert s.numElem == numElem    "TensorField: element list mismatch."
+            @assert s.nsteps  == nsteps     "TensorField: time step mismatch."
+        end
+   
+        # --- 3) Elemwise tensor összeállítása ---
+        A = Vector{Matrix{Float64}}(undef, length(numElem))
+   
+        for e in 1:length(numElem)
+            blocks = Matrix{Float64}[]
+            # 9 komponens 3×3 mátrixból sorfolytonosan
+            for i in 1:3, j in 1:3
+                push!(blocks, comps2[i,j].A[e])
+            end
+            A[e] = vcat(blocks...)   # méret: (9*numNodes × nsteps)
+        end
+   
+        # --- 4) TensorField visszaadása ---
+        return TensorField(A, [;;], t, numElem, nsteps, :tensor, prob)
+    end
 end
-
-#=
-"""
-TensorField(A, a, t, numElem, nsteps, type, model)
-
-Structure containing the data of a tensor field (e.g., stress or strain).
-- A: vector of element-wise tensor data
-- a: matrix of nodal values of the tensor field
-- numElem: vector of element tags
-- nsteps: number of time steps stored in `A` (for animations)
-- type: type of data (e.g., `:s`, `:e`)
-- model: associated `Problem`
-
-Types:
-- `A`: Vector{Matrix{Float64}}
-- `a`: Matrix{Float64}
-- `t`: Vector{Float64}
-- `numElem`: Vector{Integer}
-- `nsteps`: Integer
-- `type`: Symbol
-- `model`: Problem
-"""
-struct TensorField <: AbstractField
-    A::Vector{Matrix{Float64}}
-    a::Matrix{Float64}
-    t::Vector{Float64}
-    numElem::Vector{Int}
-    nsteps::Int
-    type::Symbol
-    model::Problem
-end
-=#
 
 function copy(A::AbstractField)
     T = typeof(A)
@@ -858,8 +863,31 @@ function Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
     end
 end
 
+"""
+    ∂(r::ScalarField, dir::Int) -> ScalarField
+
+Compute the spatial derivative of a scalar field in the global `x`, `y`, or `z`
+direction. The input field may be nodal or elementwise; nodal fields are
+automatically converted to elementwise form using `nodesToElements(r)`.
+
+# Arguments
+- `r::ScalarField`: scalar field to differentiate.
+- `dir::Int`: spatial direction:
+    * `1` → ∂/∂x  
+    * `2` → ∂/∂y  
+    * `3` → ∂/∂z
+
+# Returns
+A new `ScalarField` in **elementwise representation**, containing  
+the gradient component ∂r/∂(dir) at all nodes of each element.
+
+# Notes
+- Works for 1D, 2D, and 3D meshes.
+- Uses the element Jacobian and shape-function derivatives in global coordinates.
+- The global problem mesh is accessed via `r.model`.
+"""
 function ∂(r::ScalarField, dir::Int)
-    @info "∂: nodal"
+    #@info "∂: nodal"
     problem = r.model
     gmsh.model.setCurrent(problem.name)
 
@@ -977,21 +1005,50 @@ function ∂(r::ScalarField, dir::Int)
     return ScalarField(ε, [;;], r.t, numElem, nsteps, :scalar, problem)
 end
 
+"""
+    ∂e(r::ScalarField, dir::Int) -> ScalarField
+
+Compute the spatial derivative of an **elementwise** scalar field purely at the
+element level, without nodal conversion. This avoids mixing contributions from
+neighboring elements and is suitable for discontinuous fields or post-processing
+of elementwise quantities.
+
+# Arguments
+- `r::ScalarField`: must already be elementwise (`isElementwise(r) == true`).
+- `dir::Int`: spatial direction (1 → x, 2 → y, 3 → z).
+
+# Returns
+An elementwise `ScalarField` containing the derivative ∂r/∂(dir) at the local
+nodes of each element.
+
+# Notes
+- Uses the element-local Jacobian per integration point.
+- Safer for interfaces or discontinuities than nodal differentiation.
+- Only elementwise → elementwise transformations are performed.
+"""
 function ∂e(rr::ScalarField, dir::Int)
-    @info "∂: elementwise"
+    #@info "∂e: elementwise scalar derivative"
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
 
-    @assert dir ∈ 1:3 "d(rr,dir): dir must be 1 (x), 2 (y), or 3 (z)."
+    dim = problem.dim              # 1, 2 vagy 3
+    @assert 1 ≤ dir ≤ dim "∂e(rr,dir): dir must be between 1 and problem.dim."
 
-    # --- IMPORTANT: rr must already be elementwise ---
-    @assert rr.A != [] "Elementwise derivative: rr must be elementwise ScalarField (A ≠ [])."
+    # elementwise scalar field kell
+    @assert rr.A != [] "∂e: rr must be elementwise ScalarField (A ≠ [])."
 
     nsteps = rr.nsteps
-    ε = Vector{Matrix{Float64}}()     # element results
-    numElem = Int[]
 
-    # --- iterate physical groups ---
+    # elemTag → index in rr.A / rr.numElem
+    elem_index = Dict{Int,Int}()
+    @inbounds for (i, e) in enumerate(rr.numElem)
+        elem_index[e] = i
+    end
+
+    ε       = Vector{Matrix{Float64}}()  # elementwise results
+    numElem = Int[]                      # elemTags az eredményhez
+
+    # --- iterate physical groups (ugyanúgy, mint a többi függvényben) ---
     for ipg in 0:length(problem.material)
         phName =
             ipg == 0 ?
@@ -1015,53 +1072,66 @@ function ∂e(rr::ScalarField, dir::Int)
                 dim_et, numNodes, nodeCoord = _get_props_cached(et)
                 ∇h_all, h_all = _get_basis_cached(et, nodeCoord, numNodes)
 
-                # work buffers
-                invJac = Matrix{Float64}(undef, 3, 3*numNodes)
-                ∂h = Matrix{Float64}(undef, 1, numNodes*numNodes)   # ∂/∂dir
-                nnet = Matrix{Int}(undef, length(elemTags[it]), numNodes)
+                # csak olyan elemtípussal foglalkozzunk, ahol az rr-ben van elem
+                # (elem_index úgyis szűr, itt nem muszáj, de nem árt)
 
-                dim_et = 3
-                # element loop
-                for j in 1:length(elemTags[it])
+                # invJac: dim × (dim_et * numNodes) – minden csomóponthoz egy dim×dim_et blokk
+                invJac = Matrix{Float64}(undef, dim, dim_et * numNodes)
+                ∂h     = Matrix{Float64}(undef, 1, numNodes * numNodes)   # csak a kiválasztott dir komponens
+
+                # elem ciklus
+                @inbounds for j in 1:length(elemTags[it])
                     elem = elemTags[it][j]
 
-                    # local→global node tags
-                    @inbounds for k in 1:numNodes
-                        nnet[j,k] = elemNodeTags[it][(j-1)*numNodes + k]
+                    # csak azok az elemek, amelyekhez rr-ben tényleg van adat
+                    eidx = get(elem_index, elem, 0)
+                    if eidx == 0
+                        continue
                     end
 
-                    # Jacobians
+                    # Jacobianok az elem csomópontjain
                     jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
-                    Jac = reshape(jac, 3, :)
+                    Jac = reshape(jac, 3, :)   # gmsh mindig 3 sorral jön, de csak 1..dim kell
 
-                    # invJac blocks
-                    for k in 1:numNodes
-                        Jk = @view Jac[1:dim_et, (k-1)*3+1:k*3]
-                        invJk = pinv(Matrix(Jk'))
+                    # invJac blokkok minden lokális csomópontra
+                    @inbounds for k in 1:numNodes
+                        # Jk: dim × dim_et
+                        Jk = @view Jac[1:dim, (k-1)*3+1 : (k-1)*3+dim_et]
+                        invJk = pinv(Matrix(Jk'))   # dim_et × dim  →  dim × dim_et
 
-                        fill!(@view(invJac[:, 3*k-2:3*k]), 0.0)
-                        @views invJac[1:dim_et, 3*k-2:3*k-3+dim_et] .= invJk
+                        @views invJac[:, (k-1)*dim_et+1 : k*dim_et] .= invJk
                     end
 
-                    # compute ∂h = ∂φ_l/∂dir
+                    # ∂h = ∂φ_l/∂x_dir globális koordinátákban
                     fill!(∂h, 0.0)
                     @inbounds for k in 1:numNodes, l in 1:numNodes
-                        g = @view ∇h_all[(l-1)*3+1 : (l-1)*3+dim_et, k]      # local grad
-                        Jslice = @view invJac[:, 3*k-2 : 3*k-2+dim_et-1]    # spatial map
-                        dphi = (Jslice * g)[dir]                            # pick dir
+                        # lokális grad (dim_et komponens)
+                        g = @view ∇h_all[(l-1)*3+1 : (l-1)*3+dim_et, k]
+
+                        # dim × dim_et blokk a k-adik csomópontnál
+                        Jslice = @view invJac[:, (k-1)*dim_et+1 : k*dim_et]
+
+                        # globális grad (dim komponens) → ebből választjuk a dir-ediket
+                        dphi_vec = Jslice * g
+                        dphi = dphi_vec[dir]
+
                         ∂h[1, (k-1)*numNodes + l] = dphi
                     end
 
-                    # element result: numNodes × nsteps
+                    # csomóponti értékek ezen az elemen (numNodes × nsteps)
+                    vals = rr.A[eidx]
+                    @assert size(vals, 1) == numNodes "∂e: numNodes mismatch with rr.A."
+
+                    # elem eredmény: numNodes × nsteps
                     e = Matrix{Float64}(undef, numNodes, nsteps)
 
-                    # accumulate ∑ ∂φ_l * value_l
+                    # ∑_l ∂φ_l * value_l
                     @inbounds for k in 1:numNodes
                         idx = (k-1)*numNodes
                         for kk in 1:nsteps
                             s = 0.0
                             for l in 1:numNodes
-                                s += ∂h[1, idx + l] * rr.A[j][l, kk]
+                                s += ∂h[1, idx + l] * vals[l, kk]
                             end
                             e[k, kk] = s
                         end
@@ -1081,7 +1151,185 @@ end
 ∂y(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 2)
 ∂z(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 3)
 
+"""
+    v[k] -> ScalarField
 
+Extract the k-th component (1,2,3) of a `VectorField` as a `ScalarField`.
+
+# Arguments
+- `k::Int`: component index (1 → x, 2 → y, 3 → z).
+
+# Returns
+A `ScalarField` in the same representation as the parent field (elementwise or nodal).
+
+# Errors
+Raises an error for any non-scalar indexing:
+- `v[1:2]`    → ERROR  
+- `v[[1,3]]`  → ERROR  
+- `v[:]`      → ERROR
+
+Only single-component extraction `v[k]` is allowed.
+"""
+function Base.getindex(v::VectorField, k::Int)
+    @assert 1 ≤ k ≤ 3 "VectorField has exactly 3 components. Use v[1], v[2], v[3]."
+
+    # ha elementwise mező
+    if v.A != []
+        numElem = length(v.A)
+        numNodes = size(v.A[1], 1) ÷ 3   # 3 komponens miatt
+        nsteps = v.nsteps
+
+        Aout = Vector{Matrix{Float64}}(undef, numElem)
+
+        @inbounds for i in 1:numElem
+            Ai = v.A[i]
+            rows = (k-1)*numNodes + 1 : k*numNodes
+            Aout[i] = Ai[rows, :]
+        end
+
+        return ScalarField(Aout, [;;], v.t, v.numElem, v.nsteps, :scalar, v.model)
+    end
+
+    # ha nodal mező
+    if v.a != [;;]
+        numNodes = size(v.a, 1) ÷ 3
+        rows = (k-1)*numNodes + 1 : k*numNodes
+        aout = v.a[rows, :]
+
+        return ScalarField([;;], aout, v.t, v.numElem, v.nsteps, :scalar, v.model)
+    end
+
+    error("VectorField: no data found in A or a.")
+end
+
+"""
+    T[i,j] -> ScalarField
+
+Extract a single tensor component (i,j) from a 3×3 `TensorField`.
+
+# Arguments
+- `i::Int`, `j::Int`: tensor indices in 1:3.
+
+# Returns
+A `ScalarField` corresponding to component Tᵢⱼ.
+
+# Notes
+Block extraction is done elementwise or nodally depending on the representation
+of `T`.
+
+# Errors
+Raises an error if i or j is outside 1:3.
+"""
+function Base.getindex(T::TensorField, i::Int, j::Int)
+    @assert 1 ≤ i ≤ 3 && 1 ≤ j ≤ 3 "TensorField indexing must be T[i,j], with i,j ∈ 1:3"
+
+    block = (i-1)*3 + j   # which tensor component
+    # --- elementwise ---
+    if T.A != []
+        numElem  = length(T.A)
+        numNodes = size(T.A[1], 1) ÷ 9     # 9 tensor components
+        Aout = Vector{Matrix{Float64}}(undef, numElem)
+
+        @inbounds for e in 1:numElem
+            Ae = T.A[e]
+            rows = (block-1)*numNodes + 1 : block*numNodes
+            Aout[e] = Ae[rows, :]
+        end
+
+        return ScalarField(Aout, [;;], T.t, T.numElem, T.nsteps, :scalar, T.model)
+    end
+
+    # --- nodal ---
+    if T.a != [;;]
+        numNodes = size(T.a, 1) ÷ 9
+        rows     = (block-1)*numNodes + 1 : block*numNodes
+        aout     = T.a[rows, :]
+
+        return ScalarField([;;], aout, T.t, T.numElem, T.nsteps, :scalar, T.model)
+    end
+
+    error("TensorField: no data in A or a.")
+end
+
+"""
+    T[i,:] -> VectorField
+
+Extract the i-th row of a 3×3 `TensorField` as a 3-component `VectorField`.
+
+Equivalent to: [T[i,1], T[i,2], T[i,3]]
+
+# Arguments
+- `i::Int`: row index (1 ≤ i ≤ 3).
+
+# Returns
+A `VectorField` of size 3.
+
+# Notes
+Colon indexing is required; `T[i]` is not allowed.
+"""
+function Base.getindex(T::TensorField, i::Int, ::Colon)
+    @assert 1 ≤ i ≤ 3 "TensorField row index must be 1..3"
+
+    comps = ScalarField[]
+    for j in 1:3
+        push!(comps, T[i,j])   # already returns ScalarField
+    end
+    return VectorField(comps)
+end
+
+"""
+    T[:,j] -> VectorField
+
+Extract the j-th column of a 3×3 `TensorField` as a 3-component `VectorField`.
+
+Equivalent to: [T[1,j], T[2,j], T[3,j]]
+
+# Arguments
+- `j::Int`: column index (1 ≤ j ≤ 3).
+
+# Returns
+A `VectorField` of size 3.
+
+# Notes
+Colon indexing is required; `T[j]` is not allowed.
+"""
+function Base.getindex(T::TensorField, ::Colon, j::Int)
+    @assert 1 ≤ j ≤ 3 "TensorField column index must be 1..3"
+
+    comps = ScalarField[]
+    for i in 1:3
+        push!(comps, T[i,j])
+    end
+    return VectorField(comps)
+end
+
+"""
+Invalid index pattern for `TensorField`.
+
+Allowed:
+- `T[i,j]`    → ScalarField
+- `T[i,:]`    → VectorField (row)
+- `T[:,j]`    → VectorField (column)
+
+Not allowed:
+- `T[i]`
+- `T[:]`
+- `T[1:2,1]`
+- `T[:, :]`
+- `T[[1,3],2]`
+"""
+function Base.getindex(T::TensorField, I...)
+    error("""
+    Invalid TensorField indexing.
+
+    Allowed:
+      T[i,j]    → ScalarField
+      T[i,:]    → VectorField (row)
+      T[:,j]    → VectorField (column)
+
+    Everything else is invalid.
+    """)
+end
 
 """
     CoordinateSystem(vec1, vec2)

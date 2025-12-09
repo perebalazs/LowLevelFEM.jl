@@ -26,7 +26,7 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-#=
+
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
@@ -53,6 +53,7 @@ export probe_field
         solveStress(q)
         solveStress(q, DoFResults=true)
         solveStress(q, T=T, DoFResults=true)
+        solvePressure(prob, [], [], 0.0; cav=false, periodicSlave="", periodicMaster="")
 
         tsteps = [1.0]
         sfA = ScalarField([reshape(collect(1.0:3.0), 3, 1)], [;;], tsteps, [1], 1, :scalar, prob)
@@ -110,5 +111,5 @@ export probe_field
         _ = log(tfA)
     end
 end
-=#
+
 end #module
