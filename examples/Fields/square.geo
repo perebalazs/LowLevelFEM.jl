@@ -1,0 +1,8 @@
+//+
+SetFactory("OpenCASCADE");
+//+
+Rectangle(1) = {0, 0, 0, 1, 1, 0};
+//+
+Mesh 2;
+//+
+Physical Surface("surf", 5) = {1};

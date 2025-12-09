@@ -497,8 +497,8 @@ struct VectorField <: AbstractField
             @assert s.nsteps == nsteps "ScalarField time steps mismatch."
         end
 
-        @disp comps1[1]
-        @disp s1
+        #@disp comps1[1]
+        #@disp s1
 
         # assemble elementwise vector field
         ε0 = Vector{Matrix{Float64}}(undef, length(elems))
@@ -508,7 +508,7 @@ struct VectorField <: AbstractField
             blocks = [comps1[j].A[i] for j in 1:3]
             ε0[i] = vcat(blocks...)   # 3*numNodes × nsteps
         end
-        @disp ε0
+        #@disp ε0
 
         a = [;;]
         return new(copy(ε0), a, comps1[1].t, elems, comps1[1].nsteps, :v3D, prob)
@@ -858,14 +858,15 @@ function Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
     end
 end
 
-function ∂(rr::ScalarField, dir::Int)
-    problem = rr.model
+function ∂(r::ScalarField, dir::Int)
+    @info "∂: nodal"
+    problem = r.model
     gmsh.model.setCurrent(problem.name)
 
-    @assert dir ∈ 1:3 "d(rr,dir): dir must be 1 (x), 2 (y), or 3 (z)."
+    @assert dir ∈ 1:3 "d(r,dir): dir must be 1 (x), 2 (y), or 3 (z)."
 
     # ha nodális tér, konvertáljuk elemisre
-    r = rr.a == [;;] ? elementsToNodes(rr) : rr
+    #r = rr.a == [;;] ? elementsToNodes(rr) : rr
     nsteps = r.nsteps
 
     # globális node koordináták gyors elérése
@@ -886,8 +887,8 @@ function ∂(rr::ScalarField, dir::Int)
     for ipg in 0:length(problem.material)
         phName = ""
         if ipg == 0
-            if rr.model.geometry.nameVolume ≠ ""
-                phName = rr.model.geometry.nameVolume
+            if r.model.geometry.nameVolume ≠ ""
+                phName = r.model.geometry.nameVolume
             else
                 continue
             end
@@ -976,9 +977,109 @@ function ∂(rr::ScalarField, dir::Int)
     return ScalarField(ε, [;;], r.t, numElem, nsteps, :scalar, problem)
 end
 
-∂x(r::ScalarField) = ∂(r, 1)
-∂y(r::ScalarField) = ∂(r, 2)
-∂z(r::ScalarField) = ∂(r, 3)
+function ∂e(rr::ScalarField, dir::Int)
+    @info "∂: elementwise"
+    problem = rr.model
+    gmsh.model.setCurrent(problem.name)
+
+    @assert dir ∈ 1:3 "d(rr,dir): dir must be 1 (x), 2 (y), or 3 (z)."
+
+    # --- IMPORTANT: rr must already be elementwise ---
+    @assert rr.A != [] "Elementwise derivative: rr must be elementwise ScalarField (A ≠ [])."
+
+    nsteps = rr.nsteps
+    ε = Vector{Matrix{Float64}}()     # element results
+    numElem = Int[]
+
+    # --- iterate physical groups ---
+    for ipg in 0:length(problem.material)
+        phName =
+            ipg == 0 ?
+                (rr.model.geometry.nameVolume ≠ "" ? rr.model.geometry.nameVolume : "") :
+                problem.material[ipg].phName
+
+        if phName == ""
+            continue
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        @inbounds for (edim, etag) in dimTags
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            @inbounds for it in 1:length(elemTypes)
+                et = Int(elemTypes[it])
+
+                # cached FE data
+                dim_et, numNodes, nodeCoord = _get_props_cached(et)
+                ∇h_all, h_all = _get_basis_cached(et, nodeCoord, numNodes)
+
+                # work buffers
+                invJac = Matrix{Float64}(undef, 3, 3*numNodes)
+                ∂h = Matrix{Float64}(undef, 1, numNodes*numNodes)   # ∂/∂dir
+                nnet = Matrix{Int}(undef, length(elemTags[it]), numNodes)
+
+                dim_et = 3
+                # element loop
+                for j in 1:length(elemTags[it])
+                    elem = elemTags[it][j]
+
+                    # local→global node tags
+                    @inbounds for k in 1:numNodes
+                        nnet[j,k] = elemNodeTags[it][(j-1)*numNodes + k]
+                    end
+
+                    # Jacobians
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+
+                    # invJac blocks
+                    for k in 1:numNodes
+                        Jk = @view Jac[1:dim_et, (k-1)*3+1:k*3]
+                        invJk = pinv(Matrix(Jk'))
+
+                        fill!(@view(invJac[:, 3*k-2:3*k]), 0.0)
+                        @views invJac[1:dim_et, 3*k-2:3*k-3+dim_et] .= invJk
+                    end
+
+                    # compute ∂h = ∂φ_l/∂dir
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        g = @view ∇h_all[(l-1)*3+1 : (l-1)*3+dim_et, k]      # local grad
+                        Jslice = @view invJac[:, 3*k-2 : 3*k-2+dim_et-1]    # spatial map
+                        dphi = (Jslice * g)[dir]                            # pick dir
+                        ∂h[1, (k-1)*numNodes + l] = dphi
+                    end
+
+                    # element result: numNodes × nsteps
+                    e = Matrix{Float64}(undef, numNodes, nsteps)
+
+                    # accumulate ∑ ∂φ_l * value_l
+                    @inbounds for k in 1:numNodes
+                        idx = (k-1)*numNodes
+                        for kk in 1:nsteps
+                            s = 0.0
+                            for l in 1:numNodes
+                                s += ∂h[1, idx + l] * rr.A[j][l, kk]
+                            end
+                            e[k, kk] = s
+                        end
+                    end
+
+                    push!(ε, e)
+                    push!(numElem, elem)
+                end
+            end
+        end
+    end
+
+    return ScalarField(ε, [;;], rr.t, numElem, nsteps, :scalar, problem)
+end
+
+∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
+∂y(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 2)
+∂z(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 3)
 
 
 
