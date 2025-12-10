@@ -1147,6 +1147,84 @@ function ∂e(rr::ScalarField, dir::Int)
     return ScalarField(ε, [;;], rr.t, numElem, nsteps, :scalar, problem)
 end
 
+"""
+    ∂x(r::ScalarField)
+    ∂y(r::ScalarField)
+    ∂z(r::ScalarField)
+
+Compute directional derivatives of a scalar field `r` with respect to the
+global coordinates x, y, or z.
+
+These functions are convenience wrappers that automatically choose between  
+the nodal differentiation (`∂`) and the elementwise differentiation (`∂e`)
+depending on the representation of the input field.
+
+# Dispatch logic
+- If `isNodal(r)` is `true`:  
+    - `∂x(r)` → `∂(r, 1)`  
+    - `∂y(r)` → `∂(r, 2)`  
+    - `∂z(r)` → `∂(r, 3)`  
+- Otherwise (elementwise field):  
+    - `∂x(r)` → `∂e(r, 1)`  
+    - `∂y(r)` → `∂e(r, 2)`  
+    - `∂z(r)` → `∂e(r, 3)`
+
+# Coordinate conventions
+- In **3D**: `(x, y, z)` are the global Cartesian coordinates.
+- In **2D (plane stress/strain)**:  
+  - `∂x` and `∂y` operate in the plane.  
+  - `∂z` is mathematically allowed and returns zero for planar meshes.
+
+# Returns
+A `ScalarField` storing the derivative in **elementwise** representation.
+
+# Examples
+
+## 1) Derivative of a nodal field (automatic nodal→element conversion)
+
+```julia
+s = ScalarField(prob, "vol", (x,y,z) -> x^2 + y)
+
+dxs = ∂x(s)      # computes 2x
+dys = ∂y(s)      # computes 1
+dzs = ∂z(s)      # computes 0
+```
+
+## 2) Derivative of an elementwise field
+
+```julia
+se = elementsToNodes(s) |> r -> ∂e(r, 1)  # manually
+dxs = ∂x(se)                              # same result, auto-detected
+```
+
+## 3) Works on 2D meshes as well
+
+```julia
+s = ScalarField(prob2D, "surf", (x,y,z) -> x - y)
+
+dxs = ∂x(s)      # = 1 everywhere
+dys = ∂y(s)      # = -1 everywhere
+dzs = ∂z(s)      # = zero field (2D mesh)
+```
+
+## 4) Using derivatives to build a gradient vector field
+
+```julia
+s = ScalarField(prob, "vol", (x,y,z) -> sin(x)*y)
+
+gx = ∂x(s)       # y*cos(x)
+gy = ∂y(s)       # sin(x)
+gz = ∂z(s)       # 0
+
+grad_s = VectorField([gx, gy, gz])
+```
+
+# Notes
+
+* The output is always **elementwise**, enabling consistent post-processing.
+* Direction indices follow FEM convention:
+  1 → x, 2 → y, 3 → z.
+"""
 ∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
 ∂y(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 2)
 ∂z(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 3)
@@ -2008,6 +2086,9 @@ function vectorField(problem::Problem, phName::String, data::Vector)
         error("vectorField: size of data is $(size(data)).")
     end
 end
+
+vectorField([s1, s2, s3]) = elementsToNodes(VectorField([s1, s2, s3]))
+tensorField([s11 s12 s13; s21 s22 s23; s31 s32 s33]) = elementsToNodes(TensorField([s11 s12 s13; s21 s22 s23; s31 s32 s33]))
 
 """
     tensorField(problem, dataField; type=...)
