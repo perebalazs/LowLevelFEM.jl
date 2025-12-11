@@ -504,8 +504,13 @@ struct VectorField <: AbstractField
         #ε = zeros(Matrix{Float64}, length(elems))
         for i in 1:length(elems)
             # comps1[j].a[i] is a (numNodes × nsteps) matrix
-            blocks = [comps1[j].A[i] for j in 1:3]
-            ε0[i] = vcat(blocks...)   # 3*numNodes × nsteps
+            #blocks = [comps1[j].A[i] for j in 1:3]
+            block = zeros(size(comps1[1].A[i],1) * 3, size(comps1[1].A[i],2))
+            for l = 1:3
+                block[l:3:end, :] = comps1[l].A[i]
+            end
+            #ε0[i] = vcat(blocks...)   # 3*numNodes × nsteps
+            ε0[i] = block
         end
         #@disp ε0
 
@@ -1226,8 +1231,8 @@ grad_s = VectorField([gx, gy, gz])
   1 → x, 2 → y, 3 → z.
 """
 ∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
-∂y(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 2)
-∂z(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 3)
+∂y(r::ScalarField) = isNodal(r) ? ∂(r, 2) : ∂e(r, 2)
+∂z(r::ScalarField) = isNodal(r) ? ∂(r, 3) : ∂e(r, 3)
 
 """
     v[k] -> ScalarField
@@ -1261,7 +1266,7 @@ function Base.getindex(v::VectorField, k::Int)
 
         @inbounds for i in 1:numElem
             Ai = v.A[i]
-            rows = (k-1)*numNodes + 1 : k*numNodes
+            rows = k:3:3*numNodes
             Aout[i] = Ai[rows, :]
         end
 
@@ -1271,10 +1276,10 @@ function Base.getindex(v::VectorField, k::Int)
     # ha nodal mező
     if v.a != [;;]
         numNodes = size(v.a, 1) ÷ 3
-        rows = (k-1)*numNodes + 1 : k*numNodes
+        rows = k:3:3*numNodes
         aout = v.a[rows, :]
 
-        return ScalarField([;;], aout, v.t, v.numElem, v.nsteps, :scalar, v.model)
+        return ScalarField([], aout, v.t, v.numElem, v.nsteps, :scalar, v.model)
     end
 
     error("VectorField: no data found in A or a.")
@@ -1301,7 +1306,7 @@ Raises an error if i or j is outside 1:3.
 function Base.getindex(T::TensorField, i::Int, j::Int)
     @assert 1 ≤ i ≤ 3 && 1 ≤ j ≤ 3 "TensorField indexing must be T[i,j], with i,j ∈ 1:3"
 
-    block = (i-1)*3 + j   # which tensor component
+    block = (j-1)*3 + i   # which tensor component
     # --- elementwise ---
     if T.A != []
         numElem  = length(T.A)
@@ -1310,7 +1315,7 @@ function Base.getindex(T::TensorField, i::Int, j::Int)
 
         @inbounds for e in 1:numElem
             Ae = T.A[e]
-            rows = (block-1)*numNodes + 1 : block*numNodes
+            rows = block:9:9*numNodes
             Aout[e] = Ae[rows, :]
         end
 
@@ -1320,10 +1325,10 @@ function Base.getindex(T::TensorField, i::Int, j::Int)
     # --- nodal ---
     if T.a != [;;]
         numNodes = size(T.a, 1) ÷ 9
-        rows     = (block-1)*numNodes + 1 : block*numNodes
-        aout     = T.a[rows, :]
+        rows = block:9:9*numNodes
+        aout = T.a[rows, :]
 
-        return ScalarField([;;], aout, T.t, T.numElem, T.nsteps, :scalar, T.model)
+        return ScalarField([], aout, T.t, T.numElem, T.nsteps, :scalar, T.model)
     end
 
     error("TensorField: no data in A or a.")
@@ -1408,6 +1413,206 @@ function Base.getindex(T::TensorField, I...)
     Everything else is invalid.
     """)
 end
+
+"""
+    v[k] = s
+
+Assign a scalar component into a `VectorField`.
+
+This operation overwrites the k-th component (k = 1, 2, 3) of the vector field.
+
+## Requirements
+- `v` must be a `VectorField`
+- `s` must be a `ScalarField`
+- both fields must belong to the **same problem**
+- both must have the **same number of time steps**
+- storage layout must match:
+    - If `v` is **elementwise** (`v.A ≠ []`), then `s` must also be elementwise
+      and must have the same number of elements (`numElem`).
+    - If `v` is **nodal** (`v.a ≠ [;;]`), then `s` must also be nodal and must have
+      the same nodal size.
+
+Only the rows belonging to component `k` are modified.  
+Other components remain unchanged.
+
+## Example
+```julia
+v = VectorField([s1, s2, s3])
+
+v[1] = s4       # overwrite first component
+v[3] = 2s1      # scale and assign into third component
+```
+
+## Errors
+
+An informative error is thrown if:
+
+* k ∉ 1:3
+* the fields belong to different problems
+* storage layouts do not match (nodal vs. elementwise)
+* nodal or element counts differ
+"""
+function Base.setindex!(v::VectorField, s::ScalarField, k::Int)
+    @assert 1 ≤ k ≤ 3 "VectorField has exactly 3 components."
+
+    # check problem consistency
+    @assert s.model === v.model "ScalarField and VectorField belong to different problems."
+    @assert s.nsteps == v.nsteps "Time step mismatch in VectorField assignment."
+
+    # elementwise case
+    if v.A != []
+        @assert s.A != [] "Cannot assign nodal field into elementwise VectorField."
+        @assert length(s.A) == length(v.A) "numElem mismatch in VectorField assignment."
+
+        numNodes = size(v.A[1], 1) ÷ 3
+        @assert size(s.A[1], 1) == numNodes "Node count mismatch in VectorField assignment."
+
+        @inbounds for e in 1:length(v.A)
+            # overwrite only the block belonging to component k
+            rows = k:3:3*numNodes
+            v.A[e][rows, :] .= s.A[e]
+        end
+        return v
+    end
+
+    # nodal case
+    if v.a != [;;]
+        @assert s.a != [;;] "Cannot assign elementwise field into nodal VectorField."
+
+        numNodes = size(v.a, 1) ÷ 3
+        @assert size(s.a, 1) == numNodes "Node count mismatch in VectorField assignment."
+
+        rows = k:3:3*numNodes
+        v.a[rows, :] .= s.a
+        return v
+    end
+
+    error("VectorField: no data to assign into (empty A and a).")
+end
+
+"""
+    T[i, j] = s
+    T[i, :] = v
+    T[:, j] = v
+
+Assign a scalar or vector component into a `TensorField`.
+
+## Supported forms
+
+### 1. Assign scalar component
+`T[i, j] = s`
+
+- Inserts the scalar field `s` into the tensor component `(i, j)`  
+  (with i,j ∈ 1:3).
+- Only the rows of the `(i,j)` block are overwritten.
+
+### 2. Assign row vector
+`T[i, :] = v`
+
+- `v` must be a `VectorField` with 3 components.
+- Replaces the entire i-th tensor row with the components of `v`.
+
+### 3. Assign column vector
+`T[:, j] = v`
+
+- `v` must be a `VectorField`.
+- Replaces the entire j-th tensor column with the components of `v`.
+
+## Requirements
+- Assigned field(s) must belong to the **same problem** as `T`.
+- The number of time steps must match.
+- Storage mode must match:
+    - Elementwise tensor → only elementwise scalar/vector may be assigned.
+    - Nodal tensor → only nodal scalar/vector may be assigned.
+- Element counts or nodal sizes must be identical.
+
+## Examples
+```julia
+# scalar insertion
+T[1,1] = s1
+T[2,3] = s2
+
+# row insertion
+T[1,:] = v1    # v1 is VectorField([s11, s12, s13])
+
+# column insertion
+T[:,3] = v2
+```
+
+## Errors
+
+Errors are thrown when:
+
+* indices are out of bounds
+* shapes do not match (nodal vs elementwise mismatch)
+* component sizes differ
+* attempting unsupported forms like `T[1] = ...` or `T[:, :] = ...`
+"""
+function Base.setindex!(T::TensorField, s::ScalarField, i::Int, j::Int)
+    @assert 1 ≤ i ≤ 3 && 1 ≤ j ≤ 3 "TensorField indexing must be T[i,j] with i,j ∈ 1:3."
+
+    @assert s.model === T.model "TensorField and ScalarField belong to different problems."
+    @assert s.nsteps == T.nsteps "Time step mismatch in TensorField assignment."
+
+    block = (j-1)*3 + i  # component index
+
+    # elementwise
+    if T.A != []
+        @assert s.A != [] "Cannot assign nodal field into elementwise TensorField."
+        @assert length(s.A) == length(T.A) "numElem mismatch in TensorField assignment."
+
+        numNodes = size(T.A[1], 1) ÷ 9
+        @assert size(s.A[1], 1) == numNodes "Node count mismatch in TensorField assignment."
+
+        rows = block : 9 : 9*numNodes
+
+        @inbounds for e in 1:length(T.A)
+            T.A[e][rows, :] .= s.A[e]
+        end
+        return T
+    end
+
+    # nodal
+    if T.a != [;;]
+        @assert s.a != [;;] "Cannot assign elementwise field into nodal TensorField."
+
+        numNodes = size(T.a, 1) ÷ 9
+        @assert size(s.a, 1) == numNodes
+
+        rows = block : 9 : 9*numNodes
+        T.a[rows, :] .= s.a
+        return T
+    end
+
+    error("TensorField: empty storage (A and a both empty).")
+end
+
+function Base.setindex!(T::TensorField, v::VectorField, ::Colon, j::Int)
+    @assert 1 ≤ j ≤ 3 "TensorField column index must be 1..3."
+    @assert v.model === T.model "Model mismatch in TensorField assignment."
+    @assert v.nsteps == T.nsteps "Time step mismatch."
+
+    # expand column assignment
+    for i in 1:3
+        T[i, j] = v[i]   # reuses the ScalarField assignment above
+    end
+
+    return T
+end
+
+function Base.setindex!(T::TensorField, v::VectorField, i::Int, ::Colon)
+    @assert 1 ≤ i ≤ 3 "TensorField row index must be 1..3."
+    @assert v.model === T.model "Model mismatch in TensorField assignment."
+    @assert v.nsteps == T.nsteps "Time step mismatch."
+
+    # expand row assignment
+    for j in 1:3
+        T[i, j] = v[j]   # reuses ScalarField setter
+    end
+
+    return T
+end
+
 
 """
     CoordinateSystem(vec1, vec2)
@@ -2087,8 +2292,8 @@ function vectorField(problem::Problem, phName::String, data::Vector)
     end
 end
 
-vectorField([s1, s2, s3]) = elementsToNodes(VectorField([s1, s2, s3]))
-tensorField([s11 s12 s13; s21 s22 s23; s31 s32 s33]) = elementsToNodes(TensorField([s11 s12 s13; s21 s22 s23; s31 s32 s33]))
+vectorField(sm::Vector{ScalarField}) = elementsToNodes(VectorField([sm[1], sm[2], sm[3]]))
+tensorField(sm) = elementsToNodes(TensorField(sm))
 
 """
     tensorField(problem, dataField; type=...)
