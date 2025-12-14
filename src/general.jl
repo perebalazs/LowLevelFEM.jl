@@ -331,47 +331,57 @@ struct ScalarField <: AbstractField
     function ScalarField(A0, a0, t0, numElem0, nsteps0, type0, model)
         return new(A0, a0, t0, numElem0, nsteps0, type0, model)
     end
-    function ScalarField(problem::Problem, dataField::Vector)
-    gmsh.model.setCurrent(problem.name)
-    nodeTags, coords, _ = gmsh.model.mesh.getNodes()
-    type = :scalar
-    nsteps = 1
-    A = Vector{Matrix{Float64}}()
-    numElem = Int[]
+    function ScalarField(problem::Problem, dataField::Vector; steps=1, tmin=0.0, tmax=tmin+(steps-1))
+        gmsh.model.setCurrent(problem.name)
+        nodeTags, coords, _ = gmsh.model.mesh.getNodes()
+        type = :scalar
+        nsteps = steps
+        t = range(start=tmin, stop=tmax, length=steps)
+        A = Vector{Matrix{Float64}}()
+        numElem = Int[]
 
-    @inbounds for data in dataField
-        phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        @inbounds for data in dataField
+            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
+            dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
-        for (edim, etag) in dimTags
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            @inbounds for (i, et) in enumerate(elemTypes)
-                _, _, _, numNodes, _, _ = gmsh.model.mesh.getElementProperties(et)
-                for (j, elem) in enumerate(elemTags[i])
-                    sc1 = zeros(numNodes, nsteps)
-                    push!(numElem, elem)
-                    if f != :no
-                        for k in 1:numNodes
-                            nodeTag = elemNodeTags[i][(j-1)*numNodes + k]
-                            if f isa Function
-                                x = coords[3*nodeTag - 2]
-                                y = coords[3*nodeTag - 1]
-                                z = coords[3*nodeTag]
-                                sc1[k, 1] = f(x, y, z)
-                            else
-                                sc1[k, 1] = f
+            for (edim, etag) in dimTags
+                elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+                @inbounds for (i, et) in enumerate(elemTypes)
+                    _, _, _, numNodes, _, _ = gmsh.model.mesh.getElementProperties(et)
+                    for (j, elem) in enumerate(elemTags[i])
+                        sc1 = zeros(numNodes, nsteps)
+                        push!(numElem, elem)
+                        if f != :no
+                            for it in 1:steps
+                                for k in 1:numNodes
+                                    nodeTag = elemNodeTags[i][(j-1)*numNodes + k]
+                                    if f isa Function
+                                        x = coords[3*nodeTag - 2]
+                                        y = coords[3*nodeTag - 1]
+                                        z = coords[3*nodeTag]
+                                        if applicable(f,1,2,3,4)
+                                            sc1[k, it] = f(x, y, z, t[it])
+                                        elseif applicable(f,1,2,3)
+                                            sc1[k, it] = f(x, y, z)
+                                        else
+                                            error("ScalarField: function must have 3 or 4 arguments.")
+                                        end
+                                    else
+                                        sc1[k, it] = f
+                                    end
+                                end
                             end
                         end
+                        push!(A, sc1)
                     end
-                    push!(A, sc1)
                 end
             end
         end
-    end
 
-    return ScalarField(A, [;;], [0.0], numElem, nsteps, type, problem)
-end
-function ScalarField(problem, dataField)
+        return ScalarField(A, [;;], t, numElem, nsteps, type, problem)
+    end
+    #=
+    function ScalarField(problem, dataField)
         if !isa(dataField, Vector)
             error("ScalarField: dataField are not arranged in a vector. Put them in [...]")
         end
@@ -422,9 +432,10 @@ function ScalarField(problem, dataField)
         t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
     end
-    function ScalarField(problem::Problem, phName::String, data::Union{Number,Function})
+    =#
+    function ScalarField(problem::Problem, phName::String, data::Union{Number,Function}; steps=1, tmin=0.0, tmax=tmin+(steps-1))
         f = field(phName, f=data)
-        return ScalarField(problem, [f])
+        return ScalarField(problem, [f], steps=steps, tmin=tmin, tmax=tmax)
     end
 end
 
@@ -807,7 +818,7 @@ struct TensorField <: AbstractField
    
         # --- 1) Konvertálás elementwise alakra (nodesToElements) ---
         comps2 = Matrix{ScalarField}(undef, 3, 3)
-        for i in 1:3, j in 1:3
+        @inbounds for i in 1:3, j in 1:3
             comps2[i,j] = nodesToElements(comps[i,j])
         end
    
@@ -817,7 +828,7 @@ struct TensorField <: AbstractField
         nsteps = comps2[1,1].nsteps
         t      = comps2[1,1].t
    
-        for i in 1:3, j in 1:3
+        @inbounds for i in 1:3, j in 1:3
             s = comps2[i,j]
             @assert s.model === prob        "TensorField: ScalarFields must share same Problem."
             @assert s.numElem == numElem    "TensorField: element list mismatch."
@@ -828,12 +839,15 @@ struct TensorField <: AbstractField
         A = Vector{Matrix{Float64}}(undef, length(numElem))
    
         for e in 1:length(numElem)
-            blocks = Matrix{Float64}[]
+            #blocks = Matrix{Float64}[]
+            block = zeros(size(comps2[1].A[e],1) * 9, size(comps2[1].A[e],2))
             # 9 komponens 3×3 mátrixból sorfolytonosan
-            for i in 1:3, j in 1:3
-                push!(blocks, comps2[i,j].A[e])
+            @inbounds for i in 1:3, j in 1:3
+                #push!(blocks, comps2[i,j].A[e])
+                block[(j-1)*3+i:9:end, :] = comps2[i,j].A[e]
             end
-            A[e] = vcat(blocks...)   # méret: (9*numNodes × nsteps)
+            #A[e] = vcat(blocks...)   # méret: (9*numNodes × nsteps)
+            A[e] = block
         end
    
         # --- 4) TensorField visszaadása ---
