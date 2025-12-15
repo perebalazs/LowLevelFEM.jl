@@ -291,6 +291,8 @@ abstract type AbstractField end
     ScalarField(A, a, t, numElem, nsteps, type, model)
     ScalarField(problem, dataField)
     ScalarField(problem::Problem, phName::String, data::Union{Number,Function})
+    ScalarField(problem::Problem, dataField::Vector; steps=1, tmin=0.0, tmax=tmin+(steps-1))
+    ScalarField(s::ScalarField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
 
 Structure containing all data of a scalar field (e.g., temperature).
 - A: vector of element-wise scalar data
@@ -436,6 +438,21 @@ struct ScalarField <: AbstractField
     function ScalarField(problem::Problem, phName::String, data::Union{Number,Function}; steps=1, tmin=0.0, tmax=tmin+(steps-1))
         f = field(phName, f=data)
         return ScalarField(problem, [f], steps=steps, tmin=tmin, tmax=tmax)
+    end
+    function ScalarField(s::ScalarField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
+        if step > s.nsteps || step < 1
+            error("ScalarField: `step` is out of range - 0 < $step < $(s.nsteps)")
+        end
+        A = Vector{Matrix{Float64}}(undef, length(s.numElem))
+        s1 = nodesToElements(s)
+        for j = 1:length(s1.numElem)
+            A[j] = zeros(size(s1.A[j], 1), steps)
+            for i in 1:steps
+                A[j][:, i] = s1.A[j][:, step]
+            end
+        end
+        t = range(start=tmin, stop=tmax, length=steps)
+        ScalarField(A, [;;], t, s1.numElem, steps, s1.type, s1.model)
     end
 end
 
