@@ -821,7 +821,7 @@ for each node:
 xy, yy, zy,
 xz, yz, zz)
 
-````
+```
 repeated for all nodes and time steps.
 
 ---
