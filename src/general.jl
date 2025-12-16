@@ -12,7 +12,7 @@ export plotOnPath, showOnSurface
 export openPreProcessor, openPostProcessor, setParameter, setParameters
 export probe
 export saveField, loadField, isSaved
-export ∂x, ∂y, ∂z
+export ∂x, ∂y, ∂z, ∂t
 
 """
     Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
@@ -289,38 +289,115 @@ abstract type AbstractField end
 
 """
     ScalarField(A, a, t, numElem, nsteps, type, model)
-    ScalarField(problem, dataField)
-    ScalarField(problem::Problem, phName::String, data::Union{Number,Function})
     ScalarField(problem::Problem, dataField::Vector; steps=1, tmin=0.0, tmax=tmin+(steps-1))
+    ScalarField(problem::Problem, phName::String, data::Union{Number,Function};
+                steps=1, tmin=0.0, tmax=tmin+(steps-1))
     ScalarField(s::ScalarField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
 
-Structure containing all data of a scalar field (e.g., temperature).
-- A: vector of element-wise scalar data
-- a: matrix of nodal values of the scalar field
-- numElem: vector of element tags
-- nsteps: number of time steps stored in `A` (for animations)
-- type: type of data (e.g., `:T` for temperature)
-- model: associated `Problem`
+Container for a time-dependent scalar field defined on a finite element mesh
+(e.g. temperature, pressure, potential).
 
-Types:
-- `A`: Vector{Vector{Float64}}
-- `a`: Matrix{Float64}
-- `t`: Vector{Float64}
-- `numElem`: Vector{Integer}
-- `nsteps`: Integer
-- `type`: Symbol
-- `model`: Problem
+A `ScalarField` can store the field either
+- **element-wise** (values at the element nodes, stored in `A`), or
+- **nodally** (values at global mesh nodes, stored in `a`).
 
-# Example
+Time dependence is handled by storing multiple time steps for each spatial
+degree of freedom.
+
+---
+
+## Stored data
+
+- `A` : Vector of matrices holding **element-wise** values  
+  (`A[e][k,i]` = value at local node `k` of element `e` at time step `i`)
+- `a` : Matrix of **nodal** values  
+  (`a[n,i]` = value at node `n` at time step `i`)
+- `t` : Vector of time instants corresponding to the stored time steps
+- `numElem` : Vector of element tags associated with `A`
+- `nsteps` : Number of stored time steps
+- `type` : Symbol identifying the physical meaning of the field
+- `model` : Associated `Problem`
+
+At a given time, either `A` or `a` is typically populated, depending on whether
+the field is element-wise or nodal.
+
+---
+
+## Constructors
+
+### Low-level constructor
+```julia
+ScalarField(A, a, t, numElem, nsteps, type, model)
+````
+
+Directly constructs a `ScalarField` from preallocated data arrays.
+
+---
+
+### From spatial field definitions
+
+```julia
+ScalarField(problem, dataField; steps, tmin, tmax)
+```
+
+Constructs an **element-wise** scalar field from a vector of field definitions
+(e.g. as returned by `field(...)`).
+The scalar value may be:
+
+* a constant,
+* a spatial function `f(x,y,z)`,
+* or a space–time function `f(x,y,z,t)`.
+
+Values are evaluated at the element nodes for each requested time step.
+
+---
+
+### From a physical group
+
+```julia
+ScalarField(problem, phName, data; steps, tmin, tmax)
+```
+
+Convenience constructor for defining a scalar field on a single physical group.
+Equivalent to calling `field(phName, f=data)` internally.
+
+---
+
+### From an existing ScalarField
+
+```julia
+ScalarField(s; steps, tmin, tmax, step)
+```
+
+Creates a new `ScalarField` by **replicating a selected time step** of an
+existing field.
+This is useful for initializing a time-dependent field from a static solution.
+
+* `step` selects the time index of `s` to be replicated.
+* The new field contains `steps` identical time slices.
+
+---
+
+## Notes
+
+* Time steps do not need to be uniformly spaced.
+* No assumptions are made about governing equations; this is a pure data container.
+* Spatial interpolation and projections (e.g. nodal ↔ element-wise) are handled
+  by separate utility functions.
+
+---
+
+## Example
 
 ```julia
 s(x,y,z) = 2x + 3y
 fs = field("body", f=s)
-S = ScalarField(problem, [fs])
 
+S1 = ScalarField(problem, [fs])
 S2 = ScalarField(problem, "body", s)
 ```
-Here `S` is defined element-wise.
+
+Here `S1` and `S2` define equivalent element-wise scalar fields.
 """
 struct ScalarField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -382,59 +459,6 @@ struct ScalarField <: AbstractField
 
         return ScalarField(A, [;;], t, numElem, nsteps, type, problem)
     end
-    #=
-    function ScalarField(problem, dataField)
-        if !isa(dataField, Vector)
-            error("ScalarField: dataField are not arranged in a vector. Put them in [...]")
-        end
-        gmsh.model.setCurrent(problem.name)
-        
-        type = :scalar
-        nsteps = 1
-        A = []
-        numElem = Int[]
-        ff = 0
-        pdim = 1
-        for i in 1:length(dataField)
-            phName, f, fx, fy, fz, fxy, fyz, fzx = dataField[i]
-            dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-            for idm in 1:length(dimTags)
-                dimTag = dimTags[idm]
-                edim = dimTag[1]
-                etag = dimTag[2]
-                elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-                for i in 1:length(elemTypes)
-                    et = elemTypes[i]
-                    elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                    for j in 1:length(elemTags[i])
-                        sc1 = zeros(numNodes, nsteps)
-                        elem = elemTags[i][j]
-                        push!(numElem, elem)
-                        for k in 1:numNodes
-                            nodeTag = elemNodeTags[i][(j-1)*numNodes+k]
-                            if f != :no
-                                if f isa Function
-                                    coord, parametricCoord, dim, tag = gmsh.model.mesh.getNode(nodeTag)
-                                    x = coord[1]
-                                    y = coord[2]
-                                    z = coord[3]
-                                    ff = f(x, y, z)
-                                else
-                                    ff = f
-                                end
-                                sc1[k, 1] = ff
-                            end
-                        end
-                        push!(A, sc1)
-                    end
-                end
-            end
-        end
-        a = [;;]
-        t = [0.0]
-        return new(A, a, t, numElem, nsteps, type, problem)
-    end
-    =#
     function ScalarField(problem::Problem, phName::String, data::Union{Number,Function}; steps=1, tmin=0.0, tmax=tmin+(steps-1))
         f = field(phName, f=data)
         return ScalarField(problem, [f], steps=steps, tmin=tmin, tmax=tmax)
@@ -458,38 +482,136 @@ end
 
 """
     VectorField(A, a, t, numElem, nsteps, type, model)
-    VectorField(problem, dataField)
+    VectorField(problem::Problem, dataField::Vector)
     VectorField(problem::Problem, phName::String, data::Vector)
-    VectorField(Vector{ScalarField})
+    VectorField(problem::Problem, phName::String, func::Function)
+    VectorField(comps::Vector{ScalarField})
 
-Structure containing the data of a vector field (e.g., displacement or heat flux).
-- A: vector of element-wise vector data
-- a: matrix of nodal values of the vector field
-- numElem: vector of element tags
-- nsteps: number of time steps stored in `A` (for animations)
-- type: type of data (e.g., `:u`, `:q`)
-- model: associated `Problem`
+Container for a (possibly time-dependent) vector field defined on a finite
+element mesh (e.g. displacement, velocity, heat flux).
 
-Types:
-- `A`: Vector{Matrix{Float64}}
-- `a`: Matrix{Float64}
-- `t`: Vector{Float64}
-- `numElem`: Vector{Integer}
-- `nsteps`: Integer
-- `type`: Symbol
-- `model`: Problem
+A `VectorField` stores a 3D vector field either
+- **element-wise**, with values given at element nodes (`A`), or
+- **nodally**, with values given at global mesh nodes (`a`).
 
-# Example
+Time dependence is handled by storing multiple time steps for each spatial
+degree of freedom, analogously to `ScalarField`.
+
+---
+
+## Stored data
+
+- `A` : Vector of matrices holding **element-wise** vector values  
+  (`A[e][3k-2:3k, i]` = vector value at local node `k` of element `e`
+  at time step `i`)
+- `a` : Matrix of **nodal** vector values  
+  (layout follows the same interleaved component ordering)
+- `t` : Vector of time instants corresponding to the stored time steps
+- `numElem` : Vector of element tags associated with `A`
+- `nsteps` : Number of stored time steps
+- `type` : Symbol identifying the physical meaning of the vector field
+  (e.g. `:v3D`)
+- `model` : Associated `Problem`
+
+Vector components are stored in **interleaved form**
+(`x₁,y₁,z₁,x₂,y₂,z₂,…`) for each element or node.
+
+---
+
+## Constructors
+
+### Low-level constructor
+```julia
+VectorField(A, a, t, numElem, nsteps, type, model)
+````
+
+Directly constructs a `VectorField` from preallocated data arrays.
+
+---
+
+### From element-wise field definitions
+
+```julia
+VectorField(problem, dataField::Vector)
+```
+
+Constructs an **element-wise** vector field from a vector of field definitions
+(e.g. as returned by `field(...)`).
+Each component may be specified as:
+
+* a constant,
+* a spatial function `f(x,y,z)`.
+
+Values are evaluated at the element nodes.
+
+---
+
+### From a physical group and component data
+
+```julia
+VectorField(problem, phName, data::Vector)
+```
+
+Convenience constructor for defining a vector field on a single physical group,
+where `data = [fx, fy, fz]` specifies the three components (constants or
+functions).
+
+---
+
+### From a vector-valued function
+
+```julia
+VectorField(problem, phName, func::Function)
+```
+
+Constructs an element-wise vector field by evaluating a function
+`func(x,y,z) -> (vx,vy,vz)` at the element nodes.
+
+---
+
+### From scalar components
+
+```julia
+VectorField(comps::Vector{ScalarField})
+```
+
+Assembles a 3D vector field from exactly three compatible `ScalarField`s.
+
+Requirements:
+
+* exactly three components,
+* same `Problem`,
+* identical element numbering,
+* identical time discretization.
+
+Each scalar field provides one vector component.
+
+---
+
+## Notes
+
+* Time steps do not need to be uniformly spaced.
+* No governing equations are implied; this is a pure data container.
+* Spatial operations (gradient, divergence, projections, etc.) are handled
+  by separate utility functions.
+* Element-wise storage is the primary representation; nodal storage may be
+  empty depending on construction.
+
+---
+
+## Example
 
 ```julia
 vx(x,y,z) = x + y
 vy(x,y,z) = z
-fv = field("body", fx=vx, fy=vy, fz=3)
-V = VectorField(problem, [fv])
 
-v2 = VectorField(problem, "body", [vx, vy, 3])
+fv = field("body", fx=vx, fy=vy, fz=3)
+V1 = VectorField(problem, [fv])
+
+V2 = VectorField(problem, "body", [vx, vy, 3])
 ```
-Here `V` is defined element-wise
+
+Here `V1` and `V2` define equivalent element-wise vector fields.
 """
 struct VectorField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -661,38 +783,137 @@ end
 
 """
     TensorField(A, a, t, numElem, nsteps, type, model)
-    TensorField(problem, dataField)
+    TensorField(problem::Problem, dataField::Vector)
     TensorField(problem::Problem, phName::String, data::Matrix)
-    TensorField(Matrix{ScalarField})
+    TensorField(comps::Matrix{ScalarField})
 
-Structure containing the data of a tensor field (e.g., stress or strain).
-- A: tensor of element-wise tensor data
-- a: matrix of nodal values of the tensor field
-- numElem: vector of element tags
-- nsteps: number of time steps stored in `A` (for animations)
-- type: type of data (e.g., `:u`, `:q`)
-- model: associated `Problem`
+Container for a (possibly time-dependent) second-order tensor field defined on a
+finite element mesh (e.g. stress, strain, conductivity tensor).
 
-Types:
-- `A`: Vector{Matrix{Float64}}
-- `a`: Matrix{Float64}
-- `t`: Vector{Float64}
-- `numElem`: Vector{Integer}
-- `nsteps`: Integer
-- `type`: Symbol
-- `model`: Problem
+A `TensorField` stores a full 3×3 tensor at each spatial location, either
+- **element-wise**, with values given at element nodes (`A`), or
+- **nodally**, with values given at global mesh nodes (`a`).
 
-# Example
+Time dependence is handled by storing multiple time steps for each tensor
+component.
+
+---
+
+## Stored data
+
+- `A` : Vector of matrices holding **element-wise** tensor values  
+  (`A[e][9k-8:9k, i]` = tensor components at local node `k` of element `e`
+  at time step `i`)
+- `a` : Matrix of **nodal** tensor values  
+  (same component ordering as element-wise storage)
+- `t` : Vector of time instants corresponding to the stored time steps
+- `numElem` : Vector of element tags associated with `A`
+- `nsteps` : Number of stored time steps
+- `type` : Symbol identifying the physical meaning of the tensor field
+  (e.g. `:e`, `:stress`, `:tensor`)
+- `model` : Associated `Problem`
+
+Tensor components are stored in **row-major, interleaved form**
+for each node:
+```
+
+(xx, yx, zx,
+xy, yy, zy,
+xz, yz, zz)
+
+````
+repeated for all nodes and time steps.
+
+---
+
+## Constructors
+
+### Low-level constructor
+```julia
+TensorField(A, a, t, numElem, nsteps, type, model)
+````
+
+Directly constructs a `TensorField` from preallocated data arrays.
+
+---
+
+### From element-wise field definitions
 
 ```julia
-tx(x,y,z) = x + y
-txy(x,y,z) = z
-ft = field("body", fx=tx, fxy=txy, fz=3)
-T = TensorField(problem, [ft])
-
-T2 = TensorField(problem, "body", [1 0 0; 0 2 0; 0 0 3])
+TensorField(problem, dataField::Vector)
 ```
-Here `T` is defined element-wise
+
+Constructs an **element-wise** tensor field from a vector of field definitions
+(e.g. as returned by `field(...)`).
+
+Each tensor component may be specified as:
+
+* a constant,
+* a spatial function `f(x,y,z)`.
+
+Values are evaluated at the element nodes.
+
+---
+
+### From a constant or functional tensor
+
+```julia
+TensorField(problem, phName, data::Matrix)
+```
+
+Convenience constructor for defining a tensor field on a single physical group,
+where `data` is a `3×3` matrix whose entries are constants or functions
+`f(x,y,z)`.
+
+---
+
+### From scalar components
+
+```julia
+TensorField(comps::Matrix{ScalarField})
+```
+
+Assembles a 3×3 tensor field from a `3×3` matrix of compatible `ScalarField`s.
+
+Requirements:
+
+* exactly a 3×3 matrix of scalar fields,
+* identical `Problem`,
+* identical element numbering,
+* identical time discretization.
+
+Each scalar field provides one tensor component.
+
+---
+
+## Notes
+
+* Time steps do not need to be uniformly spaced.
+* No symmetry is assumed; all 9 tensor components are stored explicitly.
+* This is a pure data container; no constitutive or kinematic assumptions
+  are implied.
+* Spatial operations (e.g. divergence, invariants, projections) are handled
+  by separate utility functions.
+* Element-wise storage is the primary representation; nodal storage may be
+  empty depending on construction.
+
+---
+
+## Example
+
+```julia
+tx(x,y,z)  = x + y
+txy(x,y,z) = z
+
+ft = field("body", fx=tx, fxy=txy, fz=3)
+T1 = TensorField(problem, [ft])
+
+T2 = TensorField(problem, "body", [1 0 0;
+                                  0 2 0;
+                                  0 0 3])
+```
+
+Here `T1` and `T2` define equivalent element-wise tensor fields.
 """
 struct TensorField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -1264,6 +1485,83 @@ grad_s = VectorField([gx, gy, gz])
 ∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
 ∂y(r::ScalarField) = isNodal(r) ? ∂(r, 2) : ∂e(r, 2)
 ∂z(r::ScalarField) = isNodal(r) ? ∂(r, 3) : ∂e(r, 3)
+
+"""
+    ∂t(s::Union{ScalarField,VectorField,TensorField})
+
+Compute the time derivative of a time-dependent field using second-order
+finite differences in time.
+
+The field values are assumed to be stored at discrete time instants `s.t`
+and are differentiated independently at each spatial degree of freedom.
+The result has the same type and layout (nodal or elementwise) as the input
+field.
+
+### Time discretization
+- For interior time steps, a second-order central difference is used:
+```
+
+∂s/∂t(tᵢ) ≈ (s(tᵢ₊₁) − s(tᵢ₋₁)) / (tᵢ₊₁ − tᵢ₋₁)
+
+```
+- At the first and last time steps, the derivative is obtained by
+second-order extrapolation to preserve overall accuracy.
+- If only two time steps are present, a first-order difference is used
+and assigned to both time levels.
+- If `s.nsteps == 1`, a zero field is returned.
+
+The time grid `s.t` is not required to be uniform.
+
+### Notes
+- The operation is purely algebraic in time and does not involve any
+spatial operators or time-integration schemes.
+- The derivative is computed in-place on newly allocated storage and
+does not modify the original field.
+- For elementwise fields, the time derivative is computed independently
+for each element.
+
+### Returns
+A new field of the same concrete type as `s` (`ScalarField`, `VectorField`,
+or `TensorField`) containing the time derivative.
+"""
+
+function ∂t(s::Union{ScalarField,VectorField,TensorField})
+    if s.nsteps == 1
+        return 0s
+    end
+    T = typeof(s)
+    if isNodal(s)
+        a = similar(s.a)
+        time_derivative!(a, s.t, s.a)
+        return T([], a, s.t, [], s.nsteps, s.type, s.model)
+    elseif isElementwise(s)
+        A = [similar(s.A[e]) for e in eachindex(s.A)]
+        for e in eachindex(s.A)
+            time_derivative!(A[e], s.t, s.A[e])
+        end
+        return T(A, [;;], s.t, s.numElem, s.nsteps, s.type, s.model)
+    else
+        error("∂t: internal error")
+    end
+end
+
+function time_derivative!(a, t, src)
+    nsteps = length(t)
+    if nsteps == 2
+        @inbounds begin
+            a[:,1] .= (src[:,2] - src[:,1]) / (t[2] - t[1])
+            a[:,2] .= a[:,1]
+        end
+    else
+        @inbounds begin
+            for i in 2:nsteps-1
+                a[:,i] .= (src[:,i+1] - src[:,i-1]) / (t[i+1] - t[i-1])
+            end
+            a[:,1]   .= 2*(src[:,2]-src[:,1])/(t[2]-t[1]) - a[:,2]
+            a[:,end] .= 2*(src[:,end]-src[:,end-1])/(t[end]-t[end-1]) - a[:,end-1]
+        end
+    end
+end
 
 """
     v[k] -> ScalarField
