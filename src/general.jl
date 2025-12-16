@@ -4,7 +4,7 @@ export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export constrainedDoFs, freeDoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
-export fieldError, resultant, integrate, normalVector, tangentVector
+export fieldError, resultant, integrate, ∫, normalVector, tangentVector
 export rotateNodes, CoordinateSystem
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
@@ -328,7 +328,7 @@ the field is element-wise or nodal.
 ### Low-level constructor
 ```julia
 ScalarField(A, a, t, numElem, nsteps, type, model)
-````
+```
 
 Directly constructs a `ScalarField` from preallocated data arrays.
 
@@ -523,7 +523,7 @@ Vector components are stored in **interleaved form**
 ### Low-level constructor
 ```julia
 VectorField(A, a, t, numElem, nsteps, type, model)
-````
+```
 
 Directly constructs a `VectorField` from preallocated data arrays.
 
@@ -831,7 +831,7 @@ repeated for all nodes and time steps.
 ### Low-level constructor
 ```julia
 TensorField(A, a, t, numElem, nsteps, type, model)
-````
+```
 
 Directly constructs a `TensorField` from preallocated data arrays.
 
@@ -3812,9 +3812,11 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
 end
 
 """
-    integrate(problem::Problem, phName::String, f::Union{Function,ScalarField})
+    integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1)
+    ∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1)
 
 Integrates the function or scalar field `f` over the physical group `phName` defined in the geometry of `problem`.
+If `f` is a `ScalarField`, the time step `step` will be integrated.
 
 Returns: integral
 
@@ -3831,7 +3833,7 @@ f(x, y, z) = x^2 + y^2
 Iz = integrate(prob, "body", f)
 ```
 """
-function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField})
+function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1)
     gmsh.model.setCurrent(problem.name)
     f2 = 0
     if f isa ScalarField
@@ -3879,12 +3881,6 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                 s1 = 0
                 first = (l - 1) * numNodes + 1
                 @inbounds for j in 1:numIntPoints
-                    #x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
-                    #y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
-                    #z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                    ##x = h[:, j]' * ncoord2[nodeids * 3 .- 2]
-                    ##y = h[:, j]' * ncoord2[nodeids * 3 .- 1]
-                    ##z = h[:, j]' * ncoord2[nodeids * 3 .- 0]
                     x = 0.0
                     y = 0.0
                     z = 0.0
@@ -3901,7 +3897,7 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                         ff = f(x, y, z)
                     elseif f isa ScalarField
                         #ff = h[:, j]' * f2.a[nnet[l, :]]
-                        ff = h[:, j]' * f2.a[nodeids]
+                        ff = h[:, j]' * f2.a[nodeids, step]
                     else
                         error("integrate: 3rd argument must be a Function or a ScalarField")
                     end
@@ -3944,6 +3940,82 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
     end
     return sum0
 end
+
+∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1) = integrate(problem, phName, f, step=step)
+
+"""
+    time_integral!(s, t, d; s0 = 0.0)
+
+Reconstruct a time-dependent signal `s` from its time derivative `d`
+using the inverse of the second-order central difference scheme.
+
+The reconstructed signal is unique up to an additive time-independent
+constant, specified by `s0`.
+"""
+
+function time_integral!(s, t, d; s0=0.0)
+    nsteps = length(t)
+
+    # reference value
+    s[:, 1] .= s0
+
+    if nsteps == 1
+        return s
+    end
+
+    if nsteps == 2
+        # linear reconstruction
+        dt = t[2] - t[1]
+        s[:, 2] .= s[:, 1] .+ dt .* d[:, 1]
+        return s
+    end
+
+    @inbounds begin
+        # bootstrap second step using forward Euler
+        dt = t[2] - t[1]
+        s[:, 2] .= s[:, 1] .+ dt .* d[:, 1]
+
+        # central inverse recursion
+        for i in 2:nsteps-1
+            s[:, i+1] .= s[:, i-1] .+ (t[i+1] - t[i-1]) .* d[:, i]
+        end
+    end
+
+    return s
+end
+
+"""
+    integrate(s::Union{ScalarField,VectorField,TensorField})
+    ∫(s::Union{ScalarField,VectorField,TensorField})
+
+Compute the time integral of a time-dependent field using a discrete
+inverse of the central finite-difference time derivative.
+
+The result reproduces the original field (up to a time-independent
+constant) when applied to a field obtained by `∂t`.
+"""
+function integrate(s::Union{ScalarField,VectorField,TensorField})
+    s0 = 0.0
+    T = typeof(s)
+
+    if isNodal(s)
+        a = similar(s.a)
+        time_integral!(a, s.t, s.a; s0=s0)
+        return T([], a, s.t, [], s.nsteps, s.type, s.model)
+
+    elseif isElementwise(s)
+        A = [similar(s.A[e]) for e in eachindex(s.A)]
+        for e in eachindex(s.A)
+            time_integral!(A[e], s.t, s.A[e]; s0=s0)
+        end
+        return T(A, [;;], s.t, s.numElem, s.nsteps, s.type, s.model)
+
+    else
+        error("∫t: internal error")
+    end
+end
+
+∫(s::Union{ScalarField,VectorField,TensorField}) = integrate(s)
 
 """
     rotateNodes(problem, phName, CoordSys)
