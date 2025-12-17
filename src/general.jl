@@ -3812,11 +3812,14 @@ function resultant2(problem, field, phName, grad, component, offsetX, offsetY, o
 end
 
 """
-    integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1)
-    ∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1)
+    integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=...)
+    ∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=...)
 
 Integrates the function or scalar field `f` over the physical group `phName` defined in the geometry of `problem`.
-If `f` is a `ScalarField`, the time step `step` will be integrated.
+If `f` is a `ScalarField`, the time step `step` will be integrated. The optional parameter `order` controls the 
+numerical integration rule. If `order > 0`, it is used as a hint for selecting the Gauss quadrature order
+(i.e. the number of integration points) employed during integration. The exactness of the integration depends 
+on the element geometry and the regularity of the integrand.
 
 Returns: integral
 
@@ -3833,7 +3836,7 @@ f(x, y, z) = x^2 + y^2
 Iz = integrate(prob, "body", f)
 ```
 """
-function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1)
+function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=0)
     gmsh.model.setCurrent(problem.name)
     f2 = 0
     if f isa ScalarField
@@ -3862,8 +3865,9 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
         end
 
         for ii in 1:length(elementTypes)
-            elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
-            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(order))
+            elementName, dim, order1, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+            qorder = order <= 0 ? order1 : order
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(qorder))
             numIntPoints = length(intWeights)
             comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
             h = reshape(fun, :, numIntPoints)
