@@ -128,6 +128,224 @@ function initialize_old(problem::Problem)
     #gmsh.view.remove(problem.geometry.tagTop)
 end
 
+function projectScalarField(p::ScalarField; from="", to="")
+    problem = p.model
+    if isempty(from) || isempty(to)
+        error("projectScalarField: physical groups must be given.")
+    end
+    # --- 1) 2D elemek összegyűjtése ---
+    dimTags2D = gmsh.model.getEntitiesForPhysicalName(from)
+
+    elems2D = Int[]
+    conn2D = Dict{Int,Vector{Int}}()
+    etype2D = Dict{Int,Int}()
+    prin2D = Dict{Int,Int}()
+
+    for (edim, etag) in dimTags2D
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+        for i in eachindex(elemTypes)
+            et = Int(elemTypes[i])
+            _, dim, _, numNodes, _, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+            dim == 2 || error("projectScalarField: 3D mesh as a source is not yet implemented.")
+
+            tags = elemTags[i]
+            nodes = elemNodeTags[i]
+
+            @inbounds for j in eachindex(tags)
+                elem = Int(tags[j])
+                push!(elems2D, elem)
+
+                i1 = (j - 1) * numNodes + 1
+                conn = Vector{Int}(undef, numNodes)
+                @inbounds for k in 1:numNodes
+                    conn[k] = Int(nodes[i1+k-1])
+                end
+
+                conn2D[elem] = conn
+                etype2D[elem] = et
+                prin2D[elem] = numPrimaryNodes
+            end
+        end
+    end
+
+    # ---- Elem indexelés: elemTag -> idx, és tömbök a gyors belső ciklushoz
+    ne = length(elems2D)
+    elem2idx = Dict{Int,Int}()
+    sizehint!(elem2idx, ne)
+    et_of = Vector{Int}(undef, ne)
+    pn_of = Vector{Int}(undef, ne)
+    conn_of = Vector{Vector{Int}}(undef, ne)
+
+    @inbounds for idx in 1:ne
+        e = elems2D[idx]
+        elem2idx[e] = idx
+        et_of[idx] = etype2D[e]
+        pn_of[idx] = prin2D[e]
+        conn_of[idx] = conn2D[e]
+    end
+
+    # --- 2) Bounding box + minimális elemsize ---
+    bbxmin = Inf
+    bbxmax = -Inf
+    bbymin = Inf
+    bbymax = -Inf
+    esizemin = Inf
+
+    nodeCoordCache = Dict{Int,NTuple{3,Float64}}()
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(from)
+    for (edim, etag) in dimTags
+        xmin, ymin, _, xmax, ymax, _ = gmsh.model.getBoundingBox(edim, etag)
+        bbxmin = min(bbxmin, xmin)
+        bbxmax = max(bbxmax, xmax)
+        bbymin = min(bbymin, ymin)
+        bbymax = max(bbymax, ymax)
+
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+        for i in eachindex(elemTypes)
+            _, _, _, numNodes, _, _ = gmsh.model.mesh.getElementProperties(elemTypes[i])
+
+            @inbounds for j in eachindex(elemTags[i])
+                xemin = Inf
+                xemax = -Inf
+                yemin = Inf
+                yemax = -Inf
+
+                nodes = elemNodeTags[i][(j-1)*numNodes+1:j*numNodes]
+                @inbounds for n in nodes
+                    coord = get!(nodeCoordCache, Int(n)) do
+                        c, _, _, _ = gmsh.model.mesh.getNode(n)
+                        (c[1], c[2], c[3])
+                    end
+                    xemin = min(xemin, coord[1])
+                    xemax = max(xemax, coord[1])
+                    yemin = min(yemin, coord[2])
+                    yemax = max(yemax, coord[2])
+                end
+                esizemin = min(esizemin, max(xemax - xemin, yemax - yemin))
+            end
+        end
+    end
+
+    bbx = bbxmax - bbxmin
+    bby = bbymax - bbymin
+
+    nbbx = Int(bbx ÷ (0.7 * esizemin))
+    nbby = Int(bby ÷ (0.7 * esizemin))
+
+    inv_dx = nbbx / bbx
+    inv_dy = nbby / bby
+
+    # ebins most elem *indexeket* tárol, nem tag-et (gyorsabb belső ciklus)
+    ebins = [Int[] for _ in 1:(nbbx*nbby)]
+    nbins = [Int[] for _ in 1:(nbbx*nbby)]
+
+    # --- 3) Elembinning (SORRENDTARTÓ deduplikálás: elem binbe csak egyszer) ---
+    # Trükk: elemenként kis "bin lista" (numNodes kicsi), és abban egy egyszerű O(n^2) unique,
+    # ami itt olcsó és NEM változtat sorrendet.
+    bins_tmp = Int[]  # újrafelhasználjuk; elemenként empty!()
+
+    for (edim, etag) in dimTags
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+        for i in eachindex(elemTypes)
+            _, _, _, numNodes, _, _ = gmsh.model.mesh.getElementProperties(elemTypes[i])
+
+            for j in eachindex(elemTags[i])
+                elem_tag = Int(elemTags[i][j])
+                idx = elem2idx[elem_tag]
+
+                nodes = elemNodeTags[i][(j-1)*numNodes+1:j*numNodes]
+
+                empty!(bins_tmp)
+                sizehint!(bins_tmp, numNodes)
+
+                # 1) bin indexek gyűjtése (lehetnek duplikáltak)
+                @inbounds for n in nodes
+                    coord = nodeCoordCache[Int(n)]
+                    nx = clamp(Int(floor((coord[1] - bbxmin) * inv_dx)), 0, nbbx - 1)
+                    ny = clamp(Int(floor((coord[2] - bbymin) * inv_dy)), 0, nbby - 1)
+                    push!(bins_tmp, nx * nbby + ny + 1)
+                end
+
+                # 2) sorrendtartó unique a bins_tmp-ben, és push egyszer binenként
+                @inbounds for t in 1:length(bins_tmp)
+                    bt = bins_tmp[t]
+                    seen = false
+                    @inbounds for s in 1:(t-1)
+                        if bins_tmp[s] == bt
+                            seen = true
+                            break
+                        end
+                    end
+                    seen && continue
+                    push!(ebins[bt], idx)
+                end
+            end
+        end
+    end
+
+    # --- 4) Node binning ---
+    tag = getTagForPhysicalName(to)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(3, tag)
+    coord = reshape(coord, 3, :)
+
+    @inbounds for i in eachindex(nodeTags)
+        nx = clamp(Int(floor((coord[1, i] - bbxmin) * inv_dx)), 0, nbbx - 1)
+        ny = clamp(Int(floor((coord[2, i] - bbymin) * inv_dy)), 0, nbby - 1)
+        push!(nbins[nx*nbby+ny+1], Int(nodeTags[i]))
+    end
+
+    # --- 5) Interpoláció ---
+    a = zeros(problem.non)
+    pvals = vec(p.a)
+
+    # kis buffer, hogy ne allokáljunk [u,v,w]-t minden iterációban
+    uvw = Vector{Float64}(undef, 3)
+
+    for b in eachindex(ebins)
+        elems = ebins[b]   # itt idx-ek vannak
+        nodes = nbins[b]
+        isempty(elems) && continue
+        isempty(nodes) && continue
+
+        for node in nodes
+            coord = get!(nodeCoordCache, node) do
+                c, _, _, _ = gmsh.model.mesh.getNode(node)
+                (c[1], c[2], c[3])
+            end
+
+            for idx in elems
+                et = et_of[idx]
+                pn = pn_of[idx]
+                conn = conn_of[idx]
+
+                u, v, w = gmsh.model.mesh.getLocalCoordinatesInElement(
+                    elems2D[idx], coord[1], coord[2], coord[3]
+                )
+
+                if (pn == 4 && -1.0001 ≤ u ≤ 1.0001 && -1.0001 ≤ v ≤ 1.0001) ||
+                   (pn == 3 && -0.0001 ≤ u && -0.0001 ≤ v && u + v ≤ 1.0001)
+
+                    uvw[1] = u
+                    uvw[2] = v
+                    uvw[3] = w
+                    _, bf, _ = gmsh.model.mesh.getBasisFunctions(et, uvw, "Lagrange")
+
+                    val = 0.0
+                    @inbounds for i in eachindex(conn)
+                        val += bf[i] * pvals[conn[i]]
+                    end
+
+                    a[node] = val
+                    break
+                end
+            end
+        end
+    end
+
+    return ScalarField([], reshape(a, :, 1), [0.0], [], 1, :scalar, problem)
+end
+
 function pressureInVolume(p::ScalarField)
     if p.model.geometry.nameVolume == ""
         error("initializePressure: no volume for lubricant has been defined.")
