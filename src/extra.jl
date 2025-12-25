@@ -94,6 +94,7 @@ function flowRate(name::String; q=0)
 end
 
 function initialize(problem::Problem)
+    #=
     fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0, -1, 1, false, -1, [], [], [], 2)[1][1] - z # az alsó felületnek síknak kell lennie!
     fdhdx(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0, -1, 1, true, -1, [], [], [], 2)[1][1]
     h = scalarField(problem, problem.material[1].phName, fh)
@@ -103,6 +104,16 @@ function initialize(problem::Problem)
     problem.geometry.h = h
     problem.geometry.dhdx = dhdx
     gmsh.view.remove(problem.geometry.tagTop)
+    =#
+
+    h0 = ScalarField(problem, problem.geometry.nameGap, (x, y, z) -> z)
+    h0 = elementsToNodes(h0)
+    h = projectScalarField(h0, from=problem.geometry.nameGap, to=problem.material[1].phName, gap=true)
+    h0 = nodesToElements(h, onPhysicalGroup=problem.material[1].phName)
+    dhdx = elementsToNodes(∂x(h0))
+    dhdx = elementsToNodes(dhdx)
+    problem.geometry.h = h
+    problem.geometry.dhdx = dhdx
 end
 
 function initialize_old(problem::Problem)
@@ -128,11 +139,119 @@ function initialize_old(problem::Problem)
     #gmsh.view.remove(problem.geometry.tagTop)
 end
 
-function projectScalarField(p::ScalarField; from="", to="")
+"""
+    projectScalarField(p::ScalarField; from="", to="", gap=false, binSize=0.7)
+
+Projects a scalar field defined on a 2D surface onto the nodes of another mesh
+(typically a 3D volume or a parallel surface), using a robust AABB-based
+spatial binning algorithm.
+
+This function is primarily intended for use in the Reynolds equation solver,
+where a pressure field defined on a lubricating surface must be transferred
+to another surface or to the surrounding 3D mesh.
+
+---
+
+## Functionality
+
+The projection is performed by:
+1. Collecting all 2D finite elements belonging to the physical group `from`.
+2. Assigning each source element to all spatial bins intersected by its
+   axis-aligned bounding box (AABB) in the *(x,y)* plane.
+3. Assigning target nodes (from the physical group `to`) to spatial bins
+   based on their *(x,y)* coordinates.
+4. For each target node, testing candidate source elements from the same bin:
+   - computing local coordinates using Gmsh,
+   - performing an inside-element test (triangular or quadrilateral),
+   - interpolating the scalar field using Gmsh-provided Lagrange basis functions.
+
+The algorithm is deterministic, robust with respect to bin size, and works
+for arbitrary element order supported by Gmsh.
+
+---
+
+## Arguments
+
+- `p::ScalarField`  
+  Scalar field defined on the source surface (`from`).
+  In the Reynolds context, this typically represents the pressure field.
+
+---
+
+## Keyword Arguments
+
+- `from::String`  
+  Name of the physical group defining the **source 2D surface**
+  on which the scalar field `p` is defined.
+
+- `to::String`  
+  Name of the physical group defining the **target mesh**
+  (surface or volume) whose nodes receive the projected values.
+
+- `gap::Bool = false`  
+  If `true`, the source surface nodes are temporarily projected onto the
+  *z = 0* plane during the projection.
+  
+  This option is useful in Reynolds-type lubrication problems, where:
+  - the height of the lubricat is defined on a geometrically curved upper surface,
+  - but the projection should be performed purely in *(x,y)* coordinates.
+  
+  After the projection, the original node coordinates are restored.
+
+- `binSize::Real = 0.7`  
+  Controls the spatial bin size relative to the smallest source element size.
+  
+  Smaller values increase the number of bins (finer spatial partitioning),
+  potentially improving performance for large meshes.
+  
+  Due to the AABB-based binning strategy, **correctness does not depend on
+  the bin size**; this parameter only affects performance.
+
+---
+
+## Returns
+
+- `ScalarField`  
+  A new scalar field defined on the target mesh nodes, containing the
+  interpolated values of `p`.
+
+---
+
+## Notes
+
+- This function relies exclusively on the Gmsh API for element localization
+  and basis function evaluation; no custom shape functions are implemented.
+- Both triangular and quadrilateral elements are supported, for arbitrary
+  polynomial order.
+- The AABB-based binning guarantees that no valid node–element associations
+  are missed, even for small bin sizes or highly distorted elements.
+- The function is optimized for single-threaded execution; parallel scaling
+  may be limited by Gmsh API overhead.
+
+---
+
+## Typical Use Case (Reynolds Equation)
+
+- Solve the Reynolds equation on a lubricating surface (`from`),
+  obtaining a pressure field `p`.
+- Project the pressure field onto a surrounding 3D mesh (`to`)
+  for use in structural, thermal, or multiphysics coupling.
+
+---
+"""
+function projectScalarField(p::ScalarField; from="", to="", gap=false, binSize=0.7)
     problem = p.model
     if isempty(from) || isempty(to)
         error("projectScalarField: physical groups must be given.")
     end
+    dimF = 0
+    if gap == true
+        tag = getTagForPhysicalName(from)
+        dimF = getDimForPhysicalName(from)
+        nodeTagsUpper, coordUpper = gmsh.model.mesh.getNodesForPhysicalGroup(dimF, tag)
+        #h0 = elementsToNodes(ScalarField(problem, from, (x, y, z) -> z))
+    end
+
     # --- 1) 2D elemek összegyűjtése ---
     dimTags2D = gmsh.model.getEntitiesForPhysicalName(from)
 
@@ -230,21 +349,18 @@ function projectScalarField(p::ScalarField; from="", to="")
     bbx = bbxmax - bbxmin
     bby = bbymax - bbymin
 
-    nbbx = Int(bbx ÷ (0.7 * esizemin))
-    nbby = Int(bby ÷ (0.7 * esizemin))
+    nbbx = Int(bbx ÷ (binSize * esizemin))
+    nbby = Int(bby ÷ (binSize * esizemin))
 
     inv_dx = nbbx / bbx
     inv_dy = nbby / bby
 
-    # ebins most elem *indexeket* tárol, nem tag-et (gyorsabb belső ciklus)
     ebins = [Int[] for _ in 1:(nbbx*nbby)]
     nbins = [Int[] for _ in 1:(nbbx*nbby)]
 
-    # --- 3) Elembinning (SORRENDTARTÓ deduplikálás: elem binbe csak egyszer) ---
-    # Trükk: elemenként kis "bin lista" (numNodes kicsi), és abban egy egyszerű O(n^2) unique,
-    # ami itt olcsó és NEM változtat sorrendet.
-    bins_tmp = Int[]  # újrafelhasználjuk; elemenként empty!()
-
+    # --- 3) Elembinning  (>>> AABB BINNING) ---
+    # Elem AABB (x,y) alapján minden lefedett binbe betesszük az elemet.
+    # Megjegyzés: clamp + floor ugyanazt a bin-index definíciót használja, mint a node binning.
     for (edim, etag) in dimTags
         elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
         for i in eachindex(elemTypes)
@@ -256,29 +372,31 @@ function projectScalarField(p::ScalarField; from="", to="")
 
                 nodes = elemNodeTags[i][(j-1)*numNodes+1:j*numNodes]
 
-                empty!(bins_tmp)
-                sizehint!(bins_tmp, numNodes)
-
-                # 1) bin indexek gyűjtése (lehetnek duplikáltak)
+                # AABB a csomópont-koordinátákból (x,y)
+                xemin = Inf
+                xemax = -Inf
+                yemin = Inf
+                yemax = -Inf
                 @inbounds for n in nodes
-                    coord = nodeCoordCache[Int(n)]
-                    nx = clamp(Int(floor((coord[1] - bbxmin) * inv_dx)), 0, nbbx - 1)
-                    ny = clamp(Int(floor((coord[2] - bbymin) * inv_dy)), 0, nbby - 1)
-                    push!(bins_tmp, nx * nbby + ny + 1)
+                    c = nodeCoordCache[Int(n)]
+                    xemin = min(xemin, c[1])
+                    xemax = max(xemax, c[1])
+                    yemin = min(yemin, c[2])
+                    yemax = max(yemax, c[2])
                 end
 
-                # 2) sorrendtartó unique a bins_tmp-ben, és push egyszer binenként
-                @inbounds for t in 1:length(bins_tmp)
-                    bt = bins_tmp[t]
-                    seen = false
-                    @inbounds for s in 1:(t-1)
-                        if bins_tmp[s] == bt
-                            seen = true
-                            break
-                        end
+                # lefedett bin tartomány
+                nxmin = clamp(Int(floor((xemin - bbxmin) * inv_dx)), 0, nbbx - 1)
+                nxmax = clamp(Int(floor((xemax - bbxmin) * inv_dx)), 0, nbbx - 1)
+                nymin = clamp(Int(floor((yemin - bbymin) * inv_dy)), 0, nbby - 1)
+                nymax = clamp(Int(floor((yemax - bbymin) * inv_dy)), 0, nbby - 1)
+
+                # minden érintett binbe: sorrend determinisztikus (nx outer, ny inner)
+                @inbounds for nx in nxmin:nxmax
+                    base = nx * nbby
+                    @inbounds for ny in nymin:nymax
+                        push!(ebins[base+ny+1], idx)
                     end
-                    seen && continue
-                    push!(ebins[bt], idx)
                 end
             end
         end
@@ -286,7 +404,8 @@ function projectScalarField(p::ScalarField; from="", to="")
 
     # --- 4) Node binning ---
     tag = getTagForPhysicalName(to)
-    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(3, tag)
+    dimT = getDimForPhysicalName(to)
+    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(dimT, tag)
     coord = reshape(coord, 3, :)
 
     @inbounds for i in eachindex(nodeTags)
@@ -298,18 +417,23 @@ function projectScalarField(p::ScalarField; from="", to="")
     # --- 5) Interpoláció ---
     a = zeros(problem.non)
     pvals = vec(p.a)
-
-    # kis buffer, hogy ne allokáljunk [u,v,w]-t minden iterációban
     uvw = Vector{Float64}(undef, 3)
 
+    if gap == true
+        for (ni, nn) in enumerate(nodeTagsUpper)
+            gmsh.model.mesh.setNode(nn, [coordUpper[3ni-2], coordUpper[3ni-1], 0.0], [0, 0, 0])
+        end
+        #pvals = vec(h0.a)
+    end
+
     for b in eachindex(ebins)
-        elems = ebins[b]   # itt idx-ek vannak
+        elems = ebins[b]   # idx-ek
         nodes = nbins[b]
         isempty(elems) && continue
         isempty(nodes) && continue
 
         for node in nodes
-            coord = get!(nodeCoordCache, node) do
+            coordN = get!(nodeCoordCache, node) do
                 c, _, _, _ = gmsh.model.mesh.getNode(node)
                 (c[1], c[2], c[3])
             end
@@ -320,11 +444,11 @@ function projectScalarField(p::ScalarField; from="", to="")
                 conn = conn_of[idx]
 
                 u, v, w = gmsh.model.mesh.getLocalCoordinatesInElement(
-                    elems2D[idx], coord[1], coord[2], coord[3]
+                    elems2D[idx], coordN[1], coordN[2], coordN[3]
                 )
 
                 if (pn == 4 && -1.0001 ≤ u ≤ 1.0001 && -1.0001 ≤ v ≤ 1.0001) ||
-                   (pn == 3 && -0.0001 ≤ u && -0.0001 ≤ v && u + v ≤ 1.0001)
+                   (pn == 3 && -0.01 ≤ u && -0.01 ≤ v && u + v ≤ 1.01)
 
                     uvw[1] = u
                     uvw[2] = v
@@ -343,10 +467,16 @@ function projectScalarField(p::ScalarField; from="", to="")
         end
     end
 
+    if gap == true
+        for (ni, nn) in enumerate(nodeTagsUpper)
+            gmsh.model.mesh.setNode(nn, [coordUpper[3ni-2], coordUpper[3ni-1], coordUpper[3ni]], [0, 0, 0])
+        end
+    end
+
     return ScalarField([], reshape(a, :, 1), [0.0], [], 1, :scalar, problem)
 end
 
-function pressureInVolume(p::ScalarField)
+function pressureInVolume_old(p::ScalarField)
     if p.model.geometry.nameVolume == ""
         error("initializePressure: no volume for lubricant has been defined.")
     end
@@ -379,6 +509,41 @@ function pressureInVolume(p::ScalarField)
     end
 
     return pp
+
+    #=
+    return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)
+
+    if p.model.geometry.nameVolume == ""
+        error("initializePressure: no volume for lubricant has been defined.")
+    end
+    if p.model.geometry.hh == nothing
+        view_h = showDoFResults(p.model.geometry.h)
+        fh(x, y, z) = gmsh.view.probe(view_h, x, y, 0, -1, -1, false, -1)[1][1]
+        p.model.geometry.hh = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fh)])
+        gmsh.view.remove(view_h)
+    end
+    view_p = showDoFResults(p)
+    fp(x, y, z) = gmsh.view.probe(view_p, x, y, 0, -1, -1, false, -1)[1][1]
+    pp = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
+    gmsh.view.remove(view_p)
+    return pp
+    =#
+end
+
+function pressureInVolume(p::ScalarField)
+    if p.model.geometry.nameVolume == ""
+        error("initializePressure: no volume for lubricant has been defined.")
+    end
+
+    pp = projectScalarField(p, from=p.model.material[1].phName, to=p.model.geometry.nameVolume)
+
+    if isnothing(p.model.geometry.hh)
+        hh = projectScalarField(p.model.geometry.h, from=p.model.material[1].phName, to=p.model.geometry.nameVolume)
+        hh = nodesToElements(hh, onPhysicalGroup=p.model.geometry.nameVolume)
+        p.model.geometry.hh = hh
+    end
+
+    return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)
 
     #=
     return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)

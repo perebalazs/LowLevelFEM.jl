@@ -83,7 +83,7 @@ mutable struct Geometry
         end
         tagTop = showGapThickness(nameGap)
         #tagBottom = 0 #showGapThickness(nameGeo)
-        return new(nameGap, nameVolume, dim, tagTop, nothing, nothing, nothing, nothing)
+        return new(nameGap, nameVolume, dim, 0, nothing, nothing, nothing, nothing)
     end
 end
 
