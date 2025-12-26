@@ -81,7 +81,7 @@ mutable struct Geometry
                 error("Geometry: different surface dimensions $dim <==> $(dimTags[i][1])")
             end
         end
-        tagTop = showGapThickness(nameGap)
+        #tagTop = showGapThickness(nameGap)
         #tagBottom = 0 #showGapThickness(nameGeo)
         return new(nameGap, nameVolume, dim, 0, nothing, nothing, nothing, nothing)
     end
