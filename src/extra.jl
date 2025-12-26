@@ -94,18 +94,6 @@ function flowRate(name::String; q=0)
 end
 
 function initialize(problem::Problem)
-    #=
-    fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0, -1, 1, false, -1, [], [], [], 2)[1][1] - z # az alsó felületnek síknak kell lennie!
-    fdhdx(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0, -1, 1, true, -1, [], [], [], 2)[1][1]
-    h = scalarField(problem, problem.material[1].phName, fh)
-    dhdx = scalarField(problem, problem.material[1].phName, fdhdx)
-
-    #dhdx = elementsToNodes(∂x(h))
-    problem.geometry.h = h
-    problem.geometry.dhdx = dhdx
-    gmsh.view.remove(problem.geometry.tagTop)
-    =#
-
     h0 = ScalarField(problem, problem.geometry.nameGap, (x, y, z) -> z)
     h0 = elementsToNodes(h0)
     h = projectScalarField(h0, from=problem.geometry.nameGap, to=problem.material[1].phName, gap=true)
@@ -114,29 +102,6 @@ function initialize(problem::Problem)
     dhdx = elementsToNodes(dhdx)
     problem.geometry.h = h
     problem.geometry.dhdx = dhdx
-end
-
-function initialize_old(problem::Problem)
-    h0 = ScalarField(problem, problem.geometry.nameGap, (x, y, z) -> z)
-    tag = getTagForPhysicalName(problem.material[1].phName)
-    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(problem.dim, tag)
-    coord = reshape(coord, 3, :)
-    #val = probe_field_bulk_fallback(h0, coord')
-    grid = build_surface_grid(h0, nx=0, ny=0)
-    val = probe_field_bulk_walking(h0, coord', grid)
-    h1 = scalarField(problem, problem.material[1].phName, (x,y,z)->z)
-    h1.a[nodeTags] .-= val
-    h1.a .*= -1.0
-    h = h1 # nodesToElements(h1, onPhysicalGroup="bottom")
-
-    #fh(x, y, z) = gmsh.view.probe(problem.geometry.tagTop, x, y, 0)[1][1] - z
-    #h = scalarField(problem, problem.material[1].phName, fh)
-    grad_h = ∇(h)
-    ex = VectorField(problem, problem.material[1].phName, [1,0,0])
-    dhdx = grad_h * ex
-    problem.geometry.h = h
-    problem.geometry.dhdx = elementsToNodes(dhdx)
-    #gmsh.view.remove(problem.geometry.tagTop)
 end
 
 """
@@ -239,10 +204,15 @@ for arbitrary element order supported by Gmsh.
 
 ---
 """
-function projectScalarField(p::ScalarField; from="", to="", gap=false, binSize=0.7)
-    problem = p.model
+function projectScalarField(pp::ScalarField; from="", to="", gap=false, binSize=0.7)
+    problem = pp.model
     if isempty(from) || isempty(to)
         error("projectScalarField: physical groups must be given.")
+    end
+    if isElementwise(pp)
+        p = elementsToNodes(p)
+    else
+        p = pp
     end
     dimF = 0
     if gap == true
@@ -423,7 +393,6 @@ function projectScalarField(p::ScalarField; from="", to="", gap=false, binSize=0
         for (ni, nn) in enumerate(nodeTagsUpper)
             gmsh.model.mesh.setNode(nn, [coordUpper[3ni-2], coordUpper[3ni-1], 0.0], [0, 0, 0])
         end
-        #pvals = vec(h0.a)
     end
 
     for b in eachindex(ebins)
@@ -473,61 +442,12 @@ function projectScalarField(p::ScalarField; from="", to="", gap=false, binSize=0
         end
     end
 
-    return ScalarField([], reshape(a, :, 1), [0.0], [], 1, :scalar, problem)
-end
-
-function pressureInVolume_old(p::ScalarField)
-    if p.model.geometry.nameVolume == ""
-        error("initializePressure: no volume for lubricant has been defined.")
+    ret = ScalarField([], reshape(a, :, 1), [0.0], [], 1, :scalar, problem)
+    if isNodal(pp)
+        return ret
+    else
+        return nodesToElements(ret)
     end
-
-    tag = LowLevelFEM.getTagForPhysicalName(p.model.geometry.nameVolume)
-    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(p.model.dim + 1, tag)
-    coord = reshape(coord, 3, :)
-    coord_mat = Matrix(coord')
-    p1 = nodesToElements(p)
-    grid = build_surface_grid(p1, nx=0, ny=0)
-    #val = probe_field_bulk(p1, coord_mat, grid=grid)
-    #val = probe_field_bulk_fallback(p1, coord_mat)
-    val = probe_field_bulk_walking(p1, coord_mat, grid)
-    pp = scalarField(p.model, p.model.geometry.nameVolume, 0)
-    pp.a[nodeTags] .= val
-
-    if isnothing(p.model.geometry.hh)
-        #tag = LowLevelFEM.getTagForPhysicalName(p.model.geometry.nameVolume)
-        #nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(p.model.dim + 1, tag)
-        #coord = reshape(coord, 3, :)
-        h_top = ScalarField(p.model, p.model.geometry.nameGap, (x, y, z) -> z)
-        grid = build_surface_grid(h_top, nx=0, ny=0)
-        #val = probe_field_bulk(h_top, coord_mat, grid=grid)
-        #val = probe_field_bulk_fallback(h_top, coord_mat)
-        val = probe_field_bulk_walking(h_top, coord_mat, grid)
-        hh = scalarField(p.model, p.model.geometry.nameVolume, 0)
-        hh.a[nodeTags] .= val
-        hh = nodesToElements(hh, onPhysicalGroup=p.model.geometry.nameVolume)
-        p.model.geometry.hh = nodesToElements(hh)
-    end
-
-    return pp
-
-    #=
-    return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)
-
-    if p.model.geometry.nameVolume == ""
-        error("initializePressure: no volume for lubricant has been defined.")
-    end
-    if p.model.geometry.hh == nothing
-        view_h = showDoFResults(p.model.geometry.h)
-        fh(x, y, z) = gmsh.view.probe(view_h, x, y, 0, -1, -1, false, -1)[1][1]
-        p.model.geometry.hh = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fh)])
-        gmsh.view.remove(view_h)
-    end
-    view_p = showDoFResults(p)
-    fp(x, y, z) = gmsh.view.probe(view_p, x, y, 0, -1, -1, false, -1)[1][1]
-    pp = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
-    gmsh.view.remove(view_p)
-    return pp
-    =#
 end
 
 function pressureInVolume(p::ScalarField)
@@ -544,44 +464,7 @@ function pressureInVolume(p::ScalarField)
     end
 
     return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)
-
-    #=
-    return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)
-
-    if p.model.geometry.nameVolume == ""
-        error("initializePressure: no volume for lubricant has been defined.")
-    end
-    if p.model.geometry.hh == nothing
-        view_h = showDoFResults(p.model.geometry.h)
-        fh(x, y, z) = gmsh.view.probe(view_h, x, y, 0, -1, -1, false, -1)[1][1]
-        p.model.geometry.hh = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fh)])
-        gmsh.view.remove(view_h)
-    end
-    view_p = showDoFResults(p)
-    fp(x, y, z) = gmsh.view.probe(view_p, x, y, 0, -1, -1, false, -1)[1][1]
-    pp = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
-    gmsh.view.remove(view_p)
-    return pp
-    =#
 end
-
-#=
-function initializePressure(p::ScalarField)
-    if p.model.geometry.nameVolume == ""
-        error("initializePressure: no volume for lubricant has been defined.")
-    end
-    if p.model.geometry.hh == nothing
-        view_h = showDoFResults(p.model.geometry.h)
-        fh(x, y, z) = gmsh.view.probe(view_h, x, y, 0, -1, -1, false, -1)[1][1]
-        p.model.geometry.hh = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fh)])
-        gmsh.view.remove(view_h)
-    end
-    view_p = showDoFResults(p)
-    fp(x, y, z) = gmsh.view.probe(view_p, x, y, 0, -1, -1, false, -1)[1][1]
-    p.model.geometry.p = ScalarField(p.model, [field(p.model.geometry.nameVolume, f=fp)])
-    gmsh.view.remove(view_p)
-end
-=#
 
 #function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
 function systemMatrix_old(problem, velocity::Number)
