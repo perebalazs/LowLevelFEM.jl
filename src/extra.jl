@@ -1,5 +1,5 @@
 export pressureConstraint, flowRate
-export solvePressure, pressureInVolume, solveShearStress
+export solvePressure, solveShearStress, fieldsToVolume
 
 
 function showGapThickness(phName; name=phName, visible=false)
@@ -204,16 +204,13 @@ for arbitrary element order supported by Gmsh.
 
 ---
 """
-function projectScalarField(pp::ScalarField; from="", to="", gap=false, binSize=0.7)
-    problem = pp.model
+function projectScalarField(pp::Union{ScalarField,Vector{ScalarField}}; from="", to="", gap=false, binSize=0.7)
+    problem = pp isa Vector ? pp[1].model : pp.model
     if isempty(from) || isempty(to)
         error("projectScalarField: physical groups must be given.")
     end
-    if isElementwise(pp)
-        p = elementsToNodes(p)
-    else
-        p = pp
-    end
+    rows = pp isa Vector ? size(pp, 1) : 1
+    p = pp isa Vector ? [elementsToNodes(pp[i]) for i in eachindex(pp)] : [elementsToNodes(pp)]
     dimF = 0
     if gap == true
         tag = getTagForPhysicalName(from)
@@ -385,8 +382,13 @@ function projectScalarField(pp::ScalarField; from="", to="", gap=false, binSize=
     end
 
     # --- 5) Interpoláció ---
-    a = zeros(problem.non)
-    pvals = vec(p.a)
+    a = zeros(problem.non, rows)
+    pvals = Matrix{Float64}(undef, problem.non, rows)
+    for j in 1:rows
+        pvals[:, j] .= vec(p[j].a)
+    end
+
+    #pvals = [vec(p[i].a) for i in eachindex(p)]
     uvw = Vector{Float64}(undef, 3)
 
     if gap == true
@@ -395,6 +397,7 @@ function projectScalarField(pp::ScalarField; from="", to="", gap=false, binSize=
         end
     end
 
+    val = Vector{Float64}(undef, rows)
     for b in eachindex(ebins)
         elems = ebins[b]   # idx-ek
         nodes = nbins[b]
@@ -424,12 +427,23 @@ function projectScalarField(pp::ScalarField; from="", to="", gap=false, binSize=
                     uvw[3] = w
                     _, bf, _ = gmsh.model.mesh.getBasisFunctions(et, uvw, "Lagrange")
 
-                    val = 0.0
-                    @inbounds for i in eachindex(conn)
-                        val += bf[i] * pvals[conn[i]]
+                    fill!(val, 0.0)
+                    @inbounds for ii in eachindex(conn)
+                        nid = conn[ii]
+                        bfi = bf[ii]
+                        for j in 1:rows
+                            val[j] += bfi * pvals[nid, j]
+                        end
                     end
 
-                    a[node] = val
+                    #fill!(val, 0.0)
+                    #@inbounds for i in eachindex(conn), j in 1:rows
+                    #    val[j] += bf[i] * pvals[conn[i], j]
+                    #end
+
+                    @inbounds for i in 1:rows
+                        a[node, i] = val[i]
+                    end
                     break
                 end
             end
@@ -442,28 +456,38 @@ function projectScalarField(pp::ScalarField; from="", to="", gap=false, binSize=
         end
     end
 
-    ret = ScalarField([], reshape(a, :, 1), [0.0], [], 1, :scalar, problem)
-    if isNodal(pp)
-        return ret
+    if pp isa Vector
+        ret = [ScalarField([], reshape(a[:,i], :, 1), [0.0], [], 1, :scalar, problem) for i in 1:rows]
+        ret = [isNodal(pp[i]) ? ret[i] : nodesToElements(ret[i], onPhysicalGroup=to) for i in 1:rows]
     else
-        return nodesToElements(ret)
+        ret = ScalarField([], reshape(a[:, 1], :, 1), [0.0], [], 1, :scalar, problem)
+        ret = isNodal(pp) ? ret : nodesToElements(ret, onPhysicalGroup=to)
     end
+    return ret
 end
 
-function pressureInVolume(p::ScalarField)
-    if p.model.geometry.nameVolume == ""
+function fieldsToVolume(p0::Union{ScalarField,Vector{ScalarField}})
+    if p0 isa Vector
+        p = p0
+    else
+        p = [p0]
+    end
+    if p[1].model.geometry.nameVolume == ""
         error("initializePressure: no volume for lubricant has been defined.")
     end
 
-    pp = projectScalarField(p, from=p.model.material[1].phName, to=p.model.geometry.nameVolume)
-
-    if isnothing(p.model.geometry.hh)
-        hh = projectScalarField(p.model.geometry.h, from=p.model.material[1].phName, to=p.model.geometry.nameVolume)
-        hh = nodesToElements(hh, onPhysicalGroup=p.model.geometry.nameVolume)
-        p.model.geometry.hh = hh
+    if isnothing(p[1].model.geometry.hh)
+        ret = projectScalarField(vcat(p[1].model.geometry.h, p), from=p[1].model.material[1].phName, to=p[1].model.geometry.nameVolume)
+        hh = nodesToElements(ret[1], onPhysicalGroup=p[1].model.geometry.nameVolume)
+        p[1].model.geometry.hh = hh
+        pp = ret[2:end]
+        pp = [nodesToElements(pp[i], onPhysicalGroup=p[1].model.geometry.nameVolume) for i in eachindex(pp)]
+        return pp
+    else
+        pp = projectScalarField(p, from=p[1].model.material[1].phName, to=p.model.geometry.nameVolume)
+        pp = [nodesToElements(pp[i], onPhysicalGroup=p[1].model.geometry.nameVolume) for i in eachindex(pp)]
+        return pp
     end
-
-    return nodesToElements(pp, onPhysicalGroup=p.model.geometry.nameVolume)
 end
 
 #function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
