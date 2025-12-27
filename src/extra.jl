@@ -99,13 +99,13 @@ function initialize(problem::Problem)
     h = projectScalarField(h0, from=problem.geometry.nameGap, to=problem.material[1].phName, gap=true)
     h0 = nodesToElements(h, onPhysicalGroup=problem.material[1].phName)
     dhdx = elementsToNodes(∂x(h0))
-    dhdx = elementsToNodes(dhdx)
+    #dhdx = elementsToNodes(dhdx)
     problem.geometry.h = h
     problem.geometry.dhdx = dhdx
 end
 
 """
-    projectScalarField(p::ScalarField; from="", to="", gap=false, binSize=0.7)
+    projectScalarField(p::Union{ScalarField,Vector{ScalarField}}; from="", to="", gap=false, binSize=0.7)
 
 Projects a scalar field defined on a 2D surface onto the nodes of another mesh
 (typically a 3D volume or a parallel surface), using a robust AABB-based
@@ -176,8 +176,8 @@ for arbitrary element order supported by Gmsh.
 
 ## Returns
 
-- `ScalarField`  
-  A new scalar field defined on the target mesh nodes, containing the
+- `ScalarField` or `Vector{ScalarField}`
+  A new scalar field(s) defined on the target mesh nodes, containing the
   interpolated values of `p`.
 
 ---
@@ -209,7 +209,7 @@ function projectScalarField(pp::Union{ScalarField,Vector{ScalarField}}; from="",
     if isempty(from) || isempty(to)
         error("projectScalarField: physical groups must be given.")
     end
-    rows = pp isa Vector ? size(pp, 1) : 1
+    rows = pp isa Vector ? length(pp) : 1
     p = pp isa Vector ? [elementsToNodes(pp[i]) for i in eachindex(pp)] : [elementsToNodes(pp)]
     dimF = 0
     if gap == true
@@ -316,8 +316,8 @@ function projectScalarField(pp::Union{ScalarField,Vector{ScalarField}}; from="",
     bbx = bbxmax - bbxmin
     bby = bbymax - bbymin
 
-    nbbx = Int(bbx ÷ (binSize * esizemin))
-    nbby = Int(bby ÷ (binSize * esizemin))
+    nbbx = max(1, Int(bbx ÷ (binSize * esizemin)))
+    nbby = max(1, Int(bby ÷ (binSize * esizemin)))
 
     inv_dx = nbbx / bbx
     inv_dy = nbby / bby
@@ -484,7 +484,7 @@ function fieldsToVolume(p0::Union{ScalarField,Vector{ScalarField}})
         pp = [nodesToElements(pp[i], onPhysicalGroup=p[1].model.geometry.nameVolume) for i in eachindex(pp)]
         return pp
     else
-        pp = projectScalarField(p, from=p[1].model.material[1].phName, to=p.model.geometry.nameVolume)
+        pp = projectScalarField(p, from=p[1].model.material[1].phName, to=p[1].model.geometry.nameVolume)
         pp = [nodesToElements(pp[i], onPhysicalGroup=p[1].model.geometry.nameVolume) for i in eachindex(pp)]
         return pp
     end
