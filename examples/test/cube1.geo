@@ -3,7 +3,7 @@ SetFactory("OpenCASCADE");
 Box(1) = {0, 0, 0, 1, 1, 1};
 
 //+
-Transfinite Curve {:} = 50 Using Progression 1;
+Transfinite Curve {:} = 60 Using Progression 1;
 //+
 Transfinite Surface {:};
 //+

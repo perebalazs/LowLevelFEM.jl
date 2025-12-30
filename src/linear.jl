@@ -3089,15 +3089,15 @@ function loadVector(problem, loads)
                 end
                 f1 = zeros(pdim * numNodes)
                 nn2 = zeros(Int, pdim * numNodes)
-                for l in 1:length(elementTags[ii])
+                @inbounds for l in 1:length(elementTags[ii])
                     elem = elementTags[ii][l]
                     for k in 1:numNodes
                         nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
                     end
                     jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                     Jac = reshape(jac, 3, :)
-                    f1 .*= 0
-                    for j in 1:numIntPoints
+                    fill!(f1, 0.0)
+                    @inbounds for j in 1:numIntPoints
                         x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
                         y = 0
                         z = 0

@@ -1180,7 +1180,7 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
     end
     p0 = problem.material[1].p₀
     κ = problem.material[1].κ
-    if problem.geometry.h == nothing
+    if problem.geometry.h === nothing
         initialize(problem)
     end
     fluid = constrainedDoFs(problem, [pressureConstraint(problem.material[1].phName, p=0)])

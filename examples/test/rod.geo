@@ -3,7 +3,7 @@ SetFactory("OpenCASCADE");
 //+
 length = DefineNumber[ 100, Name "Parameters/length" ];
 //+
-elements = DefineNumber[ 5, Name "Parameters/elements" ];
+elements = DefineNumber[ 1, Name "Parameters/elements" ];
 //+
 Rectangle(1) = {0, 0, 0, length, length/2, 0};
 //+

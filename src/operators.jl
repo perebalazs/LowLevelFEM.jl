@@ -1852,124 +1852,132 @@ end
 
 ###############################################################################
 #                                                                             #
-#                      System matrix operations                               #
+#                      SystemMatrix operations                                #
 #                                                                             #
 ###############################################################################
 
+"""
+    *(A::Union{SystemMatrix,Matrix}, B::VectorField)
+
+Matrix–vector multiplication between a system matrix and a nodal vector field.
+
+If the vector field is defined elementwise, it is automatically converted to
+nodal representation before multiplication.
+
+# Returns
+- `VectorField` containing the nodal result with one time step.
+"""
 function *(A::Union{SystemMatrix,Matrix}, BB::VectorField)
-    if BB.A != []
-        B = elementsToNodes(BB)
-    else
-        B = BB
-    end
-    type = :none
+    B = BB.A != [] ? elementsToNodes(BB) : BB
+
     if B.a != [;;] && B.nsteps == 1
-        if B.type == :v2D
-            type = :v2D
-        elseif B.type == :v3D
-            type = :v3D
-        elseif B.type == :other
-            type = :other
-        else
-            error("*(A::Union{SystemMatrix,Matrix}, B::VectorField): neither 2D nor 3D (type=$(B.type))?")
-        end
+        type = B.type
         C = A isa Matrix ? A * B.a : A.A * B.a
         return VectorField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
     else
-        error("*(A::Union{SystemMatrix,Matrix}, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("*(A, B::VectorField): vector field must be nodal with a single time step.")
     end
 end
 
+
+"""
+    *(A::Union{SystemMatrix,Matrix}, B::ScalarField)
+
+Matrix–vector multiplication between a system matrix and a nodal scalar field.
+
+If the scalar field is defined elementwise, it is automatically converted to
+nodal representation before multiplication.
+
+# Returns
+- `ScalarField` containing the nodal result with one time step.
+"""
 function *(A::Union{SystemMatrix,Matrix}, BB::ScalarField)
-    if BB.A != []
-        B = elementsToNodes(BB)
-    else
-        B = BB
-    end
-    type = :none
+    B = BB.A != [] ? elementsToNodes(BB) : BB
+
     if B.a != [;;] && B.nsteps == 1
-        type = :scalar
         C = A isa Matrix ? A * B.a : A.A * B.a
-        return ScalarField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
+        return ScalarField([], reshape(C, :, 1), [0.0], [], 1, :scalar, B.model)
     else
-        error("*(A::SystemMatrix, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("*(A, B::ScalarField): scalar field must be nodal with a single time step.")
     end
 end
 
-import Base.\
+
+###############################################################################
+# Linear solves
+###############################################################################
+
+import Base:\
+"""
+    \\(A::Union{SystemMatrix,Matrix}, b::ScalarField)
+
+Solves the linear system `A * x = b` for a nodal scalar field right-hand side.
+
+If the scalar field is defined elementwise, it is converted to nodal form
+before solving.
+
+# Returns
+- `ScalarField` containing the solution.
+"""
 function \(A::Union{SystemMatrix,Matrix}, BB::ScalarField)
-    if BB.A != []
-        B = elementsToNodes(BB)
-    else
-        B = BB
-    end
-    type = :none
+    B = BB.A != [] ? elementsToNodes(BB) : BB
+
     if B.a != [;;] && B.nsteps == 1
-        type = :scalar
         C = A isa Matrix ? A \ B.a : A.A \ B.a
-        #B = nothing
-        #GC.gc()
-        return ScalarField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
+        return ScalarField([], reshape(C, :, 1), [0.0], [], 1, :scalar, B.model)
     else
-        error("\\(A::SystemMatrix, B::ScalarField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("\\(A, b::ScalarField): scalar field must be nodal with a single time step.")
     end
 end
 
+
+"""
+    \\(A::Union{SystemMatrix,Matrix}, b::VectorField)
+
+Solves the linear system `A * x = b` for a nodal vector field right-hand side.
+
+If the vector field is defined elementwise, it is converted to nodal form
+before solving.
+
+# Returns
+- `VectorField` containing the solution.
+"""
 function \(A::Union{SystemMatrix,Matrix}, BB::VectorField)
-    if BB.A != []
-        B = elementsToNodes(BB)
-    else
-        B = BB
-    end
-    type = :none
+    B = BB.A != [] ? elementsToNodes(BB) : BB
+
     if B.a != [;;] && B.nsteps == 1
-        if B.type == :v2D
-            type = :v2D
-        elseif B.type == :v3D
-            type = :v3D
-        elseif B.type == :other
-            type = :other
-        else
-            error("\\(A::SystemMatrix, B::VectorField): ")
-        end
         C = A isa Matrix ? A \ B.a : A.A \ B.a
-        #B = nothing
-        #GC.gc()
-        return VectorField([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
+        return VectorField([], reshape(C, :, 1), [0.0], [], 1, B.type, B.model)
     else
-        error("\\(A::SystemMatrix, B::VectorField): Type of data is not nodal or more than one time steps ($(B.nsteps)).")
+        error("\\(A, b::VectorField): vector field must be nodal with a single time step.")
     end
 end
 
-#=
-function \(A::Union{SystemMatrix,Matrix,SparseMatrixCSC}, b::SparseMatrixCSC)
-    m, n = size(b)
-    c = zeros(m)
-    d = zeros(m, n)
-    AA = A isa SystemMatrix ? lu(A.A) : lu(A)
-    for i in 1:n
-        c .= b[:, i]
-        d[:, i] = AA \ c
-    end
-    return d
-end
-=#
 
+###############################################################################
+# Sparse RHS solves
+###############################################################################
+
+"""
+    ldiv_sparse!(X, K, F)
+
+Solves the sparse linear system `K * X = F` column-by-column, where `F` is a
+sparse matrix representing multiple right-hand sides.
+
+# Returns
+- Sparse matrix `X` containing the solution.
+"""
 function ldiv_sparse!(X::SparseMatrixCSC, K::Union{SystemMatrix,SparseMatrixCSC}, F::SparseMatrixCSC)
-    if K isa SystemMatrix
-        n, m = size(K.A, 1), size(F, 2)
-        Ffac = lu(K.A)
-    elseif K isa SparseMatrixCSC
-        n, m = size(K, 1), size(F, 2)
-        Ffac = lu(K)
-    end
+    Ffac = K isa SystemMatrix ? lu(K.A) : lu(K)
+    n, m = size(F)
     x = zeros(n)
     b = zeros(n)
-    I, V, J = Int[], Float64[], Int[]
+
+    I, J, V = Int[], Int[], Float64[]
 
     for j in 1:m
         idx, val = findnz(view(F, :, j))
-        b .= 0
+        fill!(b, 0.0)
         b[idx] .= val
         ldiv!(x, Ffac, b)
         nz = findall(!iszero, x)
@@ -1978,34 +1986,154 @@ function ldiv_sparse!(X::SparseMatrixCSC, K::Union{SystemMatrix,SparseMatrixCSC}
         append!(V, x[nz])
     end
 
-    X = sparse(I, J, V, n, m)
-    return X
+    return sparse(I, J, V, n, m)
 end
 
+
+"""
+    \\(K::Union{SystemMatrix,SparseMatrixCSC}, F::SparseMatrixCSC)
+
+Solves a sparse linear system with multiple right-hand sides.
+
+# Returns
+- Sparse matrix containing the solution.
+"""
 function \(K::Union{SystemMatrix,SparseMatrixCSC}, F::SparseMatrixCSC)
-    if K isa SystemMatrix
-        X = spzeros(size(K.A, 1), size(F, 2))
-    elseif K isa SparseMatrixCSC
-        X = spzeros(size(K, 1), size(F, 2))
-    end
+    n = K isa SystemMatrix ? size(K.A, 1) : size(K, 1)
+    X = spzeros(n, size(F, 2))
     return ldiv_sparse!(X, K, F)
 end
 
+
+###############################################################################
+# Algebraic operations
+###############################################################################
+
+"""
+    *(A::SystemMatrix, c::Number)
+    *(c::Number, A::SystemMatrix)
+
+Scalar multiplication of a system matrix.
+"""
 function *(A::SystemMatrix, b::Number)
-    return SystemMatrix(A.A * b, A.model)
+    SystemMatrix(A.A * b, A.model)
 end
-
 function *(b::Number, A::SystemMatrix)
-    return SystemMatrix(A.A * b, A.model)
+    SystemMatrix(A.A * b, A.model)
 end
 
+
+"""
+    +(A::SystemMatrix, B::SystemMatrix)
+    -(A::SystemMatrix, B::SystemMatrix)
+
+Addition and subtraction of system matrices.
+"""
 function +(A::SystemMatrix, B::SystemMatrix)
-    return SystemMatrix(A.A + B.A, A.model)
+    SystemMatrix(A.A + B.A, A.model)
+end
+function -(A::SystemMatrix, B::SystemMatrix)
+    SystemMatrix(A.A - B.A, A.model)
 end
 
-function -(A::SystemMatrix, B::SystemMatrix)
-    return SystemMatrix(A.A - B.A, A.model)
-end
+
+###############################################################################
+# Optional but recommended utilities
+###############################################################################
+
+import Base:copy
+"""
+    copy(K::SystemMatrix)
+
+Returns a deep copy of the system matrix.
+"""
+copy(K::SystemMatrix) = SystemMatrix(copy(K.A), K.model)
+
+
+import Base:transpose,adjoint
+"""
+    transpose(K::SystemMatrix)
+    adjoint(K::SystemMatrix)
+
+Transpose / adjoint of a system matrix.
+"""
+transpose(K::SystemMatrix) = SystemMatrix(transpose(K.A), K.model)
+adjoint(K::SystemMatrix)   = SystemMatrix(adjoint(K.A), K.model)
+
+
+import LinearAlgebra: issymmetric
+"""
+    issymmetric(K::SystemMatrix)
+
+Checks whether the system matrix is symmetric.
+"""
+issymmetric(K::SystemMatrix) = issymmetric(K.A)
+
+import Base:getindex,setindex!,size,axes,eltype
+
+"""
+    getindex(K::SystemMatrix, I...)
+
+Indexing operation for `SystemMatrix`.
+
+Forwards all indexing operations to the underlying sparse matrix `K.A`,
+allowing a `SystemMatrix` to be indexed in the same way as a
+`SparseMatrixCSC`.
+
+Examples include:
+- `K[i, j]`
+- `K[:, j]`, `K[i, :]`
+- `K[a:b, c:d]`
+- `K[v1, v2]` where `v1` and `v2` are index vectors.
+"""
+@inline getindex(K::SystemMatrix, I...) = getindex(K.A, I...)
+
+
+"""
+    setindex!(K::SystemMatrix, v, I...)
+
+In-place assignment for `SystemMatrix`.
+
+Forwards indexed assignment to the underlying sparse matrix `K.A`,
+enabling modifications such as:
+- `K[i, j] = v`
+- `K[a:b, c:d] .= v`
+- `K[v1, v2] .= submatrix`
+
+Note that assignment follows the semantics and performance characteristics
+of `SparseMatrixCSC`.
+"""
+@inline setindex!(K::SystemMatrix, v, I...) = setindex!(K.A, v, I...)
+
+
+"""
+    size(K::SystemMatrix)
+
+Return the size of the system matrix.
+
+Equivalent to `size(K.A)`.
+"""
+size(K::SystemMatrix) = size(K.A)
+
+
+"""
+    axes(K::SystemMatrix)
+
+Return the valid index ranges for the system matrix.
+
+Equivalent to `axes(K.A)`.
+"""
+axes(K::SystemMatrix) = axes(K.A)
+
+
+"""
+    eltype(K::SystemMatrix)
+
+Return the element type of the system matrix.
+
+Equivalent to `eltype(K.A)`.
+"""
+eltype(K::SystemMatrix) = eltype(K.A)
 
 ###############################################################################
 #                                                                             #

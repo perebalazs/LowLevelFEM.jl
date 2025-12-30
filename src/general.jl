@@ -2,7 +2,7 @@ export Problem, material, getEigenVectors, getEigenValues
 export displacementConstraint, load, elasticSupport
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
-export constrainedDoFs, freeDoFs
+export constrainedDoFs, freeDoFs, DoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
 export rotateNodes, CoordinateSystem
@@ -159,18 +159,21 @@ struct Problem
         elseif type == :Truss
             dim = 3
             pdim = 3
-        elseif type == :Poisson
+        elseif type == :Poisson3D || type == :Poisson
             dim = 3
             pdim = 1
         elseif type == :Poisson2D
             dim = 2
+            pdim = 1
+        elseif type == :Poisson1D
+            dim = 1
             pdim = 1
         elseif type == :Reynolds
             geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
             pdim = 1
         else
-            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`.
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Poisson1D`, `:Poisson2D`, `:Poisson3D`.
             Now problem type = $type ????")
         end
         if !isa(mat, Vector)
@@ -277,18 +280,17 @@ end
 Internal function to display `SystemMatrix` as a `SparseMatrixCSC{Float64}`.
 """
 function Base.show(io::IO, M::SystemMatrix)
-    display(M.A)
+    show(io, M.A)
 end
 
-import Base.copy
+function Base.show(io::IO, ::MIME"text/plain", M::SystemMatrix)
+    show(io, M.A)
+    #println(io, "SystemMatrix ($(size(M.A,1)) × $(size(M.A,2))), nnz = $(nnz(M.A))")
+end
 
-"""
-    Base.copy(A::SystemMatrix)
-
-Internal function to copy the whole content of a `SystemMatrix`.
-"""
-function copy(A::SystemMatrix)
-    return SystemMatrix(copy(A.A), A.model)
+import Base:display
+function display(M::SystemMatrix)
+    display(M.A)
 end
 
 abstract type AbstractField end
@@ -1099,6 +1101,17 @@ struct TensorField <: AbstractField
     end
 end
 
+"""
+    DoFs(f::AbstractField)
+
+Return the vector of degrees of freedom (DOFs) associated with a field.
+
+This corresponds to the nodal representation used in linear algebra
+operations (assembly, solving, post-processing).
+"""
+@inline DoFs(f::AbstractField) = f.a
+
+import Base:copy
 function copy(A::AbstractField)
     T = typeof(A)
     
@@ -1112,17 +1125,31 @@ function copy(A::AbstractField)
     return T(a, b, c, d, e, f, g)
 end
 
+import Base:show
 """
-    Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
+    Base.show(io::IO, ::MIME"text/plain", M::Union{ScalarField,VectorField,TensorField})
 
-Internal function to display `ScalarField`, `VectorField` and `TensorField` as a `Matrix{Float64}` or `Vector{Matrix{Float64}}`.
+Plain-text display in REPL and notebooks.
 """
-function Base.show(io::IO, M::Union{ScalarField,VectorField,TensorField})
-    display(typeof(M))
+function Base.show(io::IO, ::MIME"text/plain", M::Union{ScalarField,VectorField,TensorField})
+    # fejléc külön sorban (szebb notebookban)
+    println(io, nameof(typeof(M)))
+    
+    io2 = IOContext(io, :compact => false)
+    
     if isNodal(M)
-        display(M.a)
+        Base.show(io2, M.a)
     else
-        display(M.A)
+        Base.show(io2, M.A)
+    end
+end
+
+import Base:display
+function display(M::Union{ScalarField,VectorField,TensorField})
+    if isNodal(M)
+        display("$(nameof(typeof(M))) $(M.a)")
+    else
+        display("$(nameof(typeof(M))) $(M.A)")
     end
 end
 
