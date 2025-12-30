@@ -159,6 +159,12 @@ struct Problem
         elseif type == :Truss
             dim = 3
             pdim = 3
+        elseif type == :Poisson
+            dim = 3
+            pdim = 1
+        elseif type == :Poisson2D
+            dim = 2
+            pdim = 1
         elseif type == :Reynolds
             geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
@@ -2038,6 +2044,52 @@ struct Eigen
     f::Vector{Float64}
     ϕ::Matrix{Float64}
     model::Problem
+end
+
+"""
+    getTagForPhysicalName(name)
+                            
+Returns `tag` of elements of physical group `name`.
+                            
+Returns: `tag`
+                            
+Types:
+- `name`: String
+- `tag`: Integer
+"""
+function getTagForPhysicalName(name)
+    dimTags = gmsh.model.getPhysicalGroups(-1)
+    i = 1
+    while gmsh.model.getPhysicalName(dimTags[i][1], dimTags[i][2]) != name
+        i += 1
+        if i > length(dimTags)
+            error("Physical name '$name' does not exist.")
+        end
+    end
+    return dimTags[i][2]
+end
+
+"""
+    getDimForPhysicalName(name)
+                            
+Returns `dim` of elements of physical group `name`.
+                            
+Returns: `dim`
+                            
+Types:
+- `name`: String
+- `dim`: Integer
+"""
+function getDimForPhysicalName(name)
+    dimTags = gmsh.model.getPhysicalGroups(-1)
+    i = 1
+    while gmsh.model.getPhysicalName(dimTags[i][1], dimTags[i][2]) != name
+        i += 1
+        if i > length(dimTags)
+            error("Physical name '$name' does not exist.")
+        end
+    end
+    return dimTags[i][1]
 end
 
 """

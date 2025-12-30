@@ -20,8 +20,9 @@ include("operators.jl")
 include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
-include("fieldtools.jl")
-using .FieldTools
+include("poisson.jl")
+#include("fieldtools.jl")
+#using .FieldTools
 include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize

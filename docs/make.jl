@@ -11,6 +11,7 @@ const DOC_PAGES = [
         "General" => "General.md",
         "Linear" => "Linear.md",
         "Heat" => "Heat.md",
+        "Poisson" => "Poisson.md",
         "Nonlinear" => "Nonlinear.md",
         "Operators" => "Operators.md",
     ],
