@@ -11,6 +11,8 @@ import Base.-
 import Base.log
 import Base.sqrt
 import Base.cbrt
+import Base.abs
+export mapScalarField
 using StaticArrays
 
 """
@@ -330,6 +332,213 @@ function *(b::Number, A::ScalarField)
     return A * b
 end
 
+"""
+    /(A::ScalarField, b::Number)
+
+Elementwise division of a scalar field by a constant.
+
+Each element-wise matrix of the scalar field is divided by the scalar `b`.
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the elementwise divided values.
+"""
+function /(AA::ScalarField, b::Number)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] ./ b
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    /(b::Number, A::ScalarField)
+
+Elementwise division of a constant by a scalar field.
+
+Each element-wise matrix of the scalar field is used as the divisor of the
+constant `b`, i.e. `b ./ A`.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the elementwise divided values.
+"""
+function /(b::Number, AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = b ./ A.A[i]
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    log(A::ScalarField)
+
+Elementwise natural logarithm of a scalar field.
+
+Applies the natural logarithm to each entry of every element-wise matrix
+of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the elementwise logarithmic values.
+"""
+function log(AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = log.(A.A[i])
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    sqrt(A::ScalarField)
+
+Elementwise square root of a scalar field.
+
+Applies the square root to each entry of every element-wise matrix
+of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the elementwise square-rooted values.
+"""
+function sqrt(AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = sqrt.(A.A[i])
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    cbrt(A::ScalarField)
+
+Elementwise cubic root of a scalar field.
+
+Applies the cubic root to each entry of every element-wise matrix
+of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the elementwise cubic-rooted values.
+"""
+function cbrt(AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = cbrt.(A.A[i])
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    abs(A::ScalarField)
+
+Elementwise absolute value of a scalar field.
+
+Applies the absolute value to each entry of every element-wise matrix
+of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the elementwise absolute values.
+"""
+function abs(AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = abs.(A.A[i])
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    +(A::ScalarField, b::Number)
+
+Add a constant offset to a scalar field.
+
+The scalar `b` is added elementwise to each entry of every element-wise
+matrix of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the shifted values.
+"""
+function +(AA::ScalarField, b::Number)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] .+ b
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    -(A::ScalarField, b::Number)
+
+Subtract a constant offset from a scalar field.
+
+The scalar `b` is subtracted elementwise from each entry of every element-wise
+matrix of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the shifted values.
+"""
+function -(AA::ScalarField, b::Number)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] .- b
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    mapScalarField(f, A::ScalarField)
+
+Apply a function elementwise to a scalar field.
+
+The function `f` is applied to each element-wise matrix of the scalar field.
+If the field is nodal, it is first converted to elementwise form.
+
+This is a low-level helper used to implement elementwise scalar-field
+operations such as `abs`, `+`, `-`, `log`, `sqrt`, etc.
+
+# Returns
+- A new `ScalarField` containing the transformed values.
+"""
+@inline function mapScalarField(f::F, AA::ScalarField) where {F}
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = f.(A.A[i])
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+#=
 function /(AA::ScalarField, b::Number)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     n = length(A.A)
@@ -379,6 +588,47 @@ function cbrt(AA::ScalarField)
     end
     return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
+
+function abs(AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = abs.(A.A[i])
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+function +(AA::ScalarField, b::Number)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] .+ b
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+function -(AA::ScalarField, b::Number)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] .- b
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+@inline function mapScalarField(f::F, AA::ScalarField) where {F}
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = f(A.A[i])
+    end
+    return ScalarField(C, [:,], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+=#
 
 ###############################################################################
 #                                                                             #
