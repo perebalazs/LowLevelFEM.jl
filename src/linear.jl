@@ -3526,6 +3526,20 @@ function applyBoundaryConditions!(dispVec::Union{ScalarField,VectorField}, suppo
     return applyBoundaryConditions!(dispVec.model, dispVec.a, supports)
 end
 
+function applyBoundaryConditions(problem::Problem, supports)
+    dispVec = nothing
+    if problem.pdim == 1
+        dispVec = scalarField(problem, problem.material[1].phName, 0)
+    elseif problem.pdim == 2
+        dispVec = vectorField(problem, problem.material[1].phName, [0,0,0])
+        dispVec = projectTo2D(dispVec)
+    elseif problem.pdim == 3
+        dispVec = vectorField(problem, problem.material[1].phName, [0,0,0])
+    end
+    applyBoundaryConditions!(dispVec.model, dispVec.a, supports)
+    return dispVec
+end
+
 """
     applyElasticSupport!(stiffMat, elastSupp)
                             

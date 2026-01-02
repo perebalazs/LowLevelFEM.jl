@@ -515,6 +515,52 @@ function -(AA::ScalarField, b::Number)
 end
 
 """
+    +(b::Number, A::ScalarField)
+
+Add a constant offset to a scalar field.
+
+The scalar `b` is added elementwise to each entry of every element-wise
+matrix of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the shifted values.
+"""
+function +(b::Number, AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] .+ b
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
+    -(b::Number, A::ScalarField)
+
+Subtract a constant offset from a scalar field.
+
+The scalar `b` is subtracted elementwise from each entry of every element-wise
+matrix of the scalar field.
+
+If the field is nodal, it is first converted to elementwise form.
+
+# Returns
+- A new `ScalarField` containing the shifted values.
+"""
+function -(b::Number, AA::ScalarField)
+    A = isNodal(AA) ? nodesToElements(AA) : AA
+    n = length(A.A)
+    C = Vector{Matrix{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        C[i] = A.A[i] .- b
+    end
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+end
+
+"""
     mapScalarField(f, A::ScalarField)
 
 Apply a function elementwise to a scalar field.
@@ -2284,6 +2330,9 @@ function +(A::SystemMatrix, B::SystemMatrix)
 end
 function -(A::SystemMatrix, B::SystemMatrix)
     SystemMatrix(A.A - B.A, A.model)
+end
+function -(A::SystemMatrix)
+    SystemMatrix(-A.A, A.model)
 end
 
 
