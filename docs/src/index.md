@@ -6,6 +6,12 @@ It exposes each phase of the workflow as simple functions (mesh → matrices →
 Typical tasks such as strain energy or resultants are one-liners (for example, `U = q' * K * q / 2`).
 The package is suitable not only for classical structural mechanics problems, but also for assembling general linear PDEs expressed in weak form.
 
+![Operator-level FEM workflow in LowLevelFEM](pic/operators_cropped.svg)
+
+*Operator-level finite element workflow in LowLevelFEM.*
+Weak forms are discretized into elementary differential operators (grad, div, curl),
+which are assembled into bilinear forms and global system matrices.
+
 ## Requirements
 
 - Julia 1.x
