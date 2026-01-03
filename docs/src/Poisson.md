@@ -1,4 +1,4 @@
-# Poisson equation
+# Poisson-type operators
 
 ```@autodocs
 Modules = [LowLevelFEM]

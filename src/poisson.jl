@@ -1,10 +1,8 @@
-export stiffnessMatrixPoisson_old
-export stiffnessMatrixPoisson, convectionMatrixPoisson, massMatrixPoisson, convectionMatrixReynoldsSkew
-export couetteMatrixReynoldsSkew
-
+export stiffnessMatrixPoisson, convectionMatrixPoisson, massMatrixPoisson
+export gradDivMatrix, symmetricGradientMatrix, curlCurlMatrix
 
 """
-    stiffnessMatrixPoisson_old(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    stiffnessMatrixPoissonAllInOne(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the global stiffness matrix of a Poisson-type problem using the finite
 element method.
@@ -35,8 +33,11 @@ where `N_a` are the Lagrange shape functions and `α(x)` is a scalar coefficient
 - The function assembles only the left-hand side operator of the Poisson equation.
 - The spatial dimension (2D or 3D) is taken from `problem`.
 - Boundary conditions and the right-hand side vector are handled separately.
+
+Everything in one big function.
 """
-function stiffnessMatrixPoisson_old(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+
+function stiffnessMatrixPoissonAllInOne(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     gmsh.model.setCurrent(problem.name)
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     #lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
@@ -320,116 +321,6 @@ function _assemble_poissonlike!(
     return pos
 end
 
-function _assemble_reynolds_couette!(
-    I::Vector{Int}, J::Vector{Int}, V::Vector{Float64},
-    pos0::Int,
-    problem::Problem,
-    phName::String;
-    velocity::Number,
-    eta::Number = problem.material[1].η,
-    dir::Int = 1,
-    hfield::ScalarField = problem.geometry.h,        # nodal ScalarField
-    dhdxfield::ScalarField = problem.geometry.dhdx   # nodal ScalarField (∂h/∂x_dir)
-)
-    gmsh.model.setCurrent(problem.name)
-
-    pdim = problem.pdim
-    dim  = problem.dim
-    @assert 1 ≤ dir ≤ dim "Reynolds Couette: dir out of bounds"
-
-    etaV = Float64(6.0 * eta * velocity / 2.0)   # matches your old code: 6*η*V/2
-
-    pos = pos0
-    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-
-    for idm in 1:length(dimTags)
-        edim, etag = dimTags[idm]
-        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-
-        for itype in 1:length(elemTypes)
-            et = elemTypes[itype]
-            _, _, order, numNodes::Int64, _, _ = gmsh.model.mesh.getElementProperties(et)
-
-            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
-            numIntPoints = length(intWeights)
-
-            comp, fun, _  = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
-            hN = reshape(fun, :, numIntPoints)      # (numNodes, numIntPoints)
-
-            comp, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
-            ∇N = reshape(dfun, :, numIntPoints)     # (3*numNodes, numIntPoints)
-
-            nnet   = zeros(Int, length(elemTags[itype]), numNodes)
-            invJac = zeros(3, 3numIntPoints)
-            ∂N     = zeros(dim, numNodes * numIntPoints)
-            Ke     = zeros(pdim * numNodes, pdim * numNodes)
-
-            # connectivity
-            @inbounds for j in 1:length(elemTags[itype]), a in 1:numNodes
-                nnet[j, a] = elemNodeTags[itype][(j-1)*numNodes + a]
-            end
-
-            @inbounds for j in 1:length(elemTags[itype])
-                elem = elemTags[itype][j]
-
-                # nodal h and dhdx for this element (from nodal fields)
-                hn    = @view hfield.a[nnet[j, :]]
-                dhdxn = @view dhdxfield.a[nnet[j, :]]
-
-                jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
-                Jac = reshape(jac, 3, :)
-
-                # inv(J)' per GP
-                @inbounds for k in 1:numIntPoints
-                    invJac[1:3, 3*k-2:3*k] .= inv(Jac[1:3, 3*k-2:3*k])'
-                end
-
-                # physical grads of shape: ∂N
-                fill!(∂N, 0.0)
-                @inbounds for k in 1:numIntPoints, a in 1:numNodes
-                    invJk = invJac[1:dim, 3*k-2:3*k-(3-dim)]
-                    gha   = ∇N[a*3-2 : a*3-(3-dim), k]
-                    ∂N[1:dim, (k-1)*numNodes + a] .= invJk * gha
-                end
-
-                fill!(Ke, 0.0)
-
-                # integrate
-                @inbounds for k in 1:numIntPoints
-                    # interpolate h and dhdx to Gauss point using N
-                    Nk = @view hN[:, k]
-                    h_gp    = dot(hn, Nk)
-                    dhdx_gp = dot(dhdxn, Nk)
-
-                    w = jacDet[k] * intWeights[k]
-                    _kernel_reynolds_couette!(Ke, w, k, hN, ∂N, h_gp, dhdx_gp, numNodes, pdim; dir = dir, etaV = etaV)
-                end
-
-                # scatter
-                @inbounds for a in 1:(pdim*numNodes)
-                    na = (div(a-1, pdim) + 1)
-                    Ia_node = nnet[j, na]
-                    Ia = (Ia_node - 1) * pdim + (mod(a-1, pdim) + 1)
-
-                    @inbounds for b in 1:(pdim*numNodes)
-                        nb = (div(b-1, pdim) + 1)
-                        Jb_node = nnet[j, nb]
-                        Jb = (Jb_node - 1) * pdim + (mod(b-1, pdim) + 1)
-
-                        I[pos] = Ia
-                        J[pos] = Jb
-                        V[pos] = Ke[a, b]
-                        pos += 1
-                    end
-                end
-            end
-        end
-    end
-
-    return pos
-end
-
-
 # --- kernels ------------------------------------------------------------------
 
 # Diffusion / stiffness: ∫ (∇Na·∇Nb) * w dA
@@ -470,25 +361,6 @@ end
     return nothing
 end
 
-# Convection (test-derivative):
-# ∫ (∂Na/∂x_dir) * Nb * w dA
-@inline function _kernel_convection_test!(
-    Ke::Matrix{Float64},
-    w::Float64, k::Int,
-    h, ∂h,
-    numNodes::Int, pdim::Int, dim::Int, elem::Integer;
-    dir::Int = 1
-)
-    @inbounds for a in 1:numNodes
-        dNa = ∂h[dir, (k-1)*numNodes + a]
-        @inbounds for b in 1:numNodes
-            Nb = h[(k-1)*numNodes + b]
-            _add_blockdiag!(Ke, pdim, a, b, dNa * Nb * w)
-        end
-    end
-    return nothing
-end
-
 # Mass / reaction: ∫ Na * Nb * w dA
 @inline function _kernel_mass!(
     Ke::Matrix{Float64},
@@ -507,32 +379,190 @@ end
     return nothing
 end
 
-# Reynolds–Couette kernel (skew/product-rule form):
-# Ke_ab += (6ηV/2) * [ Na * (∂Nb/∂x_dir) * h  -  Na*Nb * (∂h/∂x_dir) ] * w
-@inline function kernel_reynolds_couette!(
+# Grad-div: ∫ (div Na_vec) * (div Nb_vec) * w dΩ
+#
+# IMPORTANT:
+#   - This assumes a standard vector unknown u with pdim == dim (e.g., 2D -> (ux,uy), 3D -> (ux,uy,uz)).
+#   - Local dof ordering already matches _add_blockdiag! convention (block diagonal by component),
+#     but grad-div COUPLES components, so we must assemble the full pdim×pdim block per node pair.
+#
+@inline function _kernel_graddiv!(
     Ke::Matrix{Float64},
-    w::Float64,
-    k::Int,
-    hN,          # shape: (numNodes, numGP)
-    dN,          # shape: (dim, numNodes*numGP)
-    numNodes::Int,
-    pdim::Int,
-    dim::Int;
-    h_gp::Float64,
-    dhdx_gp::Float64,
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int, elem::Integer;
     dir::Int = 1
 )
+    @assert pdim == dim "_kernel_graddiv!: requires pdim == dim (vector field components match spatial dim)"
+
+    # ∂h is stored as ∂h[d, (k-1)*numNodes + a] = ∂N_a/∂x_d at GP k
     @inbounds for a in 1:numNodes
-        Na = hN[(k-1)*numNodes + a]
+        # divergence contribution of "a" basis into each component:
+        # div( N_a * e_i ) = ∂N_a/∂x_i   (only i-th component contributes)
+        # so for component i, the divergence is dN_a/dx_i
+        @inbounds for b in 1:numNodes
+            # assemble the pdim×pdim block for node pair (a,b):
+            # Ke[(a,i),(b,j)] += (∂N_a/∂x_i) * (∂N_b/∂x_j) * w
+            @inbounds for i in 1:dim
+                dNa = ∂h[i, (k-1)*numNodes + a]
+                ia  = (a - 1) * pdim + i
+                @inbounds for j in 1:dim
+                    dNb = ∂h[j, (k-1)*numNodes + b]
+                    ib  = (b - 1) * pdim + j
+                    Ke[ia, ib] += dNa * dNb * w
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+# Symmetric-gradient (strain) energy:
+#   ∫ 2μ ε(u):ε(v) dΩ
+# Uses engineering shear strains, so the "D" weights are:
+#   3D: diag([2,2,2,1,1,1]) * μ
+#   2D: diag([2,2,1]) * μ
+#
+# IMPORTANT:
+#   - requires pdim == dim
+#   - couples components (not block diagonal)
+@inline function _kernel_symgrad!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int, elem::Integer;
+    dir::Int = 1
+)
+    @assert pdim == dim "_kernel_symgrad!: requires pdim == dim"
+
+    @inbounds for a in 1:numNodes
+        # gradients of shape Na at GP k
+        ax = ∂h[1, (k-1)*numNodes + a]
+        ay = (dim >= 2) ? ∂h[2, (k-1)*numNodes + a] : 0.0
+        az = (dim == 3) ? ∂h[3, (k-1)*numNodes + a] : 0.0
 
         @inbounds for b in 1:numNodes
-            Nb  = hN[(k-1)*numNodes + b]
-            dNb = dN[dir, (k-1)*numNodes + b]
+            bx = ∂h[1, (k-1)*numNodes + b]
+            by = (dim >= 2) ? ∂h[2, (k-1)*numNodes + b] : 0.0
+            bz = (dim == 3) ? ∂h[3, (k-1)*numNodes + b] : 0.0
 
-            # skew-adjoint Reynolds Couette term
-            val = Na * dNb * h_gp - Na * Nb * dhdx_gp
+            if dim == 1
+                # 1D: 2μ (du/dx)(dv/dx)
+                Ke[(a-1)*pdim + 1, (b-1)*pdim + 1] += (2.0 * ax * bx) * w
 
-            _add_blockdiag!(Ke, pdim, a, b, val * w)
+            elseif dim == 2
+                ia1 = (a-1)*pdim + 1  # ux
+                ia2 = (a-1)*pdim + 2  # uy
+                ib1 = (b-1)*pdim + 1
+                ib2 = (b-1)*pdim + 2
+
+                # K11: 2*ax*bx + ay*by
+                Ke[ia1, ib1] += (2.0*ax*bx + ay*by) * w
+                # K22: 2*ay*by + ax*bx
+                Ke[ia2, ib2] += (2.0*ay*by + ax*bx) * w
+                # Couplings from gamma_xy = dux/dy + duy/dx
+                Ke[ia1, ib2] += (ay*bx) * w
+                Ke[ia2, ib1] += (ax*by) * w
+
+            else
+                ia1 = (a-1)*pdim + 1  # ux
+                ia2 = (a-1)*pdim + 2  # uy
+                ia3 = (a-1)*pdim + 3  # uz
+                ib1 = (b-1)*pdim + 1
+                ib2 = (b-1)*pdim + 2
+                ib3 = (b-1)*pdim + 3
+
+                # Diagonal blocks (normal + shear contributions)
+                Ke[ia1, ib1] += (2.0*ax*bx + ay*by + az*bz) * w
+                Ke[ia2, ib2] += (2.0*ay*by + ax*bx + az*bz) * w
+                Ke[ia3, ib3] += (2.0*az*bz + ax*bx + ay*by) * w
+
+                # Off-diagonal couplings from engineering shears:
+                # gamma_xy = dux/dy + duy/dx
+                Ke[ia1, ib2] += (ay*bx) * w
+                Ke[ia2, ib1] += (ax*by) * w
+                # gamma_xz = dux/dz + duz/dx
+                Ke[ia1, ib3] += (az*bx) * w
+                Ke[ia3, ib1] += (ax*bz) * w
+                # gamma_yz = duy/dz + duz/dy
+                Ke[ia2, ib3] += (az*by) * w
+                Ke[ia3, ib2] += (ay*bz) * w
+            end
+        end
+    end
+    return nothing
+end
+
+# Curl-curl operator:
+#   ∫ (∇×u) · (∇×v) dΩ
+#
+# NOTES:
+# - Requires pdim == dim (vector field).
+# - Uses standard Lagrange H¹ elements (NOT H(curl)-conforming).
+# - Suitable for operator studies, stabilization, and educational purposes.
+#
+@inline function _kernel_curlcurl!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int, elem::Integer;
+    dir::Int = 1
+)
+    @assert pdim == dim "_kernel_curlcurl!: requires pdim == dim"
+
+    @inbounds for a in 1:numNodes
+        ax = ∂h[1, (k-1)*numNodes + a]
+        ay = (dim >= 2) ? ∂h[2, (k-1)*numNodes + a] : 0.0
+        az = (dim == 3) ? ∂h[3, (k-1)*numNodes + a] : 0.0
+
+        @inbounds for b in 1:numNodes
+            bx = ∂h[1, (k-1)*numNodes + b]
+            by = (dim >= 2) ? ∂h[2, (k-1)*numNodes + b] : 0.0
+            bz = (dim == 3) ? ∂h[3, (k-1)*numNodes + b] : 0.0
+
+            if dim == 2
+                # curl u = ∂uy/∂x - ∂ux/∂y   (scalar)
+                ia1 = (a-1)*pdim + 1  # ux
+                ia2 = (a-1)*pdim + 2  # uy
+                ib1 = (b-1)*pdim + 1
+                ib2 = (b-1)*pdim + 2
+
+                # (∂uy/∂x - ∂ux/∂y)(∂vy/∂x - ∂vx/∂y)
+                Ke[ia1, ib1] += ( ay * by ) * w
+                Ke[ia2, ib2] += ( ax * bx ) * w
+                Ke[ia1, ib2] += (-ay * bx) * w
+                Ke[ia2, ib1] += (-ax * by) * w
+
+            else
+                # 3D curl:
+                # cx = ∂uz/∂y - ∂uy/∂z
+                # cy = ∂ux/∂z - ∂uz/∂x
+                # cz = ∂uy/∂x - ∂ux/∂y
+                ia1 = (a-1)*pdim + 1
+                ia2 = (a-1)*pdim + 2
+                ia3 = (a-1)*pdim + 3
+                ib1 = (b-1)*pdim + 1
+                ib2 = (b-1)*pdim + 2
+                ib3 = (b-1)*pdim + 3
+
+                # cx·cx
+                Ke[ia2, ib2] += ( az * bz ) * w
+                Ke[ia3, ib3] += ( ay * by ) * w
+                Ke[ia2, ib3] += (-az * by) * w
+                Ke[ia3, ib2] += (-ay * bz) * w
+
+                # cy·cy
+                Ke[ia1, ib1] += ( az * bz ) * w
+                Ke[ia3, ib3] += ( ax * bx ) * w
+                Ke[ia1, ib3] += (-az * bx) * w
+                Ke[ia3, ib1] += (-ax * bz) * w
+
+                # cz·cz
+                Ke[ia1, ib1] += ( ay * by ) * w
+                Ke[ia2, ib2] += ( ax * bx ) * w
+                Ke[ia1, ib2] += (-ay * bx) * w
+                Ke[ia2, ib1] += (-ax * by) * w
+            end
         end
     end
     return nothing
@@ -555,6 +585,9 @@ K_ab = ∫_Ω (∇N_a · ∇N_b) α(x) dΩ
 (interpolated to Gauss points using the Lagrange basis, as in the original implementation).
 """
 function stiffnessMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    if problem.type == :dummy
+        return nothing
+    end
     gmsh.model.setCurrent(problem.name)
 
     # same spirit as your preallocation: compute an upper estimate from all elements
@@ -608,8 +641,10 @@ C_ab = ∫_Ω N_a (∂N_b/∂x_dir) β(x) dΩ
 function convectionMatrixPoisson(
     problem::Problem;
     coefficient::Union{Number,ScalarField}=1.0,
-    dir::Int = 1
-)
+    dir::Int = 1)
+    if problem.type == :dummy
+        return nothing
+    end
     gmsh.model.setCurrent(problem.name)
 
     @assert 1 ≤ dir ≤ problem.dim "convectionMatrixPoisson: dir out of bounds"
@@ -643,58 +678,6 @@ function convectionMatrixPoisson(
     return SystemMatrix(C, problem)
 end
 
-function convectionMatrixReynoldsSkew(
-    problem::Problem;
-    coefficient::Union{Number,ScalarField}=1.0,
-    dir::Int = 1
-)
-    gmsh.model.setCurrent(problem.name)
-    @assert 1 ≤ dir ≤ problem.dim
-
-    lengthOfIJV = estimateLengthOfIJV(problem)
-    I = Vector{Int}(undef, lengthOfIJV)
-    J = Vector{Int}(undef, lengthOfIJV)
-    V = Vector{Float64}(undef, lengthOfIJV)
-
-    pos = 1
-    for ipg in 1:length(problem.material)
-        phName = problem.material[ipg].phName
-
-        # trial-derivative part:  ∫ Na * ∂Nb
-        pos1 = _assemble_poissonlike!(
-            I, J, V, pos,
-            problem, phName, coefficient,
-            _kernel_convection!;
-            dir = dir
-        )
-
-        # test-derivative part: ∫ ∂Na * Nb
-        pos2 = _assemble_poissonlike!(
-            I, J, V, pos,
-            problem, phName, coefficient,
-            _kernel_convection_test!;
-            dir = dir
-        )
-
-        # antisymmetrize locally in V
-        @inbounds for k in pos:pos2-1
-            V[k] *= 0.5
-        end
-        @inbounds for k in pos1:pos2-1
-            V[k] *= -0.5
-        end
-
-        pos = pos2
-    end
-
-    resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
-    dof = problem.pdim * problem.non
-    C = sparse(I, J, V, dof, dof)
-    dropzeros!(C)
-
-    return SystemMatrix(C, problem)
-end
-
 """
     massMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
@@ -710,6 +693,9 @@ M_ab = ∫_Ω N_a N_b c(x) dΩ
 interpolated to Gauss points using the Lagrange basis (same mechanism as stiffness).
 """
 function massMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    if problem.type == :dummy
+        return nothing
+    end
     gmsh.model.setCurrent(problem.name)
 
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
@@ -741,35 +727,34 @@ function massMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarFie
 end
 
 """
-    couetteMatrixReynoldsSkew(problem; velocity, eta=problem.material[1].η, dir=1,
-                              hfield=problem.geometry.h, dhdxfield=problem.geometry.dhdx)
+    gradDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
-Assembles the Reynolds–Couette (wedge) operator in skew/product-rule form:
+Assembles the global matrix corresponding to the grad-div bilinear form
 
-K2_ab = (6ηV/2) ∫ [ N_a * h * ∂_{x_dir}N_b  -  N_a*N_b*∂_{x_dir}h ] dΩ
+```
 
-This reproduces the stable behavior of the original `systemMatrix` implementation.
+G_ab = ∫_Ω (∇·u_h) (∇·v_h) α(x) dΩ
+
+```
+
+This is the weak form associated with the operator `∇(∇·u)` (up to sign conventions),
+commonly appearing in linear elasticity and in grad-div stabilization.
+
+Notes
+- Requires `problem.pdim == problem.dim` (vector unknown with one component per spatial dimension).
+- `coefficient` can be a constant (`Number`) or an elementwise `ScalarField`, interpolated to Gauss points
+  using the Lagrange basis (same mechanism as in `stiffnessMatrixPoisson`).
 """
-function couetteMatrixReynoldsSkew_old(
-    problem::Problem;
-    velocity::Number,
-    dir::Int = 1
-)
+function gradDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    if problem.type == :dummy
+        return nothing
+    end
     gmsh.model.setCurrent(problem.name)
 
-    h     = problem.geometry.h
-    dhdx = problem.geometry.dhdx
-    η     = problem.material[1].η
-
-    h_e     = nodesToElements(h)
-    dhdx_e  = nodesToElements(dhdx)
-
-    _, pa_h     = _build_elemwise_coeff_dict(h_e)
-    _, pa_dhdx  = _build_elemwise_coeff_dict(dhdx_e)
-
-    coeff = 6.0 * η * velocity
+    @assert problem.pdim == problem.dim "gradDivMatrix: requires problem.pdim == problem.dim"
 
     lengthOfIJV = estimateLengthOfIJV(problem)
+
     I = Vector{Int}(undef, lengthOfIJV)
     J = Vector{Int}(undef, lengthOfIJV)
     V = Vector{Float64}(undef, lengthOfIJV)
@@ -777,28 +762,97 @@ function couetteMatrixReynoldsSkew_old(
 
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
+        pos = _assemble_poissonlike!(I, J, V, pos, problem, phName, coefficient, _kernel_graddiv!)
+    end
 
-        pos = _assemble_poissonlike!(
-            I, J, V, pos,
-            problem,
-            phName,
-            coeff,
-            (Ke, w, k, hN, dN, numNodes, pdim, dim; dir=dir) -> begin
-                elem = _assemble_poissonlike_current_element()  # lásd lent
-                h_gp    = dot(pa_h[elem][:,1], view(hN, :, k))
-                dhdx_gp = dot(pa_dhdx[elem][:,1], view(hN, :, k))
+    resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
 
-                kernel_reynolds_couette!(
-                    Ke, w, k,
-                    hN, dN,
-                    numNodes, pdim, dim;
-                    h_gp = h_gp,
-                    dhdx_gp = dhdx_gp,
-                    dir = dir
-                )
-            end;
-            dir = dir
-        )
+    dof = problem.pdim * problem.non
+    G = sparse(I, J, V, dof, dof)
+    dropzeros!(G)
+    return SystemMatrix(G, problem)
+end
+
+"""
+    symmetricGradientMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+
+Assembles the global matrix for the symmetric-gradient (strain) bilinear form
+
+```
+
+A(u,v) = ∫_Ω 2μ ε(u) : ε(v) dΩ
+ε(u)   = 1/2 (∇u + ∇uᵀ)
+
+```
+
+Notes
+- Requires `problem.pdim == problem.dim`.
+- `coefficient` is typically the shear modulus `μ` (constant or `ScalarField`).
+"""
+function symmetricGradientMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    if problem.type == :dummy
+        return nothing
+    end
+    gmsh.model.setCurrent(problem.name)
+
+    @assert problem.pdim == problem.dim "symmetricGradientMatrix: requires problem.pdim == problem.dim"
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        pos = _assemble_poissonlike!(I, J, V, pos, problem, phName, coefficient, _kernel_symgrad!)
+    end
+
+    resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
+
+    dof = problem.pdim * problem.non
+    A = sparse(I, J, V, dof, dof)
+    dropzeros!(A)
+    return SystemMatrix(A, problem)
+end
+
+"""
+    curlCurlMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+
+Assembles the global curl–curl matrix
+
+```
+
+C(u,v) = ∫_Ω (∇×u) · (∇×v) α(x) dΩ
+
+```
+
+Notes
+- Requires `problem.pdim == problem.dim` (vector field).
+- Uses standard Lagrange H¹ elements (NOT H(curl)-conforming).
+- Intended for operator studies, stabilization terms, and educational use.
+- Not suitable as a primary operator for Maxwell-type problems.
+"""
+function curlCurlMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    if problem.type == :dummy
+        return nothing
+    end
+    gmsh.model.setCurrent(problem.name)
+
+    @assert problem.pdim == problem.dim "curlCurlMatrix: requires problem.pdim == problem.dim"
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        pos = _assemble_poissonlike!(I, J, V, pos, problem, phName,
+                                     coefficient, _kernel_curlcurl!)
     end
 
     resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
@@ -806,24 +860,11 @@ function couetteMatrixReynoldsSkew_old(
     dof = problem.pdim * problem.non
     C = sparse(I, J, V, dof, dof)
     dropzeros!(C)
-
     return SystemMatrix(C, problem)
 end
 
-#=
-### Használat Reynolds első 3 tagra (a te jelöléseiddel)
 
-* stiffness: `coefficient = α*k*h^3`
-* convection: `coefficient = 6ηz*V*h`, `dir=1` (x-irány)
-* mass/reaction: `coefficient = 6ηz*∂x(h)`
 
-```julia
-Kdiff = stiffnessMatrixPoisson(problem; coefficient = α*k*h3)
-Kconv = convectionMatrixPoisson(problem; coefficient = 6ηz*V*h, dir=1)
-Kmass = massMatrixPoisson(problem; coefficient = 6ηz*∂x(h))
-K = Kdiff + Kconv + Kmass
-```
-=#
 
 function estimateLengthOfIJV(problem::Problem)
     gmsh.model.setCurrent(problem.name)
@@ -853,108 +894,3 @@ function estimateLengthOfIJV(problem::Problem)
 
     return lengthOfIJV
 end
-
-function couetteMatrixReynoldsSkew(
-    problem::Problem;
-    velocity::Number,
-    dir::Int = 1
-)
-    gmsh.model.setCurrent(problem.name)
-
-    h     = problem.geometry.h
-    dhdx = problem.geometry.dhdx
-    η     = problem.material[1].η
-
-    h_e    = nodesToElements(h)
-    dhdx_e = nodesToElements(dhdx)
-
-    pa_h    = Dict(zip(h_e.numElem, h_e.A))
-    pa_dhdx = Dict(zip(dhdx_e.numElem, dhdx_e.A))
-
-    pdim = problem.pdim
-    dim  = problem.dim
-    coef = 6.0 * η * velocity / 2.0
-
-    lengthOfIJV = estimateLengthOfIJV(problem)
-    I = Vector{Int}(undef, lengthOfIJV)
-    J = Vector{Int}(undef, lengthOfIJV)
-    V = Vector{Float64}(undef, lengthOfIJV)
-
-    pos = 1
-
-    for ipg in eachindex(problem.material)
-        phName = problem.material[ipg].phName
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-
-        for (edim, etag) in dimTags
-            elemTypes, elemTags, elemNodeTags =
-                gmsh.model.mesh.getElements(edim, etag)
-
-            for itype in eachindex(elemTypes)
-                et = elemTypes[itype]
-                _, _, order, numNodes::Int, _, _ =
-                    gmsh.model.mesh.getElementProperties(et)
-
-                intPoints, intWeights =
-                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
-                numGP = length(intWeights)
-
-                comp, fun, _ =
-                    gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
-                N = reshape(fun, :, numGP)
-
-                comp, dfun, _ =
-                    gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
-                ∇N = reshape(dfun, :, numGP)
-
-                for (eidx, elem) in enumerate(elemTags[itype])
-                    nodes = elemNodeTags[itype][(eidx-1)*numNodes+1 : eidx*numNodes]
-                    Ke = zeros(pdim*numNodes, pdim*numNodes)
-
-                    jac, jacDet, _ =
-                        gmsh.model.mesh.getJacobian(elem, intPoints)
-                    Jac = reshape(jac, 3, :)
-
-                    for k in 1:numGP
-                        invJ = inv(Jac[1:dim, 3k-2:3k-(3-dim)])
-                        dN = zeros(dim, numNodes)
-                        for a in 1:numNodes
-                            dN[:,a] = invJ * ∇N[a*3-2:a*3-(3-dim), k]
-                        end
-
-                        Nk = N[:,k]
-                        h_gp    = dot(pa_h[elem][:,1], Nk)
-                        dhdx_gp = dot(pa_dhdx[elem][:,1], Nk)
-
-                        w = coef * jacDet[k] * intWeights[k]
-
-                        for a in 1:numNodes, b in 1:numNodes
-                            val = Nk[a] * dN[dir,b] * h_gp -
-                                  Nk[a] * Nk[b] * dhdx_gp
-                            _add_blockdiag!(Ke, pdim, a, b, val * w)
-                        end
-                    end
-
-                    for a in 1:pdim*numNodes
-                        na = div(a-1,pdim)+1
-                        Ia = (nodes[na]-1)*pdim + mod(a-1,pdim)+1
-                        for b in 1:pdim*numNodes
-                            nb = div(b-1,pdim)+1
-                            Jb = (nodes[nb]-1)*pdim + mod(b-1,pdim)+1
-                            I[pos]=Ia; J[pos]=Jb; V[pos]=Ke[a,b]
-                            pos+=1
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    resize!(I,pos-1); resize!(J,pos-1); resize!(V,pos-1)
-    dof = pdim * problem.non
-    C = sparse(I,J,V,dof,dof)
-    dropzeros!(C)
-
-    return SystemMatrix(C, problem)
-end
-

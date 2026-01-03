@@ -88,12 +88,12 @@ mutable struct Geometry
 end
 
 """
-    Problem(materials; thickness=..., type=..., bandwidth=...)
+    Problem(materials; thickness=..., type=..., bandwidth=..., dim=..., fdim=...)
 
 Structure containing key data for a problem.
 - Parts of the model with their material constants. Multiple materials can be provided (see `material`).
 - Problem type: `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`, `:HeatConduction`, `:PlaneHeatConduction`, 
-`:AxiSymmetricHeatConduction`, `:Truss`.
+`:AxiSymmetricHeatConduction`, `:Truss`, `:General`.
   For `:AxiSymmetric`, the symmetry axis is `y`, and the geometry must be drawn in the positive `x` half-plane.
 - Bandwidth optimization using Gmsh's built-in reordering. Options: `:RCMK`, `:Hilbert`, `:Metis`, or `:none` (default).
 - Dimension of the problem, determined by `type`.
@@ -103,6 +103,8 @@ Structure containing key data for a problem.
 - Geometry dimension.
 - Problem dimension (e.g., a 3D heat conduction problem is a 1D problem).
 - In case of 2D truss displacements have to be fixed in the third direction.
+- `dim` is number of dimensions in space (in case of :General)
+- `fdim` is the number of unknown fields (eg. scalar->1, 2D vector->2, 3D vector->3 or more) (in case of :General)
 
 Types:
 - `materials`: Material
@@ -125,10 +127,13 @@ struct Problem
     geometry::Geometry
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
-    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="")
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim=3, fdim=dim)
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0)
         end
+        pdim = 3
+        dim0 = dim
+        pdim0 = fdim
 
         #if Sys.CPU_THREADS != Threads.nthreads()
         #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
@@ -172,8 +177,11 @@ struct Problem
             geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
             pdim = 1
+        elseif type == :General
+            dim = dim0
+            pdim = pdim0
         else
-            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Poisson1D`, `:Poisson2D`, `:Poisson3D`.
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Poisson1D`, `:Poisson2D`, `:Poisson3D`, `:General`.
             Now problem type = $type ????")
         end
         if !isa(mat, Vector)
