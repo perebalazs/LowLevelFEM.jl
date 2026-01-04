@@ -894,3 +894,31 @@ function estimateLengthOfIJV(problem::Problem)
 
     return lengthOfIJV
 end
+
+"""
+    sourceVector(problem, sources)
+
+Assembles the right-hand-side vector corresponding to a volumetric source term
+in Poisson-type and other scalar or vector-valued PDEs expressed in weak form.
+
+Mathematically, this function assembles
+
+    f_a = ∫_Ω N_a f dΩ
+
+where the source term `f` may be given as a constant, a spatial function,
+or a `ScalarField`.
+
+This function is an alias of `loadVector` and shares the same implementation.
+The difference is purely interpretational: `sourceVector` emphasizes the role
+of the right-hand side as a PDE source term rather than a mechanical load.
+
+Axisymmetric or spherically symmetric problems can be handled by including
+the appropriate geometric weighting (e.g. `2πr`, `4πr²`) as a coefficient field.
+
+In LowLevelFEM, right-hand-side vectors are assembled independently of the governing equation.
+The same numerical machinery can therefore represent mechanical loads, heat sources,
+or generic PDE source terms.
+
+Returns a `ScalarField` or `VectorField`, depending on the problem field dimension.
+"""
+sourceVector = loadVector

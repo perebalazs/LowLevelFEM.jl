@@ -3000,16 +3000,33 @@ end
 """
     loadVector(problem, loads)
                             
-Solves a load vector of `problem`. `loads` is a tuple of name of physical group 
-`name`, coordinates `fx`, `fy` and `fz` or pressure `p` which are intensities of a distributed force.
-It can solve traction or body force depending on the problem.
-- In case of 2D problems and Point physical group means concentrated force.
-- In case of 2D problems and Line physical group means surface force.
-- In case of 2D problems and Surface physical group means body force.
-- In case of 3D problems and Point physical group means concentrated force.
-- In case of 3D problems and Line physical group means edge force.
-- In case of 3D problems and Surface physical group means surface force.
-- In case of 3D problems and Volume physical group means body force.
+Assembles the right-hand-side vector associated with external mechanical loads
+in weak-form finite element problems.
+
+Depending on the problem dimension and the dimension of the physical group,
+this function handles concentrated forces, line/surface/volume loads,
+tractions, pressures, and body forces in 1D, 2D, and 3D.
+
+The interpretation of the physical group dimension is:
+- 1D problems:
+  - Point  → concentrated force
+  - Line   → distributed force
+- 2D problems:
+  - Point  → concentrated force
+  - Line   → surface force
+  - Surface → body force
+- 3D problems:
+  - Point  → concentrated force
+  - Line   → edge force
+  - Surface → surface force
+  - Volume → body force
+
+Load components may be specified as constants, spatial functions, or `ScalarField`s.
+Axisymmetric and other weighted formulations can be handled by including the
+appropriate geometric factor (e.g. `2πr`) in the load definition or coefficient.
+
+Returns a `VectorField` for vector-valued problems (`pdim > 1`) and a `ScalarField`
+for scalar problems (`pdim == 1`).
                             
 Return: `loadVec`
                             
@@ -3042,16 +3059,25 @@ function loadVector(problem, loads)
         else
             error("loadVector: dimension of the problem is $(problem.dim).")
         end
+        fx_is_number = fx isa Number
+        fx_is_function = fx isa Function
+        fx_is_field = fx isa ScalarField
+        fy_is_number = fy isa Number
+        fy_is_function = fy isa Function
+        fy_is_field = fy isa ScalarField
+        fz_is_number = fz isa Number
+        fz_is_function = fz isa Function
+        fz_is_field = fz isa ScalarField
         if fy == 1im && DIM == 3
             nv = -normalVector(problem, name)
             ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
             ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
             ez = VectorField(problem, [field(name, fx=0, fy=0, fz=1)])
-            if fx isa Number || fx isa ScalarField
+            if fx_is_number || fx_is_field
                 fy = elementsToNodes((nv ⋅ ey) * fx)
                 fz = elementsToNodes((nv ⋅ ez) * fx)
                 fx = elementsToNodes((nv ⋅ ex) * fx)
-            elseif fx isa Function
+            elseif fx_is_function
                 pp = scalarField(problem, [field(name, f=fx)])
                 fy = elementsToNodes((nv ⋅ ey) * pp)
                 fz = elementsToNodes((nv ⋅ ez) * pp)
@@ -3101,21 +3127,21 @@ function loadVector(problem, loads)
                         x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
                         y = 0
                         z = 0
-                        if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
+                        if fx_is_function || fy_is_function || fz_is_function
                             y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
                         end
                         if fz == 2im
-                            if isa(fx, Function)
+                            if fx_is_function
                                 error("heatConvectionVector: h cannot be a function.")
                             end
-                            f[1] = isa(fy, Function) ? fx * fy(x, y, z) : fx * fy
+                            f[1] = fy_is_function ? fx * fy(x, y, z) : fx * fy
                         else
-                            if fx isa Number
+                            if fx_is_number
                                 f[1] = fx
-                            elseif fx isa Function
+                            elseif fx_is_function
                                 f[1] = fx(x, y, z)
-                            elseif fx isa ScalarField
+                            elseif fx_is_field
                                 f[1] = h[:, j]' * fx.a[nnet[l, :]]
                             else
                                 error("loadVector: internal error.")
@@ -3123,11 +3149,11 @@ function loadVector(problem, loads)
                             #f[1] = isa(fx, Function) ? fx(x, y, z) : fx
                         end
                         if pdim > 1
-                            if fy isa Number
+                            if fy_is_number
                                 f[2] = fy
-                            elseif fy isa Function
+                            elseif fy_is_function
                                 f[2] = fy(x, y, z)
-                            elseif fy isa ScalarField
+                            elseif fy_is_field
                                 f[2] = h[:, j]' * fy.a[nnet[l, :]]
                             else
                                 error("loadVector: internal error.")
@@ -3135,11 +3161,11 @@ function loadVector(problem, loads)
                             #f[2] = isa(fy, Function) ? fy(x, y, z) : fy
                         end
                         if pdim == 3
-                            if fz isa Number
+                            if fz_is_number
                                 f[3] = fz
-                            elseif fz isa Function
+                            elseif fz_is_function
                                 f[3] = fz(x, y, z)
-                            elseif fz isa ScalarField
+                            elseif fz_is_field
                                 f[3] = h[:, j]' * fz.a[nnet[l, :]]
                             else
                                 error("loadVector: internal error.")
@@ -3172,6 +3198,10 @@ function loadVector(problem, loads)
                         elseif DIM == 2 && dim == 0
                             Ja = 1
                             ############ 1D #######################################################
+                        elseif DIM == 1 && dim == 1
+                            Ja = Jac[1, 3*j-2] * b
+                        elseif DIM == 1 && dim == 0
+                            Ja = 1
                         else
                             error("loadVector: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
