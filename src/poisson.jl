@@ -1,5 +1,6 @@
 export stiffnessMatrixPoisson, convectionMatrixPoisson, massMatrixPoisson
 export gradDivMatrix, symmetricGradientMatrix, curlCurlMatrix
+export sourceVector
 
 """
     stiffnessMatrixPoissonAllInOne(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
