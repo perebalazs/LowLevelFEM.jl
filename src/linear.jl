@@ -3050,12 +3050,8 @@ function loadVector(problem, loads)
     f = [.0]
     for n in 1:length(loads)
         name, fx, fy, fz = loads[n]
-        if pdim == 3
-            f = [.0, .0, .0]
-        elseif pdim == 2
-            f = [.0, .0]
-        elseif pdim == 1
-            f = [.0]
+        if pdim == 1 || pdim == 2 || pdim == 3 || pdim == 9
+            f = zeros(pdim)
         else
             error("loadVector: dimension of the problem is $(problem.dim).")
         end
@@ -3160,7 +3156,7 @@ function loadVector(problem, loads)
                             end
                             #f[2] = isa(fy, Function) ? fy(x, y, z) : fy
                         end
-                        if pdim == 3
+                        if pdim > 2
                             if fz_is_number
                                 f[3] = fz
                             elseif fz_is_function
@@ -3222,6 +3218,8 @@ function loadVector(problem, loads)
         type = :v2D
     elseif pdim == 1
         type = :scalar
+    elseif pdim == 9
+        type = :tensor
     else
         error("loadVector: wrong pdim ($pdim).")
     end
@@ -3229,6 +3227,8 @@ function loadVector(problem, loads)
         return VectorField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
     elseif type == :scalar
         return ScalarField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
+    elseif type == :tensor
+        return TensorField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
     end
 end
 

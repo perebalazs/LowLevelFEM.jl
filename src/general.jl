@@ -3308,7 +3308,7 @@ function constrainedDoFs(problem, supports)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
         end
-        if pdim == 3 && uz != 1im
+        if pdim > 2 && uz != 1im
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= 3
         end
@@ -3442,7 +3442,8 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
             phName = problem.material[ipg].phName
         end
         #ν = problem.material[ipg].ν
-        dim = 0
+        dim = problem.dim
+        #=
         if problem.dim == 3 && problem.type == :Solid
             dim = 3
             rowsOfH = 3
@@ -3461,6 +3462,7 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
         else
             error("nodesToElements: dimension is $(problem.dim), problem type is $(problem.type).")
         end
+        =#
         
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
         for idm in 1:length(dimTags)

@@ -1,6 +1,7 @@
 export stiffnessMatrixPoisson, convectionMatrixPoisson, massMatrixPoisson
 export gradDivMatrix, symmetricGradientMatrix, curlCurlMatrix
-export sourceVector
+export tensorLaplaceMatrix, traceLaplaceMatrix, beltramiMichellMatrix
+export sourceVector, loadTensor
 
 """
     stiffnessMatrixPoissonAllInOne(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
@@ -569,6 +570,84 @@ end
     return nothing
 end
 
+@inline function _kernel_tensorlaplace_sym!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int, elem::Integer;
+    dir::Int = 1
+)
+    @assert pdim == 9 "tensorLaplaceMatrix requires pdim = 9 (TensorField)"
+
+    # Standard tensor Laplace (componentwise)
+    @inbounds for a in 1:numNodes, b in 1:numNodes
+        s = 0.0
+        @inbounds for d in 1:dim
+            s += ∂h[d, (k-1)*numNodes + a] *
+                 ∂h[d, (k-1)*numNodes + b]
+        end
+        val = s * w
+
+        ia = (a-1)*pdim
+        ib = (b-1)*pdim
+        @inbounds for α in 1:9
+            Ke[ia+α, ib+α] += val
+        end
+    end
+
+    # Project operator to symmetric tensor subspace
+    @inbounds for a in 1:numNodes, b in 1:numNodes
+        ia = (a-1)*pdim
+        ib = (b-1)*pdim
+
+        # xy / yx
+        s = 0.5 * (Ke[ia+4, ib+2] + Ke[ia+2, ib+4])
+        Ke[ia+4, ib+2] = s
+        Ke[ia+2, ib+4] = s
+
+        # xz / zx
+        s = 0.5 * (Ke[ia+7, ib+3] + Ke[ia+3, ib+7])
+        Ke[ia+7, ib+3] = s
+        Ke[ia+3, ib+7] = s
+
+        # yz / zy
+        s = 0.5 * (Ke[ia+8, ib+6] + Ke[ia+6, ib+8])
+        Ke[ia+8, ib+6] = s
+        Ke[ia+6, ib+8] = s
+    end
+
+    return nothing
+end
+
+@inline function _kernel_tracelaplace!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int, elem::Integer;
+    dir::Int = 1
+)
+    @assert pdim == 9 "traceLaplaceMatrix requires pdim = 9 (TensorField)"
+
+    @inbounds for a in 1:numNodes, b in 1:numNodes
+        s = 0.0
+        @inbounds for d in 1:dim
+            s += ∂h[d, (k-1)*numNodes + a] *
+                 ∂h[d, (k-1)*numNodes + b]
+        end
+        val = s * w
+
+        ia = (a-1)*pdim
+        ib = (b-1)*pdim
+
+        # trace indices: σxx, σyy, σzz
+        @inbounds for α in (1,5,9), β in (1,5,9)
+            Ke[ia+α, ib+β] += val
+        end
+    end
+
+    return nothing
+end
+
 # --- public API ---------------------------------------------------------------
 
 """
@@ -864,6 +943,110 @@ function curlCurlMatrix(problem::Problem; coefficient::Union{Number,ScalarField}
     return SystemMatrix(C, problem)
 end
 
+"""
+    tensorLaplaceMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+
+Assembles the tensor Laplace operator
+
+    ∫_Ω ∇(sym σ) : ∇(sym τ) dΩ
+
+for a nodal TensorField with `pdim = 9`.
+
+Notes
+- Operator is restricted to the symmetric tensor subspace.
+- `coefficient` may be constant or an elementwise ScalarField.
+"""
+function tensorLaplaceMatrix(
+    problem::Problem;
+    coefficient::Union{Number,ScalarField} = 1.0
+)
+    if problem.type == :dummy
+        return nothing
+    end
+    @assert problem.pdim == 9 "tensorLaplaceMatrix requires pdim = 9"
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for ipg in 1:length(problem.material)
+        ph = problem.material[ipg].phName
+        pos = _assemble_poissonlike!(
+            I, J, V, pos,
+            problem, ph,
+            coefficient,
+            _kernel_tensorlaplace_sym!
+        )
+    end
+
+    resize!(I, pos-1)
+    resize!(J, pos-1)
+    resize!(V, pos-1)
+
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+
+    return SystemMatrix(K, problem)
+end
+
+"""
+    traceLaplaceMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+
+Assembles the trace Laplace operator
+
+    ∫_Ω ∇tr(σ) · ∇tr(τ) dΩ
+
+for a nodal TensorField with `pdim = 9`.
+"""
+function traceLaplaceMatrix(
+    problem::Problem;
+    coefficient::Union{Number,ScalarField} = 1.0
+)
+    if problem.type == :dummy
+        return nothing
+    end
+    @assert problem.pdim == 9 "traceLaplaceMatrix requires pdim = 9"
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for ipg in 1:length(problem.material)
+        ph = problem.material[ipg].phName
+        pos = _assemble_poissonlike!(
+            I, J, V, pos,
+            problem, ph,
+            coefficient,
+            _kernel_tracelaplace!
+        )
+    end
+
+    resize!(I, pos-1)
+    resize!(J, pos-1)
+    resize!(V, pos-1)
+
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+
+    return SystemMatrix(K, problem)
+end
+
+function beltramiMichellMatrix(
+    problem::Problem;
+    coeff_laplace::Union{Number,ScalarField} = 1.0,
+    coeff_trace::Union{Number,ScalarField} = 1.0
+)
+    K1 = tensorLaplaceMatrix(problem; coefficient = coeff_laplace)
+    K2 = traceLaplaceMatrix(problem; coefficient = coeff_trace)
+    return K1 + K2
+end
+
 
 
 
@@ -923,3 +1106,103 @@ or generic PDE source terms.
 Returns a `ScalarField` or `VectorField`, depending on the problem field dimension.
 """
 sourceVector = loadVector
+
+"""
+    loadTensor(problem::Problem;
+               source::Union{Matrix{Float64},TensorField} = zeros(3,3))
+
+Assembles an L2 right-hand-side vector for tensor-valued problems (pdim = 9):
+
+    f_{a,α} = ∫_Ω N_a(x) * S_α(x) dΩ
+
+where `S` is either
+- a constant 3×3 tensor (`Matrix{Float64}`), or
+- a nodal `TensorField`.
+
+Notes
+- Intended for Beltrami–Michell and other stress-based formulations.
+- No traction, pressure, or surface force interpretation.
+"""
+function loadTensor(
+    problem::Problem;
+    source::Union{Matrix{Float64},TensorField} = zeros(3,3)
+)
+    @assert problem.pdim == 9 "loadTensor requires pdim = 9 (TensorField)"
+
+    gmsh.model.setCurrent(problem.name)
+
+    pdim = 9
+    non  = problem.non
+    fp   = zeros(pdim * non)
+
+    # --- prepare source -------------------------------------------------------
+    const_source = source isa Matrix
+    field_source = source isa TensorField
+
+    if const_source
+        @assert size(source) == (3,3)
+        # flatten column-wise: (xx,yx,zx,xy,yy,zy,xz,yz,zz)
+        Sconst = vec(source)
+        if all(iszero, Sconst)
+            # trivial RHS
+            return TensorField([], reshape(fp, :, 1), [0.0], [], 1, :tensor, problem)
+        end
+    else
+        src_elem = nodesToElements(source)   # elemTag => 9-vector(s)
+    end
+
+    # --- integration ----------------------------------------------------------
+    # We integrate:
+    #   ∫ N_a * S dΩ
+    # Only where S is defined / nonzero
+
+    # Decide which elements to loop on
+    elem_list = const_source ? gmsh.model.mesh.getElements(problem.dim, -1)[2] :
+                               collect(keys(src_elem.A))
+
+    for elem in elem_list
+        # element type and properties
+        etype, _, _, _ = gmsh.model.mesh.getElement(elem)
+        _, _, order, numNodes, _, _ =
+            gmsh.model.mesh.getElementProperties(etype)
+
+        intPoints, intWeights =
+            gmsh.model.mesh.getIntegrationPoints(
+                etype, "Gauss" * string(2order + 1)
+            )
+
+        comp, fun, ori =
+            gmsh.model.mesh.getBasisFunctions(etype, intPoints, "Lagrange")
+        h = reshape(fun, :, length(intWeights))
+
+        nodeTags = gmsh.model.mesh.getElement(elem)[2]
+        jac, jacDet, coord =
+            gmsh.model.mesh.getJacobian(elem, intPoints)
+
+        for k in 1:length(intWeights)
+            w = jacDet[k] * intWeights[k]
+
+            # tensor source at GP
+            if const_source
+                S = Sconst
+            else
+                # nodal tensor projected with shape functions
+                S = zeros(pdim)
+                Se = src_elem.A[elem][:,1]
+                for a in 1:numNodes
+                    S .+= h[a,k] * Se
+                end
+            end
+
+            for a in 1:numNodes
+                Na = h[a,k]
+                base = (nodeTags[a]-1)*pdim
+                @inbounds for α in 1:pdim
+                    fp[base+α] += Na * S[α] * w
+                end
+            end
+        end
+    end
+
+    return TensorField([], reshape(fp, :, 1), [0.0], [], 1, :tensor, problem)
+end
