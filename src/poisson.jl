@@ -1,6 +1,6 @@
 export stiffnessMatrixPoisson, convectionMatrixPoisson, massMatrixPoisson
 export gradDivMatrix, symmetricGradientMatrix, curlCurlMatrix
-export tensorLaplaceMatrix, traceLaplaceMatrix, beltramiMichellMatrix
+export tensorLaplaceMatrix, traceLaplaceMatrix, beltramiMichellMatrix, tensorDivDivMatrix
 export sourceVector, loadTensor
 
 """
@@ -648,6 +648,42 @@ end
     return nothing
 end
 
+# Tensor div-div:
+# ∫ (div σ) · (div τ) dΩ
+#
+# σ_ij = N_a * e_i ⊗ e_j
+# (div σ)_i = ∑_j ∂σ_ij / ∂x_j = ∑_j ∂N_a/∂x_j
+#
+@inline function _kernel_tensordivdiv!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int, elem::Integer;
+    dir::Int = 1
+)
+    @assert pdim == dim^2 "_kernel_tensordivdiv!: requires pdim = dim^2"
+
+    @inbounds for a in 1:numNodes
+        @inbounds for b in 1:numNodes
+            # tensor indices
+            @inbounds for i in 1:dim          # divergence component
+                @inbounds for j in 1:dim      # σ_ij
+                    dNa = ∂h[j, (k-1)*numNodes + a]
+                    ia  = (a - 1) * pdim + (i - 1) * dim + j
+
+                    @inbounds for l in 1:dim  # τ_il
+                        dNb = ∂h[l, (k-1)*numNodes + b]
+                        ib  = (b - 1) * pdim + (i - 1) * dim + l
+
+                        Ke[ia, ib] += dNa * dNb * w
+                    end
+                end
+            end
+        end
+    end
+    return nothing
+end
+
 # --- public API ---------------------------------------------------------------
 
 """
@@ -1045,6 +1081,62 @@ function beltramiMichellMatrix(
     K1 = tensorLaplaceMatrix(problem; coefficient = coeff_laplace)
     K2 = traceLaplaceMatrix(problem; coefficient = coeff_trace)
     return K1 + K2
+end
+
+"""
+    tensorDivDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+
+Assembles the tensor div–div matrix
+
+```
+
+D(σ,τ) = ∫_Ω (∇·σ_h) · (∇·τ_h) α(x) dΩ
+
+```
+
+Notes
+- Requires `problem.pdim == dim^2` (second-order tensor field).
+- Acts as an equilibrium-enforcing operator in stress-based formulations
+  (e.g. Beltrami–Michell).
+- `coefficient` may be a constant (`Number`) or an elementwise `ScalarField`.
+"""
+function tensorDivDivMatrix(
+    problem::Problem;
+    coefficient::Union{Number,ScalarField} = 1.0
+)
+    if problem.type == :dummy
+        return nothing
+    end
+    gmsh.model.setCurrent(problem.name)
+
+    @assert problem.pdim == problem.dim^2 "tensorDivDivMatrix: requires pdim = dim^2"
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        pos = _assemble_poissonlike!(
+            I, J, V, pos,
+            problem, phName,
+            coefficient,
+            _kernel_tensordivdiv!
+        )
+    end
+
+    resize!(I, pos-1)
+    resize!(J, pos-1)
+    resize!(V, pos-1)
+
+    dof = problem.pdim * problem.non
+    D = sparse(I, J, V, dof, dof)
+    dropzeros!(D)
+
+    return SystemMatrix(D, problem)
 end
 
 
