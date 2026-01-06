@@ -48,6 +48,105 @@ struct Material
     type::Symbol
     E::Float64
     ν::Float64
+    λ::Float64
+    μ::Float64
+    κ::Float64
+    ρ::Float64
+    k::Float64
+    c::Float64
+    α::Float64
+    η::Float64
+    p₀::Float64
+    A::Float64
+
+    function Material(
+        phName::String;
+        type = :Hooke,
+        E = nothing, ν = nothing, λ = nothing, μ = nothing, κ = nothing,
+        ρ = 7.85e-9,
+        k = 45.0,
+        c = 4.2e8,
+        α = 1.2e-5,
+        η = 1e-7,
+        p₀ = 0.1,
+        A = 1.0
+    )
+        type ∈ (:Hooke, :StVenantKirchhoff, :NeoHookeCompressible, :JFO) ||
+            error("Invalid material type: $type")
+
+        ec = elastic_constants(E=E, ν=ν, λ=λ, μ=μ, κ=κ)
+
+        return new(
+            phName,
+            type,
+            ec.E, ec.ν, ec.λ, ec.μ, ec.κ,
+            ρ, k, c, α,
+            η, p₀, A
+        )
+    end
+end
+
+function elastic_constants(; E=nothing, ν=nothing, λ=nothing, μ=nothing, κ=nothing)
+    given = Dict(:E=>E, :ν=>ν, :λ=>λ, :μ=>μ, :κ=>κ)
+    specified = filter(kv -> kv[2] !== nothing, given)
+    n = length(specified)
+    DEFAULT_POISSON = 0.3
+    DEFAULT_YOUNG = 2.0e5
+
+    if n == 0
+        E = DEFAULT_YOUNG
+        ν = DEFAULT_POISSON
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 1 && haskey(specified, :E)
+        E = specified[:E]
+        ν = DEFAULT_POISSON
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 2 && haskey(specified, :E) && haskey(specified, :ν)
+        E, ν = specified[:E], specified[:ν]
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 2 && haskey(specified, :μ) && haskey(specified, :ν)
+        μ, ν = specified[:μ], specified[:ν]
+        E = 2μ*(1+ν)
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 2 && haskey(specified, :λ) && haskey(specified, :μ)
+        λ, μ = specified[:λ], specified[:μ]
+        ν = λ / (2*(λ+μ))
+        E = μ*(3λ+2μ)/(λ+μ)
+        κ = λ + 2μ/3
+
+    elseif n == 2 && haskey(specified, :κ) && haskey(specified, :μ)
+        κ, μ = specified[:κ], specified[:μ]
+        λ = κ - 2μ/3
+        ν = λ / (2*(λ+μ))
+        E = 2μ*(1+ν)
+
+    elseif n < 2
+        error("Insufficient elastic parameters. Specify at least E+ν, μ+ν, λ+μ, κ+μ, or E alone.")
+
+    else
+        error("Elastic constants are overdetermined: $(keys(specified))")
+    end
+
+    return (; E, ν, λ, μ, κ)
+end
+
+#=
+struct Material
+    phName::String
+    type::Symbol
+    E::Float64
+    ν::Float64
     ρ::Float64
     k::Float64
     c::Float64
@@ -62,6 +161,7 @@ struct Material
     Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
+=#
 
 mutable struct Geometry
     nameGap::String
@@ -235,19 +335,61 @@ struct Problem
     end
 end
 
-#=
-1. Szerezzük meg az összes 3D entitást
-entities = gmsh.model.getEntities(3)  # minden térfogat (dim=3)
-2. Gyűjtsük össze a node-okat entitásonként
-allNodes = Int[]
-for (dim, tag) in entities
-    nodeTags, coord, param = gmsh.model.mesh.getNodes(dim, tag, true)
-    append!(allNodes, nodeTags)
+abstract type AbstractField end
+abstract type AbstractScalarField <: AbstractField end
+
+struct BoundaryCondition
+    phName::String
+
+    # Dirichlet-type (primary variables)
+    ux::Union{Nothing, Float64, Function}
+    uy::Union{Nothing, Float64, Function}
+    uz::Union{Nothing, Float64, Function}
+    p ::Union{Nothing, Float64, Function}   # pressure / scalar field
+    T ::Union{Nothing, Float64, Function}   # temperature
+
+    # Neumann-type (fluxes / forces)
+    f::Union{Nothing, Float64, Function, AbstractScalarField}
+    fx::Union{Nothing, Float64, Function, AbstractScalarField}
+    fy::Union{Nothing, Float64, Function, AbstractScalarField}
+    fz::Union{Nothing, Float64, Function, AbstractScalarField}
+    fxy::Union{Nothing, Float64, Function, AbstractScalarField}
+    fyz::Union{Nothing, Float64, Function, AbstractScalarField}
+    fzx::Union{Nothing, Float64, Function, AbstractScalarField}
+    fyx::Union{Nothing, Float64, Function, AbstractScalarField}
+    fzy::Union{Nothing, Float64, Function, AbstractScalarField}
+    fxz::Union{Nothing, Float64, Function, AbstractScalarField}
+    qx ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    qy ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    qz ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    kx ::Union{Nothing, Float64, Function}
+    ky ::Union{Nothing, Float64, Function}
+    kz ::Union{Nothing, Float64, Function}
+    q ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    qn ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    h ::Union{Nothing, Float64, Function}
+
+    # Stress / traction components
+    sxx::Union{Nothing, Float64, Function}
+    syy::Union{Nothing, Float64, Function}
+    szz::Union{Nothing, Float64, Function}
+    sxy::Union{Nothing, Float64, Function}
+    sxz::Union{Nothing, Float64, Function}
+    syz::Union{Nothing, Float64, Function}
+
+    function BoundaryCondition(phName::String; kwargs...)
+        fields = fieldnames(BoundaryCondition)
+        values = map(fields) do f
+            f == :phName ? phName : get(kwargs, f, nothing)
+        end
+        return new(values...)
+    end
 end
-3. Vegyük az egyedi halmazt
-uniqueNodes = unique(allNodes)
-println("Összes 3D-hez tartozó node: ", length(uniqueNodes))
-=#
+
+function BC_specified_fields(bc::BoundaryCondition)
+    return filter(f -> getfield(bc, f) !== nothing,
+                  fieldnames(BoundaryCondition))
+end
 
 using SparseArrays
 
@@ -300,8 +442,6 @@ import Base:display
 function display(M::SystemMatrix)
     display(M.A)
 end
-
-abstract type AbstractField end
 
 """
     ScalarField(A, a, t, numElem, nsteps, type, model)
@@ -415,7 +555,7 @@ S2 = ScalarField(problem, "body", s)
 
 Here `S1` and `S2` define equivalent element-wise scalar fields.
 """
-struct ScalarField <: AbstractField
+struct ScalarField <: AbstractScalarField
     A::Vector{Matrix{Float64}}
     a::Matrix{Float64}
     t::Vector{Float64}
@@ -436,7 +576,9 @@ struct ScalarField <: AbstractField
         numElem = Int[]
 
         @inbounds for data in dataField
-            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
+            #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
+            phName = data.phName
+            f = data.f
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
             for (edim, etag) in dimTags
@@ -446,7 +588,7 @@ struct ScalarField <: AbstractField
                     for (j, elem) in enumerate(elemTags[i])
                         sc1 = zeros(numNodes, nsteps)
                         push!(numElem, elem)
-                        if f != :no
+                        if f !== nothing
                             for it in 1:steps
                                 for k in 1:numNodes
                                     nodeTag = elemNodeTags[i][(j-1)*numNodes + k]
@@ -696,7 +838,11 @@ struct VectorField <: AbstractField
         ff = 0
         pdim = 1
         for i in 1:length(dataField)
-            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            phName = dataField[i].phName
+            fx = dataField[i].fx
+            fy = dataField[i].fy
+            fz = dataField[i].fz
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -716,7 +862,7 @@ struct VectorField <: AbstractField
                             x = coord[1]
                             y = coord[2]
                             z = coord[3]
-                            if fx ≠ :no
+                            if fx !== nothing
                                 if fx isa Function
                                     ff = fx(x, y, z)
                                 else
@@ -724,7 +870,7 @@ struct VectorField <: AbstractField
                                 end
                                 vec1[3k-2, 1] = ff
                             end
-                            if fy ≠ :no
+                            if fy !== nothing
                                 if fy isa Function
                                     ff = fy(x, y, z)
                                 else
@@ -732,7 +878,7 @@ struct VectorField <: AbstractField
                                 end
                                 vec1[3k-1, 1] = ff
                             end
-                            if fz ≠ :no
+                            if fz !== nothing
                                 if fz isa Function
                                     ff = fz(x, y, z)
                                 else
@@ -955,7 +1101,17 @@ struct TensorField <: AbstractField
         ff = 0
         pdim = 1
         for i in 1:length(dataField)
-            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            phName = dataField[i].phName
+            fx = dataField[i].fx
+            fy = dataField[i].fy
+            fz = dataField[i].fz
+            fxy = dataField[i].fxy
+            fyz = dataField[i].fyz
+            fzx = dataField[i].fzx
+            fyx = dataField[i].fyx
+            fzy = dataField[i].fzy
+            fxz = dataField[i].fxz
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -975,7 +1131,7 @@ struct TensorField <: AbstractField
                             x = coord[1]
                             y = coord[2]
                             z = coord[3]
-                            if fx ≠ :no
+                            if fx !== nothing
                                 if fx isa Function
                                     ff = fx(x, y, z)
                                 else
@@ -983,7 +1139,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-8, 1] = ff
                             end
-                            if fy ≠ :no
+                            if fy !== nothing
                                 if fy isa Function
                                     ff = fy(x, y, z)
                                 else
@@ -991,7 +1147,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-4, 1] = ff
                             end
-                            if fz ≠ :no
+                            if fz !== nothing
                                 if fz isa Function
                                     ff = fz(x, y, z)
                                 else
@@ -999,7 +1155,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k, 1] = ff
                             end
-                            if fxy ≠ :no
+                            if fxy !== nothing
                                 if fxy isa Function
                                     ff = fxy(x, y, z)
                                 else
@@ -1007,7 +1163,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-5, 1] = ff
                             end
-                            if fyz ≠ :no
+                            if fyz !== nothing
                                 if fyz isa Function
                                     ff = fyz(x, y, z)
                                 else
@@ -1015,7 +1171,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-1, 1] = ff
                             end
-                            if fzx ≠ :no
+                            if fzx !== nothing
                                 if fzx isa Function
                                     ff = fzx(x, y, z)
                                 else
@@ -1023,7 +1179,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-6, 1] = ff
                             end
-                            if fyx ≠ :no
+                            if fyx !== nothing
                                 if fyx isa Function
                                     ff = fyx(x, y, z)
                                 else
@@ -1031,7 +1187,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-7, 1] = ff
                             end
-                            if fzy ≠ :no
+                            if fzy !== nothing
                                 if fzy isa Function
                                     ff = fzy(x, y, z)
                                 else
@@ -1039,7 +1195,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-3, 1] = ff
                             end
-                            if fxz ≠ :no
+                            if fxz !== nothing
                                 if fxz isa Function
                                     ff = fxz(x, y, z)
                                 else
@@ -2127,6 +2283,7 @@ function getDimForPhysicalName(name)
     return dimTags[i][1]
 end
 
+#=
 """
     material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
 
@@ -2168,6 +2325,7 @@ function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8,
     end
     return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
+=#
 
 """
     getEigenVectors(A::TensorField)
@@ -2335,10 +2493,17 @@ Types:
 - `uy`: Float64 or Function
 - `uz`: Float64 or Function
 """
+function displacementConstraint(name; ux=nothing, uy=nothing, uz=nothing)
+    ux === nothing && uy === nothing && uz === nothing &&
+        error("displacementConstraint: at least one of ux, uy, uz must be specified.")
+    return BoundaryCondition(name, ux=ux, uy=uy, uz=uz)
+end
+#=
 function displacementConstraint(name; ux=1im, uy=1im, uz=1im)
     bc0 = name, ux, uy, uz
     return bc0
 end
+=#
 
 """
     load(name; fx=..., fy=..., fz=...)
@@ -2356,6 +2521,34 @@ Types:
 - `fy`: Float64 or Function
 - `fz`: Float64 or Function
 """
+function load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
+    fx === nothing && fy === nothing && fz === nothing && p === nothing &&
+        error("load: at least one of fx, fy, fz, p must be specified.")
+    if p !== nothing
+        if p isa ScalarField
+            pp = elementsToNodes(p)
+            return BoundaryCondition(name, p=pp)
+        end
+        return BoundaryCondition(name, p=p)
+    end
+    if fx !== nothing
+        ffx = fx isa ScalarField ? elementsToNodes(fx) : fx
+    else
+        ffx = fx
+    end
+    if fy !== nothing
+        ffy = fy isa ScalarField ? elementsToNodes(fy) : fy
+    else
+        ffy = fy
+    end
+    if fz !== nothing
+        ffz = fz isa ScalarField ? elementsToNodes(fz) : fz
+    else
+        ffz = fz
+    end
+    return BoundaryCondition(name, fx=ffx, fy=ffy, fz=ffz)
+end
+#=
 function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number, Function, ScalarField}=0, fz::Union{Number, Function, ScalarField}=0, p::Union{Number, Function, ScalarField}=0)
     if fx isa ScalarField
         if isElementwise(fx)
@@ -2384,6 +2577,7 @@ function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number
     ld0 = name, fx, fy, fz
     return ld0
 end
+=#
 
 """
     elasticSupport(name; kx=..., ky=..., kz=...)
@@ -2401,10 +2595,17 @@ Types:
 - `ky`: Float64 or Function
 - `kz`: Float64 or Function
 """
+function elasticSupport(name; kx=nothing, ky=nothing, kz=nothing)
+    kx === nothing && ky === nothing && kz === nothing &&
+        error("elasticSupport: at least one of kx, ky, kz, p must be specified.")
+    return BoundaryCondition(name, kx=kx, ky=ky, kz=kz)
+end
+#=
 function elasticSupport(name; kx=0, ky=0, kz=0)
     es0 = name, kx, ky, kz
     return es0
 end
+=#
 
 """
     temperatureConstraint(name; T=...)
@@ -2419,10 +2620,17 @@ Types:
 - `name`: String
 - `T`: Float64 or Function
 """
+function temperatureConstraint(name; T=nothing)
+    T === nothing &&
+        error("temperatureConstraint: T must be specified.")
+    return BoundaryCondition(name, T=T)
+end
+#=
 function temperatureConstraint(name; T=1im)
     bc0 = name, T, 1im, 1im
     return bc0
 end
+=#
 
 """
     heatFlux(name; qn=...)
@@ -2437,12 +2645,17 @@ Types:
 - `name`: String
 - `qn`: Float64 or Function
 """
-function heatFlux(name; qn=0)
+function heatFlux(name; qn=nothing)
+    qn === nothing &&
+        error("heatFlux: qn must be specified.")
+    return BoundaryCondition(name, qn=qn)
+    #=
     p1 =0
     p2 =0
     qn0 = -qn
     fl0 = name, qn0, p1, p2
     return fl0
+    =#
 end
 
 """
@@ -2458,12 +2671,17 @@ Types:
 - `name`: String
 - `h`: Float64 or Function
 """
-function heatSource(name; h=0)
+function heatSource(name; h=nothing)
+    h === nothing &&
+        error("heatSource: h must be specified.")
+    return BoundaryCondition(name, h=h)
+    #=
     p1 =0
     p2 =0
     h0 = -h
     sr0 = name, h0, p1, p2
     return sr0
+    =#
 end
 
 """
@@ -2540,12 +2758,11 @@ qq = scalarField(problem, [f2])
 qqq = showDoFResults(qq, :scalar)
 ```
 """
-function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, fzy=:no, fzx=:no, fxz=:no)
-    fyx = fyx != :no ? fyx : fxy
-    fzy = fzy != :no ? fzy : fyz
-    fxz = fxz != :no ? fxz : fzx
-    ld0 = name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz
-    return ld0
+function field(name; f=nothing, fx=nothing, fy=nothing, fz=nothing, fxy=nothing, fyx=nothing, fyz=nothing, fzy=nothing, fzx=nothing, fxz=nothing)
+    fyx = fyx !== nothing ? fyx : fxy
+    fzy = fzy !== nothing ? fzy : fyz
+    fxz = fxz !== nothing ? fxz : fzx
+    return BoundaryCondition(name, f=f, fx=fx, fy=fy, fz=fz, fxy=fxy, fyz=fyz, fzx=fzx, fyx=fyx, fzy=fzy, fxz=fxz)
 end
 
 """
@@ -2582,7 +2799,12 @@ function scalarField(problem, dataField)
     field = zeros(non)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        name = dataField[i].phName
+        f = dataField[i].f
+        if f === nothing
+            error("scalarField: f is not defined")
+        end
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(f, Function)
@@ -2590,7 +2812,7 @@ function scalarField(problem, dataField)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if f != :no
+        if f !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
