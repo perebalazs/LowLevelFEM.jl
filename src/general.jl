@@ -335,64 +335,6 @@ struct Problem
     end
 end
 
-abstract type AbstractField end
-abstract type AbstractScalarField <: AbstractField end
-
-struct BoundaryCondition
-    phName::String
-
-    # Dirichlet-type (primary variables)
-    ux::Union{Nothing, Float64, Function}
-    uy::Union{Nothing, Float64, Function}
-    uz::Union{Nothing, Float64, Function}
-    p ::Union{Nothing, Float64, Function}   # pressure / scalar field
-    T ::Union{Nothing, Float64, Function}   # temperature
-
-    # Neumann-type (fluxes / forces)
-    f::Union{Nothing, Float64, Function, AbstractScalarField}
-    fx::Union{Nothing, Float64, Function, AbstractScalarField}
-    fy::Union{Nothing, Float64, Function, AbstractScalarField}
-    fz::Union{Nothing, Float64, Function, AbstractScalarField}
-    fxy::Union{Nothing, Float64, Function, AbstractScalarField}
-    fyz::Union{Nothing, Float64, Function, AbstractScalarField}
-    fzx::Union{Nothing, Float64, Function, AbstractScalarField}
-    fyx::Union{Nothing, Float64, Function, AbstractScalarField}
-    fzy::Union{Nothing, Float64, Function, AbstractScalarField}
-    fxz::Union{Nothing, Float64, Function, AbstractScalarField}
-    qx ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    qy ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    qz ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    kx ::Union{Nothing, Float64, Function}
-    ky ::Union{Nothing, Float64, Function}
-    kz ::Union{Nothing, Float64, Function}
-    q ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    qn ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    h ::Union{Nothing, Float64, Function}
-
-    # Stress / traction components
-    sxx::Union{Nothing, Float64, Function}
-    syy::Union{Nothing, Float64, Function}
-    szz::Union{Nothing, Float64, Function}
-    sxy::Union{Nothing, Float64, Function}
-    sxz::Union{Nothing, Float64, Function}
-    syz::Union{Nothing, Float64, Function}
-
-    function BoundaryCondition(phName::String; kwargs...)
-        fields = fieldnames(BoundaryCondition)
-        values = map(fields) do f
-            f == :phName ? phName : get(kwargs, f, nothing)
-        end
-        return new(values...)
-    end
-end
-
-function BC_specified_fields(bc::BoundaryCondition)
-    return filter(f -> getfield(bc, f) !== nothing,
-                  fieldnames(BoundaryCondition))
-end
-
-using SparseArrays
-
 """
     Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
 
@@ -442,6 +384,8 @@ import Base:display
 function display(M::SystemMatrix)
     display(M.A)
 end
+
+abstract type AbstractField end
 
 """
     ScalarField(A, a, t, numElem, nsteps, type, model)
@@ -555,7 +499,7 @@ S2 = ScalarField(problem, "body", s)
 
 Here `S1` and `S2` define equivalent element-wise scalar fields.
 """
-struct ScalarField <: AbstractScalarField
+struct ScalarField <: AbstractField
     A::Vector{Matrix{Float64}}
     a::Matrix{Float64}
     t::Vector{Float64}
@@ -1264,6 +1208,61 @@ struct TensorField <: AbstractField
         return TensorField(A, [;;], t, numElem, nsteps, :tensor, prob)
     end
 end
+
+struct BoundaryCondition
+    phName::String
+
+    # Dirichlet-type (primary variables)
+    ux::Union{Nothing, Float64, Function, ScalarField}
+    uy::Union{Nothing, Float64, Function, ScalarField}
+    uz::Union{Nothing, Float64, Function, ScalarField}
+    p ::Union{Nothing, Float64, Function, ScalarField}   # pressure / scalar field
+    T ::Union{Nothing, Float64, Function, ScalarField}   # temperature
+
+    # Neumann-type (fluxes / forces)
+    f::Union{Nothing, Float64, Function, ScalarField}
+    fx::Union{Nothing, Float64, Function, ScalarField}
+    fy::Union{Nothing, Float64, Function, ScalarField}
+    fz::Union{Nothing, Float64, Function, ScalarField}
+    fxy::Union{Nothing, Float64, Function, ScalarField}
+    fyz::Union{Nothing, Float64, Function, ScalarField}
+    fzx::Union{Nothing, Float64, Function, ScalarField}
+    fyx::Union{Nothing, Float64, Function, ScalarField}
+    fzy::Union{Nothing, Float64, Function, ScalarField}
+    fxz::Union{Nothing, Float64, Function, ScalarField}
+    #qx ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    #qy ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    #qz ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
+    kx ::Union{Nothing, Float64, Function, ScalarField}
+    ky ::Union{Nothing, Float64, Function, ScalarField}
+    kz ::Union{Nothing, Float64, Function, ScalarField}
+    q ::Union{Nothing, Float64, Function, ScalarField}   # heat flux / generic scalar flux
+    qn ::Union{Nothing, Float64, Function, ScalarField}   # heat flux / generic scalar flux
+    h ::Union{Nothing, Float64, Function, ScalarField}
+
+    # Stress / traction components
+    sx::Union{Nothing, Float64, Function, ScalarField}
+    sy::Union{Nothing, Float64, Function, ScalarField}
+    sz::Union{Nothing, Float64, Function, ScalarField}
+    sxy::Union{Nothing, Float64, Function, ScalarField}
+    syz::Union{Nothing, Float64, Function, ScalarField}
+    szx::Union{Nothing, Float64, Function, ScalarField}
+
+    function BoundaryCondition(phName::String; kwargs...)
+        fields = fieldnames(BoundaryCondition)
+        values = map(fields) do f
+            f == :phName ? phName : get(kwargs, f, nothing)
+        end
+        return new(values...)
+    end
+end
+
+function BC_specified_fields(bc::BoundaryCondition)
+    return filter(f -> getfield(bc, f) !== nothing,
+                  fieldnames(BoundaryCondition))
+end
+
+using SparseArrays
 
 """
     DoFs(f::AbstractField)

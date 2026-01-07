@@ -3005,6 +3005,18 @@ function elasticSupportMatrix(problem, elSupports)
     return SystemMatrix(C, problem)
 end
 
+@inline function _loadvec_helper(f, h, x, y, z, nnet, j, l)
+    if f isa Number
+        return f
+    elseif f isa Function
+        return f(x, y, z)
+    elseif f isa ScalarField
+        return h[:, j]' * f.a[nnet[l, :]]
+    else
+        error("loadVector: internal error.")
+    end
+end
+
 """
     loadVector(problem, loads)
                             
@@ -3029,7 +3041,7 @@ The interpretation of the physical group dimension is:
   - Surface → surface force
   - Volume → body force
 
-Load components may be specified as constants, spatial functions, or `ScalarField`s.
+Load components may be specified as constants, spatial functions, or `ScalarField`s (nodal type).
 Axisymmetric and other weighted formulations can be handled by including the
 appropriate geometric factor (e.g. `2πr`) in the load definition or coefficient.
 
@@ -3040,25 +3052,13 @@ Return: `loadVec`
                             
 Types:
 - `problem`: Problem
-- `loads`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `loads`: Vector{BoundaryCondition}
 - `loadVec`: VectorField
 """
 function loadVector(problem, loads)
     gmsh.model.setCurrent(problem.name)
     if !isa(loads, Vector)
         error("loadVector: loads are not arranged in a vector. Put them in [...]")
-    end
-
-    @inline function loadvec_helper(f, h, x, y, z, nnet, j, l)
-        if f isa Number
-            return f
-        elseif f isa Function
-            return f(x, y, z)
-        elseif f isa ScalarField
-            return h[:, j]' * f.a[nnet[l, :]]
-        else
-            error("loadVector: internal error.")
-        end
     end
 
     pdim = problem.pdim
@@ -3068,7 +3068,7 @@ function loadVector(problem, loads)
     dof = pdim * non
     fp = zeros(dof)
     ncoord2 = zeros(3 * problem.non)
-    f = [.0]
+    f = nothing
     for n in 1:length(loads)
         #name, fx, fy, fz = loads[n]
         name = loads[n].phName
@@ -3087,10 +3087,9 @@ function loadVector(problem, loads)
         sxy = loads[n].sxy
         syz = loads[n].syz
         szx = loads[n].szx
-        syx = loads[n].syx
-        szy = loads[n].szy
-        sxz = loads[n].sxz
 
+        (qn !== nothing || hc !== nothing || hs !== nothing || T !== nothing) && (fx !== nothing || fy !== nothing || fz !== nothing) &&
+            error("loadVector: qn/h/T∞ and fx/fy/fz cannot be defined in the same BC.")
         if pdim == 1 || pdim == 2 || pdim == 3 || pdim == 9
             f = zeros(pdim)
         else
@@ -3110,12 +3109,12 @@ function loadVector(problem, loads)
             ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
             ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
             ez = VectorField(problem, [field(name, fx=0, fy=0, fz=1)])
-            if fx_is_number || fx_is_field
-                fy = elementsToNodes((nv ⋅ ey) * fx)
-                fz = elementsToNodes((nv ⋅ ez) * fx)
-                fx = elementsToNodes((nv ⋅ ex) * fx)
-            elseif fx_is_function
-                pp = scalarField(problem, [field(name, f=fx)])
+            if p isa Number || p isa ScalarField
+                fy = elementsToNodes((nv ⋅ ey) * p)
+                fz = elementsToNodes((nv ⋅ ez) * p)
+                fx = elementsToNodes((nv ⋅ ex) * p)
+            elseif p isa Function
+                pp = scalarField(problem, [field(name, f=p)])
                 fy = elementsToNodes((nv ⋅ ey) * pp)
                 fz = elementsToNodes((nv ⋅ ez) * pp)
                 fx = elementsToNodes((nv ⋅ ex) * pp)
@@ -3124,9 +3123,9 @@ function loadVector(problem, loads)
         if p !== nothing && DIM ≠ 3
             error("loadVector: pressure can be given on a surface of a 3D solid.")
         end
-        fx = fx !== nothing ? fx : 0
-        fy = fy !== nothing ? fy : 0
-        fz = fz !== nothing ? fz : 0
+        fx = fx !== nothing ? fx : 0.0
+        fy = fy !== nothing ? fy : 0.0
+        fz = fz !== nothing ? fz : 0.0
         dimTags = gmsh.model.getEntitiesForPhysicalName(name)
         for i ∈ 1:length(dimTags)
             dimTag = dimTags[i]
@@ -3165,42 +3164,49 @@ function loadVector(problem, loads)
                     fill!(f1, 0.0)
                     @inbounds for j in 1:numIntPoints
                         x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
-                        y = 0
-                        z = 0
-                        if fx_is_function || fy_is_function || fz_is_function
-                            y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
-                            z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
-                        end
+                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
                         if hc !== nothing && T0 !== nothing
                             if hc isa Function
                                 error("heatConvectionVector: h cannot be a function.")
                             end
-                            f[1] = T0 isa Function ? hc * T0(x, y, z) : hc * T0
+                            f[1] = _loadvec_helper(T0, h, x, y, z, nnet, j, l) * hc
                         elseif qn !== nothing
-                            f[1] = qn isa Function ? qn(x, y, z) : qn
+                            f[1] = _loadvec_helper(qn, h, x, y, z, nnet, j, l)
                         elseif hs !== nothing
-                            f[1] = hs isa Function ? hs(x, y, z) : hs
+                            f[1] = _loadvec_helper(hs, h, x, y, z, nnet, j, l)
                         else
-                            f[1] = loadvec_helper(fx, h, x, y, z, nnet, j, l)
+                            f[1] = _loadvec_helper(fx, h, x, y, z, nnet, j, l)
                         end
                         if pdim > 1 && pdim <= 3
-                            f[2] = loadvec_helper(fy, h, x, y, z, nnet, j, l)
+                            f[2] = _loadvec_helper(fy, h, x, y, z, nnet, j, l)
                         end
                         if pdim == 3
-                            f[3] = loadvec_helper(fy, h, x, y, z, nnet, j, l)
+                            f[3] = _loadvec_helper(fz, h, x, y, z, nnet, j, l)
                         end
                         if pdim == 9
                             fill!(f, 0.0)
                             if sx !== nothing
-                                f[1] = loadvec_helper(sx, h, x, y, z, nnet, j, l)
+                                f[1] = _loadvec_helper(sx, h, x, y, z, nnet, j, l)
                             end
                             if sy !== nothing
-                                f[5] = loadvec_helper(sy, h, x, y, z, nnet, j, l)
+                                f[5] = _loadvec_helper(sy, h, x, y, z, nnet, j, l)
                             end
                             if sz !== nothing
-                                f[9] = loadvec_helper(sz, h, x, y, z, nnet, j, l)
+                                f[9] = _loadvec_helper(sz, h, x, y, z, nnet, j, l)
                             end
-                            ----------
+                            if sxy !== nothing
+                                f[4] = _loadvec_helper(sxy, h, x, y, z, nnet, j, l)
+                                f[2] = f[4]
+                            end
+                            if syz !== nothing
+                                f[8] = _loadvec_helper(syz, h, x, y, z, nnet, j, l)
+                                f[6] = f[8]
+                            end
+                            if szx !== nothing
+                                f[3] = _loadvec_helper(szx, h, x, y, z, nnet, j, l)
+                                f[7] = f[3]
+                            end
                         end
                         r = x
                         H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
@@ -3355,8 +3361,7 @@ end
                             
 Applies displacement boundary conditions `supports` on a stiffness matrix
 `stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
-Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
-prescribed displacements `ux`, `uy` and `uz`.
+Mesh details are in `problem`. `supports` is a `Vector{BoundaryCondition}`.
                             
 Returns: nothing
                             
@@ -3365,7 +3370,7 @@ Types:
 - `massMat`: SystemMatrix 
 - `dampMat`: SystemMatrix 
 - `loadVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `supports`: Vector{BoundaryCondition}
 """
 function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix, dampMat::SystemMatrix, loadVec, supports; fix=1)
     if !isa(supports, Vector)
@@ -3398,6 +3403,9 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
                 f0 = stiffMat.A[:, nodeTagsX] * uux
+            elseif ux isa ScalarField
+                uux = ux.a[nodeTags]
+                f0 = stiffMat.A[:, nodeTagsX] * uux
             else
                 f0 = stiffMat.A[:, nodeTagsX] * ux
                 f0 = sum(f0, dims=2)
@@ -3411,6 +3419,9 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
                 f0 = stiffMat.A[:, nodeTagsY] * uuy
+            elseif uy isa ScalarField
+                uuy = uy.a[nodeTags]
+                f0 = stiffMat.A[:, nodeTagsY] * uuy
             else
                 f0 = stiffMat.A[:, nodeTagsY] * uy
                 f0 = sum(f0, dims=2)
@@ -3419,9 +3430,13 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
         end
         if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= 3
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim - 3)
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
+                f0 = stiffMat.A[:, nodeTagsZ] * uuz
+            elseif uz isa ScalarField
+                uuz = uz.a[nodeTags]
                 f0 = stiffMat.A[:, nodeTagsZ] * uuz
             else
                 f0 = stiffMat.A[:, nodeTagsZ] * uz
@@ -3450,6 +3465,8 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             nodeTagsX .-= (pdim-1)
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
+            elseif ux isa ScalarField
+                uux = ux.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsX
@@ -3465,6 +3482,8 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
                 dampMat.A[j, j] = fix
                 if isa(ux, Function)
                     loadVec.a[j] = uux[jj]
+                elseif ux isa ScalarField
+                    loadVec.a[j] = uux[jj]
                 else
                     loadVec.a[j] = ux
                 end
@@ -3476,6 +3495,8 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             nodeTagsY .-= (pdim-2)
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
+            elseif uy isa ScalarField
+                uuy = uy.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsY
@@ -3491,6 +3512,8 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
                 dampMat.A[j, j] = fix
                 if isa(uy, Function)
                     loadVec.a[j] = uuy[jj]
+                elseif uy isa ScalarField
+                    loadVec.a[j] = uuy[jj]
                 else
                     loadVec.a[j] = uy
                 end
@@ -3498,9 +3521,12 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
         end
         if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= 3
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim - 3)
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
+            elseif uz isa ScalarField
+                uuz = uz.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsZ
@@ -3515,6 +3541,8 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
                 dampMat.A[:, j] .= 0
                 dampMat.A[j, j] = fix
                 if isa(uz, Function)
+                    loadVec.a[j] = uuz[jj]
+                elseif uz isa ScalarField
                     loadVec.a[j] = uuz[jj]
                 else
                     loadVec.a[j] = uz
@@ -3542,7 +3570,7 @@ Types:
 - `dispVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
+function apply BoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
     #problem = dispVec.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
