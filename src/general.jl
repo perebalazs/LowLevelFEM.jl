@@ -2698,10 +2698,10 @@ Types:
 - `h`: Float64
 - `Tₐ`: Float64 or Function
 """
-function heatConvection(name; h=10., Tₐ=20.)
-    p = 2im
-    hcv0 = name, h, Tₐ, p
-    return hcv0
+function heatConvection(name; h=nothing, T∞=nothing)
+    h === nothing && T∞ === nothing
+        error("heatSource: h and T∞ must be specified.")
+    return BoundaryCondition(name, h=h, T=T∞)
 end
 
 """
@@ -2870,7 +2870,11 @@ function vectorField(problem, dataField)
     field = zeros(non * pdim)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        name = dataField[i].phName
+        fx = dataField[i].fx
+        fy = dataField[i].fy
+        fz = dataField[i].fz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
@@ -2878,7 +2882,7 @@ function vectorField(problem, dataField)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if fx != :no
+        if fx !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
@@ -2889,7 +2893,7 @@ function vectorField(problem, dataField)
                 field[nodeTagsX,:] .= fx
             end
         end
-        if fy != :no
+        if fy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 2)
@@ -2900,7 +2904,7 @@ function vectorField(problem, dataField)
                 field[nodeTagsY,:] .= fy
             end
         end
-        if fz != :no && pdim == 3
+        if fz !== nothing && pdim == 3
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= pdim
             if isa(fz, Function)
@@ -2971,7 +2975,17 @@ function tensorField(problem, dataField; type=:e)
     field = zeros(non * pdim)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        name = dataField[i].phName
+        fx = dataField[i].fx
+        fy = dataField[i].fy
+        fz = dataField[i].fz
+        fxy = dataField[i].fxy
+        fyz = dataField[i].fyz
+        fzx = dataField[i].fzx
+        fyx = dataField[i].fyx
+        fzy = dataField[i].fzy
+        fxz = dataField[i].fxz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function) || isa(fxy, Function) || isa(fyz, Function) || isa(fzx, Function)
@@ -2979,7 +2993,7 @@ function tensorField(problem, dataField; type=:e)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if fx != :no
+        if fx !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
@@ -2990,7 +3004,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsX,:] .= fx
             end
         end
-        if fy != :no
+        if fy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 5)
@@ -3001,7 +3015,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsY,:] .= fy
             end
         end
-        if fz != :no
+        if fz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= pdim
             if isa(fz, Function)
@@ -3011,7 +3025,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsZ,:] .= fz
             end
         end
-        if fxy != :no
+        if fxy !== nothing
             nodeTagsXY = copy(nodeTags)
             nodeTagsXY *= pdim
             nodeTagsXY .-= (pdim - 4)
@@ -3022,7 +3036,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsXY,:] .= fxy
             end
         end
-        if fyx != :no
+        if fyx !== nothing
             nodeTagsYX = copy(nodeTags)
             nodeTagsYX *= pdim
             nodeTagsYX .-= (pdim - 2)
@@ -3033,7 +3047,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsYX,:] .= fyx
             end
         end
-        if fyz != :no
+        if fyz !== nothing
             nodeTagsYZ = copy(nodeTags)
             nodeTagsYZ *= pdim
             nodeTagsYZ .-= (pdim - 8)
@@ -3044,7 +3058,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsYZ,:] .= fyz
             end
         end
-        if fzy != :no
+        if fzy !== nothing
             nodeTagsZY = copy(nodeTags)
             nodeTagsZY *= pdim
             nodeTagsZY .-= (pdim - 6)
@@ -3055,7 +3069,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsZY,:] .= fzy
             end
         end
-        if fzx != :no
+        if fzx !== nothing
             nodeTagsZX = copy(nodeTags)
             nodeTagsZX *= pdim
             nodeTagsZX .-= (pdim - 3)
@@ -3066,7 +3080,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsZX,:] .= fzx
             end
         end
-        if fxz != :no
+        if fxz !== nothing
             nodeTagsXZ = copy(nodeTags)
             nodeTagsXZ *= pdim
             nodeTagsXZ .-= (pdim - 7)
@@ -3514,27 +3528,31 @@ function constrainedDoFs(problem, supports)
     cdofs = []
     
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        #name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
         phg = getTagForPhysicalName(name)
         nodeTags::Vector{Int64}, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         nodeTagsX = []
         nodeTagsY = []
         nodeTagsZ = []
-        if ux != 1im
+        if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
         end
-        if uy != 1im
+        if uy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
         end
-        if pdim > 2 && uz != 1im
+        if pdim > 2 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= 3
         end
-        cdofs = cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ
+        cdofs = unique(cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ)
     end
     
     return cdofs

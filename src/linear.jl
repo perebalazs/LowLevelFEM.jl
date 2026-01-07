@@ -2876,7 +2876,15 @@ function elasticSupportMatrix(problem, elSupports)
     dof = pdim * non
     ncoord2 = zeros(3 * problem.non)
     for n in 1:length(elSupports)
-        name, kx, ky, kz = elSupports[n]
+        #name, kx, ky, kz = elSupports[n]
+        name = elSupports[n].phName
+        kx = elSupports[n].kx
+        ky = elSupports[n].ky
+        kz = elSupports[n].kz
+        kx = kx !== nothing ? kx : 0
+        ky = ky !== nothing ? ky : 0
+        kz = kz !== nothing ? kz : 0
+        kx = elSupports[n].h !== nothing ? h : kx
         if problem.pdim == 3
             f = [0, 0, 0]
         elseif problem.pdim == 2
@@ -3040,6 +3048,19 @@ function loadVector(problem, loads)
     if !isa(loads, Vector)
         error("loadVector: loads are not arranged in a vector. Put them in [...]")
     end
+
+    @inline function loadvec_helper(f, h, x, y, z, nnet, j, l)
+        if f isa Number
+            return f
+        elseif f isa Function
+            return f(x, y, z)
+        elseif f isa ScalarField
+            return h[:, j]' * f.a[nnet[l, :]]
+        else
+            error("loadVector: internal error.")
+        end
+    end
+
     pdim = problem.pdim
     DIM = problem.dim
     b = problem.thickness
@@ -3049,7 +3070,27 @@ function loadVector(problem, loads)
     ncoord2 = zeros(3 * problem.non)
     f = [.0]
     for n in 1:length(loads)
-        name, fx, fy, fz = loads[n]
+        #name, fx, fy, fz = loads[n]
+        name = loads[n].phName
+        fx = loads[n].fx
+        fy = loads[n].fy
+        fz = loads[n].fz
+        p = loads[n].p
+        hc = loads[n].h
+        T0 = loads[n].T
+        qn = loads[n].qn
+        hs = loads[n].h
+
+        sx = loads[n].sx
+        sy = loads[n].sy
+        sz = loads[n].sz
+        sxy = loads[n].sxy
+        syz = loads[n].syz
+        szx = loads[n].szx
+        syx = loads[n].syx
+        szy = loads[n].szy
+        sxz = loads[n].sxz
+
         if pdim == 1 || pdim == 2 || pdim == 3 || pdim == 9
             f = zeros(pdim)
         else
@@ -3064,7 +3105,7 @@ function loadVector(problem, loads)
         fz_is_number = fz isa Number
         fz_is_function = fz isa Function
         fz_is_field = fz isa ScalarField
-        if fy == 1im && DIM == 3
+        if p !== nothing && DIM == 3
             nv = -normalVector(problem, name)
             ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
             ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
@@ -3080,9 +3121,12 @@ function loadVector(problem, loads)
                 fx = elementsToNodes((nv ⋅ ex) * pp)
             end
         end
-        if fy == 1im && DIM ≠ 3
+        if p !== nothing && DIM ≠ 3
             error("loadVector: pressure can be given on a surface of a 3D solid.")
         end
+        fx = fx !== nothing ? fx : 0
+        fy = fy !== nothing ? fy : 0
+        fz = fz !== nothing ? fz : 0
         dimTags = gmsh.model.getEntitiesForPhysicalName(name)
         for i ∈ 1:length(dimTags)
             dimTag = dimTags[i]
@@ -3127,46 +3171,36 @@ function loadVector(problem, loads)
                             y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
                         end
-                        if fz == 2im
-                            if fx_is_function
+                        if hc !== nothing && T0 !== nothing
+                            if hc isa Function
                                 error("heatConvectionVector: h cannot be a function.")
                             end
-                            f[1] = fy_is_function ? fx * fy(x, y, z) : fx * fy
+                            f[1] = T0 isa Function ? hc * T0(x, y, z) : hc * T0
+                        elseif qn !== nothing
+                            f[1] = qn isa Function ? qn(x, y, z) : qn
+                        elseif hs !== nothing
+                            f[1] = hs isa Function ? hs(x, y, z) : hs
                         else
-                            if fx_is_number
-                                f[1] = fx
-                            elseif fx_is_function
-                                f[1] = fx(x, y, z)
-                            elseif fx_is_field
-                                f[1] = h[:, j]' * fx.a[nnet[l, :]]
-                            else
-                                error("loadVector: internal error.")
-                            end
-                            #f[1] = isa(fx, Function) ? fx(x, y, z) : fx
+                            f[1] = loadvec_helper(fx, h, x, y, z, nnet, j, l)
                         end
-                        if pdim > 1
-                            if fy_is_number
-                                f[2] = fy
-                            elseif fy_is_function
-                                f[2] = fy(x, y, z)
-                            elseif fy_is_field
-                                f[2] = h[:, j]' * fy.a[nnet[l, :]]
-                            else
-                                error("loadVector: internal error.")
-                            end
-                            #f[2] = isa(fy, Function) ? fy(x, y, z) : fy
+                        if pdim > 1 && pdim <= 3
+                            f[2] = loadvec_helper(fy, h, x, y, z, nnet, j, l)
                         end
-                        if pdim > 2
-                            if fz_is_number
-                                f[3] = fz
-                            elseif fz_is_function
-                                f[3] = fz(x, y, z)
-                            elseif fz_is_field
-                                f[3] = h[:, j]' * fz.a[nnet[l, :]]
-                            else
-                                error("loadVector: internal error.")
+                        if pdim == 3
+                            f[3] = loadvec_helper(fy, h, x, y, z, nnet, j, l)
+                        end
+                        if pdim == 9
+                            fill!(f, 0.0)
+                            if sx !== nothing
+                                f[1] = loadvec_helper(sx, h, x, y, z, nnet, j, l)
                             end
-                            #f[3] = isa(fz, Function) ? fz(x, y, z) : fz
+                            if sy !== nothing
+                                f[5] = loadvec_helper(sy, h, x, y, z, nnet, j, l)
+                            end
+                            if sz !== nothing
+                                f[9] = loadvec_helper(sz, h, x, y, z, nnet, j, l)
+                            end
+                            ----------
                         end
                         r = x
                         H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
@@ -3345,7 +3379,11 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
     pdim = stiffMat.model.pdim
     
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        #name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -3353,7 +3391,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if ux != 1im
+        if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
@@ -3366,7 +3404,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             end
             loadVec.a .-= f0
         end
-        if uy != 1im
+        if uy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 2)
@@ -3379,7 +3417,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             end
             loadVec.a .-= f0
         end
-        if pdim == 3 && uz != 1im
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= 3
             if isa(uz, Function)
@@ -3394,7 +3432,11 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
     end
     
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        #name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -3402,7 +3444,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if ux != 1im
+        if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
@@ -3428,7 +3470,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
                 end
             end
         end
-        if uy != 1im
+        if uy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
@@ -3454,7 +3496,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
                 end
             end
         end
-        if pdim == 3 && uz != 1im
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= 3
             if isa(uz, Function)
@@ -3509,7 +3551,11 @@ function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
     pdim = problem.pdim
     
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        #name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -3517,7 +3563,7 @@ function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if ux != 1im
+        if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
@@ -3528,7 +3574,7 @@ function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
                 dispVec[nodeTagsX,:] .= ux
             end
         end
-        if uy != 1im
+        if uy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 2)
@@ -3539,7 +3585,7 @@ function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
                 dispVec[nodeTagsY,:] .= uy
             end
         end
-        if pdim == 3 && uz != 1im
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= 3
             if isa(uz, Function)

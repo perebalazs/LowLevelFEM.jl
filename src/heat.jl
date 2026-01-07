@@ -677,6 +677,8 @@ function thermalLoadVectorSolid(problem, T, T₀)
     #if T₀ == 1im
     #    T₀ = zeros(problem.non)
     #end
+    T = elementsToNodes(T)
+    T₀ = elementsToNodes(T₀)
     if size(T.a) != size(T₀.a) || size(T.a,1) != problem.non
         error("thermalLoadVectorSolid: size of T [$(size(T))] != size of T₀ [$(size(T₀))], non=$(problem.non)")
     end
@@ -807,6 +809,8 @@ function thermalLoadVectorAXI(problem, T, T₀)
     pdim = problem.pdim
     dof = problem.non * pdim
     fT = zeros(dof)
+    T = elementsToNodes(T)
+    T₀ = elementsToNodes(T₀)
     #if T₀ == 1im
     #    T₀ = zeros(problem.non)
     #end
