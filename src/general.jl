@@ -1,8 +1,8 @@
-export Problem, Material, getEigenVectors, getEigenValues
+export Problem, Material, getEigenVectors, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
-export constrainedDoFs, freeDoFs, DoFs
+export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
 export rotateNodes, CoordinateSystem
@@ -107,6 +107,14 @@ function elastic_constants(; E=nothing, ν=nothing, λ=nothing, μ=nothing, κ=n
         λ = 2μ*ν/(1-2ν)
         κ = E / (3*(1-2ν))
 
+    elseif n == 1 && haskey(specified, :κ)
+        κ = specified[:κ]
+        ν = DEFAULT_POISSON
+        E = DEFAULT_YOUNG
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        #κ = E / (3*(1-2ν))
+
     elseif n == 2 && haskey(specified, :E) && haskey(specified, :ν)
         E, ν = specified[:E], specified[:ν]
         μ = E / (2*(1+ν))
@@ -139,6 +147,19 @@ function elastic_constants(; E=nothing, ν=nothing, λ=nothing, μ=nothing, κ=n
     end
 
     return (; E, ν, λ, μ, κ)
+end
+
+function material(  phName::String;
+        type = :Hooke,
+        E = nothing, ν = nothing, λ = nothing, μ = nothing, κ = nothing,
+        ρ = 7.85e-9,
+        k = 45.0,
+        c = 4.2e8,
+        α = 1.2e-5,
+        η = 1e-7,
+        p₀ = 0.1,
+        A = 1.0)
+    return Material(phName, type=type, E=E, ν=ν, λ=λ, μ=μ, κ=κ, ρ=ρ, k=k, c=c, α=α, η=η, p₀=p₀, A=A)
 end
 
 #=
@@ -2861,7 +2882,7 @@ Here VectorField is defined in nodes.
 """
 function vectorField(problem, dataField)
     if !isa(dataField, Vector)
-        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
+        error("vectorField: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = problem.dim
@@ -2966,7 +2987,7 @@ Here TensorField is defined in nodes.
 """
 function tensorField(problem, dataField; type=:e)
     if !isa(dataField, Vector)
-        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
+        error("tensorField!: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = 9
@@ -3513,26 +3534,26 @@ Return: `DoFs`
 
 Types:
 - `problem`: Problem
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `supports`: Vector{BoundaryCondition}
 - `DoFs`: Vector{Int64}
 """
 function constrainedDoFs(problem, supports)
     if !isa(supports, Vector)
-        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+        error("constrainedDoFs: supports are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     #non = problem.non
     pdim = problem.pdim
     #dof = non * pdim
-    cdofs = []
+    cdofs = Int[]
     
     for i in 1:length(supports)
-        #name, ux, uy, uz = supports[i]
         name = supports[i].phName
         ux = supports[i].ux
         uy = supports[i].uy
         uz = supports[i].uz
         T = supports[i].T
+        p = supports[i].p
         sx = supports[i].sx
         sy = supports[i].sy
         sz = supports[i].sz
@@ -3540,22 +3561,33 @@ function constrainedDoFs(problem, supports)
         syz = supports[i].syz
         szx = supports[i].szx
         
-        T !== nothing &&
-            (ux !== nothing || uy !== nothing || uz !== nothing) &&
-            (sx !== nothing || sy !== nothing || sz !== nothing || sxy !== nothing || syz !== nothing || szx !== nothing) &&
-            error("applyBoundaryConditions: only T or ux/uy/uz or sx/sy/sz/sxy/syz/szx can be given as BoundaryCondition.")
+        if (T !== nothing && (ux !== nothing || uy !== nothing || uz !== nothing)) ||
+            (T !== nothing && (sx !== nothing || sy !== nothing || sz !== nothing ||
+            sxy !== nothing || syz !== nothing || szx !== nothing)) ||
+            ((ux !== nothing || uy !== nothing || uz !== nothing) &&
+            (sx !== nothing || sy !== nothing || sz !== nothing ||
+            sxy !== nothing || syz !== nothing || szx !== nothing))
+            
+            error("BoundaryCondition: T, displacement and stress BCs are mutually exclusive.")
+        end
+
         phg = getTagForPhysicalName(name)
         nodeTags::Vector{Int64}, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-        nodeTagsX = []
-        nodeTagsY = []
-        nodeTagsZ = []
-        nodeTagsXY = []
-        nodeTagsYZ = []
-        nodeTagsZX = []
-        nodeTagsYX = []
-        nodeTagsZY = []
-        nodeTagsXZ = []
+        nodeTagsX = Int[]
+        nodeTagsY = Int[]
+        nodeTagsZ = Int[]
+        nodeTagsXY = Int[]
+        nodeTagsYZ = Int[]
+        nodeTagsZX = Int[]
+        nodeTagsYX = Int[]
+        nodeTagsZY = Int[]
+        nodeTagsXZ = Int[]
         if T !== nothing && pdim == 1
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim-1)
+        end
+        if p !== nothing && pdim == 1
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
@@ -3627,21 +3659,46 @@ function constrainedDoFs(problem, supports)
 end
 
 """
-    freeDoFs(problem, supports)
+    allDoFs(problem)
 
-Returns the serial numbers of unconstrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
+Returns the serial numbers of degrees of freedom of the whole model.
 
 Return: `DoFs`
 
 Types:
 - `problem`: Problem
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `DoFs`: Vector{Int64}
+"""
+function allDoFs(problem)
+    nodes = []
+    for mat in problem.material
+        dimTags = gmsh.model.getEntitiesForPhysicalName(mat.phName)
+        for (edim, etag) in dimTags
+            nodeTags, _, _ = gmsh.model.mesh.getNodes(edim, etag)
+            nodes = unique(nodes ∪ nodeTags)
+        end
+    end
+    nodes .*= problem.pdim
+    return nodes
+end
+
+"""
+    freeDoFs(problem, supports)
+
+Returns the serial numbers of unconstrained degrees of freedom. Support is 
+a vector of boundary conditions given with the function `displacementConstraint`.
+
+Return: `DoFs`
+
+Types:
+- `problem`: Problem
+- `supports`: Vector{BoundaryCondition}
 - `DoFs`: Vector{Int64}
 """
 function freeDoFs(problem, supports)
     cdofs = constrainedDoFs(problem, supports)
-    dof = problem.non * problem.pdim
-    fdofs = setdiff(1:dof, cdofs)
+    adofs = allDoFs(problem)
+    fdofs = setdiff(adofs, cdofs)
     return fdofs
 end
 

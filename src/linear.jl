@@ -3082,9 +3082,15 @@ function loadVector(problem, loads)
         qn = loads[n].qn
         hs = loads[n].h
 
+        q = loads[n].q
+
         fxy = loads[n].fxy
         fyz = loads[n].fyz
         fzx = loads[n].fzx
+        
+        fyx = loads[n].fyx
+        fzy = loads[n].fzy
+        fxz = loads[n].fxz
 
         (qn !== nothing || hc !== nothing || hs !== nothing || T !== nothing) && (fx !== nothing || fy !== nothing || fz !== nothing) &&
             error("loadVector: qn/h/T∞ and fx/fy/fz cannot be defined in the same BC.")
@@ -3093,16 +3099,7 @@ function loadVector(problem, loads)
         else
             error("loadVector: dimension of the problem is $(problem.dim).")
         end
-        fx_is_number = fx isa Number
-        fx_is_function = fx isa Function
-        fx_is_field = fx isa ScalarField
-        fy_is_number = fy isa Number
-        fy_is_function = fy isa Function
-        fy_is_field = fy isa ScalarField
-        fz_is_number = fz isa Number
-        fz_is_function = fz isa Function
-        fz_is_field = fz isa ScalarField
-        if p !== nothing && DIM == 3
+        if p !== nothing && DIM == 3 && pdim == 3
             nv = -normalVector(problem, name)
             ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
             ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
@@ -3173,6 +3170,8 @@ function loadVector(problem, loads)
                             f[1] = _loadvec_helper(qn, h, x, y, z, nnet, j, l)
                         elseif hs !== nothing
                             f[1] = _loadvec_helper(hs, h, x, y, z, nnet, j, l)
+                        elseif q !== nothing
+                            f[1] = _loadvec_helper(q, h, x, y, z, nnet, j, l)
                         elseif fx !== nothing && pdim <= 3
                             f[1] = _loadvec_helper(fx, h, x, y, z, nnet, j, l)
                         end
@@ -3195,15 +3194,21 @@ function loadVector(problem, loads)
                             end
                             if fxy !== nothing
                                 f[4] = _loadvec_helper(fxy, h, x, y, z, nnet, j, l)
-                                f[2] = f[4]
                             end
                             if fyz !== nothing
                                 f[8] = _loadvec_helper(fyz, h, x, y, z, nnet, j, l)
-                                f[6] = f[8]
                             end
                             if fzx !== nothing
                                 f[3] = _loadvec_helper(fzx, h, x, y, z, nnet, j, l)
-                                f[7] = f[3]
+                            end
+                            if fyx !== nothing
+                                f[2] = _loadvec_helper(fyx, h, x, y, z, nnet, j, l)
+                            end
+                            if fzy !== nothing
+                                f[6] = _loadvec_helper(fzy, h, x, y, z, nnet, j, l)
+                            end
+                            if fxz !== nothing
+                                f[7] = _loadvec_helper(fxz, h, x, y, z, nnet, j, l)
                             end
                         end
                         r = x
@@ -3563,34 +3568,59 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
     dropzeros!(dampMat.A)
 end
 
+@inline function _aBC_helper(ux, comp, xx, yy, zz, nodeTags, pdim, field)
+    nodeTagsX = copy(nodeTags)
+    nodeTagsX *= pdim
+    nodeTagsX .-= (pdim - comp)
+    if isa(ux, Function)
+        uux = ux.(xx, yy, zz)
+        field.a[nodeTagsX,:] .= uux
+    elseif ux isa ScalarField
+        uux = ux.a[nodeTags]
+        field.a[nodeTagsX,:] .= uux
+    else
+        field.a[nodeTagsX,:] .= ux
+    end
+end
+
 """
-    applyBoundaryConditions!(dispVec, supports)
+    applyBoundaryConditions!(field::Union{ScalarField,VectorField,TensorField}, supports::Vector{BoundaryCondition})
                             
-Applies displacement boundary conditions `supports` on a displacement vector
-`dispVec`. Mesh details are in `problem`. `supports` is a tuple of `name` of physical group and
-prescribed displacements `ux`, `uy` and `uz`.
+Applies boundary conditions `supports` on a `ScalarField`, `VectorField` or `TensorField`
+`field`. Mesh details are in `problem`. `supports` is `BoundaryCondition`.
                             
 Returns: nothing
                             
 Types:
 - `problem`: Problem
-- `dispVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `field`: ScalarField, VectorField or TensorField
+- `supports`: Vector{BoundaryCondition}
 """
-function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
-    #problem = dispVec.model
+function applyBoundaryConditions!(field::Union{ScalarField,VectorField,TensorField}, supports::Vector{BoundaryCondition})
+    problem = field.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = problem.pdim
+    field = elementsToNodes(field)
+    xx = nothing
+    yy = nothing
+    zz = nothing
     
     for i in 1:length(supports)
-        #name, ux, uy, uz = supports[i]
         name = supports[i].phName
+        T = supports[i].T
+        p = supports[i].p
         ux = supports[i].ux
         uy = supports[i].uy
         uz = supports[i].uz
+        sx = supports[i].sx
+        sy = supports[i].sy
+        sz = supports[i].sz
+        sxy = supports[i].sxy
+        syz = supports[i].syz
+        szx = supports[i].szx
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -3598,68 +3628,71 @@ function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if ux !== nothing
-            nodeTagsX = copy(nodeTags)
-            nodeTagsX *= pdim
-            nodeTagsX .-= (pdim - 1)
-            if isa(ux, Function)
-                uux = ux.(xx, yy, zz)
-                dispVec[nodeTagsX,:] .= uux
-            elseif ux isa ScalarField
-                uux = ux.a[nodeTags]
-                dispVec[nodeTagsX,:] .= uux
-            else
-                dispVec[nodeTagsX,:] .= ux
-            end
+        if T !== nothing && pdim == 1
+            _aBC_helper(T, 1, xx, yy, zz, nodeTags, pdim, field)
         end
-        if uy !== nothing
-            nodeTagsY = copy(nodeTags)
-            nodeTagsY *= pdim
-            nodeTagsY .-= (pdim - 2)
-            if isa(uy, Function)
-                uuy = uy.(xx, yy, zz)
-                dispVec[nodeTagsY,:] .= uuy
-            elseif uy isa ScalarField
-                uuy = uy.a[nodeTags]
-                dispVec[nodeTagsY,:] .= uuy
-            else
-                dispVec[nodeTagsY,:] .= uy
-            end
+        if p !== nothing && pdim == 1
+            _aBC_helper(p, 1, xx, yy, zz, nodeTags, pdim, field)
         end
-        if pdim == 3 && uz !== nothing
-            nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= 3
-            if isa(uz, Function)
-                uuz = uz.(xx, yy, zz)
-                dispVec[nodeTagsZ,:] .= uuz
-            elseif uz isa ScalarField
-                uuz = uz.a[nodeTags]
-                dispVec[nodeTagsZ,:] .= uuz
-            else
-                dispVec[nodeTagsZ,:] .= uz
-            end
+        if ux !== nothing && pdim == 1 || pdim == 2 || pdim == 3
+            _aBC_helper(ux, 1, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if uy !== nothing && pdim == 2 || pdim == 3
+            _aBC_helper(uy, 2, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if uz !== nothing && pdim == 3
+            _aBC_helper(uz, 3, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if sx !== nothing && pdim == 9
+            _aBC_helper(sx, 1, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if sy !== nothing && pdim == 9
+            _aBC_helper(sy, 5, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if sz !== nothing && pdim == 9
+            _aBC_helper(sz, 9, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if sxy !== nothing && pdim == 9
+            _aBC_helper(sxy, 4, xx, yy, zz, nodeTags, pdim, field)
+            _aBC_helper(sxy, 2, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if syz !== nothing && pdim == 9
+            _aBC_helper(syz, 8, xx, yy, zz, nodeTags, pdim, field)
+            _aBC_helper(syz, 6, xx, yy, zz, nodeTags, pdim, field)
+        end
+        if szx !== nothing && pdim == 9
+            _aBC_helper(szx, 3, xx, yy, zz, nodeTags, pdim, field)
+            _aBC_helper(szx, 7, xx, yy, zz, nodeTags, pdim, field)
         end
     end
 end
 
-function applyBoundaryConditions!(dispVec::Union{ScalarField,VectorField}, supports)
-    return applyBoundaryConditions!(dispVec.model, dispVec.a, supports)
-end
-
-function applyBoundaryConditions(problem::Problem, supports)
-    dispVec = nothing
+"""
+    applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCondition})
+                            
+Create a `ScalarField`, `VectorField` or `TensorField` and applies the boundary 
+conditions `supports` on it. Mesh details are in `problem`. `supports` is `BoundaryCondition`.
+                            
+Returns: ScalarField, VectorField or TensorField
+                            
+Types:
+- `problem`: Problem
+- `supports`: Vector{BoundaryCondition}
+"""
+function applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCondition})
+    field = nothing
     if problem.pdim == 1
-        dispVec = scalarField(problem, problem.material[1].phName, 0)
+        field = scalarField(problem, problem.material[1].phName, 0)
     elseif problem.pdim == 2
-        dispVec = vectorField(problem, problem.material[1].phName, [0,0,0])
-        dispVec = projectTo2D(dispVec)
+        field = vectorField(problem, problem.material[1].phName, [0,0,0])
+        field = projectTo2D(field)
     elseif problem.pdim == 3
-        dispVec = vectorField(problem, problem.material[1].phName, [0,0,0])
+        field = vectorField(problem, problem.material[1].phName, [0,0,0])
     elseif problem.pdim == 9
-        dispVec = tensorField(problem, problem.material[1].phName, [0 0 0;0 0 0;0 0 0])
+        field = tensorField(problem, problem.material[1].phName, [0 0 0;0 0 0;0 0 0])
     end
-    applyBoundaryConditions!(dispVec.model, dispVec.a, supports)
-    return dispVec
+    applyBoundaryConditions!(field, supports)
+    return field
 end
 
 """
