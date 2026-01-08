@@ -3075,18 +3075,16 @@ function loadVector(problem, loads)
         fx = loads[n].fx
         fy = loads[n].fy
         fz = loads[n].fz
+        T = loads[n].T
         p = loads[n].p
         hc = loads[n].h
         T0 = loads[n].T
         qn = loads[n].qn
         hs = loads[n].h
 
-        sx = loads[n].sx
-        sy = loads[n].sy
-        sz = loads[n].sz
-        sxy = loads[n].sxy
-        syz = loads[n].syz
-        szx = loads[n].szx
+        fxy = loads[n].fxy
+        fyz = loads[n].fyz
+        fzx = loads[n].fzx
 
         (qn !== nothing || hc !== nothing || hs !== nothing || T !== nothing) && (fx !== nothing || fy !== nothing || fz !== nothing) &&
             error("loadVector: qn/h/T∞ and fx/fy/fz cannot be defined in the same BC.")
@@ -3175,7 +3173,7 @@ function loadVector(problem, loads)
                             f[1] = _loadvec_helper(qn, h, x, y, z, nnet, j, l)
                         elseif hs !== nothing
                             f[1] = _loadvec_helper(hs, h, x, y, z, nnet, j, l)
-                        else
+                        elseif fx !== nothing && pdim <= 3
                             f[1] = _loadvec_helper(fx, h, x, y, z, nnet, j, l)
                         end
                         if pdim > 1 && pdim <= 3
@@ -3186,25 +3184,25 @@ function loadVector(problem, loads)
                         end
                         if pdim == 9
                             fill!(f, 0.0)
-                            if sx !== nothing
-                                f[1] = _loadvec_helper(sx, h, x, y, z, nnet, j, l)
+                            if fx !== nothing
+                                f[1] = _loadvec_helper(fx, h, x, y, z, nnet, j, l)
                             end
-                            if sy !== nothing
-                                f[5] = _loadvec_helper(sy, h, x, y, z, nnet, j, l)
+                            if fy !== nothing
+                                f[5] = _loadvec_helper(fy, h, x, y, z, nnet, j, l)
                             end
-                            if sz !== nothing
-                                f[9] = _loadvec_helper(sz, h, x, y, z, nnet, j, l)
+                            if fz !== nothing
+                                f[9] = _loadvec_helper(fz, h, x, y, z, nnet, j, l)
                             end
-                            if sxy !== nothing
-                                f[4] = _loadvec_helper(sxy, h, x, y, z, nnet, j, l)
+                            if fxy !== nothing
+                                f[4] = _loadvec_helper(fxy, h, x, y, z, nnet, j, l)
                                 f[2] = f[4]
                             end
-                            if syz !== nothing
-                                f[8] = _loadvec_helper(syz, h, x, y, z, nnet, j, l)
+                            if fyz !== nothing
+                                f[8] = _loadvec_helper(fyz, h, x, y, z, nnet, j, l)
                                 f[6] = f[8]
                             end
-                            if szx !== nothing
-                                f[3] = _loadvec_helper(szx, h, x, y, z, nnet, j, l)
+                            if fzx !== nothing
+                                f[3] = _loadvec_helper(fzx, h, x, y, z, nnet, j, l)
                                 f[7] = f[3]
                             end
                         end
@@ -3356,6 +3354,23 @@ function applyBoundaryConditions!(heatCondMat::SystemMatrix, heatCapMat::SystemM
     return
 end
 
+function _applBC_helper_(nodeTags, pdim, ux, xx, yy, zz, loadVec, stiffMat)
+    nodeTagsX = copy(nodeTags)
+    nodeTagsX *= pdim
+    nodeTagsX .-= (pdim - 1)
+    if ux isa Function
+        uux = ux.(xx, yy, zz)
+        f0 = stiffMat.A[:, nodeTagsX] * uux
+    elseif ux isa ScalarField
+        uux = ux.a[nodeTags]
+        f0 = stiffMat.A[:, nodeTagsX] * uux
+    else
+        f0 = stiffMat.A[:, nodeTagsX] * ux
+        f0 = sum(f0, dims=2)
+    end
+    loadVec.a .-= f0
+end
+
 """
     applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
                             
@@ -3382,6 +3397,7 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
     gmsh.model.setCurrent(stiffMat.model.name)
     dof, dof = size(stiffMat.A)
     pdim = stiffMat.model.pdim
+    pdim <= 3 && error("applyBoundaryConditions: pdim must be less or equal to 3.")
     
     for i in 1:length(supports)
         #name, ux, uy, uz = supports[i]
@@ -3389,6 +3405,13 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
         ux = supports[i].ux
         uy = supports[i].uy
         uz = supports[i].uz
+        T = supports[i].T
+
+        T !== nothing &&
+            (ux !== nothing || uy !== nothing || uz !== nothing) &&
+            (sx !== nothing || sy !== nothing || sz !== nothing || sxy !== nothing || syz !== nothing || szx !== nothing) &&
+            error("applyBoundaryConditions: only T or ux/uy/uz or sx/sy/sz/sxy/syz/szx can be given as BoundaryCondition.")
+
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -3396,54 +3419,38 @@ function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix,
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
+        if T !== nothing && pdim == 1
+            _applBC_helper_(nodeTags, pdim, T, xx, yy, zz, loadVec, stiffMat)
+        end
         if ux !== nothing
-            nodeTagsX = copy(nodeTags)
-            nodeTagsX *= pdim
-            nodeTagsX .-= (pdim - 1)
-            if isa(ux, Function)
-                uux = ux.(xx, yy, zz)
-                f0 = stiffMat.A[:, nodeTagsX] * uux
-            elseif ux isa ScalarField
-                uux = ux.a[nodeTags]
-                f0 = stiffMat.A[:, nodeTagsX] * uux
-            else
-                f0 = stiffMat.A[:, nodeTagsX] * ux
-                f0 = sum(f0, dims=2)
-            end
-            loadVec.a .-= f0
+            _applBC_helper_(nodeTags, pdim, ux, xx, yy, zz, loadVec, stiffMat)
         end
         if uy !== nothing
-            nodeTagsY = copy(nodeTags)
-            nodeTagsY *= pdim
-            nodeTagsY .-= (pdim - 2)
-            if isa(uy, Function)
-                uuy = uy.(xx, yy, zz)
-                f0 = stiffMat.A[:, nodeTagsY] * uuy
-            elseif uy isa ScalarField
-                uuy = uy.a[nodeTags]
-                f0 = stiffMat.A[:, nodeTagsY] * uuy
-            else
-                f0 = stiffMat.A[:, nodeTagsY] * uy
-                f0 = sum(f0, dims=2)
-            end
-            loadVec.a .-= f0
+            _applBC_helper_(nodeTags, pdim, uy, xx, yy, zz, loadVec, stiffMat)
         end
         if pdim == 3 && uz !== nothing
-            nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= pdim
-            nodeTagsZ .-= (pdim - 3)
-            if isa(uz, Function)
-                uuz = uz.(xx, yy, zz)
-                f0 = stiffMat.A[:, nodeTagsZ] * uuz
-            elseif uz isa ScalarField
-                uuz = uz.a[nodeTags]
-                f0 = stiffMat.A[:, nodeTagsZ] * uuz
-            else
-                f0 = stiffMat.A[:, nodeTagsZ] * uz
-                f0 = sum(f0, dims=2)
-            end
-            loadVec.a .-= f0
+            _applBC_helper_(nodeTags, pdim, uz, xx, yy, zz, loadVec, stiffMat)
         end
+        #=
+        if pdim == 9 && sx !== nothing
+            _applBC_helper_(nodeTags, pdim, sx, xx, yy, zz, loadVec, stiffMat)
+        end
+        if pdim == 9 && sy !== nothing
+            _applBC_helper_(nodeTags, pdim, sy, xx, yy, zz, loadVec, stiffMat)
+        end
+        if pdim == 9 && sz !== nothing
+            _applBC_helper_(nodeTags, pdim, sz, xx, yy, zz, loadVec, stiffMat)
+        end
+        if pdim == 9 && sxy !== nothing
+            _applBC_helper_(nodeTags, pdim, sxy, xx, yy, zz, loadVec, stiffMat)
+        end
+        if pdim == 9 && syz !== nothing
+            _applBC_helper_(nodeTags, pdim, syz, xx, yy, zz, loadVec, stiffMat)
+        end
+        if pdim == 9 && szx !== nothing
+            _applBC_helper_(nodeTags, pdim, szx, xx, yy, zz, loadVec, stiffMat)
+        end
+        =#
     end
     
     for i in 1:length(supports)
@@ -3570,7 +3577,7 @@ Types:
 - `dispVec`: VectorField
 - `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
 """
-function apply BoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
+function applyBoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
     #problem = dispVec.model
     if !isa(supports, Vector)
         error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
@@ -3598,6 +3605,9 @@ function apply BoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
                 dispVec[nodeTagsX,:] .= uux
+            elseif ux isa ScalarField
+                uux = ux.a[nodeTags]
+                dispVec[nodeTagsX,:] .= uux
             else
                 dispVec[nodeTagsX,:] .= ux
             end
@@ -3609,6 +3619,9 @@ function apply BoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
                 dispVec[nodeTagsY,:] .= uuy
+            elseif uy isa ScalarField
+                uuy = uy.a[nodeTags]
+                dispVec[nodeTagsY,:] .= uuy
             else
                 dispVec[nodeTagsY,:] .= uy
             end
@@ -3618,6 +3631,9 @@ function apply BoundaryConditions!(problem::Problem, dispVec::Matrix, supports)
             nodeTagsZ *= 3
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
+                dispVec[nodeTagsZ,:] .= uuz
+            elseif uz isa ScalarField
+                uuz = uz.a[nodeTags]
                 dispVec[nodeTagsZ,:] .= uuz
             else
                 dispVec[nodeTagsZ,:] .= uz
@@ -3639,6 +3655,8 @@ function applyBoundaryConditions(problem::Problem, supports)
         dispVec = projectTo2D(dispVec)
     elseif problem.pdim == 3
         dispVec = vectorField(problem, problem.material[1].phName, [0,0,0])
+    elseif problem.pdim == 9
+        dispVec = tensorField(problem, problem.material[1].phName, [0 0 0;0 0 0;0 0 0])
     end
     applyBoundaryConditions!(dispVec.model, dispVec.a, supports)
     return dispVec

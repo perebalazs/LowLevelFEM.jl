@@ -9,6 +9,7 @@ export grad_xy
     nodePositionVector(problem)
 
 Returns the position vectors of all mesh nodes as a `VectorField` (initial configuration).
+Returning vector is always a 3D vector.
 
 Returns: `R`
 
@@ -17,27 +18,11 @@ Types:
 - `R`: VectorField
 """
 function nodePositionVector(problem)
-    dim = problem.dim
-    non = problem.non
-    if dim != 3
-        error("nodePositionVector: This function only works for 3D problems.")
-    end
-    r = zeros(non * dim)
-    for ipg in 1:length(problem.material)
-        phName = problem.material[ipg].phName
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-        for idm in 1:length(dimTags)
-            dimTag = dimTags[idm]
-            edim = dimTag[1]
-            etag = dimTag[2]
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, -1, true, false)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
-            r[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-            r[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-            r[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
-        end
-    end
+    nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+    r = zeros(length(nodeTags) * 3)
+    r[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+    r[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+    r[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
     return VectorField([], reshape(r, :,1), [0], [], 1, :v3D, problem)
 end
 
@@ -1607,7 +1592,11 @@ function nonFollowerLoadVector(r::VectorField, loads)
     F0 = ∇(r)
     F0 = elementsToNodes(F0)
     for n in 1:length(loads)
-        name, fx, fy, fz = loads[n]
+        #name, fx, fy, fz = loads[n]
+        name = loads[n].phName
+        fx = loads[n].fx
+        fy = loads[n].fy
+        fz = loads[n].fz
         if pdim == 3
             f = [.0, .0, .0]
         elseif pdim == 2
@@ -1683,26 +1672,18 @@ function nonFollowerLoadVector(r::VectorField, loads)
                         F1 = reshape(F1, 3, 3)
                         iF1 =inv(F1)
                         x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
-                        y = 0
-                        z = 0
-                        if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
-                            y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
-                            z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        if fx !== nothing
+                            f[1] = _loadvec_helper(fx, h, x, y, z, nnet, j, l)
                         end
-                        if fz == 2im
-                            if isa(fx, Function)
-                                error("heatConvectionVector: h cannot be a function.")
-                            end
-                            f[1] = isa(fy, Function) ? fx * fy(x, y, z) : fx * fy
-                        else
-                            f[1] = isa(fx, Function) ? fx(x, y, z) : fx
+                        if fy !== nothing
+                            f[2] = _loadvec_helper(fy, h, x, y, z, nnet, j, l)
                         end
-                        if pdim > 1
-                            f[2] = isa(fy, Function) ? fy(x, y, z) : fy
+                        if fz !== nothing
+                            f[3] = _loadvec_helper(fz, h, x, y, z, nnet, j, l)
                         end
-                        if pdim == 3
-                            f[3] = isa(fz, Function) ? fz(x, y, z) : fz
-                        end
+
                         H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
                         ############### NANSON ######## 3D ###################################
                         if DIM == 3 && dim == 3
@@ -1752,7 +1733,7 @@ Returns: nothing
 
 Types:
 - `deformVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `supports`: Vector{BoundaryCondition}
 """
 function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
     problem = deformVec.model
@@ -1764,7 +1745,11 @@ function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
     pdim = problem.pdim
 
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        #name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -1772,45 +1757,52 @@ function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if ux != 1im
+        if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
+            elseif ux isa ScalarField
+                uux = ux.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsX
                 jj += 1
-                if isa(ux, Function)
+                if ux isa Function || ux isa ScalarField
                     deformVec.a[j] += uux[jj] * fact
                 else
                     deformVec.a[j] += ux * fact
                 end
             end
         end
-        if uy != 1im
+        if uy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
+            elseif uy isa ScalarField
+                uuy = uy.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsY
                 jj += 1
-                if isa(uy, Function)
+                if uy isa Function || uy isa ScalarField
                     deformVec.a[j] += uuy[jj] * fact
                 else
                     deformVec.a[j] += uy * fact
                 end
             end
         end
-        if pdim == 3 && uz != 1im
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= 3
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim - 3)
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
+            elseif uz isa ScalarField
+                uuz = uz.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsZ
@@ -1839,7 +1831,7 @@ Returns: nothing
 Types:
 - `stiffMat`: SystemMatrix 
 - `loadVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `supports`: Vector{BoundaryCondition}
 """
 function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
 #function applyDeformationBoundaryConditions!(problem, stiffMat, massMat, dampMat, loadVec, supports; fix=1)
@@ -1855,7 +1847,11 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
     pdim = problem.pdim
 
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        #name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -1863,12 +1859,15 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if ux != 1im
+        if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
+                f0 = stiffMat.A[:, nodeTagsX] * uux * 0
+            elseif ux isa ScalarField
+                uux = ux.a[nodeTags]
                 f0 = stiffMat.A[:, nodeTagsX] * uux * 0
             else
                 f0 = stiffMat.A[:, nodeTagsX] * ux * 0
@@ -1876,12 +1875,15 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
             end
             loadVec.a .-= f0
         end
-        if uy != 1im
+        if uy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 2)
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
+                f0 = stiffMat.A[:, nodeTagsY] * uuy * 0
+            elseif uy isa ScalarField
+                uuy = uy.a[nodeTags]
                 f0 = stiffMat.A[:, nodeTagsY] * uuy * 0
             else
                 f0 = stiffMat.A[:, nodeTagsY] * uy * 0
@@ -1889,11 +1891,14 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
             end
             loadVec.a .-= f0
         end
-        if pdim == 3 && uz != 1im
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= 3
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
+                f0 = stiffMat.A[:, nodeTagsZ] * uuz * 0
+            elseif uz isa ScalarField
+                uuz = uz.a[nodeTags]
                 f0 = stiffMat.A[:, nodeTagsZ] * uuz * 0
             else
                 f0 = stiffMat.A[:, nodeTagsZ] * uz * 0
@@ -1904,7 +1909,11 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
     end
 
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        #name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
@@ -1912,12 +1921,14 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if ux != 1im
+        if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
             if isa(ux, Function)
                 uux = ux.(xx, yy, zz)
+            elseif ux isa ScalarField
+                uux = ux.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsX
@@ -1933,17 +1944,21 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
                 #dampMat[j, j] = 1
                 if isa(ux, Function)
                     loadVec.a[j] = uux[jj] * 0
+                elseif ux isa ScalarField
+                    loadVec.a[j] = uux[jj] * 0
                 else
                     loadVec.a[j] = ux * 0
                 end
             end
         end
-        if uy != 1im
+        if uy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
             if isa(uy, Function)
                 uuy = uy.(xx, yy, zz)
+            elseif uy isa ScalarField
+                uuy = uy.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsY
@@ -1959,16 +1974,21 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
                 #dampMat[j, j] = 1
                 if isa(uy, Function)
                     loadVec.a[j] = uuy[jj] * 0
+                elseif uy isa ScalarField
+                    loadVec.a[j] = uuy[jj] * 0
                 else
                     loadVec.a[j] = uy * 0
                 end
             end
         end
-        if pdim == 3 && uz != 1im
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= 3
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim - 3)
             if isa(uz, Function)
                 uuz = uz.(xx, yy, zz)
+            elseif uz isa ScalarField
+                uuz = uz.a[nodeTags]
             end
             jj = 0
             for j ∈ nodeTagsZ
@@ -1983,6 +2003,8 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
                 #dampMat[:, j] .= 0
                 #dampMat[j, j] = 1
                 if isa(uz, Function)
+                    loadVec.a[j] = uuz[jj] * 0
+                elseif uz isa ScalarField
                     loadVec.a[j] = uuz[jj] * 0
                 else
                     loadVec.a[j] = uz * 0
@@ -2010,7 +2032,7 @@ Return: stiffMat1, loadVec1
 Types:
 - `stiffMat`: SystemMatrix 
 - `loadVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `supports`: Vector{BoundaryCondition}
 - `stiffMat1`: SystemMatrix 
 - `loadVec1`: VectorField
 """

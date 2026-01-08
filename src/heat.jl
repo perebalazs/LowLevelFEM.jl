@@ -1238,6 +1238,7 @@ function solveHeatFlux(T; DoFResults=false)
     end
 end
 
+#=
 """
     initialTemperature(problem, name; T=...)
 
@@ -1252,12 +1253,13 @@ Types:
 - `T`: Float64 
 - `T0`: ScalarField
 """
-function initialTemperature(problem, name; T=1im)
+
+function initialTemperature(problem, name; T=nothing)
     dim = problem.pdim
     T0 = zeros(problem.non * problem.pdim)
     phg = getTagForPhysicalName(name)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-    if T != 1im
+    if T !== nothing
         for i in 1:length(nodeTags)
             T0[nodeTags[i]*dim-(dim-1)] = T
         end
@@ -1278,17 +1280,19 @@ Types:
 - `T0`: ScalarField
 - `T`: Float64 
 """
-function initialTemperature!(name, T0; T=1im)
+
+function initialTemperature!(name, T0; T=nothing)
     problem = T0.model
     dim = problem.pdim
     phg = getTagForPhysicalName(name)
     nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-    if T != 1im
+    if T !== nothing
         for i in 1:length(nodeTags)
             T0.a[nodeTags[i]*dim-(dim-1)] = T
         end
     end
 end
+=#
 
 """
     FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)

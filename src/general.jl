@@ -1,5 +1,5 @@
-export Problem, material, getEigenVectors, getEigenValues
-export displacementConstraint, load, elasticSupport
+export Problem, Material, getEigenVectors, getEigenValues
+export displacementConstraint, load, elasticSupport, BoundaryCondition
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export constrainedDoFs, freeDoFs, DoFs
@@ -1213,40 +1213,40 @@ struct BoundaryCondition
     phName::String
 
     # Dirichlet-type (primary variables)
-    ux::Union{Nothing, Float64, Function, ScalarField}
-    uy::Union{Nothing, Float64, Function, ScalarField}
-    uz::Union{Nothing, Float64, Function, ScalarField}
-    p ::Union{Nothing, Float64, Function, ScalarField}   # pressure / scalar field
-    T ::Union{Nothing, Float64, Function, ScalarField}   # temperature
+    ux::Union{Nothing, Number, Function, ScalarField}
+    uy::Union{Nothing, Number, Function, ScalarField}
+    uz::Union{Nothing, Number, Function, ScalarField}
+    p ::Union{Nothing, Number, Function, ScalarField}   # pressure / scalar field
+    T ::Union{Nothing, Number, Function, ScalarField}   # temperature
 
     # Neumann-type (fluxes / forces)
-    f::Union{Nothing, Float64, Function, ScalarField}
-    fx::Union{Nothing, Float64, Function, ScalarField}
-    fy::Union{Nothing, Float64, Function, ScalarField}
-    fz::Union{Nothing, Float64, Function, ScalarField}
-    fxy::Union{Nothing, Float64, Function, ScalarField}
-    fyz::Union{Nothing, Float64, Function, ScalarField}
-    fzx::Union{Nothing, Float64, Function, ScalarField}
-    fyx::Union{Nothing, Float64, Function, ScalarField}
-    fzy::Union{Nothing, Float64, Function, ScalarField}
-    fxz::Union{Nothing, Float64, Function, ScalarField}
-    #qx ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    #qy ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    #qz ::Union{Nothing, Float64, Function}   # heat flux / generic scalar flux
-    kx ::Union{Nothing, Float64, Function, ScalarField}
-    ky ::Union{Nothing, Float64, Function, ScalarField}
-    kz ::Union{Nothing, Float64, Function, ScalarField}
-    q ::Union{Nothing, Float64, Function, ScalarField}   # heat flux / generic scalar flux
-    qn ::Union{Nothing, Float64, Function, ScalarField}   # heat flux / generic scalar flux
-    h ::Union{Nothing, Float64, Function, ScalarField}
+    f::Union{Nothing, Number, Function, ScalarField}
+    fx::Union{Nothing, Number, Function, ScalarField}
+    fy::Union{Nothing, Number, Function, ScalarField}
+    fz::Union{Nothing, Number, Function, ScalarField}
+    fxy::Union{Nothing, Number, Function, ScalarField}
+    fyz::Union{Nothing, Number, Function, ScalarField}
+    fzx::Union{Nothing, Number, Function, ScalarField}
+    fyx::Union{Nothing, Number, Function, ScalarField}
+    fzy::Union{Nothing, Number, Function, ScalarField}
+    fxz::Union{Nothing, Number, Function, ScalarField}
+    #qx ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
+    #qy ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
+    #qz ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
+    kx ::Union{Nothing, Number, Function, ScalarField}
+    ky ::Union{Nothing, Number, Function, ScalarField}
+    kz ::Union{Nothing, Number, Function, ScalarField}
+    q ::Union{Nothing, Number, Function, ScalarField}   # heat flux / generic scalar flux
+    qn ::Union{Nothing, Number, Function, ScalarField}   # heat flux / generic scalar flux
+    h ::Union{Nothing, Number, Function, ScalarField}
 
     # Stress / traction components
-    sx::Union{Nothing, Float64, Function, ScalarField}
-    sy::Union{Nothing, Float64, Function, ScalarField}
-    sz::Union{Nothing, Float64, Function, ScalarField}
-    sxy::Union{Nothing, Float64, Function, ScalarField}
-    syz::Union{Nothing, Float64, Function, ScalarField}
-    szx::Union{Nothing, Float64, Function, ScalarField}
+    sx::Union{Nothing, Number, Function, ScalarField}
+    sy::Union{Nothing, Number, Function, ScalarField}
+    sz::Union{Nothing, Number, Function, ScalarField}
+    sxy::Union{Nothing, Number, Function, ScalarField}
+    syz::Union{Nothing, Number, Function, ScalarField}
+    szx::Union{Nothing, Number, Function, ScalarField}
 
     function BoundaryCondition(phName::String; kwargs...)
         fields = fieldnames(BoundaryCondition)
@@ -3532,11 +3532,34 @@ function constrainedDoFs(problem, supports)
         ux = supports[i].ux
         uy = supports[i].uy
         uz = supports[i].uz
+        T = supports[i].T
+        sx = supports[i].sx
+        sy = supports[i].sy
+        sz = supports[i].sz
+        sxy = supports[i].sxy
+        syz = supports[i].syz
+        szx = supports[i].szx
+        
+        T !== nothing &&
+            (ux !== nothing || uy !== nothing || uz !== nothing) &&
+            (sx !== nothing || sy !== nothing || sz !== nothing || sxy !== nothing || syz !== nothing || szx !== nothing) &&
+            error("applyBoundaryConditions: only T or ux/uy/uz or sx/sy/sz/sxy/syz/szx can be given as BoundaryCondition.")
         phg = getTagForPhysicalName(name)
         nodeTags::Vector{Int64}, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         nodeTagsX = []
         nodeTagsY = []
         nodeTagsZ = []
+        nodeTagsXY = []
+        nodeTagsYZ = []
+        nodeTagsZX = []
+        nodeTagsYX = []
+        nodeTagsZY = []
+        nodeTagsXZ = []
+        if T !== nothing && pdim == 1
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim-1)
+        end
         if ux !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
@@ -3547,11 +3570,57 @@ function constrainedDoFs(problem, supports)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
         end
-        if pdim > 2 && uz !== nothing
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= 3
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim-0)
         end
-        cdofs = unique(cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ)
+        if pdim == 9 && sx !== nothing
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim - 1)
+        end
+        if pdim == 9 && sy !== nothing
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim - 5)
+        end
+        if pdim == 9 && sz !== nothing
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim - 9)
+        end
+        if pdim == 9 && sxy !== nothing
+            nodeTagsXY = copy(nodeTags)
+            nodeTagsXY *= pdim
+            nodeTagsXY .-= (pdim - 4)
+        end
+        if pdim == 9 && sxy !== nothing
+            nodeTagsYX = copy(nodeTags)
+            nodeTagsYX *= pdim
+            nodeTagsYX .-= (pdim - 2)
+        end
+        if pdim == 9 && syz !== nothing
+            nodeTagsYZ = copy(nodeTags)
+            nodeTagsYZ *= pdim
+            nodeTagsYZ .-= (pdim - 8)
+        end
+        if pdim == 9 && syz !== nothing
+            nodeTagsZY = copy(nodeTags)
+            nodeTagsZY *= pdim
+            nodeTagsZY .-= (pdim - 6)
+        end
+        if pdim == 9 && szx !== nothing
+            nodeTagsZX = copy(nodeTags)
+            nodeTagsZX *= pdim
+            nodeTagsZX .-= (pdim - 3)
+        end
+        if pdim == 9 && szx !== nothing
+            nodeTagsXZ = copy(nodeTags)
+            nodeTagsXZ *= pdim
+            nodeTagsXZ .-= (pdim - 7)
+        end
+        cdofs = unique(cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ ∪ nodeTagsXY ∪ nodeTagsYZ ∪ nodeTagsZX ∪ nodeTagsYX ∪ nodeTagsZY ∪ nodeTagsXZ)
     end
     
     return cdofs
