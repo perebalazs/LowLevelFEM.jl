@@ -8,7 +8,7 @@ export solveModalAnalysis, solveBuckling
 export initialDisplacement, initialDisplacement!, initialVelocity, initialVelocity!
 export nodalForce!, nodalAcceleration!
 export largestPeriodTime, smallestPeriodTime, largestEigenValue, smallestEigenValue
-export CMD, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
+export CDM, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
 
 # linear.jl tetején
 mutable struct SolidWS
@@ -3576,6 +3576,7 @@ end
         uux = ux.(xx, yy, zz)
         field.a[nodeTagsX,:] .= uux
     elseif ux isa ScalarField
+        ux = elementsToNodes(ux)
         uux = ux.a[nodeTags]
         field.a[nodeTagsX,:] .= uux
     else
@@ -3685,7 +3686,7 @@ function applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCond
         field = scalarField(problem, problem.material[1].phName, 0)
     elseif problem.pdim == 2
         field = vectorField(problem, problem.material[1].phName, [0,0,0])
-        field = projectTo2D(field)
+        #field = projectTo2D(field)
     elseif problem.pdim == 3
         field = vectorField(problem, problem.material[1].phName, [0,0,0])
     elseif problem.pdim == 9
@@ -3744,7 +3745,7 @@ end
 
 """
     solveDisplacement(problem, load, supp, elSupp;
-                      condensed = false,
+                      condensed = true,
                       iterative = false,
                       reltol::Real = sqrt(eps()),
                       maxiter::Int = problem.non * problem.dim,
@@ -3776,7 +3777,7 @@ Types:
 - `q`: VectorField
 """
 function solveDisplacement(problem, load, supp, elSupp;
-                           condensed=false,
+                           condensed=true,
                            iterative=false,
                            reltol::Real = sqrt(eps()),
                            maxiter::Int = problem.non * problem.dim,
@@ -3792,7 +3793,7 @@ function solveDisplacement(problem, load, supp, elSupp;
     f = loadVector(problem, load)
     if condensed
         fixed = constrainedDoFs(problem, supp)
-        free = setdiff(1:problem.non*problem.pdim, fixed)
+        free = freeDoFs(problem, supp)
         u = copy(f)
         fill!(u.a, 0.0)
         applyBoundaryConditions!(u, supp)
@@ -5468,35 +5469,9 @@ Types:
 - `uy`: Float64 
 - `uz`: Float64 
 """
-function initialDisplacement(problem, name; ux=1im, uy=1im, uz=1im)
-    pdim = problem.pdim
-    dim = problem.dim
-    u0 = zeros(problem.non * problem.dim)
-    phg = getTagForPhysicalName(name)
-    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-    if ux != 1im
-        for i in 1:length(nodeTags)
-            u0[nodeTags[i]*dim-(dim-1)] = ux
-        end
-    end
-    if uy != 1im
-        for i in 1:length(nodeTags)
-            u0[nodeTags[i]*dim-(dim-2)] = uy
-        end
-    end
-    if dim == 3 && uz != 1im
-        for i in 1:length(nodeTags)
-            u0[nodeTags[i]*dim] = uz
-        end
-    end
-    if pdim == 3
-        type = :v3D #Symbol(String(type) * "3D")
-    elseif pdim == 2
-        type = :v2D #Symbol(String(type) * "2D")
-    else
-        error("initialDisplacement: wrong pdim=$pdim")
-    end
-    return VectorField([], reshape(u0, :,1), [0], [], 1, type, problem)
+function initialDisplacement(problem, name; ux=nothing, uy=nothing, uz=nothing)
+    bc = BoundaryCondition(name, ux=ux, uy=uy, uz=uz)
+    return applyBoundaryConditions(problem, [bc])
 end
 
 """
@@ -5515,27 +5490,9 @@ Types:
 - `uz`: Float64 
 - `u0`: VectorField
 """
-function initialDisplacement!(name, u0; ux=1im, uy=1im, uz=1im)
-    problem = u0.model
-    pdim = problem.pdim
-    dim = problem.dim
-    phg = getTagForPhysicalName(name)
-    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-    if ux != 1im
-        for i in 1:length(nodeTags)
-            u0.a[nodeTags[i]*dim-(dim-1)] = ux
-        end
-    end
-    if uy != 1im
-        for i in 1:length(nodeTags)
-            u0.a[nodeTags[i]*dim-(dim-2)] = uy
-        end
-    end
-    if dim == 3 && uz != 1im
-        for i in 1:length(nodeTags)
-            u0.a[nodeTags[i]*dim] = uz
-        end
-    end
+function initialDisplacement!(u0, name; ux=nothing, uy=nothing, uz=nothing)
+    bc = BoundaryCondition(name, ux=ux, uy=uy, uz=uz)
+    applyBoundaryConditions!(u0, [bc])
 end
 
 """
@@ -5555,8 +5512,9 @@ Types:
 - `vz`: Float64 
 - `v0`: VectorField
 """
-function initialVelocity(problem, name; vx=1im, vy=1im, vz=1im)
-    return initialDisplacement(problem, name, ux=vx, uy=vy, uz=vz)
+function initialVelocity(problem, name; vx=nothing, vy=nothing, vz=nothing)
+    bc = BoundaryCondition(name, ux=vx, uy=vy, uz=vz)
+    return applyBoundaryConditions(problem, [bc])
 end
 
 """
@@ -5575,69 +5533,35 @@ Types:
 - `vy`: Float64 
 - `vz`: Float64 
 """
-function initialVelocity!(name, v0; vx=1im, vy=1im, vz=1im)
-    initialDisplacement!(name, v0, ux=vx, uy=vy, uz=vz)
+function initialVelocity!(u0, name; vx=nothing, vy=nothing, vz=nothing)
+    bc = BoundaryCondition(name, ux=vx, uy=vy, uz=vz)
+    applyBoundaryConditions!(u0, [bc])
 end
 
 """
-    nodalForce!(name, f0; fx=..., fy=..., fz=...)
-                            
-Changes the force values `fx`, `fy` and `fz` (depending on the dimension of
-the problem) at nodes belonging to physical group `name`. Original values are in
-load vector `f0`.
-                            
-Returns: nothing
-                            
-Types:
-- `name`: String 
-- `f0`: VectorField
-- `fx`: Float64 
-- `fy`: Float64 
-- `fz`: Float64 
-"""
-function nodalForce!(f0; fx=1im, fy=1im, fz=1im)
-    initialDisplacement!(f0, ux=fx, uy=fy, uz=fz)
-end
-
-"""
-    nodalAcceleration!(name, a0; ax=..., ay=..., az=...)
-                            
-Changes the acceleration values `ax`, `ay` and `az` (depending on the dimension of
-the `problem`) at nodes belonging to physical group `name`. Original values are in
-acceleration vector `a0`.
-                            
-Returns: nothing
-                            
-Types:
-- `name`: String 
-- `a0`: VectorField
-- `ax`: Float64
-- `ay`: Float64
-- `az`: Float64
-"""
-function nodalAcceleration!(a0; ax=1im, ay=1im, az=1im)
-    initialDisplacement!(a0, ux=ax, uy=ay, uz=az)
-end
-
-"""
-    largestPeriodTime(K, M)
+    largestPeriodTime(K, M, bc)
                             
 Solves the largest period of time for a dynamic problem given by stiffness
-matrix `K` and the mass matrix `M`.
+matrix `K` and the mass matrix `M`, `bc` is a vector of `BoundaryCondition` where the
+displacement is given.
                             
 Return: `Δt`
                             
 Types:
 - `K`: SystemMatrix
 - `M`: SystemMatrix
+- `bc`: Vector{BoundaryCondition}
 - `Δt`: Float64 
 """
-function largestPeriodTime(K, M)
-    ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LR, sigma=0.01, maxiter=10000)
+function largestPeriodTime(K, M, bc)
+    free = freeDoFs(K.model, bc)
+    K0 = K[free,free]
+    M0 = M[free,free]
+    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=0.01, maxiter=10000)
     if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
-        ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+        ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     end
-    err = norm(K.A * ϕ[:,1] - ω²[1] * M.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
+    err = norm(K0 * ϕ[:,1] - ω²[1] * M0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
@@ -5646,22 +5570,27 @@ function largestPeriodTime(K, M)
 end
 
 """
-    smallestPeriodTime(K, M)
+    smallestPeriodTime(K, M, bc)
                             
 Solves the smallest period of time for a dynamic problem given by stiffness
-matrix `K` and the mass matrix `M`.
+matrix `K` and the mass matrix `M`, `bc` is a vector of `BoundaryCondition` where the
+displacement is given.
                             
 Return: `Δt`
                             
 Types:
 - `K`: SystemMatrix
 - `M`: SystemMatrix
+- `bc`: Vector{BoundaryCondition}
 - `Δt`: Float64 
 """
-function smallestPeriodTime(K, M)
-    ω², ϕ = Arpack.eigs(K.A, M.A, nev=1, which=:LM, maxiter=100)
+function smallestPeriodTime(K, M, bc)
+    free = freeDoFs(K.model, bc)
+    K0 = K[free,free]
+    M0 = M[free,free]
+    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LM, maxiter=100)
     
-    err = norm(K.A * ϕ[:,1] - ω²[1] * M.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
+    err = norm(K0 * ϕ[:,1] - ω²[1] * M0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
@@ -5682,7 +5611,7 @@ Types:
 - `M`: SystemMatrix
 - `λₘₐₓ`: Float64 
 """
-function smallestEigenValue(K, C)
+function smallestEigenValue(K, C, bc)
     λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
     if real(λ[1]) > 0.999 && real(λ[1]) < 1.001
         λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LR, sigma=1.01, maxiter=10000)
@@ -5720,12 +5649,14 @@ function largestEigenValue(K, C)
 end
 
 """
-    CDM(K, M, C, f, u0, v0, T, Δt)
+    CDM(K, M, f, bc, u0, v0, n, Δt)
+    CDM(K, M, C, f, bc, u0, v0, n, Δt)
                             
 Solves a transient dynamic problem using central difference method (CDM) (explicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `C` is the damping matrix,
-`f` is the load vector, `u0` is the initial displacement, `v0` is the initial
-velocity, `T` is the upper bound of the time intervall (lower bound is zero)
+`f` is the load vector, `bc` is a vector of `BoundaryCondition` where the
+displacement is given, `u0` is the initial displacement, `v0` is the initial
+velocity, `n` is the number of time steps
 and `Δt` is the time step size. Returns the displacement vectors and velocity
 vectors in each time step arranged in the columns of the two matrices `u` and `v`
 and a vector `t` of the time instants used.
@@ -5741,43 +5672,64 @@ Types:
 - `M`: SystemMatrix
 - `C`: SystemMatrix
 - `f`: VectorField
+- `bc`: BoundaryCondition
 - `u0`: VectorField
 - `v0`: VectorField
-- `T`: Float64
+- `n`: Int
 - `Δt`: Float64 
 - `u`: VectorField
 - `v`: VectorField
 """
-function CDM(K, M, C, f, uu0, vv0, T, Δt)
+function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64)
     if K.model != M.model || M.model != C.model || C.model != f.model
         error("CDM: K, M, C and f does not belong to the same model.")
     end
-    invM = spdiagm(1 ./ diag(M.A))
-    nsteps = ceil(Int64, T / Δt)
-    dof, dof = size(K.A)
+    if f.nsteps == 1
+        f = nodesToElements(f)
+        f = VectorField(f, steps=n)
+        f = elementsToNodes(f)
+    end
+    if uu0.nsteps == 1
+        uu0 = nodesToElements(uu0)
+        uu = VectorField(uu0, steps=n)
+        uu = elementsToNodes(uu)
+    end
+    if vv0.nsteps == 1
+        vv0 = nodesToElements(vv0)
+        vv = VectorField(vv0, steps=n)
+        vv = elementsToNodes(vv)
+    end
+    free = freeDoFs(K.model, bc)
+    K0 = K[free,free]
+    M0 = M[free,free]
+    C0 = C[free,free]
+    f0 = DoFs(f)[free,1]
+    invM = spdiagm(1 ./ diag(M0))
+    nsteps = n #ceil(Int64, T / Δt)
+    dof, dof = size(K0)
     
-    u = zeros(dof, nsteps)
-    v = zeros(dof, nsteps)
+    u = uu.a #zeros(dof, nsteps)
+    v = vv.a #zeros(dof, nsteps)
     t = zeros(nsteps)
     #kene = zeros(nsteps)
     #sene = zeros(nsteps)
     #diss = zeros(nsteps)
     
-    a0 = M.A \ (f.a - K.A * uu0.a - C.A * vv0.a)
-    u00 = uu0.a - vv0.a * Δt + a0 * Δt^2 / 2
+    a0 = M0 \ (f0 - K0 * DoFs(uu)[free,1] - C0 * DoFs(vv)[free,1])
+    u00 = DoFs(uu)[free,1] - DoFs(vv)[free,1] * Δt + a0 * Δt^2 / 2
     
-    u[:, 1] = uu0.a
-    v[:, 1] = vv0.a
+    u[free, 1] .= DoFs(uu)[free, 1]
+    v[free, 1] .= DoFs(vv)[free, 1]
     t[1] = 0
     #kene[1] = dot(v0' * M, v0) / 2
     #sene[1] = dot(u0' * K, u0) / 2
-    u0 = uu0.a[:,1]
+    u0 = DoFs(uu)[free, 1]
     
     for i in 2:nsteps
-        u1 = 2.0 * u0 - u00 + Δt * Δt * invM * (f.a - K.A * u0) - Δt * invM * (C.A * (u0 - u00))
-        u[:, i] = u1
+        u1 = 2.0 * u0 - u00 + Δt * Δt * invM * (DoFs(f)[free,i] - K0 * u0) - Δt * invM * (C0 * (u0 - u00))
+        u[free, i] = u1
         v1 = (u1 - u0) / Δt
-        v[:, i] = v1
+        v[free, i] = v1
         t[i] = t[i-1] + Δt
         #kene[i] = dot(v1' * M, v1) / 2
         #sene[i] = dot(u1' * K, u1) / 2
@@ -5788,19 +5740,19 @@ function CDM(K, M, C, f, uu0, vv0, T, Δt)
     return VectorField([], u, t, [], length(t), uu0.type, f.model), VectorField([], v, t, [], length(t), vv0.type, f.model)
 end
 
-function CDM(K, M, f, u0, v0, T, Δt)
+function CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, u0::VectorField, v0::VectorField, n::Int, Δt::Float64)
     C = K * 0.0
     dropzeros!(C.A)
-    return CDM(K, M, C, f, u0, v0, T, Δt)
+    return CDM(K, M, C, f, bc, u0, v0, n, Δt)
 end
 
 """
-    HHT(K, M, f, u0, v0, T, Δt; α=..., δ=..., γ=..., β=...)
+    HHT(K, M, f, bc, u0, v0, n, Δt; α=..., δ=..., γ=..., β=...)
                             
 Solves a transient dynamic problem using HHT-α method[^1] (implicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
-`u0` is the initial displacement, `v0` is the initial velocity, `T` is the 
-upper bound of the time intervall (lower bound is zero) and `Δt` is the time 
+`bc` is a vector of `BoundaryCondition`, `u0` is the initial displacement, 
+`v0` is the initial velocity, `n` is the number of time steps and `Δt` is the time 
 step size. Returns the displacement vectors and velocity vectors in each time 
 step arranged in the columns of the two matrices `u` and `v` and a vector `t` 
 of the time instants used. For the meaning of `α`, `β` and `γ` see [^1]. If
@@ -5816,9 +5768,10 @@ Types:
 - `K`: SystemMatrix
 - `M`: SystemMatrix
 - `f`: VectorField
+- `bc`: Vector{BoundaryCondition}
 - `u0`: VectorField
 - `v0`: VectorField
-- `T`: Float64
+- `n`: Int
 - `Δt`: Float64 
 - `α`: Float64
 - `β`: Float64
@@ -5827,16 +5780,39 @@ Types:
 - `u`: VectorField
 - `v`: VectorField
 """
-function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
-    nsteps = ceil(Int64, T / Δt)
-    dof, dof = size(K.A)
-    
-    u = zeros(dof, nsteps)
-    v = zeros(dof, nsteps)
+function HHT(K, M, f, bc, uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    if K.model != M.model || M.model != f.model || f.model != uu0.model || uu0.model != vv0.model
+        error("HHT: K, M, f, u0 and v0 does not belong to the same model.")
+    end
+    if f.nsteps == 1
+        f = nodesToElements(f)
+        f = VectorField(f, steps=n)
+        f = elementsToNodes(f)
+    end
+    if uu0.nsteps == 1
+        uu0 = nodesToElements(uu0)
+        uu = VectorField(uu0, steps=n)
+        uu = elementsToNodes(uu)
+    end
+    if vv0.nsteps == 1
+        vv0 = nodesToElements(vv0)
+        vv = VectorField(vv0, steps=n)
+        vv = elementsToNodes(vv)
+    end
+    free = freeDoFs(K.model, bc)
+    K0 = K[free,free]
+    M0 = M[free,free]
+    #C0 = C[free,free]
+    f0 = DoFs(f)[free,1]
+
+    nsteps = n
+    #dof, dof = size(K.A)
+    u = uu.a #zeros(dof, nsteps)
+    v = vv.a #zeros(dof, nsteps)
     t = zeros(nsteps)
-    kene = zeros(nsteps)
-    sene = zeros(nsteps)
-    diss = zeros(nsteps)
+    #kene = zeros(nsteps)
+    #sene = zeros(nsteps)
+    #diss = zeros(nsteps)
     
     dt = Δt
     dtdt = dt * dt
@@ -5850,26 +5826,26 @@ function HHT(K, M, f, uu0, vv0, T, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (
     c6 = dt * (1.0 - γ)
     c7 = γ * dt
     
-    a0 = M.A \ (f.a - K.A * uu0.a)
+    a0 = M0 \ (f0 - K0 * DoFs(uu)[free])
     
-    u[:, 1] = uu0.a
-    v[:, 1] = vv0.a
+    u[free, 1] = DoFs(uu)[free,1]
+    v[free, 1] = DoFs(vv)[free,1]
     t[1] = 0
     #kene[1] = dot(v0' * M, v0) / 2
     #sene[1] = dot(u0' * K, u0) / 2
     
-    A = (α + 1) * K.A + M.A * c0
+    A = (α + 1) * K0 + M0 * c0
     AA = lu(A)
     
-    u0 = uu0.a[:,1]
-    v0 = vv0.a[:,1]
+    u0 = uu.a[free,1]
+    v0 = vv.a[free,1]
     for i in 2:nsteps
-        b = f.a + M.A * (u0 * c0 + v0 * c2 + a0 * c3) + α * K.A * u0
+        b = DoFs(f)[free,i] + M0 * (u0 * c0 + v0 * c2 + a0 * c3) + α * K0 * u0
         u1 = AA \ b
-        u[:, i] = u1
+        u[free, i] = u1
         a1 = (u1 - u0) * c0 - v0 * c2 - a0 * c3
         v1 = v0 + a0 * c6 + a1 * c7
-        v[:, i] = v1
+        v[free, i] = v1
         t[i] = t[i-1] + Δt
         #kene[i] = dot(v1' * M, v1) / 2
         #sene[i] = dot(u1' * K, u1) / 2

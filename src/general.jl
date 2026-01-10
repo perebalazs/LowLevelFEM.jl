@@ -109,8 +109,8 @@ function elastic_constants(; E=nothing, ν=nothing, λ=nothing, μ=nothing, κ=n
 
     elseif n == 1 && haskey(specified, :κ)
         κ = specified[:κ]
-        ν = DEFAULT_POISSON
         E = DEFAULT_YOUNG
+        ν = (1 - E/3κ) / 2
         μ = E / (2*(1+ν))
         λ = 2μ*ν/(1-2ν)
         #κ = E / (3*(1-2ν))
@@ -711,6 +711,21 @@ Each scalar field provides one vector component.
 
 ---
 
+### From an existing VectorField
+
+```julia
+VectorField(s; steps, tmin, tmax, step)
+```
+
+Creates a new `VectorField` by **replicating a selected time step** of an
+existing field.
+This is useful for initializing a time-dependent field from a static solution.
+
+* `step` selects the time index of `s` to be replicated.
+* The new field contains `steps` identical time slices.
+
+---
+
 ## Notes
 
 * Time steps do not need to be uniformly spaced.
@@ -905,6 +920,21 @@ struct VectorField <: AbstractField
         a = [;;]
         t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
+    end
+    function VectorField(s::VectorField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
+        if step > s.nsteps || step < 1
+            error("VectorField: `step` is out of range - 0 < $step < $(s.nsteps)")
+        end
+        A = Vector{Matrix{Float64}}(undef, length(s.numElem))
+        s1 = nodesToElements(s)
+        for j = 1:length(s1.numElem)
+            A[j] = zeros(size(s1.A[j], 1), steps)
+            for i in 1:steps
+                A[j][:, i] = s1.A[j][:, step]
+            end
+        end
+        t = range(start=tmin, stop=tmax, length=steps)
+        VectorField(A, [;;], t, s1.numElem, steps, s1.type, s1.model)
     end
 end
 
@@ -1230,6 +1260,84 @@ struct TensorField <: AbstractField
     end
 end
 
+"""
+    CoordinateSystem(vec1, vec2)
+
+A structure containing the data of a coordinate system.
+- `vec1`: direction of the new x axis.
+- `vec2`: together with `vec1` determine the xy plane
+If the problem is two dimensional, it is enough to give the first two
+elements of `vec1`. Elements of `vec1` and `vec2` can be functions. In
+3D case the functions have three arguments (x, y, and z coordinates),
+otherwise (in 2D case) the number of arguments is two (x and y coordinates).
+
+Types:
+- `vec1`: Vector{Float64}
+- `vec2`: Vector{Float64}
+
+# Examples
+
+```julia
+# 2D case
+nx(x, y) = x
+ny(x, y) = y
+cs = CoordinateSystem([nx, ny])
+Q = rotateNodes(problem, "body", cs)
+q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
+# `q1` is a nodal displacement vector.
+S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
+# `S2` is in Axisymmetric coordinate system.
+
+# 3D case
+n1x(x, y, z) = x
+n1y(x, y, z) = y
+n2x(x, y, z) = -y
+n2y = n1x
+cs = CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
+Q = rotateNodes(problem, "body", cs)
+```
+"""
+struct CoordinateSystem
+    vec1::Vector{Float64}
+    vec2::Vector{Float64}
+    vec1f::Vector{Function}
+    vec2f::Vector{Function}
+    i1::Vector{Int64}
+    i2::Vector{Int64}
+    function CoordinateSystem(vect1)
+        f(x) = 0
+        i1x = isa(vect1[1], Function) ? 1 : 0
+        i1y = isa(vect1[2], Function) ? 1 : 0
+        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
+        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
+        v1fx = isa(vect1[1], Function) ? vect1[1] : f
+        v1fy = isa(vect1[2], Function) ? vect1[2] : f
+        return new([v1x, v1y, 0], [0, 0, 0], [v1fx, v1fy, f], [f, f, f], [i1x, i1y, 0], [0, 0, 0])
+    end
+    function CoordinateSystem(vect1, vect2)
+        f(x) = 0
+        i1x = isa(vect1[1], Function) ? 1 : 0
+        i1y = isa(vect1[2], Function) ? 1 : 0
+        i1z = isa(vect1[3], Function) ? 1 : 0
+        i2x = isa(vect2[1], Function) ? 1 : 0
+        i2y = isa(vect2[2], Function) ? 1 : 0
+        i2z = isa(vect2[3], Function) ? 1 : 0
+        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
+        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
+        v1z = isa(vect1[3], Function) ? 1 : vect1[3]
+        v2x = isa(vect2[1], Function) ? 1 : vect2[1]
+        v2y = isa(vect2[2], Function) ? 1 : vect2[2]
+        v2z = isa(vect2[3], Function) ? 1 : vect2[3]
+        v1fx = isa(vect1[1], Function) ? vect1[1] : f
+        v1fy = isa(vect1[2], Function) ? vect1[2] : f
+        v1fz = isa(vect1[3], Function) ? vect1[3] : f
+        v2fx = isa(vect2[1], Function) ? vect2[1] : f
+        v2fy = isa(vect2[2], Function) ? vect2[2] : f
+        v2fz = isa(vect2[3], Function) ? vect2[3] : f
+        return new([v1x, v1y, v1z], [v2x, v2y, v2z], [v1fx, v1fy, v1fz], [v2fx, v2fy, v2fz], [i1x, i1y, i1z], [i2x, i2y, i2z])
+    end
+end
+
 struct BoundaryCondition
     phName::String
 
@@ -1268,6 +1376,9 @@ struct BoundaryCondition
     sxy::Union{Nothing, Number, Function, ScalarField}
     syz::Union{Nothing, Number, Function, ScalarField}
     szx::Union{Nothing, Number, Function, ScalarField}
+
+    CS::Union{Nothing, CoordinateSystem}
+    Q::Union{Nothing,Transformation}
 
     function BoundaryCondition(phName::String; kwargs...)
         fields = fieldnames(BoundaryCondition)
@@ -2159,84 +2270,6 @@ function Base.setindex!(T::TensorField, v::VectorField, i::Int, ::Colon)
     return T
 end
 
-
-"""
-    CoordinateSystem(vec1, vec2)
-
-A structure containing the data of a coordinate system.
-- `vec1`: direction of the new x axis.
-- `vec2`: together with `vec1` determine the xy plane
-If the problem is two dimensional, it is enough to give the first two
-elements of `vec1`. Elements of `vec1` and `vec2` can be functions. In
-3D case the functions have three arguments (x, y, and z coordinates),
-otherwise (in 2D case) the number of arguments is two (x and y coordinates).
-
-Types:
-- `vec1`: Vector{Float64}
-- `vec2`: Vector{Float64}
-
-# Examples
-
-```julia
-# 2D case
-nx(x, y) = x
-ny(x, y) = y
-cs = CoordinateSystem([nx, ny])
-Q = rotateNodes(problem, "body", cs)
-q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
-# `q1` is a nodal displacement vector.
-S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
-# `S2` is in Axisymmetric coordinate system.
-
-# 3D case
-n1x(x, y, z) = x
-n1y(x, y, z) = y
-n2x(x, y, z) = -y
-n2y = n1x
-cs = CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
-Q = rotateNodes(problem, "body", cs)
-```
-"""
-struct CoordinateSystem
-    vec1::Vector{Float64}
-    vec2::Vector{Float64}
-    vec1f::Vector{Function}
-    vec2f::Vector{Function}
-    i1::Vector{Int64}
-    i2::Vector{Int64}
-    function CoordinateSystem(vect1)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        return new([v1x, v1y, 0], [0, 0, 0], [v1fx, v1fy, f], [f, f, f], [i1x, i1y, 0], [0, 0, 0])
-    end
-    function CoordinateSystem(vect1, vect2)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        i1z = isa(vect1[3], Function) ? 1 : 0
-        i2x = isa(vect2[1], Function) ? 1 : 0
-        i2y = isa(vect2[2], Function) ? 1 : 0
-        i2z = isa(vect2[3], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1z = isa(vect1[3], Function) ? 1 : vect1[3]
-        v2x = isa(vect2[1], Function) ? 1 : vect2[1]
-        v2y = isa(vect2[2], Function) ? 1 : vect2[2]
-        v2z = isa(vect2[3], Function) ? 1 : vect2[3]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        v1fz = isa(vect1[3], Function) ? vect1[3] : f
-        v2fx = isa(vect2[1], Function) ? vect2[1] : f
-        v2fy = isa(vect2[2], Function) ? vect2[2] : f
-        v2fz = isa(vect2[3], Function) ? vect2[3] : f
-        return new([v1x, v1y, v1z], [v2x, v2y, v2z], [v1fx, v1fy, v1fz], [v2fx, v2fy, v2fz], [i1x, i1y, i1z], [i2x, i2y, i2z])
-    end
-end
 
 """
     Eigen(f, ϕ, model)
