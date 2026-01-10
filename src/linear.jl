@@ -3634,10 +3634,10 @@ function applyBoundaryConditions!(field::Union{ScalarField,VectorField,TensorFie
         if p !== nothing && pdim == 1
             _aBC_helper(p, 1, xx, yy, zz, nodeTags, pdim, field)
         end
-        if ux !== nothing && pdim == 1 || pdim == 2 || pdim == 3
+        if ux !== nothing && (pdim == 1 || pdim == 2 || pdim == 3)
             _aBC_helper(ux, 1, xx, yy, zz, nodeTags, pdim, field)
         end
-        if uy !== nothing && pdim == 2 || pdim == 3
+        if uy !== nothing && (pdim == 2 || pdim == 3)
             _aBC_helper(uy, 2, xx, yy, zz, nodeTags, pdim, field)
         end
         if uz !== nothing && pdim == 3

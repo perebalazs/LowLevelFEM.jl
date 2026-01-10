@@ -3592,12 +3592,12 @@ function constrainedDoFs(problem, supports)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
         end
-        if ux !== nothing
+        if ux !== nothing && (pdim == 1 || pdim == 2 || pdim == 3)
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
         end
-        if uy !== nothing
+        if uy !== nothing && (pdim == 2 || pdim == 3)
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
@@ -3670,15 +3670,19 @@ Types:
 - `DoFs`: Vector{Int64}
 """
 function allDoFs(problem)
-    nodes = []
+    nodes0 = Int[]
+    nodes = Int[]
+    pdim = problem.pdim
     for mat in problem.material
         dimTags = gmsh.model.getEntitiesForPhysicalName(mat.phName)
         for (edim, etag) in dimTags
-            nodeTags, _, _ = gmsh.model.mesh.getNodes(edim, etag)
-            nodes = unique(nodes ∪ nodeTags)
+            nodeTags, _, _ = gmsh.model.mesh.getNodes(edim, etag, true)
+            nodes0 = unique(nodes0 ∪ nodeTags)
         end
     end
-    nodes .*= problem.pdim
+    for p in 1:pdim
+        nodes = unique(nodes ∪ (pdim * nodes0 .- (pdim - p)))
+    end
     return nodes
 end
 
@@ -3836,10 +3840,10 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
             #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
-            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            #ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            #ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            #ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
             for i in 1:length(elemTypes)
                 et = elemTypes[i]
                 elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
