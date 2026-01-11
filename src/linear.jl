@@ -2884,7 +2884,7 @@ function elasticSupportMatrix(problem, elSupports)
         kx = kx !== nothing ? kx : 0
         ky = ky !== nothing ? ky : 0
         kz = kz !== nothing ? kz : 0
-        kx = elSupports[n].h !== nothing ? h : kx
+        kx = elSupports[n].h !== nothing ? elSupports[n].h : 0
         if problem.pdim == 3
             f = [0, 0, 0]
         elseif problem.pdim == 2
@@ -3668,6 +3668,16 @@ function applyBoundaryConditions!(field::Union{ScalarField,VectorField,TensorFie
     end
 end
 
+function applyBoundaryConditions!(
+    field::Union{ScalarField,VectorField,TensorField},
+    supports::AbstractVector
+)
+    isempty(supports) && return field
+    supports isa Vector{BoundaryCondition} ||
+        error("applyBoundaryConditions!: supports must be Vector{BoundaryCondition}")
+    return applyBoundaryConditions!(field, supports::Vector{BoundaryCondition})
+end
+
 """
     applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCondition})
                             
@@ -3731,7 +3741,13 @@ Types:
 - `f`: VectorField 
 - `q`: VectorField
 """
-function solveDisplacement(K, f)
+function solveDisplacement(K::SystemMatrix, f::VectorField; 
+                           support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                           iterative=false,
+                           reltol::Real = sqrt(eps()),
+                           maxiter::Int = K.model.non * K.model.dim,
+                           preconditioner = Identity(),
+                           ordering=true)
     type = :null
     if f.type == :v3D
         type = :v3D
@@ -3740,7 +3756,23 @@ function solveDisplacement(K, f)
     else
         error("solveDisplacement: wrong type of 'f': ($(f.type))")
     end
-    return VectorField([], reshape(K.A \ f.a, :, 1), [0.0], [], 1, type, K.model)
+    problem = K.model
+
+    fixed = constrainedDoFs(problem, support)
+    free = freeDoFs(problem, support)
+    u = copy(f)
+    fill!(u.a, 0.0)
+    applyBoundaryConditions!(u, support)
+    f_kin = K.A[:, fixed] * u.a[fixed]
+    #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
+    if iterative
+        u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free], Pl=preconditioner, reltol=reltol, maxiter=maxiter)
+    elseif ordering == false
+        u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
+    else
+        u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
+    end
+    return u
 end
 
 """
@@ -3776,7 +3808,10 @@ Types:
 - `preconditioner`: preconditioner object (made by eg. `ilu` or `ichol`)
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp, elSupp;
+function solveDisplacement(problem::Problem; 
+                           load::Vector{BoundaryCondition}=BoundaryCondition[], 
+                           support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                           elasticSupport::Vector{BoundaryCondition}=BoundaryCondition[],
                            condensed=true,
                            iterative=false,
                            reltol::Real = sqrt(eps()),
@@ -3787,16 +3822,16 @@ function solveDisplacement(problem, load, supp, elSupp;
         return nothing
     end
     K = stiffnessMatrix(problem)
-    if elSupp ≠ []
-        applyElasticSupport!(K, elSupp)
+    if !isempty(elasticSupport)
+        applyElasticSupport!(K, elasticSupport)
     end
     f = loadVector(problem, load)
     if condensed
-        fixed = constrainedDoFs(problem, supp)
-        free = freeDoFs(problem, supp)
+        fixed = constrainedDoFs(problem, support)
+        free = freeDoFs(problem, support)
         u = copy(f)
         fill!(u.a, 0.0)
-        applyBoundaryConditions!(u, supp)
+        applyBoundaryConditions!(u, support)
         f_kin = K.A[:, fixed] * u.a[fixed]
         #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
         if iterative
@@ -3808,10 +3843,10 @@ function solveDisplacement(problem, load, supp, elSupp;
         end
         return u
     else
-        fixed_dofs = constrainedDoFs(problem, supp)
+        fixed_dofs = constrainedDoFs(problem, support)
         u = copy(f)
         fill!(u.a, 0.0)
-        applyBoundaryConditions!(u, supp)
+        applyBoundaryConditions!(u, support)
         f_kin = K.A[:, fixed_dofs] * u.a[fixed_dofs]
         fixed = falses(size(K.A, 1))
         fixed[fixed_dofs] .= true
@@ -3857,6 +3892,7 @@ function solveDisplacement(problem, load, supp, elSupp;
     end
 end
 
+#=
 """
     solveDisplacement(problem, load, supp;
                       condensed = false,
@@ -3884,15 +3920,16 @@ Types:
 - `supp`: Vector{Tuple}
 - `q`: VectorField
 """
-function solveDisplacement(problem, load, supp;
+function solveDisplacement(problem::Problem; load::Vector{BoundaryCondition}, supp::Vector{BoundaryCondition},
                            condensed=false,
                            iterative=false,
                            reltol::Real = sqrt(eps()),
                            maxiter::Int = problem.non * problem.dim,
                            preconditioner = Identity(),
                            ordering=true)
-    return solveDisplacement(problem, load, supp, [], condensed=condensed, iterative=iterative, reltol=reltol, maxiter=maxiter, preconditioner=preconditioner, ordering=ordering)
+    return solveDisplacement(problem, load=load, support=supp, elasticSupport=BoundaryCondition[], condensed=condensed, iterative=iterative, reltol=reltol, maxiter=maxiter, preconditioner=preconditioner, ordering=ordering)
 end
+=#
 
 """
     solveStrain(q; DoFResults=false)
@@ -4968,7 +5005,7 @@ function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.mo
                             @inbounds for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
                                 if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
                                 end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
@@ -4985,7 +5022,7 @@ function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.mo
                             @inbounds for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
                                 if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
                                 end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
@@ -5002,7 +5039,7 @@ function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.mo
                             @inbounds for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
                                 if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
                                 end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
@@ -5020,7 +5057,7 @@ function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.mo
                             @inbounds for kk in 1:nsteps
                                 s0 = D * B1 * q.a[nn2, kk]
                                 if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
                                 end
                                 if DoFResults == false
                                     s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,

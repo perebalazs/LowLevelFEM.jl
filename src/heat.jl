@@ -657,7 +657,6 @@ Types:
 - `T₀`: ScalarField
 - `thermLoadVec`: VectorField
 """
-#function thermalLoadVector(problem, T; T₀=1im)
 function thermalLoadVector(problem, T; T₀=ScalarField([], zeros(problem.non, 1), [0], [], 1, :scalar, problem))
     if problem.type == :AxiSymmetric
         return thermalLoadVectorAXI(problem, T, T₀)
@@ -951,64 +950,65 @@ function applyHeatConvection!(heatCondMat, heatFluxVec, heatConv)
 end
 
 """
-    solveTemperature(K, q)
+    solveTemperature(K::SystemMatrix, q::ScalarField; temperatureConstraint::Vector{BoundaryCondition})
 
-Solves the equation K*T=q for the temperature field `T`. `K` is the heat conduction matrix,
-`q` is the heat flux vector.
+Solves the equation K*T=q for the temperature field `T` after applying `temperatureConstraint`. 
+`K` is the heat conduction matrix, `q` is the heat flux vector.
 
 Return: `T`
 
 Types:
 - `K`: SystemMatrix 
-- `q`: ScalarField 
+- `q`: ScalarField
+- `temperatureConstraint`: Vector{BoundaryCondition}
 - `T`: ScalarField
 """
-function solveTemperature(K::SystemMatrix, q::ScalarField)
-    return K \ q
+function solveTemperature(K::SystemMatrix, q::ScalarField, temperatureConstraint::Vector{BoundaryCondition}=BoundaryCondition[])
+    bc = constrainedDoFs(problem, temperatureConstraint)
+    free = freeDoFs(problem, temperatureConstraint)
+    T = applyBoundaryConditions(problem, temperatureConstraint)
+    q0 = K[:,bc] * DoFs(T)[bc]
+    DoFs(T)[free] = K[free,free] \ (DoFs(q)[free] - q0[free])
+    return T
 end
 
 """
-    solveTemperature(problem, flux, temp)
+    solveTemperature(problem::Problem; heatFlux::Vector{BoundaryCondition}=[], temperatureConstraint::Vector{BoundaryCondition}=[], heatConvection::Vector{BoundaryCondition}=[])
 
-Solves the temperature field `T` of `problem` with given heat flux `flux` and
-temperature `temp`.
+Solves the temperature field `T` of `problem` with given heat flux `heatFlux`,
+temperature `temperatureConstraint` and heat convection `heatConvection`.
 
 Return: `T`
 
 Types:
 - `problem`: Problem 
-- `flux`: Vector{Tuple} 
-- `temp`: Vector{Tuple}
+- `heatFlux`: Vector{BoundaryCondition} 
+- `temperatureConstraint`: Vector{BoundaryCondition}
+- `heatConvection`: Vector{BoundaryCondition}
 - `T`: ScalarField
 """
-function solveTemperature(problem, flux, temp)
+function solveTemperature(problem::Problem; 
+                          heatFlux::Vector{BoundaryCondition}=BoundaryCondition[], 
+                          temperatureConstraint::Vector{BoundaryCondition}=BoundaryCondition[], 
+                          heatConvection::Vector{BoundaryCondition}=BoundaryCondition[]
+                          )
+    bc = constrainedDoFs(problem, temperatureConstraint)
+    free = freeDoFs(problem, temperatureConstraint)
+    T = applyBoundaryConditions(problem, temperatureConstraint)
     K = heatConductionMatrix(problem)
-    q = heatFluxVector(problem, flux)
-    applyBoundaryConditions!(K, q, temp)
-    return K \ q
-end
+    q = heatFluxVector(problem, heatFlux)
+    if !isempty(heatConvection)
+        applyHeatConvection!(K, q, heatConvection)
+    end
+    q0 = K[:,bc] * DoFs(T)[bc]
+    DoFs(T)[free] = K[free,free] \ (DoFs(q)[free] - q0[free])
+    return T
 
-"""
-    solveTemperature(problem, flux, temp, heatconv)
-
-Solves the temperature field `T` of `problem` with given heat flux `flux`,
-temperature `temp` and heat convection `heatconv`.
-
-Return: `T`
-
-Types:
-- `problem`: Problem 
-- `flux`: Vector{Tuple} 
-- `temp`: Vector{Tuple}
-- `heatconv`: Vector{Tuple}
-- `T`: ScalarField
-"""
-function solveTemperature(problem, flux, temp, heatconv)
-    K = heatConductionMatrix(problem)
-    q = heatFluxVector(problem, flux)
-    applyHeatConvection!(K, q, heatconv)
-    applyBoundaryConditions!(K, q, temp)
-    return K \ q
+    #K = heatConductionMatrix(problem)
+    #q = heatFluxVector(problem, flux)
+    #applyHeatConvection!(K, q, heatconv)
+    #applyBoundaryConditions!(K, q, temp)
+    #return K \ q
 end
 
 """
@@ -1064,12 +1064,7 @@ function solveHeatFlux(T; DoFResults=false)
     if !isa(T, ScalarField) 
         error("solveHeatFlux:argument must be a ScalarField. Now it is '$(typeof(T))'.")
     end
-    if T.type != :T
-        error("solveHeatFlux: argument must be a temperature vector (ScalarField). Now it is '$(q.type)'.")
-    end
-    if T.A != []
-        error("solveStrain: T.A != []")
-    end
+    T = elementsToNodes(T)
     nsteps = T.nsteps
     σ = []
     numElem = Int[]

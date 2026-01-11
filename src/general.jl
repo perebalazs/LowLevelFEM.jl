@@ -1362,9 +1362,9 @@ struct BoundaryCondition
     #qx ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
     #qy ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
     #qz ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
-    kx ::Union{Nothing, Number, Function, ScalarField}
-    ky ::Union{Nothing, Number, Function, ScalarField}
-    kz ::Union{Nothing, Number, Function, ScalarField}
+    kx ::Union{Nothing, Number, Function}
+    ky ::Union{Nothing, Number, Function}
+    kz ::Union{Nothing, Number, Function}
     q ::Union{Nothing, Number, Function, ScalarField}   # heat flux / generic scalar flux
     qn ::Union{Nothing, Number, Function, ScalarField}   # heat flux / generic scalar flux
     h ::Union{Nothing, Number, Function, ScalarField}
@@ -2752,7 +2752,7 @@ Types:
 - `Tₐ`: Float64 or Function
 """
 function heatConvection(name; h=nothing, T∞=nothing)
-    h === nothing && T∞ === nothing
+    h === nothing || T∞ === nothing &&
         error("heatSource: h and T∞ must be specified.")
     return BoundaryCondition(name, h=h, T=T∞)
 end
