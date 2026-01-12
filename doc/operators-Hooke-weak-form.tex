@@ -1,0 +1,153 @@
+\documentclass[12pt]{article}
+
+\begin{document}
+	\subsection*{Weak form of the Navier equation (Laplace + grad--div form)}
+	
+	Consider the strong form of linear elasticity written as
+	\begin{equation}
+		\mu \Delta \mathbf u
+		+ (\lambda+\mu)\nabla(\nabla\cdot\mathbf u)
+		+ \mathbf b
+		= \mathbf 0
+		\qquad \mbox{in } \Omega.
+	\end{equation}
+	
+	Let the boundary be decomposed as
+	\[
+	\partial\Omega = \Gamma_u \cup \Gamma_t,
+	\]
+	and choose test functions
+	\[
+	\mathbf v = \mathbf 0 \quad \mbox{on } \Gamma_u.
+	\]
+	
+	Multiplying the strong form by $\mathbf v$ and integrating over $\Omega$ yields
+	\begin{equation}
+		\int_\Omega \mu (\Delta \mathbf u)\cdot \mathbf v \, d\Omega
+		+
+		\int_\Omega (\lambda+\mu)\nabla(\nabla\cdot\mathbf u)\cdot \mathbf v \, d\Omega
+		+
+		\int_\Omega \mathbf b\cdot \mathbf v \, d\Omega
+		= 0.
+	\end{equation}
+	
+	Applying integration by parts to the Laplacian term,
+	\begin{equation}
+		\int_\Omega (\Delta \mathbf u)\cdot \mathbf v \, d\Omega
+		=
+		-\int_\Omega \nabla \mathbf u : \nabla \mathbf v \, d\Omega
+		+
+		\int_{\partial\Omega} \frac{\partial \mathbf u}{\partial n}\cdot \mathbf v \, d\Gamma.
+	\end{equation}
+	
+	For the grad--div term, let $\phi = \nabla\cdot\mathbf u$. Then
+	\begin{equation}
+		\int_\Omega \nabla\phi \cdot \mathbf v \, d\Omega
+		=
+		-\int_\Omega \phi \, (\nabla\cdot\mathbf v)\, d\Omega
+		+
+		\int_{\partial\Omega} \phi (\mathbf v\cdot \mathbf n)\, d\Gamma.
+	\end{equation}
+	
+	Substituting these into the weighted equation and rearranging gives the weak form:
+	\begin{equation}
+			\mu\int_\Omega \nabla\mathbf u:\nabla\mathbf v\, d\Omega
+			+
+			(\lambda+\mu)\int_\Omega (\nabla\cdot\mathbf u)(\nabla\cdot\mathbf v)\, d\Omega
+			=
+			\int_\Omega \mathbf b\cdot \mathbf v\, d\Omega
+			+
+			\int_{\Gamma_t} \mathbf t\cdot \mathbf v\, d\Gamma
+	\end{equation}
+	
+	with the natural traction
+	\begin{equation}
+		\mathbf t
+		=
+		\mu \frac{\partial \mathbf u}{\partial n}
+		+
+		(\lambda+\mu)(\nabla\cdot\mathbf u)\mathbf n.
+	\end{equation}
+	
+	
+	\subsection*{Weak form with Laplace, grad--div and curl--curl operators}
+	
+	Consider the equivalent strong form
+	\begin{equation}
+		2\mu\Delta\mathbf u
+		+\lambda\nabla(\nabla\cdot\mathbf u)
+		-\mu\nabla\times(\nabla\times\mathbf u)
+		+\mathbf b
+		= \mathbf 0
+		\qquad \mbox{in } \Omega.
+	\end{equation}
+	
+	Let $\mathbf v$ be a test function such that
+	\[
+	\mathbf v = \mathbf 0 \quad \mbox{on } \Gamma_u.
+	\]
+	
+	Multiplying by $\mathbf v$ and integrating over $\Omega$,
+	\begin{equation}
+		\int_\Omega
+		\Big(
+		2\mu\Delta\mathbf u
+		+\lambda\nabla(\nabla\cdot\mathbf u)
+		-\mu\nabla\times(\nabla\times\mathbf u)
+		+\mathbf b
+		\Big)\cdot\mathbf v\, d\Omega
+		=0.
+	\end{equation}
+	
+	For the Laplacian term,
+	\begin{equation}
+		\int_\Omega (\Delta\mathbf u)\cdot\mathbf v\, d\Omega
+		=
+		-\int_\Omega \nabla\mathbf u:\nabla\mathbf v\, d\Omega
+		+
+		\int_{\partial\Omega} \frac{\partial\mathbf u}{\partial n}\cdot\mathbf v\, d\Gamma.
+	\end{equation}
+	
+	For the grad--div term,
+	\begin{equation}
+		\int_\Omega \nabla(\nabla\cdot\mathbf u)\cdot\mathbf v\, d\Omega
+		=
+		-\int_\Omega (\nabla\cdot\mathbf u)(\nabla\cdot\mathbf v)\, d\Omega
+		+
+		\int_{\partial\Omega} (\nabla\cdot\mathbf u)(\mathbf v\cdot\mathbf n)\, d\Gamma.
+	\end{equation}
+	
+	For the curl--curl term, using Stokes' identity,
+	\begin{equation}
+		\int_\Omega \nabla\times(\nabla\times\mathbf u)\cdot\mathbf v\, d\Omega
+		=
+		\int_\Omega (\nabla\times\mathbf u)\cdot(\nabla\times\mathbf v)\, d\Omega
+		+
+		\int_{\partial\Omega} \big(\mathbf n\times(\nabla\times\mathbf u)\big)\cdot\mathbf v\, d\Gamma.
+	\end{equation}
+	
+	Collecting the volume terms yields the weak form
+	\begin{equation}
+			2\mu\int_\Omega \nabla\mathbf u:\nabla\mathbf v\, d\Omega
+			+
+			\lambda\int_\Omega (\nabla\cdot\mathbf u)(\nabla\cdot\mathbf v)\, d\Omega
+			-
+			\mu\int_\Omega (\nabla\times\mathbf u)\cdot(\nabla\times\mathbf v)\, d\Omega
+			=
+			\int_\Omega \mathbf b\cdot\mathbf v\, d\Omega
+			+
+			\int_{\Gamma_t} \mathbf t_3\cdot\mathbf v\, d\Gamma
+	\end{equation}
+	
+	with the natural traction
+	\begin{equation}
+		\mathbf t_3
+		=
+		2\mu\frac{\partial\mathbf u}{\partial n}
+		+
+		\lambda(\nabla\cdot\mathbf u)\mathbf n
+		-
+		\mu\,\mathbf n\times(\nabla\times\mathbf u).
+	\end{equation}
+	
+\end{document}

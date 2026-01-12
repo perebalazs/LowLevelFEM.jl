@@ -950,18 +950,40 @@ function applyHeatConvection!(heatCondMat, heatFluxVec, heatConv)
 end
 
 """
-    solveTemperature(K::SystemMatrix, q::ScalarField; temperatureConstraint::Vector{BoundaryCondition})
+    solveTemperature(K, q;
+                     temperatureConstraint = BoundaryCondition[])
 
-Solves the equation K*T=q for the temperature field `T` after applying `temperatureConstraint`. 
-`K` is the heat conduction matrix, `q` is the heat flux vector.
+Solves the linear heat conduction problem
 
-Return: `T`
+    K * T = q
 
-Types:
-- `K`: SystemMatrix 
-- `q`: ScalarField
-- `temperatureConstraint`: Vector{BoundaryCondition}
-- `T`: ScalarField
+for the temperature field `T`, where `K` is the assembled heat conduction matrix
+and `q` is the heat flux (load) vector. Essential temperature constraints
+(Dirichlet-type boundary conditions) are imposed via `temperatureConstraint`.
+
+This is a **low-level temperature solver** operating directly on a preassembled
+[`SystemMatrix`] and a heat flux [`ScalarField`]. It assumes that the system matrix
+already contains all material contributions.
+
+# Arguments
+- `K::SystemMatrix`:
+  Assembled heat conduction matrix associated with a [`Problem`].
+- `q::ScalarField`:
+  Heat flux vector (right-hand side of the heat equation).
+- `temperatureConstraint::Vector{BoundaryCondition}` (keyword, optional):
+  Prescribed temperature constraints (Dirichlet boundary conditions).
+  Default is an empty vector (no temperature constraints).
+
+# Returns
+- `T::ScalarField`:
+  Temperature field satisfying the prescribed constraints.
+
+# Notes
+- Only the unconstrained degrees of freedom are solved for; constrained values
+  are imposed explicitly.
+- This function is primarily intended for internal or advanced use.
+  Most users should prefer the high-level
+  `solveTemperature(problem; ...)` interface.
 """
 function solveTemperature(K::SystemMatrix, q::ScalarField, temperatureConstraint::Vector{BoundaryCondition}=BoundaryCondition[])
     bc = constrainedDoFs(problem, temperatureConstraint)
@@ -973,19 +995,42 @@ function solveTemperature(K::SystemMatrix, q::ScalarField, temperatureConstraint
 end
 
 """
-    solveTemperature(problem::Problem; heatFlux::Vector{BoundaryCondition}=[], temperatureConstraint::Vector{BoundaryCondition}=[], heatConvection::Vector{BoundaryCondition}=[])
+    solveTemperature(problem;
+                     heatFlux = BoundaryCondition[],
+                     temperatureConstraint = BoundaryCondition[],
+                     heatConvection = BoundaryCondition[])
 
-Solves the temperature field `T` of `problem` with given heat flux `heatFlux`,
-temperature `temperatureConstraint` and heat convection `heatConvection`.
+Computes the temperature field `T` for a given [`Problem`] subject to prescribed
+heat fluxes, temperature constraints, and optional heat convection boundary
+conditions.
 
-Return: `T`
+The heat conduction matrix and load vector are assembled internally. Heat
+convection terms, if present, are incorporated into the system before solving.
 
-Types:
-- `problem`: Problem 
-- `heatFlux`: Vector{BoundaryCondition} 
-- `temperatureConstraint`: Vector{BoundaryCondition}
-- `heatConvection`: Vector{BoundaryCondition}
-- `T`: ScalarField
+This is the **high-level, user-facing temperature solver**.
+
+# Arguments
+- `problem::Problem`:
+  Finite element heat transfer problem definition.
+- `heatFlux::Vector{BoundaryCondition}` (keyword, optional):
+  Prescribed heat flux boundary conditions.
+- `temperatureConstraint::Vector{BoundaryCondition}` (keyword, optional):
+  Prescribed temperature constraints (Dirichlet boundary conditions).
+- `heatConvection::Vector{BoundaryCondition}` (keyword, optional):
+  Heat convection boundary conditions contributing to both the system matrix
+  and the load vector.
+
+# Returns
+- `T::ScalarField`:
+  Temperature field defined on the problem degrees of freedom.
+
+# Notes
+- Temperature constraints are enforced by eliminating constrained degrees of
+  freedom from the linear system.
+- Heat convection terms are added to the conduction matrix and load vector via
+  `applyHeatConvection!`.
+- This function internally assembles the heat conduction matrix and heat flux
+  vector, then solves the reduced linear system.
 """
 function solveTemperature(problem::Problem; 
                           heatFlux::Vector{BoundaryCondition}=BoundaryCondition[], 
@@ -1003,12 +1048,6 @@ function solveTemperature(problem::Problem;
     q0 = K[:,bc] * DoFs(T)[bc]
     DoFs(T)[free] = K[free,free] \ (DoFs(q)[free] - q0[free])
     return T
-
-    #K = heatConductionMatrix(problem)
-    #q = heatFluxVector(problem, flux)
-    #applyHeatConvection!(K, q, heatconv)
-    #applyBoundaryConditions!(K, q, temp)
-    #return K \ q
 end
 
 """

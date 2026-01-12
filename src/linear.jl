@@ -3729,17 +3729,57 @@ function applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
 end
 
 """
-    solveDisplacement(K, q)
-                            
-Solves the equation K*q=f for the displacement vector `q`. `K` is the stiffness Matrix,
-`q` is the load vector.
-                            
-Return: `q`
-                            
-Types:
-- `K`: SystemMatrix 
-- `f`: VectorField 
-- `q`: VectorField
+    solveDisplacement(K, f; support = BoundaryCondition[],
+                      iterative = false,
+                      reltol = sqrt(eps()),
+                      maxiter = K.model.non * K.model.dim,
+                      preconditioner = Identity(),
+                      ordering = true)
+
+Solves the linear system
+
+    K * u = f
+
+for the displacement vector `u`, where `K` is a stiffness matrix and `f` is the
+load vector. Essential (Dirichlet) boundary conditions are imposed via the
+`support` argument.
+
+This is a **low-level solver** operating directly on a preassembled
+[`SystemMatrix`] and load [`VectorField`]. It assumes that the stiffness matrix
+already includes all material contributions (and optional elastic supports).
+
+If `iterative = true`, the reduced system is solved using the conjugate gradient
+method. Otherwise, a direct solver is used.
+
+# Arguments
+- `K::SystemMatrix`:
+  Assembled stiffness matrix associated with a [`Problem`].
+- `f::VectorField`:
+  Load vector.
+- `support::Vector{BoundaryCondition}` (keyword, optional):
+  Essential boundary conditions (Dirichlet-type constraints).
+  Default is an empty vector (no supports).
+- `iterative::Bool` (keyword):
+  If `true`, uses the conjugate gradient method.
+- `reltol::Real` (keyword):
+  Relative tolerance for the iterative solver.
+- `maxiter::Int` (keyword):
+  Maximum number of iterations for the iterative solver.
+- `preconditioner` (keyword):
+  Preconditioner object for iterative solution (e.g. from `ilu` or `ichol`).
+- `ordering::Bool` (keyword):
+  If `false`, disables column reordering in the direct solver
+  (`lu(A, q=nothing)`).
+
+# Returns
+- `u::VectorField`:
+  Displacement vector satisfying the prescribed boundary conditions.
+
+# Notes
+- Only the unconstrained degrees of freedom are solved for; constrained values
+  are imposed explicitly.
+- This function is primarily intended for internal or advanced use. Most users
+  should prefer the high-level `solveDisplacement(problem; ...)` interface.
 """
 function solveDisplacement(K::SystemMatrix, f::VectorField; 
                            support::Vector{BoundaryCondition}=BoundaryCondition[], 
@@ -3776,37 +3816,60 @@ function solveDisplacement(K::SystemMatrix, f::VectorField;
 end
 
 """
-    solveDisplacement(problem, load, supp, elSupp;
+    solveDisplacement(problem;
+                      load = BoundaryCondition[],
+                      support = BoundaryCondition[],
+                      elasticSupport = BoundaryCondition[],
                       condensed = true,
                       iterative = false,
-                      reltol::Real = sqrt(eps()),
-                      maxiter::Int = problem.non * problem.dim,
+                      reltol = sqrt(eps()),
+                      maxiter = problem.non * problem.dim,
                       preconditioner = Identity(),
-                      ordering=true)
-                            
-Computes the displacement vector `q` for the given `problem` subject to 
-loads `load`, supports `supp` and elastic supports `elSupp`. When `condensed` is `true`, the 
-reduced stiffness matrix and load vector are used in the solution.
-(see `load`, `displacementConstraint` and `elasticSupport`)
-If `iterative` is true, conjugate gradient method will be used with `reltol` and
-`maxiter` (see `cg` in the `IterativeSolvers` package)
-If `ordering` is false, no culomn ordering will be performed in the stiffness
-matrix. In this case it is advisable to use the `bandwidth` option when define `Problem`.
-(see `lu` in `LinearAlgebra` package, `q=nothing` option)
-                            
-Return: `q`
-                            
-Types:
-- `problem`: Problem 
-- `load`: Vector{Tuple} 
-- `supp`: Vector{Tuple}
-- `elSupp`: Vector{Tuple}
-- `condensed`: Boolean
-- `iterative`: Boolean
-- `maxiter`: Int
-- `reltol`: Real
-- `preconditioner`: preconditioner object (made by eg. `ilu` or `ichol`)
-- `q`: VectorField
+                      ordering = true)
+
+Computes the displacement vector `u` for a given [`Problem`] subject to external
+loads, essential supports, and optional elastic supports.
+
+The stiffness matrix is assembled internally. Depending on the value of
+`condensed`, either a reduced system (eliminating constrained degrees of freedom)
+or the full system with modified rows and columns is solved.
+
+This is the **high-level, user-facing displacement solver**.
+
+# Arguments
+- `problem::Problem`:
+  Finite element problem definition (geometry, materials, DOFs, etc.).
+- `load::Vector{BoundaryCondition}` (keyword, optional):
+  Prescribed nodal loads.
+- `support::Vector{BoundaryCondition}` (keyword, optional):
+  Essential (Dirichlet) boundary conditions.
+- `elasticSupport::Vector{BoundaryCondition}` (keyword, optional):
+  Elastic (spring-type) supports contributing to the stiffness matrix.
+- `condensed::Bool` (keyword):
+  If `true`, solves the reduced system using only free degrees of freedom.
+  If `false`, modifies the full system matrix explicitly.
+- `iterative::Bool` (keyword):
+  If `true`, uses the conjugate gradient method.
+- `reltol::Real` (keyword):
+  Relative tolerance for the iterative solver.
+- `maxiter::Int` (keyword):
+  Maximum number of iterations for the iterative solver.
+- `preconditioner` (keyword):
+  Preconditioner object for iterative solution (e.g. from `ilu` or `ichol`).
+- `ordering::Bool` (keyword):
+  If `false`, disables column reordering in the direct solver
+  (`lu(A, q=nothing)`).
+
+# Returns
+- `u::VectorField`:
+  Displacement vector defined on the problem degrees of freedom.
+
+# Notes
+- If `problem.type == :dummy`, the function returns `nothing`.
+- When `condensed = true`, constrained DOFs are eliminated algebraically.
+- When `condensed = false`, constrained rows and columns are modified explicitly.
+- This function internally calls the low-level `solveDisplacement(K, f; ...)`
+  routine after assembling the stiffness matrix and load vector.
 """
 function solveDisplacement(problem::Problem; 
                            load::Vector{BoundaryCondition}=BoundaryCondition[], 
@@ -3876,60 +3939,8 @@ function solveDisplacement(problem::Problem;
             u.a .= K.A \ (f.a - f_kin)
         end
         return u
-
-
-        #applyBoundaryConditions!(K, f, supp)
-        #A = reshape(K.A \ f.a, :, 1)
-        #type = :null
-        #if f.type == :v3D
-        #    type = :v3D
-        #elseif f.type == :v2D
-        #    type = :v2D
-        #else
-        #    error("solveDisplacement: wrong type of 'f': ($(f.type))")
-        #end
-        #return VectorField([], A, [0.0], [], 1, type, problem)
     end
 end
-
-#=
-"""
-    solveDisplacement(problem, load, supp;
-                      condensed = false,
-                      iterative = false,
-                      reltol::Real = sqrt(eps()),
-                      maxiter::Int = problem.non * problem.dim,
-                      preconditioner = Identity(),
-                      ordering=true)
-                            
-Computes the displacement vector `q` for the given `problem` subject to 
-loads `load` and supports `supp`. When `condensed` is `true`, the 
-reduced stiffness matrix and load vector are used in the solution.
-(see `load`, `displacementConstraint` and `elasticSupport`)
-If `iterative` is true, conjugate gradient method will be used with `reltol` and
-`maxiter` (see `cg` in the `IterativeSolvers` package)
-If `ordering` is false, no culomn ordering will be performed in the stiffness
-matrix. In this case it is advisable to use the `bandwidth` option when define `Problem`.
-(see `lu` in `LinearAlgebra` package, `q=nothing` option)
-                            
-Return: `q`
-                            
-Types:
-- `problem`: Problem 
-- `load`: Vector{Tuple} 
-- `supp`: Vector{Tuple}
-- `q`: VectorField
-"""
-function solveDisplacement(problem::Problem; load::Vector{BoundaryCondition}, supp::Vector{BoundaryCondition},
-                           condensed=false,
-                           iterative=false,
-                           reltol::Real = sqrt(eps()),
-                           maxiter::Int = problem.non * problem.dim,
-                           preconditioner = Identity(),
-                           ordering=true)
-    return solveDisplacement(problem, load=load, support=supp, elasticSupport=BoundaryCondition[], condensed=condensed, iterative=iterative, reltol=reltol, maxiter=maxiter, preconditioner=preconditioner, ordering=ordering)
-end
-=#
 
 """
     solveStrain(q; DoFResults=false)
