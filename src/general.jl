@@ -1,5 +1,5 @@
 export Problem, Material, getEigenVectors, getEigenValues, material
-export displacementConstraint, load, elasticSupport, BoundaryCondition
+export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export constrainedDoFs, freeDoFs, allDoFs, DoFs
@@ -1389,7 +1389,7 @@ struct BoundaryCondition
     end
 end
 
-function BC_specified_fields(bc::BoundaryCondition)
+function BoundaryConditionFields(bc::BoundaryCondition)
     return filter(f -> getfield(bc, f) !== nothing,
                   fieldnames(BoundaryCondition))
 end

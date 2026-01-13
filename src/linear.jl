@@ -2850,7 +2850,7 @@ Return: `elSuppMat`
                             
 Types:
 - `problem`: Problem
-- `elSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `elSupp`: Vector{BoundaryCondition}
 - `elSuppMat`: SystemMatrix
 """
 function elasticSupportMatrix(problem, elSupports)
@@ -2884,7 +2884,7 @@ function elasticSupportMatrix(problem, elSupports)
         kx = kx !== nothing ? kx : 0
         ky = ky !== nothing ? ky : 0
         kz = kz !== nothing ? kz : 0
-        kx = elSupports[n].h !== nothing ? elSupports[n].h : 0
+        hc = elSupports[n].h !== nothing ? elSupports[n].h : 0
         if problem.pdim == 3
             f = [0, 0, 0]
         elseif problem.pdim == 2
@@ -2944,7 +2944,12 @@ function elasticSupportMatrix(problem, elSupports)
                             y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
                         end
-                        f[1] = isa(kx, Function) ? kx(x, y, z) : kx
+                        if elSupports[n].h !== nothing && problem.pdim == 1
+                            f[1] = hc
+                        end
+                        if elSupports[n].kx !== nothing
+                            f[1] = isa(kx, Function) ? kx(x, y, z) : kx
+                        end
                         if problem.pdim > 1
                             f[2] = isa(ky, Function) ? ky(x, y, z) : ky
                         end
@@ -2984,6 +2989,10 @@ function elasticSupportMatrix(problem, elSupports)
                         elseif DIM == 2 && dim == 0
                             Ja = 1
                             ############ 1D #######################################################
+                        elseif DIM == 1 && dim == 1
+                            Ja = Jac[1, 3*j-2] * b
+                        elseif DIM == 1 && dim == 0
+                            Ja = 1
                         else
                             error("elasticSupportMatrix: dimension of the problem is $(problem.dim), dimension of load is $dim.")
                         end
