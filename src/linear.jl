@@ -5626,6 +5626,8 @@ function largestPeriodTime(K, M, bc)
     return Δt
 end
 
+largestPeriodTime(K::SystemMatrix, M::SystemMatrix) = largestPeriodTime(K, M, BoundaryCondition[])
+
 """
     smallestPeriodTime(K, M, bc)
                             
@@ -5655,6 +5657,8 @@ function smallestPeriodTime(K, M, bc)
     return Δt
 end
 
+smallestPeriodTime(K::SystemMatrix, M::SystemMatrix) = smallestPeriodTime(K, M, BoundaryCondition[])
+
 """
     smallestEigenValue(K, M)
                             
@@ -5668,18 +5672,23 @@ Types:
 - `M`: SystemMatrix
 - `λₘₐₓ`: Float64 
 """
-function smallestEigenValue(K, C, bc)
-    λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
+function smallestEigenValue(K::SystemMatrix, C::SystemMatrix, bc::Vector{BoundaryCondition})
+    free = freeDoFs(K.model, bc)
+    K0 = K[free,free]
+    C0 = C[free,free]
+    λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
     if real(λ[1]) > 0.999 && real(λ[1]) < 1.001
-        λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+        λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LR, sigma=1.01, maxiter=10000)
     end
-    err = norm(K.A * ϕ[:,1] - λ[1] * C.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
+    err = norm(K0 * ϕ[:,1] - λ[1] * C0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the largest eigenvalue is too large: $err")
     end
     λₘₐₓ = abs(real(λ[1]))
     return λₘₐₓ
 end
+
+smallestEigenValue(K::SystemMatrix, C::SystemMatrix) = smallestEigenValue(K, C, BoundaryCondition[])
 
 """
     largestEigenValue(K, M)
@@ -5694,10 +5703,13 @@ Types:
 - `M`: SystemMatrix
 - `λₘᵢₙ`: Float64 
 """
-function largestEigenValue(K, C)
-    λ, ϕ = Arpack.eigs(K.A, C.A, nev=1, which=:LM)
+function largestEigenValue(K::SystemMatrix, C::SystemMatrix, bc::Vector{BoundaryCondition})
+    free = freeDoFs(K.model, bc)
+    K0 = K[free,free]
+    C0 = C[free,free]
+    λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LM)
     
-    err = norm(K.A * ϕ[:,1] - λ[1] * C.A * ϕ[:,1]) / norm(K.A * ϕ[:,1])
+    err = norm(K0 * ϕ[:,1] - λ[1] * C0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
     end
@@ -5705,9 +5717,13 @@ function largestEigenValue(K, C)
     return λₘᵢₙ
 end
 
+largestEigenValue(K::SystemMatrix, C::SystemMatrix) = largestEigenValue(K, C, BoundaryCondition[])
+
 """
     CDM(K, M, f, bc, u0, v0, n, Δt)
     CDM(K, M, C, f, bc, u0, v0, n, Δt)
+    CDM(K, M, f, u0, v0, n, Δt)
+    CDM(K, M, C, f, u0, v0, n, Δt)
                             
 Solves a transient dynamic problem using central difference method (CDM) (explicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `C` is the damping matrix,
@@ -5757,12 +5773,13 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, 
         vv = elementsToNodes(vv)
     end
     free = freeDoFs(K.model, bc)
+    #fix = constrainedDoFs(K.model, bc)
     K0 = K[free,free]
     M0 = M[free,free]
     C0 = C[free,free]
     f0 = DoFs(f)[free,1]
     invM = spdiagm(1 ./ diag(M0))
-    nsteps = n #ceil(Int64, T / Δt)
+    nsteps = n
     dof, dof = size(K0)
     
     u = uu.a #zeros(dof, nsteps)
@@ -5803,8 +5820,22 @@ function CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{Bounda
     return CDM(K, M, C, f, bc, u0, v0, n, Δt)
 end
 
+CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64) = 
+    CDM(K, M, C, f, BoundaryCondition[],  uu0, vv0, n, Δt)
+
+CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64) = 
+    CDM(K, M, f, BoundaryCondition[],  uu0, vv0, n, Δt)
+
 """
-    HHT(K, M, f, bc, u0, v0, n, Δt; α=..., δ=..., γ=..., β=...)
+    HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, 
+    bc::Vector{BoundaryCondition}, uu0::VectorField, vv0::VectorField, 
+    n::Int, Δt::Float64; 
+    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+
+    HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, 
+    uu0::VectorField, vv0::VectorField, 
+    n::Int, Δt::Float64; 
+    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
                             
 Solves a transient dynamic problem using HHT-α method[^1] (implicit).
 `K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
@@ -5837,7 +5868,7 @@ Types:
 - `u`: VectorField
 - `v`: VectorField
 """
-function HHT(K, M, f, bc, uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+function HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
     if K.model != M.model || M.model != f.model || f.model != uu0.model || uu0.model != vv0.model
         error("HHT: K, M, f, u0 and v0 does not belong to the same model.")
     end
@@ -5913,6 +5944,9 @@ function HHT(K, M, f, bc, uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25
     end
     return VectorField([], u, t, [], length(t), uu0.type, f.model), VectorField([], v, t, [], length(t), vv0.type, f.model)
 end
+
+HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
+    HHT(K, M, f, BoundaryCondition[], uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
 
 """
     CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=..., ξ=..., β=..., show_β=..., show_ξ=...)

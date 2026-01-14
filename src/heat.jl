@@ -1360,35 +1360,54 @@ Types:
 - `Δt`: Float64 
 - `T`: ScalarField
 """
-function FDM(K, C, q, TT0, tₘₐₓ, Δt; ϑ=0.5)
+function FDM(K::SystemMatrix, C::SystemMatrix, q::ScalarField, 
+    bc::Vector{BoundaryCondition}, TT0::ScalarField, 
+    n::Int, Δt::Float64; ϑ=0.5)
+    
+    if q.nsteps == 1
+        q = nodesToElements(q)
+        q = ScalarField(q, steps=n)
+        q = elementsToNodes(q)
+    end
+    if TT0.nsteps == 1
+        TT0 = nodesToElements(TT0)
+        TT0 = ScalarField(TT0, steps=n)
+        TT0 = elementsToNodes(TT0)
+    end
+    free = freeDoFs(K.model, bc)
+    K0 = K[free,free]
+    C0 = C[free,free]
+    q0 = DoFs(q)[free,1]
     nnz = nonzeros(C.A)
     dof, dof = size(C.A)
-    nsteps = ceil(Int64, tₘₐₓ / Δt)
-    T = zeros(dof, nsteps)
+    nsteps = n
+    T = TT0.a
     t = zeros(nsteps)
-    T0 = TT0.a
-    T[:, 1] = T0
+    T0 = T[free]
+    #T[:, 1] = T0
     t[1] = 0
     if ϑ == 0 && nnz == dof
-        invC = spdiagm(1 ./ diag(C.A))
+        invC = spdiagm(1 ./ diag(C0))
         for i in 2:nsteps
-            T1 = T0 - (1 - ϑ) * Δt * invC * K.A * T0 + Δt * invC * q.a
-            T[:, i] = T1
+            T1 = T0 - (1 - ϑ) * Δt * invC * K0 * T0 + Δt * invC * q0
+            T[free, i] = T1
             t[i] = t[i-1] + Δt
             T0 = T1
         end
     else
-        A = C.A + ϑ * Δt * K.A
-        b = C.A - (1 - ϑ) * Δt * K.A
+        A = C0 + ϑ * Δt * K0
+        b = C0 - (1 - ϑ) * Δt * K0
         AA = lu(A)
         for i in 2:nsteps
-            bb = b * T0 + Δt * q.a
+            bb = b * T0 + Δt * q0
             T1 = AA \ bb
-            T[:, i] = T1
+            T[free, i] = T1
             t[i] = t[i-1] + Δt
             T0 = T1
         end
     end
+
+
 
     return ScalarField([], T, t, [], length(t), :scalar, q.model)
 end

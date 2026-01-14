@@ -248,13 +248,12 @@ struct Problem
     geometry::Geometry
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
-    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim=3, fdim=dim)
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim::Int=3)
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0)
         end
         pdim = 3
         dim0 = dim
-        pdim0 = fdim
 
         #if Sys.CPU_THREADS != Threads.nthreads()
         #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
@@ -285,24 +284,23 @@ struct Problem
         elseif type == :Truss
             dim = 3
             pdim = 3
-        elseif type == :Poisson3D || type == :Poisson
-            dim = 3
+        elseif type == :ScalarField
+            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
+            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be equal or less than three.")
+            dim = dim0
             pdim = 1
-        elseif type == :Poisson2D
-            dim = 2
-            pdim = 1
-        elseif type == :Poisson1D
-            dim = 1
-            pdim = 1
+        elseif type == :VectorField
+            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
+            dim0 == 1 && error("Problem: dimension of a :VectorField problem must be greater than one.")
+            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be two or three.")
+            dim = dim0
+            pdim = dim0
         elseif type == :Reynolds
             geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
             pdim = 1
-        elseif type == :General
-            dim = dim0
-            pdim = pdim0
         else
-            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Poisson1D`, `:Poisson2D`, `:Poisson3D`, `:General`.
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Truss`, `:ScalarField`, `VectorField`.
             Now problem type = $type ????")
         end
         if !isa(mat, Vector)

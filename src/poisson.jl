@@ -687,7 +687,8 @@ end
 # --- public API ---------------------------------------------------------------
 
 """
-    stiffnessMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    poissonMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    ∫∇oN_c_∇oN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the global stiffness matrix for a Poisson-type diffusion operator
 
@@ -700,7 +701,7 @@ K_ab = ∫_Ω (∇N_a · ∇N_b) α(x) dΩ
 `coefficient` can be a constant (`Number`) or an elementwise `ScalarField`
 (interpolated to Gauss points using the Lagrange basis, as in the original implementation).
 """
-function stiffnessMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+function poissonMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     if problem.type == :dummy
         return nothing
     end
@@ -738,9 +739,14 @@ function stiffnessMatrixPoisson(problem::Problem; coefficient::Union{Number,Scal
     dropzeros!(K)
     return SystemMatrix(K, problem)
 end
+    
+∫∇oN_c_∇oN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = poissonMatrix(problem, coefficient=coefficient)
 
 """
     convectionMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0, dir::Int=1)
+    ∫N_c_∂N∂x_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    ∫N_c_∂N∂y_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    ∫N_c_∂N∂z_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the global convection (advection/drift) matrix
 
@@ -794,8 +800,13 @@ function convectionMatrixPoisson(
     return SystemMatrix(C, problem)
 end
 
+∫N_c_∂N∂x_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = convectionMatrixPoisson(problem, coefficient=coefficient, dir=1)
+∫N_c_∂N∂y_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = convectionMatrixPoisson(problem, coefficient=coefficient, dir=2)
+∫N_c_∂N∂z_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = convectionMatrixPoisson(problem, coefficient=coefficient, dir=3)
+
 """
-    massMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    reactionMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    ∫N_c_N_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the global (weighted) mass / reaction matrix
 
@@ -808,7 +819,7 @@ M_ab = ∫_Ω N_a N_b c(x) dΩ
 `coefficient` can be a constant (`Number`) or an elementwise `ScalarField`,
 interpolated to Gauss points using the Lagrange basis (same mechanism as stiffness).
 """
-function massMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+function reactionMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     if problem.type == :dummy
         return nothing
     end
@@ -842,8 +853,11 @@ function massMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarFie
     return SystemMatrix(M, problem)
 end
 
+∫N_c_N_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = reactionMatrix(problem, coefficient=coefficient)
+
 """
     gradDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    ∫∇N_c_∇N_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the global matrix corresponding to the grad-div bilinear form
 
@@ -888,6 +902,8 @@ function gradDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=
     dropzeros!(G)
     return SystemMatrix(G, problem)
 end
+
+∫∇N_c_∇N_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = gradDivMatrix(problem, coefficient=coefficient)
 
 """
     symmetricGradientMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
@@ -935,6 +951,7 @@ end
 
 """
     curlCurlMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    ∫∇xN_c_∇xN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the global curl–curl matrix
 
@@ -978,6 +995,8 @@ function curlCurlMatrix(problem::Problem; coefficient::Union{Number,ScalarField}
     dropzeros!(C)
     return SystemMatrix(C, problem)
 end
+    
+∫∇xN_c_∇xN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = curlCurlMatrix(problem, coefficient=coefficient)
 
 """
     tensorLaplaceMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
