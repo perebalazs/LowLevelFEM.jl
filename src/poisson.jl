@@ -1,7 +1,11 @@
-export stiffnessMatrixPoisson, convectionMatrixPoisson, massMatrixPoisson
+#export stiffnessMatrixPoisson, advectionMatrix, massMatrixPoisson
+export poissonMatrix, reactionMatrix, advectionMatrix
+export ∫∇oN_c_∇oN_dΩ, ∫∇N_c_∇N_dΩ, ∫∇xN_c_∇xN_dΩ, ∫N_c_N_dΩ, ∫N_c_∂N∂x_dΩ, ∫N_c_∂N∂x_dΩ, ∫N_c_∂N∂y_dΩ, ∫N_c_∂N∂z_dΩ
+export ∫N_c_dΩ
 export gradDivMatrix, symmetricGradientMatrix, curlCurlMatrix
 export tensorLaplaceMatrix, traceLaplaceMatrix, beltramiMichellMatrix, tensorDivDivMatrix
 export sourceVector, loadTensor
+export solveField
 
 """
     stiffnessMatrixPoissonAllInOne(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
@@ -743,7 +747,7 @@ end
 ∫∇oN_c_∇oN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = poissonMatrix(problem, coefficient=coefficient)
 
 """
-    convectionMatrixPoisson(problem::Problem; coefficient::Union{Number,ScalarField}=1.0, dir::Int=1)
+    advectionMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0, dir::Int=1)
     ∫N_c_∂N∂x_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     ∫N_c_∂N∂y_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     ∫N_c_∂N∂z_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
@@ -760,7 +764,7 @@ C_ab = ∫_Ω N_a (∂N_b/∂x_dir) β(x) dΩ
 - `coefficient` can be a constant (`Number`) or an elementwise `ScalarField`,
   interpolated to Gauss points as in the stiffness implementation.
 """
-function convectionMatrixPoisson(
+function advectionMatrix(
     problem::Problem;
     coefficient::Union{Number,ScalarField}=1.0,
     dir::Int = 1)
@@ -769,7 +773,7 @@ function convectionMatrixPoisson(
     end
     gmsh.model.setCurrent(problem.name)
 
-    @assert 1 ≤ dir ≤ problem.dim "convectionMatrixPoisson: dir out of bounds"
+    @assert 1 ≤ dir ≤ problem.dim "advectionMatrix: dir out of bounds"
 
     elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
     estElems = sum(length.(elemTags))
@@ -800,9 +804,9 @@ function convectionMatrixPoisson(
     return SystemMatrix(C, problem)
 end
 
-∫N_c_∂N∂x_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = convectionMatrixPoisson(problem, coefficient=coefficient, dir=1)
-∫N_c_∂N∂y_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = convectionMatrixPoisson(problem, coefficient=coefficient, dir=2)
-∫N_c_∂N∂z_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = convectionMatrixPoisson(problem, coefficient=coefficient, dir=3)
+∫N_c_∂N∂x_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = advectionMatrix(problem, coefficient=coefficient, dir=1)
+∫N_c_∂N∂y_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = advectionMatrix(problem, coefficient=coefficient, dir=2)
+∫N_c_∂N∂z_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = advectionMatrix(problem, coefficient=coefficient, dir=3)
 
 """
     reactionMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
@@ -1217,6 +1221,7 @@ or generic PDE source terms.
 Returns a `ScalarField` or `VectorField`, depending on the problem field dimension.
 """
 sourceVector = loadVector
+∫N_c_dΩ = sourceVector
 
 """
     loadTensor(problem::Problem;
@@ -1237,7 +1242,7 @@ Notes
 function loadTensor(
     problem::Problem;
     source::Union{Matrix{Float64},TensorField} = zeros(3,3)
-)
+    )
     @assert problem.pdim == 9 "loadTensor requires pdim = 9 (TensorField)"
 
     gmsh.model.setCurrent(problem.name)
@@ -1316,4 +1321,95 @@ function loadTensor(
     end
 
     return TensorField([], reshape(fp, :, 1), [0.0], [], 1, :tensor, problem)
+end
+
+"""
+    solveField(K, f; support=BoundaryCondition[], iterative=false,
+               reltol=sqrt(eps()), maxiter=..., preconditioner=Identity(),
+               ordering=true)
+
+Solves a linear static field problem with Dirichlet boundary conditions.
+
+The algebraic system
+```
+
+K * u = f
+
+```
+is solved for the unknown field `u`, where prescribed values are enforced
+*solver-side* via boundary conditions.
+
+The solution is obtained by partitioning the degrees of freedom into
+free and constrained sets. On constrained DOFs the values prescribed
+by `support` override the solution, while on free DOFs the reduced system
+is solved:
+```
+
+K_ff * u_f = f_f − K_fc * u_c
+
+```
+
+The function supports both direct and iterative linear solvers and works
+uniformly for `ScalarField` and `VectorField` unknowns.
+
+---
+
+### Arguments
+- `K::SystemMatrix`  
+  Global system matrix.
+- `f::Union{ScalarField,VectorField}`  
+  Right-hand-side vector.
+- `support::Vector{BoundaryCondition}` (keyword, default = `BoundaryCondition[]`)  
+  Dirichlet-type boundary conditions.
+- `iterative::Bool` (keyword, default = `false`)  
+  If `true`, use an iterative solver (conjugate gradient).
+- `reltol::Real` (keyword, default = `sqrt(eps())`)  
+  Relative tolerance for the iterative solver.
+- `maxiter::Int` (keyword, default = `K.model.non * K.model.dim`)  
+  Maximum number of iterations for the iterative solver.
+- `preconditioner` (keyword, default = `Identity()`)  
+  Preconditioner for the iterative solver.
+- `ordering::Bool` (keyword, default = `true`)  
+  If `false`, use an explicit LU factorization without reordering.
+
+---
+
+### Returns
+- `u::Union{ScalarField,VectorField}`  
+  Solution field with prescribed values enforced on constrained DOFs.
+
+---
+
+### Notes
+- Boundary conditions are applied *inside* the solver; the input field `f`
+  is not modified.
+- The algorithm itself is agnostic to the physical meaning of the field
+  (scalar, vector, tensor), as long as `K` and `f` are dimensionally consistent.
+- When `iterative = true`, the system is solved using conjugate gradient on
+  the reduced matrix `K_ff`.
+"""
+function solveField(K::SystemMatrix, f::Union{ScalarField,VectorField}; 
+                           support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                           iterative=false,
+                           reltol::Real = sqrt(eps()),
+                           maxiter::Int = K.model.non * K.model.dim,
+                           preconditioner = Identity(),
+                           ordering=true)
+    problem = K.model
+
+    fixed = constrainedDoFs(problem, support)
+    free = freeDoFs(problem, support)
+    u = copy(f)
+    fill!(u.a, 0.0)
+    applyBoundaryConditions!(u, support)
+    f_kin = K.A[:, fixed] * u.a[fixed]
+    #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
+    if iterative
+        u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free], Pl=preconditioner, reltol=reltol, maxiter=maxiter)
+    elseif ordering == false
+        u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
+    else
+        u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
+    end
+    return u
 end

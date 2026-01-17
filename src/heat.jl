@@ -1329,38 +1329,204 @@ end
 =#
 
 """
-    FDM(K, C, q, T0, tₘₐₓ, Δt; ϑ=...)
+    FDM(K, C, q, bc, T0, n, Δt; ϑ=0.5)
 
-Solves a transient heat conduction problem using Finite Difference Method (FDM).
-Introducing a `ϑ` parameter, special cases can be used as the Forward Euler (explicit, ϑ=0),
-Backward Euler (implicit, ϑ=1), Crank-Nicolson (ϑ=0.5) and intermediate cases (0<ϑ<1).
-(This method is known as ϑ-method. See [^5].)
-`K` is the heat conduction matrix, `C` is the heat capacity matrix,
-`q` is the heat flux vector, `T0` is the initial temperature, `tₘₐₓ` is the upper 
-bound of the time intervall (lower bound is zero)
-and `Δt` is the time step size. Returns the nodal temperature vectors in each time 
-step arranged in the columns of the matrix `T`
-and a vector `t` of the time instants used.
+Solves a transient diffusion-type problem (e.g. heat conduction) using the
+finite difference method in time (ϑ-method).
 
-The critical (largest allowed) time step is `Δtₘₐₓ = 2 / ((1-2ϑ)*λₘₐₓ)`
-where `λₘₐₓ` is the largest eigenvalue of (**K**+λ**C**)**θ**=**0** 
-eigenvalue problem and `ϑ` is the parameter of the ϑ-method. Default value of `ϑ`
-is 1/2.
+The semi-discrete system
+```
 
-[^5]: Bathe, K. J.: Finite element procedures, Wiley, 1983, <https://doi.org/10.1002/nag.1610070412>
+C * Ẋ(t) + K * X(t) = q(t)
 
-Return: `T`
+```
+is integrated in time using the ϑ-scheme:
+- ϑ = 0   : Forward Euler (explicit)
+- ϑ = 1/2 : Crank–Nicolson
+- ϑ = 1   : Backward Euler (implicit)
+- 0 < ϑ < 1 : intermediate schemes
 
-Types:
-- `K`: SystemMatrix
-- `C`: SystemMatrix
-- `q`: ScalarField
-- `T0`: ScalarField
-- `tₘₐₓ`: Float64
-- `Δt`: Float64 
-- `T`: ScalarField
+The method supports:
+- time-independent or time-dependent load vectors `q`
+- time-independent or time-dependent Dirichlet boundary conditions
+- `ScalarField` and `VectorField` unknowns
+- consistent treatment of constraint-induced volume terms
+  (i.e. contributions of prescribed values appear automatically in the RHS)
+
+Boundary conditions are applied *solver-side*:
+on constrained DOFs the prescribed values override the initial condition,
+while on free DOFs the initial condition `T0` is used.
+
+If `q.nsteps == 1`, the load is treated as time-independent.
+If `q.nsteps == n`, a true ϑ-weighted load
+```
+
+q^{n+ϑ} = (1-ϑ) q^n + ϑ q^{n+1}
+
+```
+is used.
+
+For `ϑ = 0` and diagonal `C`, a fully explicit update is used.
+
+---
+
+### Arguments
+- `K::SystemMatrix`  
+  Diffusion (conductivity / stiffness) matrix.
+- `C::SystemMatrix`  
+  Capacity (mass / heat capacity) matrix.
+- `q::Union{ScalarField,VectorField}`  
+  Load / source vector. May be time-independent (`nsteps = 1`)
+  or time-dependent (`nsteps = n`).
+- `bc::Vector{BoundaryCondition}`  
+  Dirichlet boundary conditions (possibly time-dependent).
+- `T0::Union{ScalarField,VectorField}`  
+  Initial condition. On constrained DOFs this is overridden by `bc`.
+- `n::Int`  
+  Number of time steps.
+- `Δt::Float64`  
+  Time step size.
+- `ϑ::Float64` (keyword, default = 0.5)  
+  Parameter of the ϑ-method.
+
+---
+
+### Returns
+- `T::Union{ScalarField,VectorField}`  
+  Nodal solution field at all time steps (`ndof × nsteps`),
+  with time vector `t = 0:Δt:(n-1)Δt`.
+
+---
+
+### Notes
+- Stability depends on `ϑ` and the spectrum of the generalized eigenproblem
+  `K x = λ C x`. For `ϑ ≥ 1/2` the method is unconditionally stable.
+- The algorithm itself is agnostic to the physical meaning of the field
+  (scalar, vector, tensor), as long as `K`, `C` and the fields are consistent.
 """
-function FDM(K::SystemMatrix, C::SystemMatrix, q::ScalarField, 
+function FDM(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    q::Union{ScalarField,VectorField},
+    bc::Vector{BoundaryCondition},
+    TT0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    ϑ = 0.5)
+
+    TYPE = typeof(q)
+    # --- checks --------------------------------------------------------------
+    if K.model != C.model || C.model != q.model || q.model != TT0.model
+        error("FDM: K, C, q and TT0 does not belong to the same model.")
+    end
+    if q.nsteps != 1 && q.nsteps != n
+        error("FDM: number of time steps in q must be 1 or n.")
+    end
+    if TT0.nsteps != 1 && TT0.nsteps != n
+        error("FDM: number of time steps in TT0 must be 1 or n.")
+    end
+
+    # --- nodalize ------------------------------------------------------------
+    q   = elementsToNodes(q)
+    TT0 = elementsToNodes(TT0)
+
+    ndof = size(C.A, 1)
+    ts = [i for i in 0:n-1]
+
+    # --- build temperature container and apply BC for ALL steps --------------
+    TT = TYPE([], zeros(ndof, n), ts, [], n, :scalar, K.model)
+
+    if TT0.nsteps == 1
+        TT.a[:, :] .= TT0.a[:, 1]
+    else
+        TT.a[:, :] .= TT0.a[:, 1:n]
+    end
+
+    applyBoundaryConditions!(TT, bc)
+
+    free = freeDoFs(K.model, bc)
+    fix  = constrainedDoFs(K.model, bc)
+
+    # blocks
+    Kff = K.A[free, free]
+    Cff = C.A[free, free]
+    Kfc = K.A[free, fix]
+    Cfc = C.A[free, fix]
+
+    # time
+    t = zeros(n)
+    t[1] = 0.0
+
+    # initial free temperature
+    T0 = copy(TT.a[free, 1])
+
+    # load helper
+    @inline function q_free(i::Int)
+        ii = (q.nsteps == 1) ? 1 : i
+        return DoFs(q)[free, ii]
+    end
+
+    # "true" theta load: q^{n+θ} = (1-θ) q^n + θ q^{n+1}
+    @inline function q_theta(i::Int)
+        if q.nsteps == 1
+            return q_free(1)
+        else
+            # i corresponds to step n+1, so use (i-1)=n and i=(n+1)
+            return (1 - ϑ) .* q_free(i-1) .+ ϑ .* q_free(i)
+        end
+    end
+
+    # explicit theta=0 diagonal-C shortcut (kept, but now uses q^n)
+    is_diag = nnz(C.A) == length(diag(C.A))
+    if ϑ == 0 && is_diag
+        invC = spdiagm(1.0 ./ diag(Cff))
+
+        for i in 2:n
+            Tc_n   = TT.a[fix, i-1]
+            Tc_np1 = TT.a[fix, i]
+            qn = q_free(i-1)
+
+            T1 = T0 - Δt * (invC * (Kff * T0 + Kfc * Tc_n)) + Δt * (invC * qn) - (invC * (Cfc * (Tc_np1 - Tc_n)))
+
+            TT.a[free, i] .= T1
+            t[i] = t[i-1] + Δt
+            T0 = T1
+        end
+
+    else
+        # true theta method:
+        # (C + θΔt K) T^{n+1} = (C - (1-θ)Δt K) T^n + Δt q^{n+θ}
+        A = Cff + ϑ * Δt * Kff
+        B = Cff - (1 - ϑ) * Δt * Kff
+        luA = lu(A)
+
+        for i in 2:n
+            Tc_n   = TT.a[fix, i-1]
+            Tc_np1 = TT.a[fix, i]
+
+            qth = q_theta(i)
+
+            rhs =
+                B * T0 +
+                Δt * qth -
+                ((Cfc + ϑ * Δt * Kfc) * Tc_np1 -
+                (Cfc - (1 - ϑ) * Δt * Kfc) * Tc_n)
+
+            T1 = luA \ rhs
+
+            TT.a[free, i] .= T1
+            t[i] = t[i-1] + Δt
+            T0 = T1
+        end
+    end
+
+    return TYPE([], TT.a, t, [], length(t), :scalar, K.model)
+end
+
+FDM( K::SystemMatrix, C::SystemMatrix, q::Union{ScalarField,VectorField}, TT0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; ϑ = 0.5, support=Vector{BoundaryCondition}()) = 
+    FDM(K, C, q, support, TT0, n, Δt, ϑ=ϑ)
+
+function FDM_old(K::SystemMatrix, C::SystemMatrix, q::ScalarField, 
     bc::Vector{BoundaryCondition}, TT0::ScalarField, 
     n::Int, Δt::Float64; ϑ=0.5)
     
@@ -1406,8 +1572,6 @@ function FDM(K::SystemMatrix, C::SystemMatrix, q::ScalarField,
             T0 = T1
         end
     end
-
-
 
     return ScalarField([], T, t, [], length(t), :scalar, q.model)
 end

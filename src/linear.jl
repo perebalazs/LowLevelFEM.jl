@@ -3014,13 +3014,14 @@ function elasticSupportMatrix(problem, elSupports)
     return SystemMatrix(C, problem)
 end
 
-@inline function _loadvec_helper(f, h, x, y, z, nnet, j, l)
+@inline function _loadvec_helper(f, h, x, y, z, nnet, j, l, nsteps)
     if f isa Number
-        return f
+        return fill(f, nsteps)
     elseif f isa Function
-        return f(x, y, z)
-    elseif f isa ScalarField
-        return h[:, j]' * f.a[nnet[l, :]]
+        return fill(f(x, y, z), nsteps)
+    elseif f isa ScalarField && isNodal(f)
+        v = h[:, j]' * f.a[nnet[l, :],:]
+        return vec(v)
     else
         error("loadVector: internal error.")
     end
@@ -3075,11 +3076,11 @@ function loadVector(problem, loads)
     b = problem.thickness
     non = problem.non
     dof = pdim * non
-    fp = zeros(dof)
     ncoord2 = zeros(3 * problem.non)
     f = nothing
+    fp = nothing
+    nsteps = 1
     for n in 1:length(loads)
-        #name, fx, fy, fz = loads[n]
         name = loads[n].phName
         fx = loads[n].fx
         fy = loads[n].fy
@@ -3101,10 +3102,35 @@ function loadVector(problem, loads)
         fzy = loads[n].fzy
         fxz = loads[n].fxz
 
+        fx  = (fx  isa ScalarField && isElementwise(fx))  ? elementsToNodes(fx)  : fx
+        fy  = (fy  isa ScalarField && isElementwise(fy))  ? elementsToNodes(fy)  : fy
+        fz  = (fz  isa ScalarField && isElementwise(fz))  ? elementsToNodes(fz)  : fz
+        T   = (T   isa ScalarField && isElementwise(T))   ? elementsToNodes(T)   : T
+        p   = (p   isa ScalarField && isElementwise(p))   ? elementsToNodes(p)   : p
+        hc  = (hc  isa ScalarField && isElementwise(hc))  ? elementsToNodes(hc)  : hc
+        T0  = (T0  isa ScalarField && isElementwise(T0))  ? elementsToNodes(T0)  : T0
+        qn  = (qn  isa ScalarField && isElementwise(qn))  ? elementsToNodes(qn)  : qn
+        hs  = (hs  isa ScalarField && isElementwise(hs))  ? elementsToNodes(hs)  : hs
+        q   = (q   isa ScalarField && isElementwise(q))   ? elementsToNodes(q)   : q
+        fxy = (fxy isa ScalarField && isElementwise(fxy)) ? elementsToNodes(fxy) : fxy
+        fyz = (fyz isa ScalarField && isElementwise(fyz)) ? elementsToNodes(fyz) : fyz
+        fzx = (fzx isa ScalarField && isElementwise(fzx)) ? elementsToNodes(fzx) : fzx
+        fyx = (fyx isa ScalarField && isElementwise(fyx)) ? elementsToNodes(fyx) : fyx
+        fzy = (fzy isa ScalarField && isElementwise(fzy)) ? elementsToNodes(fzy) : fzy
+        fxz = (fxz isa ScalarField && isElementwise(fxz)) ? elementsToNodes(fxz) : fxz
+    
+        nsteps = 1
+        for i in [fx, fy , fz, T,  p, hc, T0, qn, hs, q, fxy, fyz, fzx, fyx, fzy, fxz]
+            if i isa ScalarField
+                nsteps = max(nsteps, i.nsteps)
+            end
+        end
+        fp = zeros(dof, nsteps)
+
         (qn !== nothing || hc !== nothing || hs !== nothing || T !== nothing) && (fx !== nothing || fy !== nothing || fz !== nothing) &&
             error("loadVector: qn/h/T∞ and fx/fy/fz cannot be defined in the same BC.")
         if pdim == 1 || pdim == 2 || pdim == 3 || pdim == 9
-            f = zeros(pdim)
+            f = zeros(pdim, nsteps)
         else
             error("loadVector: dimension of the problem is $(problem.dim).")
         end
@@ -3156,7 +3182,7 @@ function loadVector(problem, loads)
                         end
                     end
                 end
-                f1 = zeros(pdim * numNodes)
+                f1 = zeros(pdim * numNodes, nsteps)
                 nn2 = zeros(Int, pdim * numNodes)
                 @inbounds for l in 1:length(elementTags[ii])
                     elem = elementTags[ii][l]
@@ -3174,50 +3200,50 @@ function loadVector(problem, loads)
                             if hc isa Function
                                 error("heatConvectionVector: h cannot be a function.")
                             end
-                            f[1] = _loadvec_helper(T0, h, x, y, z, nnet, j, l) * hc
+                            f[1,:] .= _loadvec_helper(T0, h, x, y, z, nnet, j, l, nsteps) * hc
                         elseif qn !== nothing
-                            f[1] = _loadvec_helper(qn, h, x, y, z, nnet, j, l)
+                            f[1,:] .= _loadvec_helper(qn, h, x, y, z, nnet, j, l, nsteps)
                         elseif hs !== nothing
-                            f[1] = _loadvec_helper(hs, h, x, y, z, nnet, j, l)
+                            f[1,:] .= _loadvec_helper(hs, h, x, y, z, nnet, j, l, nsteps)
                         elseif q !== nothing
-                            f[1] = _loadvec_helper(q, h, x, y, z, nnet, j, l)
+                            f[1,:] .= _loadvec_helper(q, h, x, y, z, nnet, j, l, nsteps)
                         elseif fx !== nothing && pdim <= 3
-                            f[1] = _loadvec_helper(fx, h, x, y, z, nnet, j, l)
+                            f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
                         end
                         if pdim > 1 && pdim <= 3
-                            f[2] = _loadvec_helper(fy, h, x, y, z, nnet, j, l)
+                            f[2,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
                         end
                         if pdim == 3
-                            f[3] = _loadvec_helper(fz, h, x, y, z, nnet, j, l)
+                            f[3,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
                         end
                         if pdim == 9
                             fill!(f, 0.0)
                             if fx !== nothing
-                                f[1] = _loadvec_helper(fx, h, x, y, z, nnet, j, l)
+                                f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fy !== nothing
-                                f[5] = _loadvec_helper(fy, h, x, y, z, nnet, j, l)
+                                f[5,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fz !== nothing
-                                f[9] = _loadvec_helper(fz, h, x, y, z, nnet, j, l)
+                                f[9,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fxy !== nothing
-                                f[4] = _loadvec_helper(fxy, h, x, y, z, nnet, j, l)
+                                f[4,:] .= _loadvec_helper(fxy, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fyz !== nothing
-                                f[8] = _loadvec_helper(fyz, h, x, y, z, nnet, j, l)
+                                f[8,:] .= _loadvec_helper(fyz, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fzx !== nothing
-                                f[3] = _loadvec_helper(fzx, h, x, y, z, nnet, j, l)
+                                f[3,:] .= _loadvec_helper(fzx, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fyx !== nothing
-                                f[2] = _loadvec_helper(fyx, h, x, y, z, nnet, j, l)
+                                f[2,:] .= _loadvec_helper(fyx, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fzy !== nothing
-                                f[6] = _loadvec_helper(fzy, h, x, y, z, nnet, j, l)
+                                f[6,:] .= _loadvec_helper(fzy, h, x, y, z, nnet, j, l, nsteps)
                             end
                             if fxz !== nothing
-                                f[7] = _loadvec_helper(fxz, h, x, y, z, nnet, j, l)
+                                f[7,:] .= _loadvec_helper(fxz, h, x, y, z, nnet, j, l, nsteps)
                             end
                         end
                         r = x
@@ -3258,7 +3284,7 @@ function loadVector(problem, loads)
                     for k in 1:pdim
                         nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
                     end
-                    fp[nn2] += f1
+                    fp[nn2,:] .+= f1
                 end
             end
         end
@@ -3275,12 +3301,15 @@ function loadVector(problem, loads)
     else
         error("loadVector: wrong pdim ($pdim).")
     end
+    ts = [i for i in 0:nsteps-1]
     if type == :v3D || type == :v2D
-        return VectorField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
+        return VectorField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+
     elseif type == :scalar
-        return ScalarField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
+        return ScalarField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+
     elseif type == :tensor
-        return TensorField([], reshape(fp, :, 1), [0.0], [], 1, type, problem)
+        return TensorField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
     end
 end
 
@@ -3585,8 +3614,9 @@ end
         uux = ux.(xx, yy, zz)
         field.a[nodeTagsX,:] .= uux
     elseif ux isa ScalarField
+        ux.nsteps != field.nsteps && error("applyBoundaryCondition: different number of time steps.")
         ux = elementsToNodes(ux)
-        uux = ux.a[nodeTags]
+        uux = ux.a[nodeTags,:]
         field.a[nodeTagsX,:] .= uux
     else
         field.a[nodeTagsX,:] .= ux
@@ -3699,17 +3729,17 @@ Types:
 - `problem`: Problem
 - `supports`: Vector{BoundaryCondition}
 """
-function applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCondition})
+function applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCondition}; steps::Int=1)
     field = nothing
     if problem.pdim == 1
-        field = scalarField(problem, problem.material[1].phName, 0)
+        field = scalarField(problem, problem.material[1].phName, 0, steps=steps)
     elseif problem.pdim == 2
-        field = vectorField(problem, problem.material[1].phName, [0,0,0])
+        field = vectorField(problem, problem.material[1].phName, [0,0,0], steps=steps)
         #field = projectTo2D(field)
     elseif problem.pdim == 3
-        field = vectorField(problem, problem.material[1].phName, [0,0,0])
+        field = vectorField(problem, problem.material[1].phName, [0,0,0], steps=steps)
     elseif problem.pdim == 9
-        field = tensorField(problem, problem.material[1].phName, [0 0 0;0 0 0;0 0 0])
+        field = tensorField(problem, problem.material[1].phName, [0 0 0;0 0 0;0 0 0], steps=steps)
     end
     applyBoundaryConditions!(field, supports)
     return field
@@ -5720,98 +5750,146 @@ end
 largestEigenValue(K::SystemMatrix, C::SystemMatrix) = largestEigenValue(K, C, BoundaryCondition[])
 
 """
-    CDM(K, M, f, bc, u0, v0, n, Δt)
     CDM(K, M, C, f, bc, u0, v0, n, Δt)
-    CDM(K, M, f, u0, v0, n, Δt)
-    CDM(K, M, C, f, u0, v0, n, Δt)
-                            
-Solves a transient dynamic problem using central difference method (CDM) (explicit).
-`K` is the stiffness Matrix, `M` is the mass matrix, `C` is the damping matrix,
-`f` is the load vector, `bc` is a vector of `BoundaryCondition` where the
-displacement is given, `u0` is the initial displacement, `v0` is the initial
-velocity, `n` is the number of time steps
-and `Δt` is the time step size. Returns the displacement vectors and velocity
-vectors in each time step arranged in the columns of the two matrices `u` and `v`
-and a vector `t` of the time instants used.
-                            
-The critical (largest allowed) time step is `Δtₘₐₓ = Tₘᵢₙ / π * (√(1 + ξₘₐₓ^2) - ξₘₐₓ)`
-where `Tₘᵢₙ` is the time period of the largest eigenfrequency and `ξₘₐₓ` is the largest
-modal damping.
-                            
-Return: `u`, `v`
-                            
-Types:
-- `K`: SystemMatrix
-- `M`: SystemMatrix
-- `C`: SystemMatrix
-- `f`: VectorField
-- `bc`: BoundaryCondition
-- `u0`: VectorField
-- `v0`: VectorField
-- `n`: Int
-- `Δt`: Float64 
-- `u`: VectorField
-- `v`: VectorField
+    CDM(K, M, f, bc, u0, v0, n, Δt)
+    CDM(K, M, C, f, u0, v0, n, Δt; support=[])
+    CDM(K, M, f, u0, v0, n, Δt; support=[])
+
+Solves a transient structural dynamic problem using the **central difference method (CDM)**,
+an explicit time integration scheme. (support ≡ bc)
+
+The semi-discrete system
+```
+
+M * ü(t) + C * u̇(t) + K * u(t) = f(t)
+
+```
+is advanced in time using central finite differences.
+The method supports:
+- time-independent or time-dependent load vectors `f`
+- time-independent or time-dependent displacement boundary conditions
+- consistent treatment of constraint-induced inertia and damping terms
+- vector-valued unknowns (`VectorField`)
+
+Boundary conditions are applied *solver-side*:
+on constrained DOFs the prescribed displacements override the initial conditions,
+while on free DOFs the initial displacement `u0` and velocity `v0` are used.
+Velocities on constrained DOFs are derived from the prescribed displacements.
+
+If `f.nsteps == 1`, the load is treated as time-independent.
+If `f.nsteps == n`, the load is applied time step–by–time step.
+
+---
+
+### Arguments
+- `K::SystemMatrix`  
+  Global stiffness matrix.
+- `M::SystemMatrix`  
+  Global mass matrix (assumed diagonal or lumped for efficiency).
+- `C::SystemMatrix`  
+  Global damping matrix. If omitted, zero damping is assumed.
+- `f::VectorField`  
+  External load vector (time-independent or time-dependent).
+- `bc::Vector{BoundaryCondition}`  
+  Displacement-type boundary conditions (possibly time-dependent).
+- `u0::VectorField`  
+  Initial displacement field. Overridden on constrained DOFs.
+- `v0::VectorField`  
+  Initial velocity field. Overridden on constrained DOFs.
+- `n::Int`  
+  Number of time steps.
+- `Δt::Float64`  
+  Time step size.
+
+---
+
+### Returns
+- `u::VectorField`  
+  Displacement field at all time steps (`ndof × nsteps`).
+- `v::VectorField`  
+  Velocity field at all time steps (`ndof × nsteps`).
+
+The associated time vector is
+```
+
+t = 0 : Δt : (n-1)Δt
+
+```
+
+---
+
+### Notes
+- The method is conditionally stable.
+  The critical time step is governed by the highest eigenfrequency and damping:
+```
+
+Δt_max = T_min / π * (√(1 + ξ_max^2) - ξ_max)
+
+```
+where `T_min` is the smallest modal period and `ξ_max` is the largest modal damping ratio.
+- The algorithm itself is agnostic to the physical meaning of the displacement field;
+it operates purely on the algebraic system defined by `M`, `C`, and `K`.
+
 """
-function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64)
+function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, 
+    bc::Vector{BoundaryCondition}, U0::VectorField, V0::VectorField, 
+    n::Int, Δt::Float64)
+    
     if K.model != M.model || M.model != C.model || C.model != f.model
         error("CDM: K, M, C and f does not belong to the same model.")
     end
-    if f.nsteps == 1
-        f = nodesToElements(f)
-        f = VectorField(f, steps=n)
-        f = elementsToNodes(f)
+    
+    if f.nsteps != 1 && f.nsteps != n
+        error("CDM: number of time steps in load vector is not equal to the time steps given in CDM.")
     end
-    if uu0.nsteps == 1
-        uu0 = nodesToElements(uu0)
-        uu = VectorField(uu0, steps=n)
-        uu = elementsToNodes(uu)
-    end
-    if vv0.nsteps == 1
-        vv0 = nodesToElements(vv0)
-        vv = VectorField(vv0, steps=n)
-        vv = elementsToNodes(vv)
-    end
+
+    f = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+    
     free = freeDoFs(K.model, bc)
-    #fix = constrainedDoFs(K.model, bc)
-    K0 = K[free,free]
-    M0 = M[free,free]
-    C0 = C[free,free]
-    f0 = DoFs(f)[free,1]
-    invM = spdiagm(1 ./ diag(M0))
-    nsteps = n
-    dof, dof = size(K0)
-    
-    u = uu.a #zeros(dof, nsteps)
-    v = vv.a #zeros(dof, nsteps)
-    t = zeros(nsteps)
-    #kene = zeros(nsteps)
-    #sene = zeros(nsteps)
-    #diss = zeros(nsteps)
-    
-    a0 = M0 \ (f0 - K0 * DoFs(uu)[free,1] - C0 * DoFs(vv)[free,1])
-    u00 = DoFs(uu)[free,1] - DoFs(vv)[free,1] * Δt + a0 * Δt^2 / 2
-    
-    u[free, 1] .= DoFs(uu)[free, 1]
-    v[free, 1] .= DoFs(vv)[free, 1]
-    t[1] = 0
-    #kene[1] = dot(v0' * M, v0) / 2
-    #sene[1] = dot(u0' * K, u0) / 2
-    u0 = DoFs(uu)[free, 1]
-    
-    for i in 2:nsteps
-        u1 = 2.0 * u0 - u00 + Δt * Δt * invM * (DoFs(f)[free,i] - K0 * u0) - Δt * invM * (C0 * (u0 - u00))
-        u[free, i] = u1
-        v1 = (u1 - u0) / Δt
-        v[free, i] = v1
-        t[i] = t[i-1] + Δt
-        #kene[i] = dot(v1' * M, v1) / 2
-        #sene[i] = dot(u1' * K, u1) / 2
-        #diss[i] = dot(v1' * C, v1)
-        u00 = u0
-        u0 = u1
+    fix = constrainedDoFs(K.model, bc)
+
+    ts = [i for i in 0:n-1]
+    uu = VectorField([], zeros(size(f.a,1), n), ts, [], n, f.type, f.model)
+    vv = copy(uu)
+    applyBoundaryConditions!(uu, bc)
+    for i in 1:n-1
+        vv.a[fix,i] = (uu.a[fix,i+1] - uu.a[fix,i]) / Δt
     end
-    return VectorField([], u, t, [], length(t), uu0.type, f.model), VectorField([], v, t, [], length(t), vv0.type, f.model)
+    vv.a[fix,end] = 2 * vv.a[fix,end-1] - vv.a[fix,end-2]
+
+    uu.a[free, 1] .= DoFs(U0)[free, 1]
+    vv.a[free, 1] .= DoFs(V0)[free, 1]
+
+    invM = spdiagm(1 ./ diag(M.A))
+    MK = (invM * K.A)[free,:]
+    MC = (invM * C.A)[free,:]
+    Mf = (invM * f.a)[free,:]
+    nsteps = n
+    
+    u = uu.a
+    v = vv.a
+    t = zeros(nsteps)
+    
+    a0 = M.A \ (DoFs(f)[:,1] - K.A * DoFs(uu)[:,1] - C.A * DoFs(vv)[:,1])
+    u00 = DoFs(uu)[:,1] - DoFs(vv)[:,1] * Δt + a0 * Δt^2 / 2
+    
+    t[1] = 0
+    u0 = DoFs(uu)[:, 1]
+    ΔtΔt = Δt * Δt
+
+    for i in 2:nsteps
+        ii = f.nsteps == 1 ? 1 : i
+        u1 = 2.0 * u0[free] - u00[free] - Δt * MC * (u0 - u00) - ΔtΔt * MK * u0 + ΔtΔt * Mf[:,ii]
+        u[free, i] .= u1
+        v1 = (u1 - u0[free]) / Δt
+        v[free, i] .= v1
+        t[i] = t[i-1] + Δt
+        u00 = u0
+        u0 = u[:, i]
+    end
+    return VectorField([], u, t, [], length(t), U0.type, f.model), VectorField([], v, t, [], length(t), V0.type, f.model)
 end
 
 function CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, u0::VectorField, v0::VectorField, n::Int, Δt::Float64)
@@ -5820,87 +5898,247 @@ function CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{Bounda
     return CDM(K, M, C, f, bc, u0, v0, n, Δt)
 end
 
-CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64) = 
-    CDM(K, M, C, f, BoundaryCondition[],  uu0, vv0, n, Δt)
+CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+    CDM(K, M, C, f, support,  uu0, vv0, n, Δt)
 
-CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64) = 
-    CDM(K, M, f, BoundaryCondition[],  uu0, vv0, n, Δt)
+CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+    CDM(K, M, f, support,  uu0, vv0, n, Δt)
 
 """
-    HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, 
-    bc::Vector{BoundaryCondition}, uu0::VectorField, vv0::VectorField, 
-    n::Int, Δt::Float64; 
-    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    HHT(K, M, f, bc, u0, v0, n, Δt; α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2)
+    HHT(K, M, f, u0, v0, n, Δt; α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2)
 
-    HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, 
-    uu0::VectorField, vv0::VectorField, 
-    n::Int, Δt::Float64; 
-    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
-                            
-Solves a transient dynamic problem using HHT-α method[^1] (implicit).
-`K` is the stiffness Matrix, `M` is the mass matrix, `f` is the load vector, 
-`bc` is a vector of `BoundaryCondition`, `u0` is the initial displacement, 
-`v0` is the initial velocity, `n` is the number of time steps and `Δt` is the time 
-step size. Returns the displacement vectors and velocity vectors in each time 
-step arranged in the columns of the two matrices `u` and `v` and a vector `t` 
-of the time instants used. For the meaning of `α`, `β` and `γ` see [^1]. If
-`δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
-                            
+Solves a transient structural dynamic problem using the **Hilber–Hughes–Taylor
+(HHT-α) method**[^1], an implicit time integration scheme with controllable numerical
+dissipation.
+
+The semi-discrete system
+```
+
+M * ü(t) + K * u(t) = f(t)
+
+```
+is integrated in time using the generalized Newmark formulation with the HHT-α
+modification. The method supports:
+- time-independent or time-dependent load vectors `f`
+- time-independent or time-dependent displacement boundary conditions
+- solver-side enforcement of Dirichlet constraints
+- consistent treatment of constraint-induced inertia forces
+- vector-valued unknowns (`VectorField`)
+
+Boundary conditions are applied *solver-side*:
+on constrained DOFs the prescribed displacements override the initial conditions,
+while on free DOFs the initial displacement `u0` and velocity `v0` are used.
+Prescribed displacements are inserted at every time step, and the corresponding
+inertial contributions are accounted for automatically through the global system.
+
+If `f.nsteps == 1`, the load is treated as time-independent.
+If `f.nsteps == n`, the load is applied time step–by–time step.
+
+The parameters `α`, `β`, and `γ` control numerical dissipation and stability.
+If `δ` is given, the standard relations
+```
+
+γ = 0.5 + δ
+β = 0.25 * (0.5 + γ)^2
+
+```
+are used.
+
+---
+
+### Arguments
+- `K::SystemMatrix`  
+  Global stiffness matrix.
+- `M::SystemMatrix`  
+  Global mass matrix.
+- `f::VectorField`  
+  External load vector (time-independent or time-dependent).
+- `bc::Vector{BoundaryCondition}`  
+  Displacement-type boundary conditions (possibly time-dependent).
+- `u0::VectorField`  
+  Initial displacement field. Overridden on constrained DOFs.
+- `v0::VectorField`  
+  Initial velocity field. Overridden on constrained DOFs.
+- `n::Int`  
+  Number of time steps.
+- `Δt::Float64`  
+  Time step size.
+
+---
+
+### Returns
+- `u::VectorField`  
+  Displacement field at all time steps (`ndof × nsteps`).
+- `v::VectorField`  
+  Velocity field at all time steps (`ndof × nsteps`).
+
+The associated time vector is
+```
+
+t = 0 : Δt : (n-1)Δt
+
+```
+
+---
+
+### Notes
+- The HHT-α method is unconditionally stable for appropriate parameter choices
+  and introduces numerical dissipation primarily in the high-frequency range.
+- The algorithm itself is independent of the physical interpretation of the
+  displacement field and operates purely on the algebraic system defined by
+  `M`, `K`, and `f`.
+- Damping matrices are not included explicitly; numerical dissipation is
+  controlled via the HHT-α parameters.
+
+---
+
+### Reference
+Hilber, H. M., Hughes, T. J. R., Taylor, R. L.  
+*Improved numerical dissipation for time integration algorithms in structural dynamics*,  
+Earthquake Engineering & Structural Dynamics, 5(3), 283–292, 1977.
+
 [^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. *Improved 
     numerical dissipation for time integration algorithms in structural 
     dynamics*. Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
-                            
-Return: `u`, `v`
-                            
-Types:
-- `K`: SystemMatrix
-- `M`: SystemMatrix
-- `f`: VectorField
-- `bc`: Vector{BoundaryCondition}
-- `u0`: VectorField
-- `v0`: VectorField
-- `n`: Int
-- `Δt`: Float64 
-- `α`: Float64
-- `β`: Float64
-- `γ`: Float64
-- `δ`: Float64
-- `u`: VectorField
-- `v`: VectorField
 """
-function HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
-    if K.model != M.model || M.model != f.model || f.model != uu0.model || uu0.model != vv0.model
+function HHT(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::VectorField,
+    bc::Vector{BoundaryCondition},
+    U0::VectorField,
+    V0::VectorField,
+    n::Int,
+    Δt::Float64;
+    α = 0.0,
+    δ = 0.0,
+    γ = 0.5 + δ,
+    β = 0.25 * (0.5 + γ)^2)
+
+    if K.model != M.model || M.model != f.model || f.model != U0.model || U0.model != V0.model
+        error("HHT: K, M, f, U0 and V0 does not belong to the same model.")
+    end
+    if f.nsteps != 1 && f.nsteps != n
+        error("HHT: number of time steps in load vector is not equal to the time steps given in HHT.")
+    end
+
+    f  = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+
+    ts = [i for i in 0:n-1]
+
+    # Allocate displacement container and pre-fill prescribed displacements for all steps (CDM-style)
+    uu = VectorField([], zeros(size(f.a, 1), n), ts, [], n, U0.type, K.model)
+    applyBoundaryConditions!(uu, bc)
+
+    free = freeDoFs(K.model, bc)
+    fix  = constrainedDoFs(K.model, bc)
+
+    ndof = size(K.A, 1)
+    u = uu.a
+    v = zeros(ndof, n)
+    t = zeros(n)
+
+    dt   = Δt
+    dtdt = dt * dt
+
+    # Newmark/HHT constants
+    c0 = 1.0 / (β * dtdt)
+    c2 = 1.0 / (β * dt)
+    c3 = 0.5 / β - 1.0
+    c6 = dt * (1.0 - γ)
+    c7 = γ * dt
+
+    # Initial conditions: set free parts from U0, keep fix parts from prescribed BC in uu
+    u[free, 1] .= DoFs(U0)[free, 1]
+    v[:, 1]    .= DoFs(V0)[:, 1]
+    t[1] = 0.0
+
+    # Initial acceleration a0 from equilibrium at step 1 (full vector)
+    a = M.A \ (DoFs(f)[:,1] - K.A * u[:,1])
+
+    # Effective stiffness blocks (constant here)
+    A   = (1 + α) * K.A + c0 * M.A
+    Aff = A[free, free]
+    Afc = A[free, fix]
+    luAff = lu(Aff)
+
+    # Time stepping
+    for i in 2:n
+        ii = (f.nsteps == 1) ? 1 : i
+
+        # Previous state (full vectors at step n=i-1)
+        u_n = @view u[:, i-1]
+        v_n = @view v[:, i-1]
+        a_n = a  # 'a' stores a_n at loop start
+
+        # Prescribed displacement at step n+1 (already in uu from applyBoundaryConditions!)
+        u_fix_np1 = @view u[fix, i]
+
+        # Build RHS using ONLY previous step quantities (u_n, v_n, a_n)
+        rhs_full = DoFs(f)[:, ii] + M.A * (u_n * c0 + v_n * c2 + a_n * c3) + α * (K.A * u_n)
+
+        # Condense to free dofs and subtract constraint contribution
+        rhs_free = rhs_full[free] - Afc * u_fix_np1
+
+        # Solve for free displacements at n+1
+        u_free_np1 = luAff \ rhs_free
+        u[free, i] .= u_free_np1
+        # u[fix, i] is already prescribed by BC
+
+        # --- Now compute a_{n+1} and v_{n+1} for ALL dofs from Newmark relations ---
+        # a_{n+1} = c0*(u_{n+1}-u_n) - c2*v_n - c3*a_n
+        # v_{n+1} = v_n + c6*a_n + c7*a_{n+1}
+
+        # Assemble u_{n+1} (full vector view)
+        u_np1 = @view u[:, i]
+
+        a_np1 = c0 .* (u_np1 .- u_n) .- c2 .* v_n .- c3 .* a_n
+        v_np1 = v_n .+ c6 .* a_n .+ c7 .* a_np1
+
+        v[:, i] .= v_np1
+        a .= a_np1  # store as "current" for next loop
+
+        t[i] = t[i-1] + dt
+    end
+
+    return VectorField([], u, t, [], length(t), U0.type, K.model),
+           VectorField([], v, t, [], length(t), V0.type, K.model)
+end
+
+HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; support=BoundaryCondition[], α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
+    HHT(K, M, f, support, uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+
+    #=
+function HHT_old_wrong(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, U0::VectorField, V0::VectorField, n::Int, Δt::Float64; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    if K.model != M.model || M.model != f.model || f.model != U0.model || U0.model != V0.model
         error("HHT: K, M, f, u0 and v0 does not belong to the same model.")
     end
-    if f.nsteps == 1
-        f = nodesToElements(f)
-        f = VectorField(f, steps=n)
-        f = elementsToNodes(f)
+    if f.nsteps != 1 && f.nsteps != n
+        error("HHT: number of time steps in load vector is not equal to the time steps given in CDM.")
     end
-    if uu0.nsteps == 1
-        uu0 = nodesToElements(uu0)
-        uu = VectorField(uu0, steps=n)
-        uu = elementsToNodes(uu)
-    end
-    if vv0.nsteps == 1
-        vv0 = nodesToElements(vv0)
-        vv = VectorField(vv0, steps=n)
-        vv = elementsToNodes(vv)
-    end
+
+    f = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+    
+    ts = [i for i in 0:n-1]
+    uu = VectorField([], zeros(size(f.a,1), n), ts, [], n, f.type, f.model)
+    vv = copy(uu)
+    applyBoundaryConditions!(uu, bc)
+
     free = freeDoFs(K.model, bc)
-    K0 = K[free,free]
-    M0 = M[free,free]
-    #C0 = C[free,free]
-    f0 = DoFs(f)[free,1]
+    fix = constrainedDoFs(K.model, bc)
+    
+    K0 = K.A
+    M0 = M.A
 
     nsteps = n
-    #dof, dof = size(K.A)
     u = uu.a #zeros(dof, nsteps)
     v = vv.a #zeros(dof, nsteps)
     t = zeros(nsteps)
-    #kene = zeros(nsteps)
-    #sene = zeros(nsteps)
-    #diss = zeros(nsteps)
     
     dt = Δt
     dtdt = dt * dt
@@ -5914,39 +6152,34 @@ function HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{Bounda
     c6 = dt * (1.0 - γ)
     c7 = γ * dt
     
-    a0 = M0 \ (f0 - K0 * DoFs(uu)[free])
+    a0 = M.A \ (DoFs(f)[:,1] - K.A * DoFs(uu)[:,1])
     
     u[free, 1] = DoFs(uu)[free,1]
     v[free, 1] = DoFs(vv)[free,1]
     t[1] = 0
-    #kene[1] = dot(v0' * M, v0) / 2
-    #sene[1] = dot(u0' * K, u0) / 2
     
-    A = (α + 1) * K0 + M0 * c0
+    A = (α + 1) * K.A + M.A * c0
     AA = lu(A)
     
-    u0 = uu.a[free,1]
-    v0 = vv.a[free,1]
+    u0 = DoFs(U0)[:,1]
+    v0 = DoFs(V0)[:,1]
+
     for i in 2:nsteps
-        b = DoFs(f)[free,i] + M0 * (u0 * c0 + v0 * c2 + a0 * c3) + α * K0 * u0
+        ii = f.nsteps == 1 ? 1 : i
+        b = DoFs(f)[free,ii] + M0 * (u0 * c0 + v0 * c2 + a0 * c3) + α * K0 * u0
         u1 = AA \ b
-        u[free, i] = u1
-        a1 = (u1 - u0) * c0 - v0 * c2 - a0 * c3
-        v1 = v0 + a0 * c6 + a1 * c7
-        v[free, i] = v1
+        u[free, i] .= u1
+        a1 = (u1 - u0[free]) * c0 - v0[free] * c2 - a0[free] * c3
+        v1 = v0[free] + a0[free] * c6 + a1 * c7
+        v[free, i] .= v1
         t[i] = t[i-1] + Δt
-        #kene[i] = dot(v1' * M, v1) / 2
-        #sene[i] = dot(u1' * K, u1) / 2
-        #diss[i] = dot(v1' * C, v1)
-        u0 = u1
-        v0 = v1
+        u0 = u[:,i]
+        v0 = v[:,i]
         a0 = a1
     end
     return VectorField([], u, t, [], length(t), uu0.type, f.model), VectorField([], v, t, [], length(t), vv0.type, f.model)
 end
-
-HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
-    HHT(K, M, f, BoundaryCondition[], uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+=#
 
 """
     CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=..., ξ=..., β=..., show_β=..., show_ξ=...)
