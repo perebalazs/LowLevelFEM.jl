@@ -951,7 +951,7 @@ end
 
 """
     solveTemperature(K, q;
-                     temperatureConstraint = BoundaryCondition[])
+                     temperatureConstraint = [])
 
 Solves the linear heat conduction problem
 
@@ -985,7 +985,8 @@ already contains all material contributions.
   Most users should prefer the high-level
   `solveTemperature(problem; ...)` interface.
 """
-function solveTemperature(K::SystemMatrix, q::ScalarField, temperatureConstraint::Vector{BoundaryCondition}=BoundaryCondition[])
+function solveTemperature(K::SystemMatrix, q::ScalarField; temperatureConstraint=Vector{BoundaryCondition}())
+    problem = K.model
     bc = constrainedDoFs(problem, temperatureConstraint)
     free = freeDoFs(problem, temperatureConstraint)
     T = applyBoundaryConditions(problem, temperatureConstraint)
@@ -1272,7 +1273,6 @@ function solveHeatFlux(T; DoFResults=false)
     end
 end
 
-#=
 """
     initialTemperature(problem, name; T=...)
 
@@ -1287,7 +1287,6 @@ Types:
 - `T`: Float64 
 - `T0`: ScalarField
 """
-
 function initialTemperature(problem, name; T=nothing)
     dim = problem.pdim
     T0 = zeros(problem.non * problem.pdim)
@@ -1302,7 +1301,7 @@ function initialTemperature(problem, name; T=nothing)
 end
 
 """
-    initialTemperature!(name, T0; T=...)
+    initialTemperature!(T0, name; T=...)
 
 Changes the tempetature value to `T` at nodes belonging to physical group `name`.
 Original values are in temperature vector `T0`.
@@ -1314,8 +1313,7 @@ Types:
 - `T0`: ScalarField
 - `T`: Float64 
 """
-
-function initialTemperature!(name, T0; T=nothing)
+function initialTemperature!(T0, name; T=nothing)
     problem = T0.model
     dim = problem.pdim
     phg = getTagForPhysicalName(name)
@@ -1326,7 +1324,6 @@ function initialTemperature!(name, T0; T=nothing)
         end
     end
 end
-=#
 
 """
     FDM(K, C, q, bc, T0, n, Δt; ϑ=0.5)

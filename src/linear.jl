@@ -9,6 +9,7 @@ export initialDisplacement, initialDisplacement!, initialVelocity, initialVeloci
 export nodalForce!, nodalAcceleration!
 export largestPeriodTime, smallestPeriodTime, largestEigenValue, smallestEigenValue
 export CDM, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
+export printElasticConstantsTable
 
 # linear.jl tetején
 mutable struct SolidWS
@@ -3078,7 +3079,7 @@ function loadVector(problem, loads)
     dof = pdim * non
     ncoord2 = zeros(3 * problem.non)
     f = nothing
-    fp = nothing
+    fp = zeros(dof,1)
     nsteps = 1
     for n in 1:length(loads)
         name = loads[n].phName
@@ -3313,299 +3314,6 @@ function loadVector(problem, loads)
     end
 end
 
-"""
-    applyBoundaryConditions!(stiffMat, loadVec, supports)
-                            
-Applies displacement boundary conditions `supports` on a stiffness matrix
-`stiffMat` and load vector `loadVec`. Mesh details are in `problem`. `supports`
-is a tuple of `name` of physical group and prescribed displacements `ux`, `uy`
-and `uz`.
-                            
-Returns: nothing
-                            
-Types:
-- `stiffMat`: SystemMatrix 
-- `loadVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
-"""
-function applyBoundaryConditions!(stiffMat::SystemMatrix, loadVec, supports)
-    if !isa(supports, Vector)
-        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
-    end
-    dof, dof = size(stiffMat.A)
-    massMat = SystemMatrix(spzeros(dof, dof), stiffMat.model)
-    dampMat = SystemMatrix(spzeros(dof, dof), stiffMat.model)
-    applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
-    #massMat.A *= 0
-    #dampMat.A *= 0
-    return
-end
-
-"""
-    applyBoundaryConditions(stiffMat, loadVec, supports)
-                            
-Applies displacement boundary conditions `supports` on a stiffness matrix
-`stiffMat` and load vector `loadVec`. Mesh details are in `problem`. `supports`
-is a tuple of `name` of physical group and prescribed displacements `ux`, `uy`
-and `uz`. Creates a new stiffness matrix and load vector.
-                            
-Returns: `stiffMat`, `loadVec`
-                            
-Types:
-- `stiffMat`: SystemMatrix 
-- `loadVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
-"""
-function applyBoundaryConditions(stiffMat0, loadVec0, supports)
-    problem = stiffMat0.model
-    if !isa(supports, Vector)
-        error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
-    end
-    dof, dof = size(stiffMat0.A)
-    massMat = SystemMatrix(spzeros(dof, dof), stiffMat0.model)
-    dampMat = SystemMatrix(spzeros(dof, dof), stiffMat0.model)
-    stiffMat = copy(stiffMat0)
-    loadVec = copy(loadVec0)
-    applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
-    #massMat.A = []
-    #dampMat.A = []
-    return stiffMat, loadVec
-end
-
-"""
-    applyBoundaryConditions!(heatCondMat, heatCapMat, heatFluxVec, supports)
-                            
-Applies boundary conditions `supports` on a heat conduction matrix
-`heatCondMat`, heat capacity matrix `heatCapMat` and heat flux vector `heatFluxVec`. Mesh details are in `problem`. `supports`
-is a tuple of `name` of physical group and prescribed temperature `T`.
-                            
-Returns: nothing
-                            
-Types:
-- `stiffMat`: SystemMatrix 
-- `loadVec`: VectorField
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
-"""
-function applyBoundaryConditions!(heatCondMat::SystemMatrix, heatCapMat::SystemMatrix, heatFluxVec, supports; fix=1)
-    if !isa(supports, Vector)
-        error("applyBoundaryConditions: supports are not arranged in a vector. Put them in [...]")
-    end
-    dof, dof = size(heatCondMat.A)
-    dampMat = SystemMatrix(spzeros(dof, dof), heatCondMat.model)
-    applyBoundaryConditions!(heatCondMat, heatCapMat, dampMat, heatFluxVec, supports, fix=fix)
-    #dampMat.A = []
-    return
-end
-
-function _applBC_helper_(nodeTags, pdim, ux, xx, yy, zz, loadVec, stiffMat)
-    nodeTagsX = copy(nodeTags)
-    nodeTagsX *= pdim
-    nodeTagsX .-= (pdim - 1)
-    if ux isa Function
-        uux = ux.(xx, yy, zz)
-        f0 = stiffMat.A[:, nodeTagsX] * uux
-    elseif ux isa ScalarField
-        uux = ux.a[nodeTags]
-        f0 = stiffMat.A[:, nodeTagsX] * uux
-    else
-        f0 = stiffMat.A[:, nodeTagsX] * ux
-        f0 = sum(f0, dims=2)
-    end
-    loadVec.a .-= f0
-end
-
-"""
-    applyBoundaryConditions!(stiffMat, massMat, dampMat, loadVec, supports)
-                            
-Applies displacement boundary conditions `supports` on a stiffness matrix
-`stiffMat`, mass matrix `massMat`, damping matrix `dampMat` and load vector `loadVec`.
-Mesh details are in `problem`. `supports` is a `Vector{BoundaryCondition}`.
-                            
-Returns: nothing
-                            
-Types:
-- `stiffMat`: SystemMatrix 
-- `massMat`: SystemMatrix 
-- `dampMat`: SystemMatrix 
-- `loadVec`: VectorField
-- `supports`: Vector{BoundaryCondition}
-"""
-function applyBoundaryConditions!(stiffMat::SystemMatrix, massMat::SystemMatrix, dampMat::SystemMatrix, loadVec, supports; fix=1)
-    if !isa(supports, Vector)
-        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
-    end
-    if stiffMat.model != massMat.model || massMat.model != dampMat.model
-        error("applyBoundaryConditions!: K, M or C does not belong to the same problem.")
-    end
-    gmsh.model.setCurrent(stiffMat.model.name)
-    dof, dof = size(stiffMat.A)
-    pdim = stiffMat.model.pdim
-    pdim <= 3 && error("applyBoundaryConditions: pdim must be less or equal to 3.")
-    
-    for i in 1:length(supports)
-        #name, ux, uy, uz = supports[i]
-        name = supports[i].phName
-        ux = supports[i].ux
-        uy = supports[i].uy
-        uz = supports[i].uz
-        T = supports[i].T
-
-        T !== nothing &&
-            (ux !== nothing || uy !== nothing || uz !== nothing) &&
-            (sx !== nothing || sy !== nothing || sz !== nothing || sxy !== nothing || syz !== nothing || szx !== nothing) &&
-            error("applyBoundaryConditions: only T or ux/uy/uz or sx/sy/sz/sxy/syz/szx can be given as BoundaryCondition.")
-
-        phg = getTagForPhysicalName(name)
-        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
-            xx = coord[1:3:length(coord)]
-            yy = coord[2:3:length(coord)]
-            zz = coord[3:3:length(coord)]
-        end
-        if T !== nothing && pdim == 1
-            _applBC_helper_(nodeTags, pdim, T, xx, yy, zz, loadVec, stiffMat)
-        end
-        if ux !== nothing
-            _applBC_helper_(nodeTags, pdim, ux, xx, yy, zz, loadVec, stiffMat)
-        end
-        if uy !== nothing
-            _applBC_helper_(nodeTags, pdim, uy, xx, yy, zz, loadVec, stiffMat)
-        end
-        if pdim == 3 && uz !== nothing
-            _applBC_helper_(nodeTags, pdim, uz, xx, yy, zz, loadVec, stiffMat)
-        end
-        #=
-        if pdim == 9 && sx !== nothing
-            _applBC_helper_(nodeTags, pdim, sx, xx, yy, zz, loadVec, stiffMat)
-        end
-        if pdim == 9 && sy !== nothing
-            _applBC_helper_(nodeTags, pdim, sy, xx, yy, zz, loadVec, stiffMat)
-        end
-        if pdim == 9 && sz !== nothing
-            _applBC_helper_(nodeTags, pdim, sz, xx, yy, zz, loadVec, stiffMat)
-        end
-        if pdim == 9 && sxy !== nothing
-            _applBC_helper_(nodeTags, pdim, sxy, xx, yy, zz, loadVec, stiffMat)
-        end
-        if pdim == 9 && syz !== nothing
-            _applBC_helper_(nodeTags, pdim, syz, xx, yy, zz, loadVec, stiffMat)
-        end
-        if pdim == 9 && szx !== nothing
-            _applBC_helper_(nodeTags, pdim, szx, xx, yy, zz, loadVec, stiffMat)
-        end
-        =#
-    end
-    
-    for i in 1:length(supports)
-        #name, ux, uy, uz = supports[i]
-        name = supports[i].phName
-        ux = supports[i].ux
-        uy = supports[i].uy
-        uz = supports[i].uz
-        phg = getTagForPhysicalName(name)
-        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-        if isa(ux, Function) || isa(uy, Function) || isa(uz, Function)
-            xx = coord[1:3:length(coord)]
-            yy = coord[2:3:length(coord)]
-            zz = coord[3:3:length(coord)]
-        end
-        if ux !== nothing
-            nodeTagsX = copy(nodeTags)
-            nodeTagsX *= pdim
-            nodeTagsX .-= (pdim-1)
-            if isa(ux, Function)
-                uux = ux.(xx, yy, zz)
-            elseif ux isa ScalarField
-                uux = ux.a[nodeTags]
-            end
-            jj = 0
-            for j ∈ nodeTagsX
-                jj += 1
-                stiffMat.A[j, :] .= 0
-                stiffMat.A[:, j] .= 0
-                stiffMat.A[j, j] = fix
-                massMat.A[j, :] .= 0
-                massMat.A[:, j] .= 0
-                massMat.A[j, j] = 1
-                dampMat.A[j, :] .= 0
-                dampMat.A[:, j] .= 0
-                dampMat.A[j, j] = fix
-                if isa(ux, Function)
-                    loadVec.a[j] = uux[jj]
-                elseif ux isa ScalarField
-                    loadVec.a[j] = uux[jj]
-                else
-                    loadVec.a[j] = ux
-                end
-            end
-        end
-        if uy !== nothing
-            nodeTagsY = copy(nodeTags)
-            nodeTagsY *= pdim
-            nodeTagsY .-= (pdim-2)
-            if isa(uy, Function)
-                uuy = uy.(xx, yy, zz)
-            elseif uy isa ScalarField
-                uuy = uy.a[nodeTags]
-            end
-            jj = 0
-            for j ∈ nodeTagsY
-                jj += 1
-                stiffMat.A[j, :] .= 0
-                stiffMat.A[:, j] .= 0
-                stiffMat.A[j, j] = fix
-                massMat.A[j, :] .= 0
-                massMat.A[:, j] .= 0
-                massMat.A[j, j] = 1
-                dampMat.A[j, :] .= 0
-                dampMat.A[:, j] .= 0
-                dampMat.A[j, j] = fix
-                if isa(uy, Function)
-                    loadVec.a[j] = uuy[jj]
-                elseif uy isa ScalarField
-                    loadVec.a[j] = uuy[jj]
-                else
-                    loadVec.a[j] = uy
-                end
-            end
-        end
-        if pdim == 3 && uz !== nothing
-            nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= pdim
-            nodeTagsZ .-= (pdim - 3)
-            if isa(uz, Function)
-                uuz = uz.(xx, yy, zz)
-            elseif uz isa ScalarField
-                uuz = uz.a[nodeTags]
-            end
-            jj = 0
-            for j ∈ nodeTagsZ
-                jj += 1
-                stiffMat.A[j, :] .= 0
-                stiffMat.A[:, j] .= 0
-                stiffMat.A[j, j] = fix
-                massMat.A[j, :] .= 0
-                massMat.A[:, j] .= 0
-                massMat.A[j, j] = 1
-                dampMat.A[j, :] .= 0
-                dampMat.A[:, j] .= 0
-                dampMat.A[j, j] = fix
-                if isa(uz, Function)
-                    loadVec.a[j] = uuz[jj]
-                elseif uz isa ScalarField
-                    loadVec.a[j] = uuz[jj]
-                else
-                    loadVec.a[j] = uz
-                end
-            end
-        end
-    end
-    
-    dropzeros!(stiffMat.A)
-    dropzeros!(massMat.A)
-    dropzeros!(dampMat.A)
-end
-
 @inline function _aBC_helper(ux, comp, xx, yy, zz, nodeTags, pdim, field)
     nodeTagsX = copy(nodeTags)
     nodeTagsX *= pdim
@@ -3732,14 +3440,14 @@ Types:
 function applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCondition}; steps::Int=1)
     field = nothing
     if problem.pdim == 1
-        field = scalarField(problem, problem.material[1].phName, 0, steps=steps)
+        field = scalarField(problem, problem.material[1].phName, 0)
     elseif problem.pdim == 2
-        field = vectorField(problem, problem.material[1].phName, [0,0,0], steps=steps)
+        field = vectorField(problem, problem.material[1].phName, [0,0,0])
         #field = projectTo2D(field)
     elseif problem.pdim == 3
-        field = vectorField(problem, problem.material[1].phName, [0,0,0], steps=steps)
+        field = vectorField(problem, problem.material[1].phName, [0,0,0])
     elseif problem.pdim == 9
-        field = tensorField(problem, problem.material[1].phName, [0 0 0;0 0 0;0 0 0], steps=steps)
+        field = tensorField(problem, problem.material[1].phName, [0 0 0;0 0 0;0 0 0])
     end
     applyBoundaryConditions!(field, supports)
     return field
@@ -3756,7 +3464,7 @@ Returns: nothing
                             
 Types:
 - `stiffMat`: SystemMatrix 
-- `elastSupp`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `elastSupp`: Vector{BoundaryCondition}}
 """
 function applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
     problem = stiffMat.model
@@ -5166,7 +4874,7 @@ the axial force in a truss element.
                             
 # Examples
 ```julia
-u = solveDisplacement(problem, [loads], [supports])  # VectorField of nodal displacements
+u = solveDisplacement(problem, load=[loads], support=[supports])  # VectorField of nodal displacements
 N = solveAxialForce(u)                               # ScalarField of axial element forces
 ```
 """
@@ -5421,57 +5129,60 @@ function solveBucklingModes(K, Knl; n=6)
 end
 
 """
-    solveModalAnalysis(problem; constraints=[]; loads=[], n=6)
+    solveModalAnalysis(problem; support=[]; load=[], n=6, fₘᵢₙ=0.00001, directSolver=false)
                             
 Solves the first `n` eigenfrequencies and the corresponding 
-mode shapes for the `problem`, when `loads` and 
-`constraints` are applied. `loads` and `contraints` are optional. 
+mode shapes for the `problem`, when `load` and 
+`support` are applied. `load` and `contraints` are optional. 
 Result can be presented by `showModalResults` function. 
-`loads` and `constraints` can be defined by `load` and `displacementConstraint` functions,
-respectively. If `loads` are given, it solves the eigenfrequencies of a prestressed structure.
+`load` and `support` can be defined by `load` and `displacementConstraint` functions,
+respectively. If `load` are given, it solves the eigenfrequencies of a prestressed structure.
                             
 Return: `modes`
                             
 Types:
 - `problem`: Problem
-- `loads`: Vector{tuples}
-- `constraints`: Vector{tuples}
+- `load`: Vector{tuples}
+- `support`: Vector{tuples}
 - `n`: Int64
 - `modes`: Eigen
 """
-function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0.1, directSolver=false)
-    if !isa(loads, Vector)
+function solveModalAnalysis(problem; support=Vector{BoundaryCondition}(), load=Vector{BoundaryCondition}(), n=6, fₘᵢₙ=0.00001, directSolver=false)
+    if !isa(load, Vector)
         error("solveModalAnalysis: loads are not arranged in a vector. Put them in [...]")
     end
-    if !isa(constraints, Vector)
-        error("solveModalAnalysis: constraints are not arranged in a vector. Put them in [...]")
+    if !isa(support, Vector)
+        error("solveModalAnalysis: support are not arranged in a vector. Put them in [...]")
     end
+    all = allDoFs(problem)
+    free = freeDoFs(problem, support)
+    fix = constrainedDoFs(problem, support)
     dof = problem.pdim * problem.non
     K = stiffnessMatrix(problem)
     M = massMatrix(problem)
-    if length(constraints) == 0
-        return solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ)
-    elseif length(loads) == 0
-        fdof = freeDoFs(problem, constraints)
-        cdof = constrainedDoFs(problem, constraints)
-        K = SystemMatrix(K.A[fdof, fdof], K.model)
-        M = SystemMatrix(M.A[fdof, fdof], M.model)
+    if length(support) == 0
+        ϕ1 = zeros(dof, n)
+        K0 = SystemMatrix(K[all,all], K.model)
+        M0 = SystemMatrix(M[all,all], M.model)
+        mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
+        ϕ1[free,:] .= mod.ϕ
+        return Eigen(mod.f, ϕ1, problem)
+    elseif length(load) == 0
+        K0 = SystemMatrix(K[free,free], K.model)
+        M0 = SystemMatrix(M[free,free], M.model)
         #f = zeros(dof)
-        #applyBoundaryConditions!(problem, K, M, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes(K, M, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
+        #applyBoundaryConditions!(problem, K, M, f, support, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
+        mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
         nn = length(mod.f)
         ϕ10 = zeros(dof, nn)
-        ϕ10[fdof,:] .= mod.ϕ
+        ϕ10[free,:] .= mod.ϕ
         ϕ1 = VectorField([], ϕ10, [0.0], [], 1, :v3D, K.model)
-        applyBoundaryConditions!(ϕ1, constraints)
+        applyBoundaryConditions!(ϕ1, support)
         return Eigen(mod.f, ϕ1.a, problem)
     else
-        fdof = freeDoFs(problem, constraints)
-        cdof = constrainedDoFs(problem, constraints)
         ϕ1 = zeros(dof, n)
-        f = loadVector(problem, loads)
-        applyBoundaryConditions!(K, f, constraints)
-        q = solveDisplacement(K, f)
+        f = loadVector(problem, load)
+        q = solveDisplacement(K, f, support=support)
         
         err = 1
         count = 0
@@ -5479,8 +5190,7 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
             count += 1
             q0 = copy(q)
             Knl = nonLinearStiffnessMatrix(q)
-            applyBoundaryConditions!(Knl, f, constraints)
-            q = solveDisplacement(K + Knl, f)
+            q = solveDisplacement(K + Knl, f, support=support)
             err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
         end
         if count == 10
@@ -5488,46 +5198,47 @@ function solveModalAnalysis(problem; constraints=[], loads=[], n=6, fₘᵢₙ=0
         end
         Knl = nonLinearStiffnessMatrix(q)
         
-        #applyBoundaryConditions!(problem, K, M, Knl, f, constraints, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes(SystemMatrix((K.A + Knl.A)[fdof,fdof], K.model), SystemMatrix(M.A[fdof,fdof], M.model), n=n, fₘᵢₙ=fₘᵢₙ)
-        ϕ1[fdof,:] .= mod.ϕ
-        applyBoundaryConditions!(VectorField([], ϕ1, [0.0], [], 1, q.type, q.model), constraints)
+        #applyBoundaryConditions!(problem, K, M, Knl, f, support, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
+        K0 = SystemMatrix((K + Knl)[free,free], K.model)
+        M0 = SystemMatrix(M[free,free], M.model)
+        mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
+        ϕ1[free,:] .= mod.ϕ
+        applyBoundaryConditions!(VectorField([], ϕ1, [i for i in 1:n], [], n, q.type, q.model), support)
         return Eigen(mod.f, ϕ1, problem)
     end
 end
 
 """
-    solveBuckling(problem, loads, constraints; n=6)
+    solveBuckling(problem; load=[], support=[], n=6)
                             
 Solves the multipliers for the first `n` critical forces and the corresponding 
 buckling shapes for the instability of the `problem`, when `loads` and 
-`constraints` are applied. Result can be presented by `showBucklingResults`
-function. `loads` and `constraints` can be defined by `load` and `displacementConstraint` functions,
+`support` are applied. Result can be presented by `showBucklingResults`
+function. `loads` and `support` can be defined by `load` and `displacementConstraint` functions,
 respectively.
                             
 Return: `buckling`
                             
 Types:
 - `problem`: Problem
-- `loads`: Vector{tuples}
-- `constraints`: Vector{tuples}
+- `load`: Vector{BoundaryCondition}
+- `support`: Vector{BoundaryCondition}
 - `n`: Int64
 - `buckling`: Eigen 
 """
-function solveBuckling(problem, loads, constraints; n=6)
-    f = loadVector(problem, loads)
+function solveBuckling(problem; load=Vector{BoundaryCondition}(), support=Vector{BoundaryCondition}(), n=6)
+    f = loadVector(problem, load)
     K = stiffnessMatrix(problem)
-    applyBoundaryConditions!(K, f, constraints)
-    q = solveDisplacement(K, f)
+    q = solveDisplacement(K, f, support=support)
     
+    ϕ = zeros(problem.non * problem.pdim, n)
     err = 1
     count = 0
     while err > 1e-3 && count < 10
         count += 1
         q0 = copy(q)
         Knl = nonLinearStiffnessMatrix(q)
-        applyBoundaryConditions!(Knl, f, constraints)
-        q = solveDisplacement(K + Knl, f)
+        q = solveDisplacement(K + Knl, f, support=support)
         err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
     end
     if count == 10
@@ -5535,8 +5246,13 @@ function solveBuckling(problem, loads, constraints; n=6)
     end
     Knl = nonLinearStiffnessMatrix(q)
     
-    applyBoundaryConditions!(Knl, f, constraints)
-    return solveBucklingModes(K, Knl, n=n)
+    free = freeDoFs(problem, support)
+    K0 = SystemMatrix(K[free,free], K.model)
+    Knl0 = SystemMatrix(Knl[free,free], K.model)
+    bm = solveBucklingModes(K0, Knl0, n=n)
+    ϕ[free,:] = bm.ϕ
+    applyBoundaryConditions!(VectorField([], ϕ, [i for i in 1:n], [], n, q.type, q.model), support)
+    return Eigen(bm.f, ϕ, problem)
 end
 
 """
@@ -5562,13 +5278,13 @@ function initialDisplacement(problem, name; ux=nothing, uy=nothing, uz=nothing)
 end
 
 """
-    initialDisplacement!(name, u0; ux=..., uy=..., uz=...)
+    initialDisplacement!(u0, name; ux=..., uy=..., uz=...)
                             
 Changes the displacement values to `ux`, `uy` and `uz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
 displacement vector `u0`.
                             
-Return: u0
+Return: nothing
                             
 Types:
 - `name`: String 
@@ -5605,7 +5321,7 @@ function initialVelocity(problem, name; vx=nothing, vy=nothing, vz=nothing)
 end
 
 """
-    initialVelocity!(name, v0; vx=..., vy=..., vz=...)
+    initialVelocity!(v0, name; vx=..., vy=..., vz=...)
                             
 Changes the velocity values `vx`, `vy` and `vz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
@@ -5640,14 +5356,14 @@ Types:
 - `bc`: Vector{BoundaryCondition}
 - `Δt`: Float64 
 """
-function largestPeriodTime(K, M, bc)
-    free = freeDoFs(K.model, bc)
+function largestPeriodTime(K, M; support=Vector{BoundaryCondition}())
+    free = freeDoFs(K.model, support)
     K0 = K[free,free]
     M0 = M[free,free]
-    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=0.01, maxiter=10000)
-    if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
-        ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=1.01, maxiter=10000)
-    end
+    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=0.00001, maxiter=10000)
+    #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
+    #    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=1.01, maxiter=10000)
+    #end
     err = norm(K0 * ϕ[:,1] - ω²[1] * M0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
     if err > 1e-3 # || true
         @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
@@ -5656,13 +5372,11 @@ function largestPeriodTime(K, M, bc)
     return Δt
 end
 
-largestPeriodTime(K::SystemMatrix, M::SystemMatrix) = largestPeriodTime(K, M, BoundaryCondition[])
-
 """
-    smallestPeriodTime(K, M, bc)
+    smallestPeriodTime(K, M, support=[])
                             
 Solves the smallest period of time for a dynamic problem given by stiffness
-matrix `K` and the mass matrix `M`, `bc` is a vector of `BoundaryCondition` where the
+matrix `K` and the mass matrix `M`, `support` is a vector of `BoundaryCondition` where the
 displacement is given.
                             
 Return: `Δt`
@@ -5670,11 +5384,11 @@ Return: `Δt`
 Types:
 - `K`: SystemMatrix
 - `M`: SystemMatrix
-- `bc`: Vector{BoundaryCondition}
+- `support`: Vector{BoundaryCondition}
 - `Δt`: Float64 
 """
-function smallestPeriodTime(K, M, bc)
-    free = freeDoFs(K.model, bc)
+function smallestPeriodTime(K, M; support=Vector{BoundaryCondition}())
+    free = freeDoFs(K.model, support)
     K0 = K[free,free]
     M0 = M[free,free]
     ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LM, maxiter=100)
@@ -5686,8 +5400,6 @@ function smallestPeriodTime(K, M, bc)
     Δt = 2π / √(abs(real(ω²[1])))
     return Δt
 end
-
-smallestPeriodTime(K::SystemMatrix, M::SystemMatrix) = smallestPeriodTime(K, M, BoundaryCondition[])
 
 """
     smallestEigenValue(K, M)
@@ -5702,8 +5414,8 @@ Types:
 - `M`: SystemMatrix
 - `λₘₐₓ`: Float64 
 """
-function smallestEigenValue(K::SystemMatrix, C::SystemMatrix, bc::Vector{BoundaryCondition})
-    free = freeDoFs(K.model, bc)
+function smallestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
+    free = freeDoFs(K.model, support)
     K0 = K[free,free]
     C0 = C[free,free]
     λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
@@ -5718,8 +5430,6 @@ function smallestEigenValue(K::SystemMatrix, C::SystemMatrix, bc::Vector{Boundar
     return λₘₐₓ
 end
 
-smallestEigenValue(K::SystemMatrix, C::SystemMatrix) = smallestEigenValue(K, C, BoundaryCondition[])
-
 """
     largestEigenValue(K, M)
                             
@@ -5733,8 +5443,8 @@ Types:
 - `M`: SystemMatrix
 - `λₘᵢₙ`: Float64 
 """
-function largestEigenValue(K::SystemMatrix, C::SystemMatrix, bc::Vector{BoundaryCondition})
-    free = freeDoFs(K.model, bc)
+function largestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
+    free = freeDoFs(K.model, support)
     K0 = K[free,free]
     C0 = C[free,free]
     λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LM)
@@ -5746,8 +5456,6 @@ function largestEigenValue(K::SystemMatrix, C::SystemMatrix, bc::Vector{Boundary
     λₘᵢₙ = abs(real(λ[1]))
     return λₘᵢₙ
 end
-
-largestEigenValue(K::SystemMatrix, C::SystemMatrix) = largestEigenValue(K, C, BoundaryCondition[])
 
 """
     CDM(K, M, C, f, bc, u0, v0, n, Δt)
@@ -5852,6 +5560,7 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
 
     ts = [i for i in 0:n-1]
     uu = VectorField([], zeros(size(f.a,1), n), ts, [], n, f.type, f.model)
+    uu = elementsToNodes(uu)
     vv = copy(uu)
     applyBoundaryConditions!(uu, bc)
     for i in 1:n-1
@@ -6057,7 +5766,8 @@ function HHT(
     t[1] = 0.0
 
     # Initial acceleration a0 from equilibrium at step 1 (full vector)
-    a = M.A \ (DoFs(f)[:,1] - K.A * u[:,1])
+    a = zeros(ndof)
+    a[free] = M.A[free,free] \ (DoFs(f)[free,1] - K.A[free,free] * u[free,1])
 
     # Effective stiffness blocks (constant here)
     A   = (1 + α) * K.A + c0 * M.A
@@ -6358,4 +6068,67 @@ function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
         end
     end
     return x, y
+end
+
+"""
+    printElasticConstantsTable(; io::IO=stdout)
+
+Prints a compact reference table of the most common relations between
+isotropic linear-elastic material constants:
+
+- Young's modulus `E`
+- Poisson's ratio `ν`
+- Shear modulus `G` (also denoted as `μ`)
+- Bulk modulus `K`
+- Lamé's first parameter `λ`
+- Lamé's second parameter `μ` (= `G`)
+
+The table is meant as a quick cheat-sheet for documentation / teaching.
+"""
+function printElasticConstantsTable(; io::IO=stdout)
+    lines = String[]
+    push!(lines, "Isotropic linear elasticity (small strain) — key relations")
+    push!(lines, "")
+    push!(lines, "Valid ranges (stable material):  E>0,  G>0,  K>0,  -1 < ν < 1/2")
+    push!(lines, "Common note: μ ≡ G  (Lamé's 2nd parameter equals shear modulus)")
+    push!(lines, "")
+
+    # helper to add a row
+    function row(lhs, rhs)
+        return "| " * rpad(lhs, 14) * " | " * rpad(rhs, 44) * " |"
+    end
+    sep = "+----------------+----------------------------------------------+"
+
+    push!(lines, sep)
+    push!(lines, row("Given", "Relations"))
+    push!(lines, sep)
+
+    push!(lines, row("(E, ν)", "G = E / (2*(1+ν))"))
+    push!(lines, row("",      "K = E / (3*(1-2ν))"))
+    push!(lines, row("",      "λ = E*ν / ((1+ν)*(1-2ν))"))
+    push!(lines, row("",      "μ = G"))
+    push!(lines, sep)
+
+    push!(lines, row("(K, G)", "E = 9*K*G / (3*K + G)"))
+    push!(lines, row("",      "ν = (3*K - 2*G) / (2*(3*K + G))"))
+    push!(lines, row("",      "λ = K - 2*G/3"))
+    push!(lines, row("",      "μ = G"))
+    push!(lines, sep)
+
+    push!(lines, row("(λ, μ)", "E = μ*(3λ + 2μ) / (λ + μ)"))
+    push!(lines, row("",      "ν = λ / (2*(λ + μ))"))
+    push!(lines, row("",      "K = λ + 2μ/3"))
+    push!(lines, row("",      "G = μ"))
+    push!(lines, sep)
+
+    push!(lines, row("(E, G)", "ν = E/(2G) - 1"))
+    push!(lines, row("",      "K = E*G / (3*(3G - E))"))
+    push!(lines, row("",      "λ = G*(E - 2G) / (3G - E)"))
+    push!(lines, sep)
+
+    # print
+    for s in lines
+        println(io, s)
+    end
+    return nothing
 end

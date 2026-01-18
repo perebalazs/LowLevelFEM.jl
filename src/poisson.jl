@@ -877,7 +877,7 @@ commonly appearing in linear elasticity and in grad-div stabilization.
 Notes
 - Requires `problem.pdim == problem.dim` (vector unknown with one component per spatial dimension).
 - `coefficient` can be a constant (`Number`) or an elementwise `ScalarField`, interpolated to Gauss points
-  using the Lagrange basis (same mechanism as in `stiffnessMatrixPoisson`).
+  using the Lagrange basis (same mechanism as in `poissonMatrix`).
 """
 function gradDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     if problem.type == :dummy

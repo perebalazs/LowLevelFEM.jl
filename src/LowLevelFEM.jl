@@ -27,34 +27,33 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-#=
+
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
         prob = Problem([mat], type = :dummy)
         stiffnessMatrix(prob)
-        solveDisplacement(prob, [], [])
-        solveDisplacement(prob, [], [], condensed=true)
-        solveDisplacement(prob, [], [], iterative=true)
-        solveDisplacement(prob, [], [], condensed=true, iterative=true)
-        solveDisplacement(prob, [], [], iterative=true, reltol=0)
-        solveDisplacement(prob, [], [], iterative=true, maxiter=0)
-        solveDisplacement(prob, [], [], iterative=true, maxiter=0, reltol=0)
-        solveDisplacement(prob, [], [], condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
-        solveDisplacement(prob, [], [], [])
-        solveDisplacement(prob, [], [], [], condensed=true)
-        solveDisplacement(prob, [], [], [], iterative=true)
-        solveDisplacement(prob, [], [], [], condensed=true, iterative=true)
-        solveDisplacement(prob, [], [], [], iterative=true, reltol=0)
-        solveDisplacement(prob, [], [], [], iterative=true, maxiter=0)
-        solveDisplacement(prob, [], [], [], iterative=true, maxiter=0, reltol=0)
-        solveDisplacement(prob, [], [], [], condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
+        solveDisplacement(prob)
+        solveDisplacement(prob, condensed=true)
+        solveDisplacement(prob, iterative=true)
+        solveDisplacement(prob, condensed=true, iterative=true)
+        solveDisplacement(prob, iterative=true, reltol=0)
+        solveDisplacement(prob, iterative=true, maxiter=0)
+        solveDisplacement(prob, iterative=true, maxiter=0, reltol=0)
+        solveDisplacement(prob, condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
+        solveDisplacement(prob, condensed=true)
+        solveDisplacement(prob, iterative=true)
+        solveDisplacement(prob, condensed=true, iterative=true)
+        solveDisplacement(prob, iterative=true, reltol=0)
+        solveDisplacement(prob, iterative=true, maxiter=0)
+        solveDisplacement(prob, iterative=true, maxiter=0, reltol=0)
+        solveDisplacement(prob, condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
         q = VectorField([], [;;], [], [], 0, :dummy, prob)
         T = ScalarField([], [;;], [], [], 0, :dummy, prob)
         solveStress(q)
         solveStress(q, DoFResults=true)
         solveStress(q, T=T, DoFResults=true)
-        solvePressure(prob, [], [], 0.0; cav=false, periodicSlave="", periodicMaster="")
+        #solvePressure(prob, [], [], 0.0; cav=false, periodicSlave="", periodicMaster="")
 
         tsteps = [1.0]
         sfA = ScalarField([reshape(collect(1.0:3.0), 3, 1)], [;;], tsteps, [1], 1, :scalar, prob)
@@ -110,9 +109,9 @@ export probe_field
         _ = sqrt(tfA)
         _ = cbrt(tfA)
         _ = log(tfA)
-        stiffnessMatrixPoisson(prob)
-        convectionMatrixPoisson(prob)
-        massMatrixPoisson(prob)
+        poissonMatrix(prob)
+        advectionMatrix(prob)
+        reactionMatrix(prob)
         gradDivMatrix(prob)
         symmetricGradientMatrix(prob)
         curlCurlMatrix(prob)
@@ -120,5 +119,5 @@ export probe_field
         traceLaplaceMatrix(prob)
     end
 end
-=#
+
 end #module

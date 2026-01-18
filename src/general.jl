@@ -1336,6 +1336,103 @@ struct CoordinateSystem
     end
 end
 
+"""
+    BoundaryCondition
+
+General container type for prescribing boundary conditions in LowLevelFEM.
+
+`BoundaryCondition` unifies all Dirichlet- and Neumann-type boundary data
+(mechanical, thermal, elastic, convective, etc.) into a single, extensible
+structure. A boundary condition always refers to a *physical group* of the mesh
+(e.g. `"left"`, `"right"`, `"wall"`) and may prescribe one or more fields
+simultaneously.
+
+The same `BoundaryCondition` type is used consistently across:
+- static and transient solid mechanics
+- modal and buckling analysis
+- heat conduction and thermo-mechanical problems
+
+Boundary conditions are typically passed as `Vector{BoundaryCondition}` to
+assembly, load, and solver routines.
+
+# Prescribed fields
+
+## Mechanical (solid mechanics)
+
+### Dirichlet-type (essential)
+- `ux, uy, uz` : prescribed displacement components
+- `p`          : prescribed pressure (if applicable)
+
+### Neumann-type (natural)
+- `fx, fy, fz` : prescribed surface forces / tractions
+
+### Elastic (Robin-type)
+- `kx, ky, kz` : elastic support (spring stiffness per displacement component)
+
+## Thermal
+
+### Dirichlet-type
+- `T`          : prescribed temperature
+
+### Neumann-type
+- `q`          : prescribed heat flux
+- `qn`         : prescribed normal heat flux
+
+### Convection (Robin-type)
+- `h`          : heat transfer coefficient
+- `T`          : ambient temperature (used together with `h`)
+
+## Poisson-type problems
+
+### Dirichlet-type
+- `p`          : prescribed field
+
+### Neumann-type
+- `q`          : prescribed force
+
+For heat convection, the field `T` is interpreted as *ambient temperature*.
+This is intentional and handled consistently by the heat assembly routines.
+
+# Value types
+
+Each field may be specified as:
+- a scalar number (`Number`)
+- a `ScalarField`
+- a `VectorField`
+- a function `(x,y,z) -> value`
+
+depending on the context and the assembly routine using it.
+
+# Usage pattern
+
+It is recommended to:
+- use **separate `BoundaryCondition` objects** for conceptually different
+  constraints (e.g. displacement support vs. load),
+- and collect them in a vector:
+```julia
+bc = [
+    displacementConstraint("left", ux=0.0, uy=0.0),
+    load("right", fx=1.0),
+    temperatureConstraint("wall", T=300.0)
+]
+```
+
+# Notes
+
+* Only the fields relevant to a given analysis are accessed; unused fields
+  may safely remain `nothing`.
+* Invalid combinations (e.g. simultaneous displacement and force prescription
+  on the same DOF) are detected during boundary condition application.
+
+See also:
+
+* `displacementConstraint`
+* `load`
+* `elasticSupport`
+* `temperatureConstraint`
+* `heatFlux`
+* `heatConvection`
+"""
 struct BoundaryCondition
     phName::String
 
@@ -2500,12 +2597,12 @@ or `uz` must be provided (depending on the problem dimension). `ux`, `uy`, or `u
 constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); displacementConstraint("support1", ux=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 # Examples
 
 ```julia
-hc = heatConvection("outer", h=10.0, Tₐ=20.0)
+hc = heatConvection("outer", h=10.0, T∞=20.0)
 ```
 
 # Examples
@@ -2564,7 +2661,7 @@ must be provided (depending on the problem dimension). `fx`, `fy`, or `fz` can b
 or a function of `x`, `y`, and `z` or `ScalarField`.
 (e.g., `fn(x,y,z) = 5*(5-x); load("load1", fx=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2638,7 +2735,7 @@ Specifies distributed stiffness for an elastic support on the physical group `na
 (e.g., `fn(x,y,z) = 5*(5-x); elasticSupport("supp1", kx=fn)`)
 Default values are 1.
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2665,7 +2762,7 @@ Specifies temperature constraints on the physical group `name`.
 `T` can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); temperatureConstraint("surf1", T=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2690,7 +2787,7 @@ Specifies the heat flux normal to the surface of the physical group `name`.
 `qn` can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); load("flux1", qn=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2716,7 +2813,7 @@ Specifies the volumetric heat source in the physical group `name`.
 `h` can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); load("source1", h=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2736,13 +2833,13 @@ function heatSource(name; h=nothing)
 end
 
 """
-    heatConvection(name; h=..., Tₐ=...)
+    heatConvection(name; h=..., T∞=...)
 
 Specifies convective boundary conditions on the surface in the physical group `name`.
 `h` is the heat transfer coefficient of the surrounding medium; `Tₐ` is the ambient temperature.
 `Tₐ` can be either a constant or a function of `x`, `y`, and `z`.
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2788,7 +2885,7 @@ At least one of `fx`, `fy`, or `fz` etc. must be provided (depending on the prob
 Each component can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); field("surf1", fx=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function, ... x7}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2826,7 +2923,7 @@ Return: Vector{Float64}
 
 Types:
 - `problem`: Problem
-- `dataField`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{BoundaryCondition}
 
 # Examples
 
@@ -2894,7 +2991,7 @@ Return: VectorField
 
 Types:
 - `problem`: Problem
-- `dataField`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{BoundaryCondition}
 
 # Examples
 
@@ -2999,7 +3096,7 @@ Return: TensorField
 
 Types:
 - `problem`: Problem
-- `dataField`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{BoundaryCondition}
 
 # Examples
 
@@ -3636,7 +3733,7 @@ function constrainedDoFs(problem, supports)
         if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= pdim
-            nodeTagsZ .-= (pdim-0)
+            nodeTagsZ .-= (pdim-3)
         end
         if pdim == 9 && sx !== nothing
             nodeTagsX = copy(nodeTags)
