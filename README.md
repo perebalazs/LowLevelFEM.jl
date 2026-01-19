@@ -56,13 +56,13 @@ using LowLevelFEM
 gmsh.initialize()
 gmsh.open("your_model.geo")
 
-mat = material("body", E=2e5, ν=0.3)
+mat = Material("body", E=2e5, ν=0.3)
 prob = Problem([mat], type=:PlaneStress)  # :Solid, :PlaneStrain, :AxiSymmetric, :HeatConduction, ...
 
 bc    = displacementConstraint("supp", ux=0, uy=0)
 force = load("load", fy=-1)
 
-u = solveDisplacement(prob, [force], [bc])
+u = solveDisplacement(prob, load=[force], support=[bc])
 S = solveStress(u)
 
 showDoFResults(u)
@@ -81,8 +81,7 @@ Note: physical group names in your geometry (created in Gmsh) must match the str
 ```julia
 K = stiffnessMatrix(prob)
 f = loadVector(prob, [force])
-applyBoundaryConditions!(K, f, [bc])
-u = K \ f
+u = solveDisplacement(K, f, support=[bc])
 
 E = mat.E
 ν = mat.ν

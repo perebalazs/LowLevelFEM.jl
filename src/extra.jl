@@ -1,5 +1,5 @@
-export pressureConstraint, flowRate
-export solvePressure, solveShearStress, fieldsToVolume
+#export pressureConstraint, flowRate
+export projectScalarField, fieldsToVolume
 
 
 function showGapThickness(phName; name=phName, visible=false)
@@ -83,15 +83,15 @@ function showGapThickness(phName; name=phName, visible=false)
     return SS
 end
 
-function pressureConstraint(name::String; p=1im)
-    bc0 = name, p, 1im, 1im
-    return bc0
-end
+#function pressureConstraint(name::String; p=1im)
+#    bc0 = name, p, 1im, 1im
+#    return bc0
+#end
 
-function flowRate(name::String; q=0)
-    ld0 = name, q
-    return ld0
-end
+#function flowRate(name::String; q=0)
+#    ld0 = name, q
+#    return ld0
+#end
 
 function initialize(problem::Problem)
     h0 = ScalarField(problem, problem.geometry.nameGap, (x, y, z) -> z)
@@ -489,7 +489,7 @@ function fieldsToVolume(p0::Union{ScalarField,Vector{ScalarField}})
         return pp
     end
 end
-
+#=
 #function systemMatrix(problem, αInNodes::ScalarField, velocity::Number, height::ScalarField)
 function systemMatrix_old(problem, velocity::Number)
     gmsh.model.setCurrent(problem.name)
@@ -660,7 +660,9 @@ function systemMatrix_old(problem, velocity::Number)
     return SystemMatrix(K, problem), SystemMatrix(KK, problem)
     GC.gc()
 end
+=#
 
+#=
 function systemMatrix(problem, velocity::Number)
     gmsh.model.setCurrent(problem.name)
 
@@ -908,7 +910,9 @@ function systemMatrix(problem, velocity::Number)
 
     return SystemMatrix(K, problem), SystemMatrix(KK, problem)
 end
+=#
 
+#=
 function flowRateVector(problem, loads)
     gmsh.model.setCurrent(problem.name)
     dim0 = problem.dim
@@ -1007,6 +1011,7 @@ function flowRateVector(problem, loads)
     end
     return ScalarField([], reshape(fp, :,1), [0.0], [], 1, type, problem)
 end
+=#
 
 #=
 function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", periodicMaster="")
@@ -1171,6 +1176,7 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
 end
 =#
 
+#=
 function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", periodicMaster="")
     if problem.type == :dummy
         return nothing
@@ -1344,7 +1350,9 @@ function solvePressure(problem, load, BC, V; cav=false, periodicSlave="", period
         return ScalarField([], reshape(pret, :, 1), [0], [], 1, :other, problem), ScalarField([], reshape(αcav, :, 1), [0], [], 1, :p, problem)
     end
 end
+=#
 
+#=
 function solveShearStress(p, V; component=:xz)
     grad_p = grad_xy(p)
     grad_p = expandTo3D(grad_p)
@@ -1369,3 +1377,4 @@ function solveShearStress(p, V; component=:xz)
         error("solveShearStress: wrong component name ($(component)), use :xz or :yz.")
     end
 end
+=#

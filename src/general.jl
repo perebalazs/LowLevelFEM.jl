@@ -1,8 +1,8 @@
-export Problem, material, getEigenVectors, getEigenValues
-export displacementConstraint, load, elasticSupport
+export Problem, Material, getEigenVectors, getEigenValues, material
+export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
-export constrainedDoFs, freeDoFs, DoFs
+export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
 export rotateNodes, CoordinateSystem
@@ -48,6 +48,126 @@ struct Material
     type::Symbol
     E::Float64
     ν::Float64
+    λ::Float64
+    μ::Float64
+    κ::Float64
+    ρ::Float64
+    k::Float64
+    c::Float64
+    α::Float64
+    η::Float64
+    p₀::Float64
+    A::Float64
+
+    function Material(
+        phName::String;
+        type = :Hooke,
+        E = nothing, ν = nothing, λ = nothing, μ = nothing, κ = nothing,
+        ρ = 7.85e-9,
+        k = 45.0,
+        c = 4.2e8,
+        α = 1.2e-5,
+        η = 1e-7,
+        p₀ = 0.1,
+        A = 1.0
+    )
+        type ∈ (:Hooke, :StVenantKirchhoff, :NeoHookeCompressible, :JFO) ||
+            error("Invalid material type: $type")
+
+        ec = elastic_constants(E=E, ν=ν, λ=λ, μ=μ, κ=κ)
+
+        return new(
+            phName,
+            type,
+            ec.E, ec.ν, ec.λ, ec.μ, ec.κ,
+            ρ, k, c, α,
+            η, p₀, A
+        )
+    end
+end
+
+function elastic_constants(; E=nothing, ν=nothing, λ=nothing, μ=nothing, κ=nothing)
+    given = Dict(:E=>E, :ν=>ν, :λ=>λ, :μ=>μ, :κ=>κ)
+    specified = filter(kv -> kv[2] !== nothing, given)
+    n = length(specified)
+    DEFAULT_POISSON = 0.3
+    DEFAULT_YOUNG = 2.0e5
+
+    if n == 0
+        E = DEFAULT_YOUNG
+        ν = DEFAULT_POISSON
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 1 && haskey(specified, :E)
+        E = specified[:E]
+        ν = DEFAULT_POISSON
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 1 && haskey(specified, :κ)
+        κ = specified[:κ]
+        E = DEFAULT_YOUNG
+        ν = (1 - E/3κ) / 2
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        #κ = E / (3*(1-2ν))
+
+    elseif n == 2 && haskey(specified, :E) && haskey(specified, :ν)
+        E, ν = specified[:E], specified[:ν]
+        μ = E / (2*(1+ν))
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 2 && haskey(specified, :μ) && haskey(specified, :ν)
+        μ, ν = specified[:μ], specified[:ν]
+        E = 2μ*(1+ν)
+        λ = 2μ*ν/(1-2ν)
+        κ = E / (3*(1-2ν))
+
+    elseif n == 2 && haskey(specified, :λ) && haskey(specified, :μ)
+        λ, μ = specified[:λ], specified[:μ]
+        ν = λ / (2*(λ+μ))
+        E = μ*(3λ+2μ)/(λ+μ)
+        κ = λ + 2μ/3
+
+    elseif n == 2 && haskey(specified, :κ) && haskey(specified, :μ)
+        κ, μ = specified[:κ], specified[:μ]
+        λ = κ - 2μ/3
+        ν = λ / (2*(λ+μ))
+        E = 2μ*(1+ν)
+
+    elseif n < 2
+        error("Insufficient elastic parameters. Specify at least E+ν, μ+ν, λ+μ, κ+μ, or E alone.")
+
+    else
+        error("Elastic constants are overdetermined: $(keys(specified))")
+    end
+
+    return (; E, ν, λ, μ, κ)
+end
+
+function material(  phName::String;
+        type = :Hooke,
+        E = nothing, ν = nothing, λ = nothing, μ = nothing, κ = nothing,
+        ρ = 7.85e-9,
+        k = 45.0,
+        c = 4.2e8,
+        α = 1.2e-5,
+        η = 1e-7,
+        p₀ = 0.1,
+        A = 1.0)
+    return Material(phName, type=type, E=E, ν=ν, λ=λ, μ=μ, κ=κ, ρ=ρ, k=k, c=c, α=α, η=η, p₀=p₀, A=A)
+end
+
+#=
+struct Material
+    phName::String
+    type::Symbol
+    E::Float64
+    ν::Float64
     ρ::Float64
     k::Float64
     c::Float64
@@ -62,6 +182,7 @@ struct Material
     Material(name) = new(name, :none, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
+=#
 
 mutable struct Geometry
     nameGap::String
@@ -127,13 +248,12 @@ struct Problem
     geometry::Geometry
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
-    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim=3, fdim=dim)
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim::Int=3)
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0)
         end
         pdim = 3
         dim0 = dim
-        pdim0 = fdim
 
         #if Sys.CPU_THREADS != Threads.nthreads()
         #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
@@ -164,24 +284,23 @@ struct Problem
         elseif type == :Truss
             dim = 3
             pdim = 3
-        elseif type == :Poisson3D || type == :Poisson
-            dim = 3
+        elseif type == :ScalarField
+            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
+            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be equal or less than three.")
+            dim = dim0
             pdim = 1
-        elseif type == :Poisson2D
-            dim = 2
-            pdim = 1
-        elseif type == :Poisson1D
-            dim = 1
-            pdim = 1
+        elseif type == :VectorField
+            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
+            dim0 == 1 && error("Problem: dimension of a :VectorField problem must be greater than one.")
+            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be two or three.")
+            dim = dim0
+            pdim = dim0
         elseif type == :Reynolds
             geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
             pdim = 1
-        elseif type == :General
-            dim = dim0
-            pdim = pdim0
         else
-            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Poisson1D`, `:Poisson2D`, `:Poisson3D`, `:General`.
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Truss`, `:ScalarField`, `VectorField`.
             Now problem type = $type ????")
         end
         if !isa(mat, Vector)
@@ -234,22 +353,6 @@ struct Problem
         return new(name, type, dim, pdim, material, thickness, non, geometry)
     end
 end
-
-#=
-1. Szerezzük meg az összes 3D entitást
-entities = gmsh.model.getEntities(3)  # minden térfogat (dim=3)
-2. Gyűjtsük össze a node-okat entitásonként
-allNodes = Int[]
-for (dim, tag) in entities
-    nodeTags, coord, param = gmsh.model.mesh.getNodes(dim, tag, true)
-    append!(allNodes, nodeTags)
-end
-3. Vegyük az egyedi halmazt
-uniqueNodes = unique(allNodes)
-println("Összes 3D-hez tartozó node: ", length(uniqueNodes))
-=#
-
-using SparseArrays
 
 """
     Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
@@ -436,7 +539,9 @@ struct ScalarField <: AbstractField
         numElem = Int[]
 
         @inbounds for data in dataField
-            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
+            #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
+            phName = data.phName
+            f = data.f
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
             for (edim, etag) in dimTags
@@ -446,7 +551,7 @@ struct ScalarField <: AbstractField
                     for (j, elem) in enumerate(elemTags[i])
                         sc1 = zeros(numNodes, nsteps)
                         push!(numElem, elem)
-                        if f != :no
+                        if f !== nothing
                             for it in 1:steps
                                 for k in 1:numNodes
                                     nodeTag = elemNodeTags[i][(j-1)*numNodes + k]
@@ -604,6 +709,21 @@ Each scalar field provides one vector component.
 
 ---
 
+### From an existing VectorField
+
+```julia
+VectorField(s; steps, tmin, tmax, step)
+```
+
+Creates a new `VectorField` by **replicating a selected time step** of an
+existing field.
+This is useful for initializing a time-dependent field from a static solution.
+
+* `step` selects the time index of `s` to be replicated.
+* The new field contains `steps` identical time slices.
+
+---
+
 ## Notes
 
 * Time steps do not need to be uniformly spaced.
@@ -696,7 +816,11 @@ struct VectorField <: AbstractField
         ff = 0
         pdim = 1
         for i in 1:length(dataField)
-            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            phName = dataField[i].phName
+            fx = dataField[i].fx
+            fy = dataField[i].fy
+            fz = dataField[i].fz
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -716,7 +840,7 @@ struct VectorField <: AbstractField
                             x = coord[1]
                             y = coord[2]
                             z = coord[3]
-                            if fx ≠ :no
+                            if fx !== nothing
                                 if fx isa Function
                                     ff = fx(x, y, z)
                                 else
@@ -724,7 +848,7 @@ struct VectorField <: AbstractField
                                 end
                                 vec1[3k-2, 1] = ff
                             end
-                            if fy ≠ :no
+                            if fy !== nothing
                                 if fy isa Function
                                     ff = fy(x, y, z)
                                 else
@@ -732,7 +856,7 @@ struct VectorField <: AbstractField
                                 end
                                 vec1[3k-1, 1] = ff
                             end
-                            if fz ≠ :no
+                            if fz !== nothing
                                 if fz isa Function
                                     ff = fz(x, y, z)
                                 else
@@ -794,6 +918,21 @@ struct VectorField <: AbstractField
         a = [;;]
         t = [0.0]
         return new(A, a, t, numElem, nsteps, type, problem)
+    end
+    function VectorField(s::VectorField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
+        if step > s.nsteps || step < 1
+            error("VectorField: `step` is out of range - 0 < $step < $(s.nsteps)")
+        end
+        A = Vector{Matrix{Float64}}(undef, length(s.numElem))
+        s1 = nodesToElements(s)
+        for j = 1:length(s1.numElem)
+            A[j] = zeros(size(s1.A[j], 1), steps)
+            for i in 1:steps
+                A[j][:, i] = s1.A[j][:, step]
+            end
+        end
+        t = range(start=tmin, stop=tmax, length=steps)
+        VectorField(A, [;;], t, s1.numElem, steps, s1.type, s1.model)
     end
 end
 
@@ -955,7 +1094,17 @@ struct TensorField <: AbstractField
         ff = 0
         pdim = 1
         for i in 1:length(dataField)
-            phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+            phName = dataField[i].phName
+            fx = dataField[i].fx
+            fy = dataField[i].fy
+            fz = dataField[i].fz
+            fxy = dataField[i].fxy
+            fyz = dataField[i].fyz
+            fzx = dataField[i].fzx
+            fyx = dataField[i].fyx
+            fzy = dataField[i].fzy
+            fxz = dataField[i].fxz
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -975,7 +1124,7 @@ struct TensorField <: AbstractField
                             x = coord[1]
                             y = coord[2]
                             z = coord[3]
-                            if fx ≠ :no
+                            if fx !== nothing
                                 if fx isa Function
                                     ff = fx(x, y, z)
                                 else
@@ -983,7 +1132,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-8, 1] = ff
                             end
-                            if fy ≠ :no
+                            if fy !== nothing
                                 if fy isa Function
                                     ff = fy(x, y, z)
                                 else
@@ -991,7 +1140,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-4, 1] = ff
                             end
-                            if fz ≠ :no
+                            if fz !== nothing
                                 if fz isa Function
                                     ff = fz(x, y, z)
                                 else
@@ -999,7 +1148,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k, 1] = ff
                             end
-                            if fxy ≠ :no
+                            if fxy !== nothing
                                 if fxy isa Function
                                     ff = fxy(x, y, z)
                                 else
@@ -1007,7 +1156,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-5, 1] = ff
                             end
-                            if fyz ≠ :no
+                            if fyz !== nothing
                                 if fyz isa Function
                                     ff = fyz(x, y, z)
                                 else
@@ -1015,7 +1164,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-1, 1] = ff
                             end
-                            if fzx ≠ :no
+                            if fzx !== nothing
                                 if fzx isa Function
                                     ff = fzx(x, y, z)
                                 else
@@ -1023,7 +1172,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-6, 1] = ff
                             end
-                            if fyx ≠ :no
+                            if fyx !== nothing
                                 if fyx isa Function
                                     ff = fyx(x, y, z)
                                 else
@@ -1031,7 +1180,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-7, 1] = ff
                             end
-                            if fzy ≠ :no
+                            if fzy !== nothing
                                 if fzy isa Function
                                     ff = fzy(x, y, z)
                                 else
@@ -1039,7 +1188,7 @@ struct TensorField <: AbstractField
                                 end
                                 ten1[9k-3, 1] = ff
                             end
-                            if fxz ≠ :no
+                            if fxz !== nothing
                                 if fxz isa Function
                                     ff = fxz(x, y, z)
                                 else
@@ -1108,6 +1257,239 @@ struct TensorField <: AbstractField
         return TensorField(A, [;;], t, numElem, nsteps, :tensor, prob)
     end
 end
+
+"""
+    CoordinateSystem(vec1, vec2)
+
+A structure containing the data of a coordinate system.
+- `vec1`: direction of the new x axis.
+- `vec2`: together with `vec1` determine the xy plane
+If the problem is two dimensional, it is enough to give the first two
+elements of `vec1`. Elements of `vec1` and `vec2` can be functions. In
+3D case the functions have three arguments (x, y, and z coordinates),
+otherwise (in 2D case) the number of arguments is two (x and y coordinates).
+
+Types:
+- `vec1`: Vector{Float64}
+- `vec2`: Vector{Float64}
+
+# Examples
+
+```julia
+# 2D case
+nx(x, y) = x
+ny(x, y) = y
+cs = CoordinateSystem([nx, ny])
+Q = rotateNodes(problem, "body", cs)
+q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
+# `q1` is a nodal displacement vector.
+S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
+# `S2` is in Axisymmetric coordinate system.
+
+# 3D case
+n1x(x, y, z) = x
+n1y(x, y, z) = y
+n2x(x, y, z) = -y
+n2y = n1x
+cs = CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
+Q = rotateNodes(problem, "body", cs)
+```
+"""
+struct CoordinateSystem
+    vec1::Vector{Float64}
+    vec2::Vector{Float64}
+    vec1f::Vector{Function}
+    vec2f::Vector{Function}
+    i1::Vector{Int64}
+    i2::Vector{Int64}
+    function CoordinateSystem(vect1)
+        f(x) = 0
+        i1x = isa(vect1[1], Function) ? 1 : 0
+        i1y = isa(vect1[2], Function) ? 1 : 0
+        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
+        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
+        v1fx = isa(vect1[1], Function) ? vect1[1] : f
+        v1fy = isa(vect1[2], Function) ? vect1[2] : f
+        return new([v1x, v1y, 0], [0, 0, 0], [v1fx, v1fy, f], [f, f, f], [i1x, i1y, 0], [0, 0, 0])
+    end
+    function CoordinateSystem(vect1, vect2)
+        f(x) = 0
+        i1x = isa(vect1[1], Function) ? 1 : 0
+        i1y = isa(vect1[2], Function) ? 1 : 0
+        i1z = isa(vect1[3], Function) ? 1 : 0
+        i2x = isa(vect2[1], Function) ? 1 : 0
+        i2y = isa(vect2[2], Function) ? 1 : 0
+        i2z = isa(vect2[3], Function) ? 1 : 0
+        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
+        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
+        v1z = isa(vect1[3], Function) ? 1 : vect1[3]
+        v2x = isa(vect2[1], Function) ? 1 : vect2[1]
+        v2y = isa(vect2[2], Function) ? 1 : vect2[2]
+        v2z = isa(vect2[3], Function) ? 1 : vect2[3]
+        v1fx = isa(vect1[1], Function) ? vect1[1] : f
+        v1fy = isa(vect1[2], Function) ? vect1[2] : f
+        v1fz = isa(vect1[3], Function) ? vect1[3] : f
+        v2fx = isa(vect2[1], Function) ? vect2[1] : f
+        v2fy = isa(vect2[2], Function) ? vect2[2] : f
+        v2fz = isa(vect2[3], Function) ? vect2[3] : f
+        return new([v1x, v1y, v1z], [v2x, v2y, v2z], [v1fx, v1fy, v1fz], [v2fx, v2fy, v2fz], [i1x, i1y, i1z], [i2x, i2y, i2z])
+    end
+end
+
+"""
+    BoundaryCondition
+
+General container type for prescribing boundary conditions in LowLevelFEM.
+
+`BoundaryCondition` unifies all Dirichlet- and Neumann-type boundary data
+(mechanical, thermal, elastic, convective, etc.) into a single, extensible
+structure. A boundary condition always refers to a *physical group* of the mesh
+(e.g. `"left"`, `"right"`, `"wall"`) and may prescribe one or more fields
+simultaneously.
+
+The same `BoundaryCondition` type is used consistently across:
+- static and transient solid mechanics
+- modal and buckling analysis
+- heat conduction and thermo-mechanical problems
+
+Boundary conditions are typically passed as `Vector{BoundaryCondition}` to
+assembly, load, and solver routines.
+
+# Prescribed fields
+
+## Mechanical (solid mechanics)
+
+### Dirichlet-type (essential)
+- `ux, uy, uz` : prescribed displacement components
+- `p`          : prescribed pressure (if applicable)
+
+### Neumann-type (natural)
+- `fx, fy, fz` : prescribed surface forces / tractions
+
+### Elastic (Robin-type)
+- `kx, ky, kz` : elastic support (spring stiffness per displacement component)
+
+## Thermal
+
+### Dirichlet-type
+- `T`          : prescribed temperature
+
+### Neumann-type
+- `q`          : prescribed heat flux
+- `qn`         : prescribed normal heat flux
+
+### Convection (Robin-type)
+- `h`          : heat transfer coefficient
+- `T`          : ambient temperature (used together with `h`)
+
+## Poisson-type problems
+
+### Dirichlet-type
+- `p`          : prescribed field
+
+### Neumann-type
+- `q`          : prescribed force
+
+For heat convection, the field `T` is interpreted as *ambient temperature*.
+This is intentional and handled consistently by the heat assembly routines.
+
+# Value types
+
+Each field may be specified as:
+- a scalar number (`Number`)
+- a `ScalarField`
+- a `VectorField`
+- a function `(x,y,z) -> value`
+
+depending on the context and the assembly routine using it.
+
+# Usage pattern
+
+It is recommended to:
+- use **separate `BoundaryCondition` objects** for conceptually different
+  constraints (e.g. displacement support vs. load),
+- and collect them in a vector:
+```julia
+bc = [
+    displacementConstraint("left", ux=0.0, uy=0.0),
+    load("right", fx=1.0),
+    temperatureConstraint("wall", T=300.0)
+]
+```
+
+# Notes
+
+* Only the fields relevant to a given analysis are accessed; unused fields
+  may safely remain `nothing`.
+* Invalid combinations (e.g. simultaneous displacement and force prescription
+  on the same DOF) are detected during boundary condition application.
+
+See also:
+
+* `displacementConstraint`
+* `load`
+* `elasticSupport`
+* `temperatureConstraint`
+* `heatFlux`
+* `heatConvection`
+"""
+struct BoundaryCondition
+    phName::String
+
+    # Dirichlet-type (primary variables)
+    ux::Union{Nothing, Number, Function, ScalarField}
+    uy::Union{Nothing, Number, Function, ScalarField}
+    uz::Union{Nothing, Number, Function, ScalarField}
+    p ::Union{Nothing, Number, Function, ScalarField}   # pressure / scalar field
+    T ::Union{Nothing, Number, Function, ScalarField}   # temperature
+
+    # Neumann-type (fluxes / forces)
+    f::Union{Nothing, Number, Function, ScalarField}
+    fx::Union{Nothing, Number, Function, ScalarField}
+    fy::Union{Nothing, Number, Function, ScalarField}
+    fz::Union{Nothing, Number, Function, ScalarField}
+    fxy::Union{Nothing, Number, Function, ScalarField}
+    fyz::Union{Nothing, Number, Function, ScalarField}
+    fzx::Union{Nothing, Number, Function, ScalarField}
+    fyx::Union{Nothing, Number, Function, ScalarField}
+    fzy::Union{Nothing, Number, Function, ScalarField}
+    fxz::Union{Nothing, Number, Function, ScalarField}
+    #qx ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
+    #qy ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
+    #qz ::Union{Nothing, Number, Function}   # heat flux / generic scalar flux
+    kx ::Union{Nothing, Number, Function}
+    ky ::Union{Nothing, Number, Function}
+    kz ::Union{Nothing, Number, Function}
+    q ::Union{Nothing, Number, Function, ScalarField}   # heat flux / generic scalar flux
+    qn ::Union{Nothing, Number, Function, ScalarField}   # heat flux / generic scalar flux
+    h ::Union{Nothing, Number, Function, ScalarField}
+
+    # Stress / traction components
+    sx::Union{Nothing, Number, Function, ScalarField}
+    sy::Union{Nothing, Number, Function, ScalarField}
+    sz::Union{Nothing, Number, Function, ScalarField}
+    sxy::Union{Nothing, Number, Function, ScalarField}
+    syz::Union{Nothing, Number, Function, ScalarField}
+    szx::Union{Nothing, Number, Function, ScalarField}
+
+    CS::Union{Nothing, CoordinateSystem}
+    Q::Union{Nothing,Transformation}
+
+    function BoundaryCondition(phName::String; kwargs...)
+        fields = fieldnames(BoundaryCondition)
+        values = map(fields) do f
+            f == :phName ? phName : get(kwargs, f, nothing)
+        end
+        return new(values...)
+    end
+end
+
+function BoundaryConditionFields(bc::BoundaryCondition)
+    return filter(f -> getfield(bc, f) !== nothing,
+                  fieldnames(BoundaryCondition))
+end
+
+using SparseArrays
 
 """
     DoFs(f::AbstractField)
@@ -1985,84 +2367,6 @@ end
 
 
 """
-    CoordinateSystem(vec1, vec2)
-
-A structure containing the data of a coordinate system.
-- `vec1`: direction of the new x axis.
-- `vec2`: together with `vec1` determine the xy plane
-If the problem is two dimensional, it is enough to give the first two
-elements of `vec1`. Elements of `vec1` and `vec2` can be functions. In
-3D case the functions have three arguments (x, y, and z coordinates),
-otherwise (in 2D case) the number of arguments is two (x and y coordinates).
-
-Types:
-- `vec1`: Vector{Float64}
-- `vec2`: Vector{Float64}
-
-# Examples
-
-```julia
-# 2D case
-nx(x, y) = x
-ny(x, y) = y
-cs = CoordinateSystem([nx, ny])
-Q = rotateNodes(problem, "body", cs)
-q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
-# `q1` is a nodal displacement vector.
-S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
-# `S2` is in Axisymmetric coordinate system.
-
-# 3D case
-n1x(x, y, z) = x
-n1y(x, y, z) = y
-n2x(x, y, z) = -y
-n2y = n1x
-cs = CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
-Q = rotateNodes(problem, "body", cs)
-```
-"""
-struct CoordinateSystem
-    vec1::Vector{Float64}
-    vec2::Vector{Float64}
-    vec1f::Vector{Function}
-    vec2f::Vector{Function}
-    i1::Vector{Int64}
-    i2::Vector{Int64}
-    function CoordinateSystem(vect1)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        return new([v1x, v1y, 0], [0, 0, 0], [v1fx, v1fy, f], [f, f, f], [i1x, i1y, 0], [0, 0, 0])
-    end
-    function CoordinateSystem(vect1, vect2)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        i1z = isa(vect1[3], Function) ? 1 : 0
-        i2x = isa(vect2[1], Function) ? 1 : 0
-        i2y = isa(vect2[2], Function) ? 1 : 0
-        i2z = isa(vect2[3], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1z = isa(vect1[3], Function) ? 1 : vect1[3]
-        v2x = isa(vect2[1], Function) ? 1 : vect2[1]
-        v2y = isa(vect2[2], Function) ? 1 : vect2[2]
-        v2z = isa(vect2[3], Function) ? 1 : vect2[3]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        v1fz = isa(vect1[3], Function) ? vect1[3] : f
-        v2fx = isa(vect2[1], Function) ? vect2[1] : f
-        v2fy = isa(vect2[2], Function) ? vect2[2] : f
-        v2fz = isa(vect2[3], Function) ? vect2[3] : f
-        return new([v1x, v1y, v1z], [v2x, v2y, v2z], [v1fx, v1fy, v1fz], [v2fx, v2fy, v2fz], [i1x, i1y, i1z], [i2x, i2y, i2z])
-    end
-end
-
-"""
     Eigen(f, ϕ, model)
 
 A structure containing the eigenfrequencies and eigen modes.
@@ -2127,6 +2431,7 @@ function getDimForPhysicalName(name)
     return dimTags[i][1]
 end
 
+#=
 """
     material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
 
@@ -2168,6 +2473,7 @@ function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8,
     end
     return Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
+=#
 
 """
     getEigenVectors(A::TensorField)
@@ -2291,12 +2597,12 @@ or `uz` must be provided (depending on the problem dimension). `ux`, `uy`, or `u
 constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); displacementConstraint("support1", ux=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 # Examples
 
 ```julia
-hc = heatConvection("outer", h=10.0, Tₐ=20.0)
+hc = heatConvection("outer", h=10.0, T∞=20.0)
 ```
 
 # Examples
@@ -2335,10 +2641,17 @@ Types:
 - `uy`: Float64 or Function
 - `uz`: Float64 or Function
 """
+function displacementConstraint(name; ux=nothing, uy=nothing, uz=nothing)
+    ux === nothing && uy === nothing && uz === nothing &&
+        error("displacementConstraint: at least one of ux, uy, uz must be specified.")
+    return BoundaryCondition(name, ux=ux, uy=uy, uz=uz)
+end
+#=
 function displacementConstraint(name; ux=1im, uy=1im, uz=1im)
     bc0 = name, ux, uy, uz
     return bc0
 end
+=#
 
 """
     load(name; fx=..., fy=..., fz=...)
@@ -2348,7 +2661,7 @@ must be provided (depending on the problem dimension). `fx`, `fy`, or `fz` can b
 or a function of `x`, `y`, and `z` or `ScalarField`.
 (e.g., `fn(x,y,z) = 5*(5-x); load("load1", fx=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2356,6 +2669,34 @@ Types:
 - `fy`: Float64 or Function
 - `fz`: Float64 or Function
 """
+function load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
+    fx === nothing && fy === nothing && fz === nothing && p === nothing &&
+        error("load: at least one of fx, fy, fz, p must be specified.")
+    if p !== nothing
+        if p isa ScalarField
+            pp = elementsToNodes(p)
+            return BoundaryCondition(name, p=pp)
+        end
+        return BoundaryCondition(name, p=p)
+    end
+    if fx !== nothing
+        ffx = fx isa ScalarField ? elementsToNodes(fx) : fx
+    else
+        ffx = fx
+    end
+    if fy !== nothing
+        ffy = fy isa ScalarField ? elementsToNodes(fy) : fy
+    else
+        ffy = fy
+    end
+    if fz !== nothing
+        ffz = fz isa ScalarField ? elementsToNodes(fz) : fz
+    else
+        ffz = fz
+    end
+    return BoundaryCondition(name, fx=ffx, fy=ffy, fz=ffz)
+end
+#=
 function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number, Function, ScalarField}=0, fz::Union{Number, Function, ScalarField}=0, p::Union{Number, Function, ScalarField}=0)
     if fx isa ScalarField
         if isElementwise(fx)
@@ -2384,6 +2725,7 @@ function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number
     ld0 = name, fx, fy, fz
     return ld0
 end
+=#
 
 """
     elasticSupport(name; kx=..., ky=..., kz=...)
@@ -2393,7 +2735,7 @@ Specifies distributed stiffness for an elastic support on the physical group `na
 (e.g., `fn(x,y,z) = 5*(5-x); elasticSupport("supp1", kx=fn)`)
 Default values are 1.
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2401,10 +2743,17 @@ Types:
 - `ky`: Float64 or Function
 - `kz`: Float64 or Function
 """
+function elasticSupport(name; kx=nothing, ky=nothing, kz=nothing)
+    kx === nothing && ky === nothing && kz === nothing &&
+        error("elasticSupport: at least one of kx, ky, kz, p must be specified.")
+    return BoundaryCondition(name, kx=kx, ky=ky, kz=kz)
+end
+#=
 function elasticSupport(name; kx=0, ky=0, kz=0)
     es0 = name, kx, ky, kz
     return es0
 end
+=#
 
 """
     temperatureConstraint(name; T=...)
@@ -2413,16 +2762,23 @@ Specifies temperature constraints on the physical group `name`.
 `T` can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); temperatureConstraint("surf1", T=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
 - `T`: Float64 or Function
 """
+function temperatureConstraint(name; T=nothing)
+    T === nothing &&
+        error("temperatureConstraint: T must be specified.")
+    return BoundaryCondition(name, T=T)
+end
+#=
 function temperatureConstraint(name; T=1im)
     bc0 = name, T, 1im, 1im
     return bc0
 end
+=#
 
 """
     heatFlux(name; qn=...)
@@ -2431,18 +2787,23 @@ Specifies the heat flux normal to the surface of the physical group `name`.
 `qn` can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); load("flux1", qn=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
 - `qn`: Float64 or Function
 """
-function heatFlux(name; qn=0)
+function heatFlux(name; qn=nothing)
+    qn === nothing &&
+        error("heatFlux: qn must be specified.")
+    return BoundaryCondition(name, qn=qn)
+    #=
     p1 =0
     p2 =0
     qn0 = -qn
     fl0 = name, qn0, p1, p2
     return fl0
+    =#
 end
 
 """
@@ -2452,38 +2813,43 @@ Specifies the volumetric heat source in the physical group `name`.
 `h` can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); load("source1", h=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
 - `h`: Float64 or Function
 """
-function heatSource(name; h=0)
+function heatSource(name; h=nothing)
+    h === nothing &&
+        error("heatSource: h must be specified.")
+    return BoundaryCondition(name, h=h)
+    #=
     p1 =0
     p2 =0
     h0 = -h
     sr0 = name, h0, p1, p2
     return sr0
+    =#
 end
 
 """
-    heatConvection(name; h=..., Tₐ=...)
+    heatConvection(name; h=..., T∞=...)
 
 Specifies convective boundary conditions on the surface in the physical group `name`.
 `h` is the heat transfer coefficient of the surrounding medium; `Tₐ` is the ambient temperature.
 `Tₐ` can be either a constant or a function of `x`, `y`, and `z`.
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
 - `h`: Float64
 - `Tₐ`: Float64 or Function
 """
-function heatConvection(name; h=10., Tₐ=20.)
-    p = 2im
-    hcv0 = name, h, Tₐ, p
-    return hcv0
+function heatConvection(name; h=nothing, T∞=nothing)
+    h === nothing || T∞ === nothing &&
+        error("heatSource: h and T∞ must be specified.")
+    return BoundaryCondition(name, h=h, T=T∞)
 end
 
 """
@@ -2519,7 +2885,7 @@ At least one of `fx`, `fy`, or `fz` etc. must be provided (depending on the prob
 Each component can be a constant or a function of `x`, `y`, and `z`.
 (e.g., `fn(x,y,z) = 5*(5-x); field("surf1", fx=fn)`)
 
-Returns: Tuple{String, Float64 or Function, Float64 or Function, Float64 or Function, ... x7}
+Returns: BoundaryCondition
 
 Types:
 - `name`: String
@@ -2540,12 +2906,11 @@ qq = scalarField(problem, [f2])
 qqq = showDoFResults(qq, :scalar)
 ```
 """
-function field(name; f=:no, fx=:no, fy=:no, fz=:no, fxy=:no, fyx=:no, fyz=:no, fzy=:no, fzx=:no, fxz=:no)
-    fyx = fyx != :no ? fyx : fxy
-    fzy = fzy != :no ? fzy : fyz
-    fxz = fxz != :no ? fxz : fzx
-    ld0 = name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz
-    return ld0
+function field(name; f=nothing, fx=nothing, fy=nothing, fz=nothing, fxy=nothing, fyx=nothing, fyz=nothing, fzy=nothing, fzx=nothing, fxz=nothing)
+    fyx = fyx !== nothing ? fyx : fxy
+    fzy = fzy !== nothing ? fzy : fyz
+    fxz = fxz !== nothing ? fxz : fzx
+    return BoundaryCondition(name, f=f, fx=fx, fy=fy, fz=fz, fxy=fxy, fyz=fyz, fzx=fzx, fyx=fyx, fzy=fzy, fxz=fxz)
 end
 
 """
@@ -2558,7 +2923,7 @@ Return: Vector{Float64}
 
 Types:
 - `problem`: Problem
-- `dataField`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{BoundaryCondition}
 
 # Examples
 
@@ -2582,7 +2947,12 @@ function scalarField(problem, dataField)
     field = zeros(non)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        name = dataField[i].phName
+        f = dataField[i].f
+        if f === nothing
+            error("scalarField: f is not defined")
+        end
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(f, Function)
@@ -2590,7 +2960,7 @@ function scalarField(problem, dataField)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if f != :no
+        if f !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
@@ -2621,7 +2991,7 @@ Return: VectorField
 
 Types:
 - `problem`: Problem
-- `dataField`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{BoundaryCondition}
 
 # Examples
 
@@ -2640,7 +3010,7 @@ Here VectorField is defined in nodes.
 """
 function vectorField(problem, dataField)
     if !isa(dataField, Vector)
-        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
+        error("vectorField: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = problem.dim
@@ -2648,7 +3018,11 @@ function vectorField(problem, dataField)
     field = zeros(non * pdim)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        name = dataField[i].phName
+        fx = dataField[i].fx
+        fy = dataField[i].fy
+        fz = dataField[i].fz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
@@ -2656,7 +3030,7 @@ function vectorField(problem, dataField)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if fx != :no
+        if fx !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
@@ -2667,7 +3041,7 @@ function vectorField(problem, dataField)
                 field[nodeTagsX,:] .= fx
             end
         end
-        if fy != :no
+        if fy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 2)
@@ -2678,7 +3052,7 @@ function vectorField(problem, dataField)
                 field[nodeTagsY,:] .= fy
             end
         end
-        if fz != :no && pdim == 3
+        if fz !== nothing && pdim == 3
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= pdim
             if isa(fz, Function)
@@ -2722,7 +3096,7 @@ Return: TensorField
 
 Types:
 - `problem`: Problem
-- `dataField`: Vector{Tuple{String, Float64,...}}
+- `dataField`: Vector{BoundaryCondition}
 
 # Examples
 
@@ -2741,7 +3115,7 @@ Here TensorField is defined in nodes.
 """
 function tensorField(problem, dataField; type=:e)
     if !isa(dataField, Vector)
-        error("applyBoundaryConditions!: dataField are not arranged in a vector. Put them in [...]")
+        error("tensorField!: dataField are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     pdim = 9
@@ -2749,7 +3123,17 @@ function tensorField(problem, dataField; type=:e)
     field = zeros(non * pdim)
     
     for i in 1:length(dataField)
-        name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
+        name = dataField[i].phName
+        fx = dataField[i].fx
+        fy = dataField[i].fy
+        fz = dataField[i].fz
+        fxy = dataField[i].fxy
+        fyz = dataField[i].fyz
+        fzx = dataField[i].fzx
+        fyx = dataField[i].fyx
+        fzy = dataField[i].fzy
+        fxz = dataField[i].fxz
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function) || isa(fxy, Function) || isa(fyz, Function) || isa(fzx, Function)
@@ -2757,7 +3141,7 @@ function tensorField(problem, dataField; type=:e)
             yy = coord[2:3:length(coord)]
             zz = coord[3:3:length(coord)]
         end
-        if fx != :no
+        if fx !== nothing
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim - 1)
@@ -2768,7 +3152,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsX,:] .= fx
             end
         end
-        if fy != :no
+        if fy !== nothing
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim - 5)
@@ -2779,7 +3163,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsY,:] .= fy
             end
         end
-        if fz != :no
+        if fz !== nothing
             nodeTagsZ = copy(nodeTags)
             nodeTagsZ *= pdim
             if isa(fz, Function)
@@ -2789,7 +3173,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsZ,:] .= fz
             end
         end
-        if fxy != :no
+        if fxy !== nothing
             nodeTagsXY = copy(nodeTags)
             nodeTagsXY *= pdim
             nodeTagsXY .-= (pdim - 4)
@@ -2800,7 +3184,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsXY,:] .= fxy
             end
         end
-        if fyx != :no
+        if fyx !== nothing
             nodeTagsYX = copy(nodeTags)
             nodeTagsYX *= pdim
             nodeTagsYX .-= (pdim - 2)
@@ -2811,7 +3195,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsYX,:] .= fyx
             end
         end
-        if fyz != :no
+        if fyz !== nothing
             nodeTagsYZ = copy(nodeTags)
             nodeTagsYZ *= pdim
             nodeTagsYZ .-= (pdim - 8)
@@ -2822,7 +3206,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsYZ,:] .= fyz
             end
         end
-        if fzy != :no
+        if fzy !== nothing
             nodeTagsZY = copy(nodeTags)
             nodeTagsZY *= pdim
             nodeTagsZY .-= (pdim - 6)
@@ -2833,7 +3217,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsZY,:] .= fzy
             end
         end
-        if fzx != :no
+        if fzx !== nothing
             nodeTagsZX = copy(nodeTags)
             nodeTagsZX *= pdim
             nodeTagsZX .-= (pdim - 3)
@@ -2844,7 +3228,7 @@ function tensorField(problem, dataField; type=:e)
                 field[nodeTagsZX,:] .= fzx
             end
         end
-        if fxz != :no
+        if fxz !== nothing
             nodeTagsXZ = copy(nodeTags)
             nodeTagsXZ *= pdim
             nodeTagsXZ .-= (pdim - 7)
@@ -3278,62 +3662,175 @@ Return: `DoFs`
 
 Types:
 - `problem`: Problem
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `supports`: Vector{BoundaryCondition}
 - `DoFs`: Vector{Int64}
 """
 function constrainedDoFs(problem, supports)
     if !isa(supports, Vector)
-        error("applyBoundaryConditions!: supports are not arranged in a vector. Put them in [...]")
+        error("constrainedDoFs: supports are not arranged in a vector. Put them in [...]")
     end
     gmsh.model.setCurrent(problem.name)
     #non = problem.non
     pdim = problem.pdim
     #dof = non * pdim
-    cdofs = []
+    cdofs = Int[]
     
     for i in 1:length(supports)
-        name, ux, uy, uz = supports[i]
+        name = supports[i].phName
+        ux = supports[i].ux
+        uy = supports[i].uy
+        uz = supports[i].uz
+        T = supports[i].T
+        p = supports[i].p
+        sx = supports[i].sx
+        sy = supports[i].sy
+        sz = supports[i].sz
+        sxy = supports[i].sxy
+        syz = supports[i].syz
+        szx = supports[i].szx
+        
+        if (T !== nothing && (ux !== nothing || uy !== nothing || uz !== nothing)) ||
+            (T !== nothing && (sx !== nothing || sy !== nothing || sz !== nothing ||
+            sxy !== nothing || syz !== nothing || szx !== nothing)) ||
+            ((ux !== nothing || uy !== nothing || uz !== nothing) &&
+            (sx !== nothing || sy !== nothing || sz !== nothing ||
+            sxy !== nothing || syz !== nothing || szx !== nothing))
+            
+            error("BoundaryCondition: T, displacement and stress BCs are mutually exclusive.")
+        end
+
         phg = getTagForPhysicalName(name)
         nodeTags::Vector{Int64}, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-        nodeTagsX = []
-        nodeTagsY = []
-        nodeTagsZ = []
-        if ux != 1im
+        nodeTagsX = Int[]
+        nodeTagsY = Int[]
+        nodeTagsZ = Int[]
+        nodeTagsXY = Int[]
+        nodeTagsYZ = Int[]
+        nodeTagsZX = Int[]
+        nodeTagsYX = Int[]
+        nodeTagsZY = Int[]
+        nodeTagsXZ = Int[]
+        if T !== nothing && pdim == 1
             nodeTagsX = copy(nodeTags)
             nodeTagsX *= pdim
             nodeTagsX .-= (pdim-1)
         end
-        if uy != 1im
+        if p !== nothing && pdim == 1
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim-1)
+        end
+        if ux !== nothing && (pdim == 1 || pdim == 2 || pdim == 3)
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim-1)
+        end
+        if uy !== nothing && (pdim == 2 || pdim == 3)
             nodeTagsY = copy(nodeTags)
             nodeTagsY *= pdim
             nodeTagsY .-= (pdim-2)
         end
-        if pdim > 2 && uz != 1im
+        if pdim == 3 && uz !== nothing
             nodeTagsZ = copy(nodeTags)
-            nodeTagsZ *= 3
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim-3)
         end
-        cdofs = cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ
+        if pdim == 9 && sx !== nothing
+            nodeTagsX = copy(nodeTags)
+            nodeTagsX *= pdim
+            nodeTagsX .-= (pdim - 1)
+        end
+        if pdim == 9 && sy !== nothing
+            nodeTagsY = copy(nodeTags)
+            nodeTagsY *= pdim
+            nodeTagsY .-= (pdim - 5)
+        end
+        if pdim == 9 && sz !== nothing
+            nodeTagsZ = copy(nodeTags)
+            nodeTagsZ *= pdim
+            nodeTagsZ .-= (pdim - 9)
+        end
+        if pdim == 9 && sxy !== nothing
+            nodeTagsXY = copy(nodeTags)
+            nodeTagsXY *= pdim
+            nodeTagsXY .-= (pdim - 4)
+        end
+        if pdim == 9 && sxy !== nothing
+            nodeTagsYX = copy(nodeTags)
+            nodeTagsYX *= pdim
+            nodeTagsYX .-= (pdim - 2)
+        end
+        if pdim == 9 && syz !== nothing
+            nodeTagsYZ = copy(nodeTags)
+            nodeTagsYZ *= pdim
+            nodeTagsYZ .-= (pdim - 8)
+        end
+        if pdim == 9 && syz !== nothing
+            nodeTagsZY = copy(nodeTags)
+            nodeTagsZY *= pdim
+            nodeTagsZY .-= (pdim - 6)
+        end
+        if pdim == 9 && szx !== nothing
+            nodeTagsZX = copy(nodeTags)
+            nodeTagsZX *= pdim
+            nodeTagsZX .-= (pdim - 3)
+        end
+        if pdim == 9 && szx !== nothing
+            nodeTagsXZ = copy(nodeTags)
+            nodeTagsXZ *= pdim
+            nodeTagsXZ .-= (pdim - 7)
+        end
+        cdofs = unique(cdofs ∪ nodeTagsX ∪ nodeTagsY ∪ nodeTagsZ ∪ nodeTagsXY ∪ nodeTagsYZ ∪ nodeTagsZX ∪ nodeTagsYX ∪ nodeTagsZY ∪ nodeTagsXZ)
     end
     
     return cdofs
 end
 
 """
-    freeDoFs(problem, supports)
+    allDoFs(problem)
 
-Returns the serial numbers of unconstrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
+Returns the serial numbers of degrees of freedom of the whole model.
 
 Return: `DoFs`
 
 Types:
 - `problem`: Problem
-- `supports`: Vector{Tuple{String, Float64, Float64, Float64}}
+- `DoFs`: Vector{Int64}
+"""
+function allDoFs(problem)
+    nodes0 = Int[]
+    nodes = Int[]
+    pdim = problem.pdim
+    for mat in problem.material
+        dimTags = gmsh.model.getEntitiesForPhysicalName(mat.phName)
+        for (edim, etag) in dimTags
+            nodeTags, _, _ = gmsh.model.mesh.getNodes(edim, etag, true)
+            nodes0 = unique(nodes0 ∪ nodeTags)
+        end
+    end
+    for p in 1:pdim
+        nodes = unique(nodes ∪ (pdim * nodes0 .- (pdim - p)))
+    end
+    return nodes
+end
+
+"""
+    freeDoFs(problem, supports)
+
+Returns the serial numbers of unconstrained degrees of freedom. Support is 
+a vector of boundary conditions given with the function `displacementConstraint`.
+
+Return: `DoFs`
+
+Types:
+- `problem`: Problem
+- `supports`: Vector{BoundaryCondition}
 - `DoFs`: Vector{Int64}
 """
 function freeDoFs(problem, supports)
     cdofs = constrainedDoFs(problem, supports)
-    dof = problem.non * problem.pdim
-    fdofs = setdiff(1:dof, cdofs)
+    adofs = allDoFs(problem)
+    fdofs = setdiff(adofs, cdofs)
     return fdofs
 end
 
@@ -3471,10 +3968,10 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
             #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
-            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            #ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            #ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            #ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
             for i in 1:length(elemTypes)
                 et = elemTypes[i]
                 elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)

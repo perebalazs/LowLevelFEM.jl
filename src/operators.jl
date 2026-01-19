@@ -2164,16 +2164,16 @@ nodal representation before multiplication.
 - `VectorField` containing the nodal result with one time step.
 """
 function *(A::Union{SystemMatrix,Matrix}, BB::Union{ScalarField,VectorField,TensorField})
-    B = BB.A != [] ? elementsToNodes(BB) : BB
+    B = isNodal(BB) ? elementsToNodes(BB) : BB
     T = typeof(BB)
 
-    if B.a != [;;] && B.nsteps == 1
-        type = B.type
-        C = A isa Matrix ? A * B.a : A.A * B.a
-        return T([], reshape(C, :, 1), [0.0], [], 1, type, B.model)
-    else
-        error("*(A, B::Union{ScalarField,VectorField,TensorField}): vector field must be nodal with a single time step.")
-    end
+    #if B.a != [;;] && B.nsteps == 1
+    type = B.type
+    C = A isa Matrix ? A * B.a : A.A * B.a
+    return T([], reshape(C, :, BB.nsteps), BB.t, [], BB.nsteps, type, B.model)
+    #else
+    #    error("*(A, B::Union{ScalarField,VectorField,TensorField}): vector field must be nodal with a single time step.")
+    #end
 end
 
 #=
@@ -2218,15 +2218,15 @@ before solving.
 - `ScalarField` or `VectorField` or `TensorField` containing the solution.
 """
 function \(A::Union{SystemMatrix,Matrix}, BB::Union{ScalarField,VectorField,TensorField})
-    B = BB.A != [] ? elementsToNodes(BB) : BB
+    B = isNodal(BB) ? elementsToNodes(BB) : BB
     T = typeof(BB)
 
-    if B.a != [;;] && B.nsteps == 1
+    #if B.a != [;;] && B.nsteps == 1
         C = A isa Matrix ? A \ B.a : A.A \ B.a
-        return T([], reshape(C, :, 1), [0.0], [], 1, BB.type, BB.model)
-    else
-        error("\\(A, b::Union{ScalarField,VectorField,TensorField}): scalar field must be nodal with a single time step.")
-    end
+        return T([], reshape(C, :, 1), BB.t, [], BB.nsteps, BB.type, BB.model)
+    #else
+    #    error("\\(A, b::Union{ScalarField,VectorField,TensorField}): scalar field must be nodal with a single time step.")
+    #end
 end
 
 #=
