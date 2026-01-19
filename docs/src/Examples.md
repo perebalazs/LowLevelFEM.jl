@@ -14,13 +14,13 @@ using LowLevelFEM
 gmsh.initialize()
 
 gmsh.open("cantilever2D.geo")
-mat = material("body", E=2e5, ν=0.3)
+mat = Material("body", E=2e5, ν=0.3)
 problem = Problem([mat], type=:PlaneStress)
 
 supp = displacementConstraint("supp", ux=0, uy=0)
-load = load("load", fy=-1)
+load1 = load("load", fy=-1)
 
-q = solveDisplacement(problem, [load], [supp])
+q = solveDisplacement(problem, load=[load1], support=[supp])
 S = solveStress(q)
 
 u = showDoFResults(q, :uvec)
@@ -90,9 +90,7 @@ ld = load("load", fy=-1)
 K = stiffnessMatrix(problem)
 f = loadVector(problem, [ld])
 
-applyBoundaryConditions!(K, f, [supp])
-
-q = solveDisplacement(K, f)
+q = solveDisplacement(K, f, support=[supp])
 S = solveStress(q)
 
 u = showDoFResults(q, :uvec, name="uvec", visible=false)
@@ -166,7 +164,7 @@ gmsh.initialize()
 #gmsh.open("LshapedPlate.geo")
 gmsh.open("LshapedPlate2.geo")
 
-mat = material("body", E=2e5, ν=0.3)
+mat = Material("body", E=2e5, ν=0.3)
 problem = Problem([mat], type=:PlaneStress, thickness=1)
 
 bc1 = displacementConstraint("fix", ux=0, uy=0)
@@ -174,9 +172,8 @@ ld1 = load("load", fy=-1)
 
 K = stiffnessMatrix(problem)
 f = loadVector(problem, [ld1])
-applyBoundaryConditions!(K, f, [bc1])
 
-q = solveDisplacement(K, f)
+q = solveDisplacement(K, f, support=[bc1])
 S = solveStress(q)
 
 u = showDoFResults(q, :uvec, name="uvec", visible=false)
@@ -404,7 +401,7 @@ using LowLevelFEM
 gmsh.initialize()
 
 # Problem and BCs
-mat = material("body", k=45.0)
+mat = Material("body", k=45.0)
 problem = Problem([mat], type=:PlaneHeatConduction, thickness=1.0)
 
 bc_hot = temperatureConstraint("hot", T=100.0)
@@ -413,8 +410,7 @@ bc_cold = temperatureConstraint("cold", T=0.0)
 # Assemble and solve K*T = q with Dirichlet BCs
 Kth = heatConductionMatrix(problem)
 qth = heatFluxVector(problem, [])
-applyBoundaryConditions!(Kth, qth, [bc_hot, bc_cold])
-T = solveTemperature(Kth, qth)
+T = solveTemperature(Kth, qth, temperatureConstraint=[bc_hot, bc_cold])
 
 # Postprocess: temperature and heat flux
 showDoFResults(T, :T, name="T", visible=true)
@@ -437,13 +433,9 @@ matT = material("body", k=45.0)
 probT = Problem([matT], type=:PlaneHeatConduction, thickness=1.0)
 
 bc_hot = temperatureConstraint("hot", T=100.0)
-hcv = heatConvection("conv", h=15.0, Tₐ=20.0)
+hcv = heatConvection("conv", h=15.0, T∞=20.0)
 
-Kth = heatConductionMatrix(probT)
-qth = heatFluxVector(probT, [])
-applyHeatConvection!(Kth, qth, [hcv])
-applyBoundaryConditions!(Kth, qth, [bc_hot])
-T = solveTemperature(Kth, qth)
+T = solveTemperature(Kth, qth, temperatureConstraint=[bc_hot], heatConvection=[hcv])
 
 showDoFResults(T, :T, name="T", visible=true)
 qflux = solveHeatFlux(T)
@@ -464,12 +456,8 @@ gmsh.initialize()
 matT = material("body", k=45.0)
 probT = Problem([matT], type=:PlaneHeatConduction, thickness=1.0)
 bc_hot = temperatureConstraint("hot", T=100.0)
-hcv = heatConvection("conv", h=15.0, Tₐ=20.0)
-Kth = heatConductionMatrix(probT)
-qth = heatFluxVector(probT, [])
-applyHeatConvection!(Kth, qth, [hcv])
-applyBoundaryConditions!(Kth, qth, [bc_hot])
-T = solveTemperature(Kth, qth)
+hcv = heatConvection("conv", h=15.0, T∞=20.0)
+T = solveTemperature(Kth, qth, temperatureConstraint=[bc_hot], heatConvection=[hcv])
 
 # 2) Elastic problem with thermal load
 matE = material("body", E=210e3, ν=0.3, α=1.2e-5)
@@ -477,8 +465,7 @@ probE = Problem([matE], type=:PlaneStress, thickness=1.0)
 K = stiffnessMatrix(probE)
 fth = thermalLoadVector(probE, T)  # from temperature field
 bc_fix = displacementConstraint("hot", ux=0.0, uy=0.0)
-applyBoundaryConditions!(K, fth, [bc_fix])
-q = solveDisplacement(K, fth)
+q = solveDisplacement(K, fth, support=[bc_fix])
 S = solveStress(q)
 
 showDoFResults(q, :uvec, name="u", visible=false)
