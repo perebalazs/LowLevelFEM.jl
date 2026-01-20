@@ -3,6 +3,7 @@ export poissonMatrix, reactionMatrix, advectionMatrix
 export ∫∇oN_c_∇oN_dΩ, ∫∇N_c_∇N_dΩ, ∫∇xN_c_∇xN_dΩ, ∫N_c_N_dΩ, ∫N_c_∂N∂x_dΩ, ∫N_c_∂N∂x_dΩ, ∫N_c_∂N∂y_dΩ, ∫N_c_∂N∂z_dΩ
 export ∫N_c_dΩ
 export gradDivMatrix, symmetricGradientMatrix, curlCurlMatrix
+export gradMatrix, navierStokesAdvectionMatrix
 export tensorLaplaceMatrix, traceLaplaceMatrix, beltramiMichellMatrix, tensorDivDivMatrix
 export sourceVector, loadTensor
 export solveField
@@ -1413,3 +1414,560 @@ function solveField(K::SystemMatrix, f::Union{ScalarField,VectorField};
     end
     return u
 end
+
+"""
+    gradMatrix(problem_u::Problem, problem_p::Problem)
+
+Assembles the mixed gradient matrix G mapping a scalar field (pressure)
+to a vector field (velocity), corresponding to the weak form
+
+    (G p, v) = -∫_Ω p ∇·v dΩ
+
+Notes
+- Requires problem_u.pdim == problem_u.dim (vector field).
+- Requires problem_p.pdim == 1 (scalar field).
+- Requires problem_u.dim == problem_p.dim.
+- The divergence matrix is obtained as D = -G'.
+"""
+function gradMatrix(problem_u::Problem, problem_p::Problem)
+
+    @assert problem_u.dim == problem_p.dim
+    @assert problem_u.pdim == problem_u.dim
+    @assert problem_p.pdim == 1
+
+    gmsh.model.setCurrent(problem_u.name)
+
+    dim   = problem_u.dim
+    pdim  = problem_u.pdim
+    non_u = problem_u.non
+    non_p = problem_p.non
+
+    # Conservative IJV estimate
+    lengthOfIJV = estimateLengthOfIJV(problem_u)
+
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for ipg in 1:length(problem_u.material)
+        phName = problem_u.material[ipg].phName
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        for (edim, etag) in dimTags
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for itype in 1:length(elemTypes)
+                et = elemTypes[itype]
+
+                _, _, order, numNodes::Int, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                intPoints, intWeights =
+                    gmsh.model.mesh.getIntegrationPoints(
+                        et, "Gauss" * string(2order + 1)
+                    )
+
+                numIntPoints = length(intWeights)
+
+                # --- pressure basis (scalar) ---
+                _, fun_p, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h_p = reshape(fun_p, :, numIntPoints)
+
+                # --- velocity basis (vector) ---
+                _, dfun_u, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h_u = reshape(dfun_u, :, numIntPoints)
+
+                nnet = zeros(Int, length(elemTags[itype]), numNodes)
+
+                invJac = zeros(3, 3numIntPoints)
+                ∂h_u  = zeros(dim, numNodes * numIntPoints)
+
+                Ke = zeros(pdim * numNodes, numNodes)
+
+                for j in 1:length(elemTags[itype])
+                    elem = elemTags[itype][j]
+
+                    for a in 1:numNodes
+                        nnet[j, a] =
+                            elemNodeTags[itype][(j-1)*numNodes + a]
+                    end
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3k-2:3k] .=
+                            inv(Jac[1:3, 3k-2:3k])'
+                    end
+
+                    fill!(∂h_u, 0.0)
+                    for k in 1:numIntPoints, a in 1:numNodes
+                        ∂h_u[1:dim, (k-1)*numNodes + a] .=
+                            invJac[1:dim, 3k-2:3k-(3-dim)] *
+                            ∇h_u[a*3-2:a*3-(3-dim), k]
+                    end
+
+                    fill!(Ke, 0.0)
+
+                    for k in 1:numIntPoints
+                        w = jacDet[k] * intWeights[k]
+                        _kernel_grad_scalar_to_vector!(
+                            Ke, w, k,
+                            h_p, ∂h_u,
+                            numNodes, numNodes,
+                            pdim, dim
+                        )
+                    end
+
+                    # scatter to global IJV
+                    for a in 1:(pdim*numNodes)
+                        na = div(a-1, pdim) + 1
+                        Ia = (nnet[j, na]-1)*pdim + mod(a-1, pdim) + 1
+
+                        for b in 1:numNodes
+                            Ib = nnet[j, b]
+                            I[pos] = Ia
+                            J[pos] = Ib
+                            V[pos] = Ke[a, b]
+                            pos += 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    resize!(I, pos-1)
+    resize!(J, pos-1)
+    resize!(V, pos-1)
+
+    K = sparse(I, J, V, pdim*non_u, non_p)
+    dropzeros!(K)
+
+    return SystemMatrix(K, problem_p, problem_u)
+end
+
+@inline function _kernel_grad_scalar_to_vector!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h_p, ∂h_u,
+    numNodes_p::Int,
+    numNodes_u::Int,
+    pdim_u::Int,
+    dim::Int
+)
+    @inbounds for a in 1:numNodes_u
+        @inbounds for b in 1:numNodes_p
+            Nb = h_p[(k-1)*numNodes_p + b]
+            @inbounds for α in 1:dim
+                dNa = ∂h_u[α, (k-1)*numNodes_u + a]
+                ia  = (a-1)*pdim_u + α
+                ib  = b
+                Ke[ia, ib] -= Nb * dNa * w
+            end
+        end
+    end
+end
+
+# --- Navier–Stokes / Oseen advection (vector -> vector) -----------------------
+
+"""
+    navierStokesAdvectionMatrix(problem::Problem, u;
+                                time_index::Int = 1)
+
+Assembles the (linearized) Navier–Stokes convection operator in Oseen/Picard form:
+
+    C(w,v) = ∫_Ω (u·∇)w · v dΩ
+
+where `u` is a given velocity field (the coefficient), `w` is the unknown velocity,
+and `v` is the test function.
+
+Matrix size:
+- `problem.pdim == problem.dim` is required (vector field).
+- Returns a `SystemMatrix` of size (dim*N) × (dim*N).
+
+Arguments
+- `problem::Problem`:
+  Must represent the velocity unknown (vector field).
+- `u`:
+  Given advection velocity in the SAME dof ordering as `VectorField` uses:
+  `[u1x,u1y(,u1z), u2x,u2y(,u2z), ...]`.
+  Accepted forms:
+  - `VectorField` (nodal, same mesh)
+  - `AbstractVector{<:Real}` (length = dim*problem.non)
+
+Keyword arguments
+- `time_index`:
+  If `u` stores multiple time steps internally (e.g. as a matrix), you can select
+  which column to use. For plain vectors it is ignored.
+
+Notes
+- This is NOT the scalar `advectionMatrix`. This operator uses the given velocity `u`
+  inside the Gauss integration, assembled in ONE pass (no splitting to 3 scalar fields).
+- The resulting operator is block-diagonal by velocity components (no component mixing),
+  consistent with (u·∇) acting component-wise in Cartesian coordinates.
+"""
+function navierStokesAdvectionMatrix(
+    problem::Problem,
+    u;
+    time_index::Int = 1
+)
+    if problem.type == :dummy
+        return nothing
+    end
+    gmsh.model.setCurrent(problem.name)
+
+    @assert problem.pdim == problem.dim "navierStokesAdvectionMatrix: requires vector field (pdim == dim)."
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    N    = problem.non
+    dof  = pdim * N
+
+    # --- extract dof vector for u ------------------------------------------------
+    uvec = _ns_get_uvec(u, dof, time_index)
+
+    # prealloc (same strategy as others)
+    lengthOfIJV = estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    # loop physical groups (same as poissonMatrix/advectionMatrix)
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        pos = _assemble_navier_stokes_advection!(I, J, V, pos, problem, phName, uvec)
+    end
+
+    resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
+
+    C = sparse(I, J, V, dof, dof)
+    dropzeros!(C)
+    return SystemMatrix(C, problem)
+end
+
+# --- internal: get u dofs as a vector ----------------------------------------
+
+# Try to be robust without touching existing code:
+# - If u is already a vector: use it.
+# - If u is a VectorField: try DoFs(u), else u.a (vector), else u.a[:,time_index].
+function _ns_get_uvec(u, dof::Int, time_index::Int)
+    if u isa AbstractVector
+        @assert length(u) == dof "navierStokesAdvectionMatrix: length(u) must be dim*non."
+        return u
+    end
+
+    # VectorField path: prefer DoFs(u) if available
+    try
+        uv = DoFs(u)
+        if uv isa AbstractVector
+            @assert length(uv) == dof "navierStokesAdvectionMatrix: DoFs(u) has wrong length."
+            return uv
+        end
+        # If DoFs(u) returns a matrix (time-dependent storage), take a column
+        if uv isa AbstractMatrix
+            @assert size(uv, 1) == dof "navierStokesAdvectionMatrix: DoFs(u) has wrong size."
+            return view(uv, :, time_index)
+        end
+    catch
+        # fallthrough
+    end
+
+    # fallback to field storage convention u.a
+    if hasproperty(u, :a)
+        A = getproperty(u, :a)
+        if A isa AbstractVector
+            @assert length(A) == dof "navierStokesAdvectionMatrix: u.a has wrong length."
+            return A
+        elseif A isa AbstractMatrix
+            @assert size(A, 1) == dof "navierStokesAdvectionMatrix: u.a has wrong size."
+            return view(A, :, time_index)
+        end
+    end
+
+    error("navierStokesAdvectionMatrix: cannot extract velocity dofs from `u`. Provide a VectorField or a dof vector.")
+end
+
+# --- kernel -------------------------------------------------------------------
+
+# Convection operator: ∫ Na * (u·∇Nb) * w dΩ, block-diagonal by component.
+@inline function _kernel_ns_convection!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int,
+    u_gp::AbstractVector{<:Real}
+)
+    @inbounds for a in 1:numNodes
+        Na = h[(k-1)*numNodes + a]
+        @inbounds for b in 1:numNodes
+            adv = 0.0
+            @inbounds for d in 1:dim
+                adv += u_gp[d] * ∂h[d, (k-1)*numNodes + b]
+            end
+            _add_blockdiag!(Ke, pdim, a, b, Na * adv * w)
+        end
+    end
+    return nothing
+end
+
+# --- assembly for one physical group -----------------------------------------
+
+function _assemble_navier_stokes_advection!(
+    I::Vector{Int}, J::Vector{Int}, V::Vector{Float64},
+    pos0::Int,
+    problem::Problem,
+    phName::String,
+    uvec::AbstractVector{<:Real}
+)
+    gmsh.model.setCurrent(problem.name)
+
+    pdim = problem.pdim
+    dim  = problem.dim
+    pos  = pos0
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    for dimTag in dimTags
+        edim, etag = dimTag
+        elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+
+        for itype in 1:length(elemTypes)
+            et = elemTypes[itype]
+            _, _, order, numNodes::Int64, _, _ = gmsh.model.mesh.getElementProperties(et)
+
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+            numIntPoints = length(intWeights)
+
+            # basis and grad basis
+            _, fun, _  = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h = reshape(fun, :, numIntPoints)
+
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h = reshape(dfun, :, numIntPoints)   # (3*numNodes, numIntPoints)
+
+            # connectivity
+            nnet = zeros(Int, length(elemTags[itype]), numNodes)
+            @inbounds for j in 1:length(elemTags[itype])
+                for a in 1:numNodes
+                    nnet[j, a] = elemNodeTags[itype][(j-1)*numNodes + a]
+                end
+            end
+
+            invJac = zeros(3, 3numIntPoints)
+            ∂h     = zeros(dim, numNodes * numIntPoints)
+            Ke     = zeros(pdim * numNodes, pdim * numNodes)
+
+            # local velocity nodal values: u_loc[d,a]
+            u_loc  = zeros(Float64, dim, numNodes)
+            u_gp   = zeros(Float64, dim)
+
+            @inbounds for j in 1:length(elemTags[itype])
+                elem = elemTags[itype][j]
+
+                jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
+                Jac = reshape(jac, 3, :)
+
+                @inbounds for k in 1:numIntPoints
+                    invJac[1:3, 3*k-2:3*k] .= inv(Jac[1:3, 3*k-2:3*k])'
+                end
+
+                # physical gradients of basis
+                fill!(∂h, 0.0)
+                @inbounds for k in 1:numIntPoints, a in 1:numNodes
+                    invJk = invJac[1:dim, 3*k-2:3*k-(3-dim)]
+                    gha  = ∇h[a*3-2 : a*3-(3-dim), k]
+                    ∂h[1:dim, (k-1)*numNodes + a] .= invJk * gha
+                end
+
+                # gather u nodal values for this element
+                @inbounds for a in 1:numNodes
+                    node = nnet[j, a]
+                    base = (node - 1) * pdim
+                    for d in 1:dim
+                        u_loc[d, a] = uvec[base + d]
+                    end
+                end
+
+                fill!(Ke, 0.0)
+
+                # integrate
+                @inbounds for k in 1:numIntPoints
+                    # interpolate u to Gauss point: u_gp[d] = Σ_a N_a * u_loc[d,a]
+                    for d in 1:dim
+                        u_gp[d] = dot(view(u_loc, d, :), view(h, :, k))
+                    end
+
+                    w = jacDet[k] * intWeights[k]
+                    _kernel_ns_convection!(Ke, w, k, h, ∂h, numNodes, pdim, dim, u_gp)
+                end
+
+                # scatter to global I,J,V
+                @inbounds for a in 1:(pdim*numNodes)
+                    na = (div(a-1, pdim) + 1)
+                    Ia_node = nnet[j, na]
+                    Ia = (Ia_node - 1) * pdim + (mod(a-1, pdim) + 1)
+
+                    @inbounds for b in 1:(pdim*numNodes)
+                        nb = (div(b-1, pdim) + 1)
+                        Jb_node = nnet[j, nb]
+                        Jb = (Jb_node - 1) * pdim + (mod(b-1, pdim) + 1)
+
+                        I[pos] = Ia
+                        J[pos] = Jb
+                        V[pos] = Ke[a, b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    return pos
+end
+
+#=
+@inline function _kernel_ns_convection!(
+    Ke::Matrix{Float64},
+    w::Float64, k::Int,
+    h, ∂h,
+    numNodes::Int, pdim::Int, dim::Int,
+    u_gp::AbstractVector{<:Real}
+)
+    @inbounds for a in 1:numNodes
+        Na = h[(k-1)*numNodes + a]
+        @inbounds for b in 1:numNodes
+            adv = 0.0
+            @inbounds for d in 1:dim
+                adv += u_gp[d] * ∂h[d, (k-1)*numNodes + b]
+            end
+            _add_blockdiag!(Ke, pdim, a, b, Na * adv * w)
+        end
+    end
+    return nothing
+end
+=#
+
+#=
+function _assemble_ns_advection!(
+    I::Vector{Int}, J::Vector{Int}, V::Vector{Float64},
+    pos0::Int,
+    problem::Problem,
+    phName::String,
+    uvec::AbstractVector{<:Real}
+)
+    gmsh.model.setCurrent(problem.name)
+
+    pdim = problem.pdim
+    dim  = problem.dim
+    pos  = pos0
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    for (edim, etag) in dimTags
+        elemTypes, elemTags, elemNodeTags =
+            gmsh.model.mesh.getElements(edim, etag)
+
+        for itype in 1:length(elemTypes)
+            et = elemTypes[itype]
+            _, _, order, numNodes::Int, _, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            intPoints, intWeights =
+                gmsh.model.mesh.getIntegrationPoints(
+                    et, "Gauss" * string(2order + 1)
+                )
+            numIntPoints = length(intWeights)
+
+            # basis
+            _, fun, _ =
+                gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h = reshape(fun, :, numIntPoints)
+
+            _, dfun, _ =
+                gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h = reshape(dfun, :, numIntPoints)
+
+            # connectivity
+            nnet = zeros(Int, length(elemTags[itype]), numNodes)
+            @inbounds for j in 1:length(elemTags[itype])
+                for a in 1:numNodes
+                    nnet[j, a] =
+                        elemNodeTags[itype][(j-1)*numNodes + a]
+                end
+            end
+
+            invJac = zeros(3, 3numIntPoints)
+            ∂h     = zeros(dim, numNodes * numIntPoints)
+            Ke     = zeros(pdim * numNodes, pdim * numNodes)
+
+            u_loc = zeros(Float64, dim, numNodes)
+            u_gp  = zeros(Float64, dim)
+
+            @inbounds for j in 1:length(elemTags[itype])
+                elem = elemTags[itype][j]
+
+                jac, jacDet, _ =
+                    gmsh.model.mesh.getJacobian(elem, intPoints)
+                Jac = reshape(jac, 3, :)
+
+                for k in 1:numIntPoints
+                    invJac[1:3, 3k-2:3k] .=
+                        inv(Jac[1:3, 3k-2:3k])'
+                end
+
+                # physical gradients
+                fill!(∂h, 0.0)
+                for k in 1:numIntPoints, a in 1:numNodes
+                    ∂h[1:dim, (k-1)*numNodes + a] .=
+                        invJac[1:dim, 3k-2:3k-(3-dim)] *
+                        ∇h[a*3-2:a*3-(3-dim), k]
+                end
+
+                # gather nodal u
+                for a in 1:numNodes
+                    node = nnet[j, a]
+                    base = (node-1)*pdim
+                    for d in 1:dim
+                        u_loc[d, a] = uvec[base + d]
+                    end
+                end
+
+                fill!(Ke, 0.0)
+
+                for k in 1:numIntPoints
+                    for d in 1:dim
+                        u_gp[d] = dot(view(u_loc, d, :), view(h, :, k))
+                    end
+                    w = jacDet[k] * intWeights[k]
+                    _kernel_ns_convection!(
+                        Ke, w, k, h, ∂h, numNodes, pdim, dim, u_gp
+                    )
+                end
+
+                # scatter
+                for a in 1:(pdim*numNodes)
+                    na = div(a-1, pdim) + 1
+                    Ia = (nnet[j, na]-1)*pdim + mod(a-1, pdim) + 1
+                    for b in 1:(pdim*numNodes)
+                        nb = div(b-1, pdim) + 1
+                        Jb = (nnet[j, nb]-1)*pdim + mod(b-1, pdim) + 1
+                        I[pos] = Ia
+                        J[pos] = Jb
+                        V[pos] = Ke[a, b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    return pos
+end
+=#

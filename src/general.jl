@@ -373,16 +373,22 @@ end
 
 """
     SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem)
 
-Structure containing the stiffness/mass/heat conduction/heat capacity/latent heat/... matrix and the associated `Problem`.
+Structure containing the stiffness/mass/heat conduction/heat capacity/latent heat/... matrix and the 
+associated `Problem` (with its trial field) and another `Problem` (with a test field).
 
 Types:
 - `A`: SparseMatrixCSC{Float64}
 - `model`: Problem
+- `test_model`: Problem
 """
 struct SystemMatrix
     A::SparseMatrixCSC
     model::Problem
+    test_model::Problem
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem) = new(A, model, test_model)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem) = new(A, model, model)
 end
 
 """

@@ -2360,8 +2360,8 @@ import Base:transpose,adjoint
 
 Transpose / adjoint of a system matrix.
 """
-transpose(K::SystemMatrix) = SystemMatrix(transpose(K.A), K.model)
-adjoint(K::SystemMatrix)   = SystemMatrix(adjoint(K.A), K.model)
+transpose(K::SystemMatrix) = SystemMatrix(transpose(K.A), K.test_model, K.model)
+adjoint(K::SystemMatrix)   = SystemMatrix(adjoint(K.A), K.test_model, K.model)
 
 
 import LinearAlgebra: issymmetric
