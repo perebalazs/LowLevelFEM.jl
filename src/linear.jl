@@ -3704,6 +3704,211 @@ Types:
 - `q`: VectorField
 - `E`: TensorField
 """
+function solveStrain(q; DoFResults=false)
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+    
+    if !isa(q, VectorField) 
+        error("solveStrain:argument must be a VectorField. Now it is '$(typeof(q))'.")
+    end
+    if q.type != :v3D && q.type != :v2D
+        error("solveStrain: argument must be a displacement vector. Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStrain: q.A != []")
+    end
+    nsteps = q.nsteps
+    ε = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    type = :e
+    if DoFResults == true
+        E1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ν = problem.material[ipg].ν
+        dim = 0
+        if problem.dim == 3 && problem.type == :Solid
+            dim = 3
+            rowsOfB = 6
+            b = 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            dim = 2
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            dim = 2
+            rowsOfB = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            dim = 2
+            rowsOfB = 4
+            b = 1
+        else
+            error("solveStrain: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                #e0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                r = zeros(numNodes)
+                leTags = length(elemTags[i])
+                @inbounds for j in 1:leTags
+                    elem = elemTags[i][j]
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+                    @inbounds for k in 1:numNodes
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    fill!(B, 0.0)
+                    if dim == 2 && rowsOfB == 3
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 2 && rowsOfB == 4
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l, k] / r[k]
+                        end
+                    else
+                        error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    push!(numElem, elem)
+                    @inbounds for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    #fill!(e, 0.0)
+                    e = zeros(9numNodes, nsteps) # tensors have nine elements
+                    @inbounds for k in 1:numNodes
+                        if rowsOfB == 6 && dim == 3 && problem.type == :Solid
+                            B1 = @view B[k*6-5:k*6, 1:3*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, e0[6]/2,
+                                    e0[4]/2, e0[2], e0[5]/2,
+                                    e0[6]/2, e0[5]/2, e0[3]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4]/2, e0[6]/2, e0[4]/2, e0[2], e0[5]/2, e0[6]/2, e0[5]/2, e0[3]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
+                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                    e0[3]/2, e0[2], 0,
+                                    0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
+                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                    e0[3]/2, e0[2], 0,
+                                    0, 0, 0]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
+                                end
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
+                                    e0[4]/2, e0[3], 0,
+                                    0, 0, e0[2]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], 0, e0[4], e0[3], 0, 0, 0, e0[2]]
+                                end
+                            end
+                        else
+                            error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        end
+                    end
+                    if DoFResults == true
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    end
+                    if DoFResults == false
+                        push!(ε, e)
+                    end
+                end
+            end
+        end
+    end
+    if DoFResults == true
+        @inbounds for k in 1:9
+            @inbounds for l in 1:non
+                E1[k + 9 * l - 9, :] ./= pcs[l]
+            end
+        end
+    end
+    if DoFResults == true
+        epsilon = TensorField([], E1, q.t, [], nsteps, type, problem)
+        return epsilon
+    else
+        epsilon = TensorField(ε, [;;], q.t, numElem, nsteps, type, problem)
+        return epsilon
+    end
+end
+
 function solveStrainNew(q; DoFResults::Bool=false)
     problem = q.model
     gmsh.model.setCurrent(problem.name)
@@ -4014,211 +4219,6 @@ function solveStrainNew(q; DoFResults::Bool=false)
     end
 end
 
-function solveStrain(q; DoFResults=false)
-    problem = q.model
-    gmsh.model.setCurrent(problem.name)
-    
-    if !isa(q, VectorField) 
-        error("solveStrain:argument must be a VectorField. Now it is '$(typeof(q))'.")
-    end
-    if q.type != :v3D && q.type != :v2D
-        error("solveStrain: argument must be a displacement vector. Now it is '$(q.type)'.")
-    end
-    if q.A != []
-        error("solveStrain: q.A != []")
-    end
-    nsteps = q.nsteps
-    ε = []
-    numElem = Int[]
-    ncoord2 = zeros(3 * problem.non)
-    dim = problem.dim
-    pdim = problem.pdim
-    non = problem.non
-    type = :e
-    if DoFResults == true
-        E1 = zeros(non * 9, nsteps)
-        pcs = zeros(Int64, non * dim)
-    end
-    
-    for ipg in 1:length(problem.material)
-        phName = problem.material[ipg].phName
-        ν = problem.material[ipg].ν
-        dim = 0
-        if problem.dim == 3 && problem.type == :Solid
-            dim = 3
-            rowsOfB = 6
-            b = 1
-        elseif problem.dim == 2 && problem.type == :PlaneStress
-            dim = 2
-            rowsOfB = 3
-            b = problem.thickness
-        elseif problem.dim == 2 && problem.type == :PlaneStrain
-            dim = 2
-            rowsOfB = 3
-            b = 1
-        elseif problem.dim == 2 && problem.type == :AxiSymmetric
-            dim = 2
-            rowsOfB = 4
-            b = 1
-        else
-            error("solveStrain: dimension is $(problem.dim), problem type is $(problem.type).")
-        end
-        
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-        for idm in 1:length(dimTags)
-            dimTag = dimTags[idm]
-            edim = dimTag[1]
-            etag = dimTag[2]
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
-            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
-            for i in 1:length(elemTypes)
-                et = elemTypes[i]
-                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                #e0 = zeros(rowsOfB * numNodes)
-                nodeCoord = zeros(numNodes * 3)
-                for k in 1:dim, j = 1:numNodes
-                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
-                end
-                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
-                ∇h = reshape(dfun, :, numNodes)
-                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
-                h = reshape(fun, :, numNodes)
-                nnet = zeros(Int, length(elemTags[i]), numNodes)
-                invJac = zeros(3, 3numNodes)
-                ∂h = zeros(3, numNodes * numNodes)
-                B = zeros(rowsOfB * numNodes, pdim * numNodes)
-                nn2 = zeros(Int, pdim * numNodes)
-                r = zeros(numNodes)
-                leTags = length(elemTags[i])
-                @inbounds for j in 1:leTags
-                    elem = elemTags[i][j]
-                    @inbounds for k in 1:numNodes
-                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
-                    end
-                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
-                    Jac = reshape(jac, 3, :)
-                    @inbounds for k in 1:numNodes
-                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
-                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
-                    end
-                    fill!(∂h, 0.0)
-                    @inbounds for k in 1:numNodes, l in 1:numNodes
-                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
-                    end
-                    fill!(B, 0.0)
-                    if dim == 2 && rowsOfB == 3
-                        @inbounds for k in 1:numNodes, l in 1:numNodes
-                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
-                        end
-                    elseif dim == 3 && rowsOfB == 6
-                        @inbounds for k in 1:numNodes, l in 1:numNodes
-                            B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
-                        end
-                    elseif dim == 2 && rowsOfB == 4
-                        @inbounds for k in 1:numNodes, l in 1:numNodes
-                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l, k] / r[k]
-                        end
-                    else
-                        error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
-                    end
-                    push!(numElem, elem)
-                    @inbounds for k in 1:dim
-                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
-                    end
-                    #fill!(e, 0.0)
-                    e = zeros(9numNodes, nsteps) # tensors have nine elements
-                    @inbounds for k in 1:numNodes
-                        if rowsOfB == 6 && dim == 3 && problem.type == :Solid
-                            B1 = @view B[k*6-5:k*6, 1:3*numNodes]
-                            @inbounds for kk in 1:nsteps
-                                e0 = B1 * q.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, e0[6]/2,
-                                    e0[4]/2, e0[2], e0[5]/2,
-                                    e0[6]/2, e0[5]/2, e0[3]]
-                                end
-                                if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4]/2, e0[6]/2, e0[4]/2, e0[2], e0[5]/2, e0[6]/2, e0[5]/2, e0[3]]
-                                end
-                            end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
-                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
-                            @inbounds for kk in 1:nsteps
-                                e0 = B1 * q.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
-                                    e0[3]/2, e0[2], 0,
-                                    0, 0, ν/(ν-1)*(e0[1]+e0[2])]
-                                end
-                                if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν/(ν-1)*(e0[1]+e0[2])]
-                                end
-                            end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
-                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
-                            @inbounds for kk in 1:nsteps
-                                e0 = B1 * q.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
-                                    e0[3]/2, e0[2], 0,
-                                    0, 0, 0]
-                                end
-                                if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
-                                end
-                            end
-                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
-                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
-                            @inbounds for kk in 1:nsteps
-                                e0 = B1 * q.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
-                                    e0[4]/2, e0[3], 0,
-                                    0, 0, e0[2]]
-                                end
-                                if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], 0, e0[4], e0[3], 0, 0, 0, e0[2]]
-                                end
-                            end
-                        else
-                            error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
-                        end
-                    end
-                    if DoFResults == true
-                        pcs[nnet[j,1:numNodes]] .+= 1
-                    end
-                    if DoFResults == false
-                        push!(ε, e)
-                    end
-                end
-            end
-        end
-    end
-    if DoFResults == true
-        @inbounds for k in 1:9
-            @inbounds for l in 1:non
-                E1[k + 9 * l - 9, :] ./= pcs[l]
-            end
-        end
-    end
-    if DoFResults == true
-        epsilon = TensorField([], E1, q.t, [], nsteps, type, problem)
-        return epsilon
-    else
-        epsilon = TensorField(ε, [;;], q.t, numElem, nsteps, type, problem)
-        return epsilon
-    end
-end
-
 # --- anyagmátrix és kísérő adatok feszültséghez ---
 @inline function constitutive_matrix_stress(dim::Int, type::Symbol,
     E::Float64, ν::Float64, thickness::Float64)
@@ -4349,256 +4349,6 @@ Types:
 - `T₀`: ScalarField
 - `S`: TensorField
 """
-function solveStressSlow(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model),
-                        T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model),
-                        DoFResults=false)
-    # Jacobians --> slow
-    problem = q.model
-    gmsh.model.setCurrent(problem.name)
-
-    if !isa(q, VectorField); error("solveStress:argument must be a VectorField. Now it is '$(typeof(q))'."); end
-    if q.type != :v3D && q.type != :v2D; error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'."); end
-    if q.A != []; error("solveStress: q.A != []"); end
-
-    type = :s
-    nsteps = q.nsteps
-    σ = []
-    numElem = Int[]
-    ncoord2 = zeros(3 * problem.non)
-    dim = problem.dim
-    pdim = problem.pdim
-    non = problem.non
-    if DoFResults
-        S1 = zeros(non * 9, nsteps)
-        pcs = zeros(Int64, non * dim)
-    end
-
-    for ipg in 1:length(problem.material)
-        phName = problem.material[ipg].phName
-        E = problem.material[ipg].E
-        ν = problem.material[ipg].ν
-        α = problem.material[ipg].α
-
-        D = Matrix{Float64}(undef, 0, 0)
-        rowsOfB = 0
-        b = 1.0
-        E0 = Float64[]
-
-        if problem.dim == 3 && problem.type == :Solid
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0; ν 1-ν ν 0 0 0; ν ν 1-ν 0 0 0; 0 0 0 (1-2ν)/2 0 0; 0 0 0 0 (1-2ν)/2 0; 0 0 0 0 0 (1-2ν)/2]
-            rowsOfB = 6; b = 1.0; E0 = [1,1,1,0,0,0]
-        elseif problem.dim == 2 && problem.type == :PlaneStress
-            D = E / (1 - ν^2) * [1 ν 0; ν 1 0; 0 0 (1-ν)/2]
-            rowsOfB = 3; b = problem.thickness; E0 = [1,1,0]
-        elseif problem.dim == 2 && problem.type == :PlaneStrain
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0; ν 1-ν 0; 0 0 (1-2ν)/2]
-            rowsOfB = 3; b = 1.0; E0 = [1,1,0]
-        elseif problem.dim == 2 && problem.type == :AxiSymmetric
-            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0; ν 1-ν ν 0; ν ν 1-ν 0; 0 0 0 (1-2ν)/2]
-            rowsOfB = 4; b = 1.0; E0 = [1,1,1,0]
-        else
-            error("solveStress: dimension=$(problem.dim), type=$(problem.type).")
-        end
-
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-        for idm in 1:length(dimTags)
-            edim, etag = dimTags[idm]
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
-            ncoord2[nodeTags*3 .- 2] .= ncoord[1:3:end]
-            ncoord2[nodeTags*3 .- 1] .= ncoord[2:3:end]
-            ncoord2[nodeTags*3 .- 0] .= ncoord[3:3:end]
-
-            for i in 1:length(elemTypes)
-                et = elemTypes[i]
-                elementName, dim, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
-                    gmsh.model.mesh.getElementProperties(et)
-
-                # lokális (csomóponti) értékeléshez IP = csomópontok lokális koordinátái
-                nodeCoord = zeros(numNodes * 3)
-                @inbounds for k in 1:dim, j = 1:numNodes
-                    nodeCoord[k + (j-1)*3] = localNodeCoord[k + (j-1)*dim]
-                end
-
-                comp, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
-                ∇h = reshape(dfun, :, numNodes)
-                comp, fun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
-                h = reshape(fun, :, numNodes)
-
-                # --- FONTOS: globális sorrend és mapping felépítése ---
-                elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)   # minden et típusú elem tag-je, globális sorrendben
-                jac_all, jacDet_all, coord_all = gmsh.model.mesh.getJacobians(et, nodeCoord) # ugyanerre a globális sorrendre
-                nip = length(jacDet_all) ÷ length(elemTags_global)
-
-                idxmap = Dict{Int,Int}()           # elemTag -> (globális index - 1)
-                @inbounds for (gi, gtag) in enumerate(elemTags_global)
-                    idxmap[gtag] = gi - 1
-                end
-                # -----------------------------------------------
-
-                nnet = zeros(Int, length(elemTags[i]), numNodes)
-                H = zeros(numNodes, numNodes)
-                @inbounds for j in 1:numNodes, k in 1:numNodes
-                    H[j, k] = h[k, j]
-                end
-
-                invJac = zeros(3, 3*numNodes)
-                ∂h = zeros(3, numNodes * numNodes)
-                B = zeros(rowsOfB * numNodes, pdim * numNodes)
-                nn2 = zeros(Int, pdim * numNodes)
-                nn1 = zeros(Int, numNodes)
-                r = zeros(numNodes)
-                s = zeros(9*numNodes, nsteps)
-
-                leTags = length(elemTags[i])
-                @inbounds for j in 1:leTags
-                    elem = elemTags[i][j]
-                    @inbounds for k in 1:numNodes
-                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes + k]
-                    end
-
-                    # --- helyes szelet a GLOBÁLIS jac_all-ból: idxmap alapján ---
-                    gidx = idxmap[elem]              # NEM j-1!
-                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
-                    # ------------------------------------------------------------
-
-                    @inbounds for k in 1:numNodes
-                        Jk = @view jac_slice[(k-1)*9+1 : k*9]
-                        Jac = reshape(Jk, 3, 3)
-                        invJac[1:3, 3*k-2:3*k] = inv(Jac)'
-                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
-                    end
-
-                    fill!(∂h, 0.0)
-                    @inbounds for k in 1:numNodes, l in 1:numNodes
-                        ∂h[1:dim, (k-1)*numNodes+l] =
-                            invJac[1:dim, k*3-2:k*3-(3-dim)] *
-                            ∇h[l*3-2:l*3-(3-dim), k]
-                    end
-
-                    fill!(B, 0.0)
-                    if pdim == 2 && rowsOfB == 3
-                        @inbounds for k in 1:numNodes, l in 1:numNodes
-                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
-                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
-                        end
-                    elseif pdim == 3 && rowsOfB == 6
-                        @inbounds for k in 1:numNodes, l in 1:numNodes
-                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
-                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
-                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3,(k-1)*numNodes+l]
-                        end
-                    elseif pdim == 2 && rowsOfB == 4
-                        @inbounds for k in 1:numNodes, l in 1:numNodes
-                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1,(k-1)*numNodes+l]
-                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2,(k-1)*numNodes+l]
-                            B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l,k] / r[k]
-                        end
-                    else
-                        error("solveStress: rowsOfB=$rowsOfB, dim=$dim not supported.")
-                    end
-
-                    push!(numElem, elem)
-                    @inbounds for k in 1:pdim
-                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
-                    end
-                    nn1 .= nnet[j, 1:numNodes]
-                    fill!(s, 0.0)
-
-                    @inbounds for k in 1:numNodes
-                        if rowsOfB == 6 && pdim == 3 && problem.type == :Solid
-                            H1 = @view H[k, 1:numNodes]
-                            B1 = @view B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
-                            for kk in 1:nsteps
-                                s0 = D * B1 * q.a[nn2, kk]
-                                if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
-                                end
-                                if !DoFResults
-                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
-                                                            s0[4], s0[2], s0[5],
-                                                            s0[6], s0[5], s0[3]]
-                                else
-                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
-                                        [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
-                                end
-                            end
-                        elseif rowsOfB == 3 && pdim == 2 && problem.type == :PlaneStress
-                            H1 = @view H[k, 1:numNodes]
-                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
-                            for kk in 1:nsteps
-                                s0 = D * B1 * q.a[nn2, kk]
-                                if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
-                                end
-                                if !DoFResults
-                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
-                                                            s0[3], s0[2], 0,
-                                                            0, 0, 0]
-                                else
-                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
-                                        [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, 0]
-                                end
-                            end
-                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
-                            H1 = @view H[k, 1:numNodes]
-                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
-                            for kk in 1:nsteps
-                                s0 = D * B1 * q.a[nn2, kk]
-                                if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
-                                end
-                                if !DoFResults
-                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
-                                                            s0[3], s0[2], 0,
-                                                            0, 0, ν*(s0[1]+s0[2])]
-                                else
-                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
-                                        [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, ν*(s0[1]+s0[2])]
-                                end
-                            end
-                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
-                            H1 = @view H[k, 1:numNodes]
-                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
-                            for kk in 1:nsteps
-                                s0 = D * B1 * q.a[nn2, kk]
-                                if T.type != :null
-                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
-                                end
-                                if !DoFResults
-                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
-                                                            s0[4], s0[3], 0,
-                                                            0, 0, s0[2]]
-                                else
-                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
-                                        [s0[1], s0[4], 0, s0[4], s0[3], 0, 0, 0, s0[2]]
-                                end
-                            end
-                        else
-                            error("solveStress: rowsOfB=$rowsOfB, dim=$dim, type=$(problem.type).")
-                        end
-                    end
-
-                    if DoFResults
-                        pcs[nnet[j,1:numNodes]] .+= 1
-                    else
-                        push!(σ, s)
-                    end
-                end
-            end
-        end
-    end
-
-    if DoFResults
-        @inbounds for k in 1:9, l in 1:non
-            S1[k + 9*l - 9, :] ./= pcs[l]
-        end
-        return TensorField([], S1, q.t, [], nsteps, type, problem)
-    else
-        return TensorField(σ, [;;], q.t, numElem, nsteps, type, problem)
-    end
-end
-
 function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model), DoFResults=false)
     if q.type == :dummy
         return nothing
@@ -4853,6 +4603,256 @@ function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.mo
     else
         sigma = TensorField(σ, [;;], q.t, numElem, nsteps, type, problem)
         return sigma
+    end
+end
+
+function solveStressSlow(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model),
+                        T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model),
+                        DoFResults=false)
+    # Jacobians --> slow
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+
+    if !isa(q, VectorField); error("solveStress:argument must be a VectorField. Now it is '$(typeof(q))'."); end
+    if q.type != :v3D && q.type != :v2D; error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'."); end
+    if q.A != []; error("solveStress: q.A != []"); end
+
+    type = :s
+    nsteps = q.nsteps
+    σ = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    if DoFResults
+        S1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        α = problem.material[ipg].α
+
+        D = Matrix{Float64}(undef, 0, 0)
+        rowsOfB = 0
+        b = 1.0
+        E0 = Float64[]
+
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0; ν 1-ν ν 0 0 0; ν ν 1-ν 0 0 0; 0 0 0 (1-2ν)/2 0 0; 0 0 0 0 (1-2ν)/2 0; 0 0 0 0 0 (1-2ν)/2]
+            rowsOfB = 6; b = 1.0; E0 = [1,1,1,0,0,0]
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * [1 ν 0; ν 1 0; 0 0 (1-ν)/2]
+            rowsOfB = 3; b = problem.thickness; E0 = [1,1,0]
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0; ν 1-ν 0; 0 0 (1-2ν)/2]
+            rowsOfB = 3; b = 1.0; E0 = [1,1,0]
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0; ν 1-ν ν 0; ν ν 1-ν 0; 0 0 0 (1-2ν)/2]
+            rowsOfB = 4; b = 1.0; E0 = [1,1,1,0]
+        else
+            error("solveStress: dimension=$(problem.dim), type=$(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            edim, etag = dimTags[idm]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] .= ncoord[1:3:end]
+            ncoord2[nodeTags*3 .- 1] .= ncoord[2:3:end]
+            ncoord2[nodeTags*3 .- 0] .= ncoord[3:3:end]
+
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                # lokális (csomóponti) értékeléshez IP = csomópontok lokális koordinátái
+                nodeCoord = zeros(numNodes * 3)
+                @inbounds for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k + (j-1)*3] = localNodeCoord[k + (j-1)*dim]
+                end
+
+                comp, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+
+                # --- FONTOS: globális sorrend és mapping felépítése ---
+                elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)   # minden et típusú elem tag-je, globális sorrendben
+                jac_all, jacDet_all, coord_all = gmsh.model.mesh.getJacobians(et, nodeCoord) # ugyanerre a globális sorrendre
+                nip = length(jacDet_all) ÷ length(elemTags_global)
+
+                idxmap = Dict{Int,Int}()           # elemTag -> (globális index - 1)
+                @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                    idxmap[gtag] = gi - 1
+                end
+                # -----------------------------------------------
+
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                H = zeros(numNodes, numNodes)
+                @inbounds for j in 1:numNodes, k in 1:numNodes
+                    H[j, k] = h[k, j]
+                end
+
+                invJac = zeros(3, 3*numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                nn1 = zeros(Int, numNodes)
+                r = zeros(numNodes)
+                s = zeros(9*numNodes, nsteps)
+
+                leTags = length(elemTags[i])
+                @inbounds for j in 1:leTags
+                    elem = elemTags[i][j]
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes + k]
+                    end
+
+                    # --- helyes szelet a GLOBÁLIS jac_all-ból: idxmap alapján ---
+                    gidx = idxmap[elem]              # NEM j-1!
+                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
+                    # ------------------------------------------------------------
+
+                    @inbounds for k in 1:numNodes
+                        Jk = @view jac_slice[(k-1)*9+1 : k*9]
+                        Jac = reshape(Jk, 3, 3)
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac)'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] =
+                            invJac[1:dim, k*3-2:k*3-(3-dim)] *
+                            ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+
+                    fill!(B, 0.0)
+                    if pdim == 2 && rowsOfB == 3
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                        end
+                    elseif pdim == 3 && rowsOfB == 6
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3,(k-1)*numNodes+l]
+                        end
+                    elseif pdim == 2 && rowsOfB == 4
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l,k] / r[k]
+                        end
+                    else
+                        error("solveStress: rowsOfB=$rowsOfB, dim=$dim not supported.")
+                    end
+
+                    push!(numElem, elem)
+                    @inbounds for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    nn1 .= nnet[j, 1:numNodes]
+                    fill!(s, 0.0)
+
+                    @inbounds for k in 1:numNodes
+                        if rowsOfB == 6 && pdim == 3 && problem.type == :Solid
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
+                                                            s0[4], s0[2], s0[5],
+                                                            s0[6], s0[5], s0[3]]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && pdim == 2 && problem.type == :PlaneStress
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                                            s0[3], s0[2], 0,
+                                                            0, 0, 0]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, 0]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                                            s0[3], s0[2], 0,
+                                                            0, 0, ν*(s0[1]+s0[2])]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, ν*(s0[1]+s0[2])]
+                                end
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
+                                                            s0[4], s0[3], 0,
+                                                            0, 0, s0[2]]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[4], 0, s0[4], s0[3], 0, 0, 0, s0[2]]
+                                end
+                            end
+                        else
+                            error("solveStress: rowsOfB=$rowsOfB, dim=$dim, type=$(problem.type).")
+                        end
+                    end
+
+                    if DoFResults
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    else
+                        push!(σ, s)
+                    end
+                end
+            end
+        end
+    end
+
+    if DoFResults
+        @inbounds for k in 1:9, l in 1:non
+            S1[k + 9*l - 9, :] ./= pcs[l]
+        end
+        return TensorField([], S1, q.t, [], nsteps, type, problem)
+    else
+        return TensorField(σ, [;;], q.t, numElem, nsteps, type, problem)
     end
 end
 
