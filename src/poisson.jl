@@ -1971,3 +1971,506 @@ function _assemble_ns_advection!(
     return pos
 end
 =#
+
+
+function poissonMatrixVector(
+    problem::Problem;
+    coefficient::TensorField
+)
+    @assert problem.pdim == problem.dim
+    gmsh.model.setCurrent(problem.name)
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    dof  = pdim * non
+
+    # elementwise tensor field
+    S = nodesToElements(coefficient)
+    Se = Dict(zip(S.numElem, S.A))
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for mat in problem.material
+        for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                intPoints, intWeights =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+
+                _, _, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+
+                ∇h = reshape(dfun, :, length(intWeights))
+
+                for (e, elem) in enumerate(elemTags[it])
+                    nodeTags = elemNodeTags[it][(e-1)*numNodes+1 : e*numNodes]
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+
+                    Ke = zeros(pdim*numNodes, pdim*numNodes)
+
+                    # tensor at element nodes (9×numNodes)
+                    Snode = Se[elem]
+
+                    for k in eachindex(intWeights)
+                        invJ = inv(Jac[1:dim, 3k-2:3k])'
+                        w = jacDet[k] * intWeights[k]
+
+                        # interpolate S to GP (Voigt-free, full tensor)
+                        Sgp = zeros(dim, dim)
+                        for a in 1:numNodes
+                            Sa = reshape(Snode[9a-8:9a, 1], dim, dim)
+                            Sgp .+= Sa * (1.0 / numNodes)   # lumped interp
+                        end
+
+                        for a in 1:numNodes, b in 1:numNodes
+                            ∇Na = invJ * ∇h[3a-2:3a-(3-dim), k]
+                            ∇Nb = invJ * ∇h[3b-2:3b-(3-dim), k]
+
+                            for i in 1:dim, j in 1:dim
+                                ia = (a-1)*pdim + i
+                                ib = (b-1)*pdim + j
+                                Ke[ia, ib] += ∇Na[i] * Sgp[i,j] * ∇Nb[j] * w
+                            end
+                        end
+                    end
+
+                    for a in 1:pdim*numNodes, b in 1:pdim*numNodes
+                        I[pos] = (nodeTags[div(a-1,pdim)+1]-1)*pdim + mod(a-1,pdim)+1
+                        J[pos] = (nodeTags[div(b-1,pdim)+1]-1)*pdim + mod(b-1,pdim)+1
+                        V[pos] = Ke[a,b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
+    return SystemMatrix(sparse(I,J,V,dof,dof), problem)
+end
+
+
+function gradDivMatrixF(
+    problem::Problem;
+    coefficient::Union{Number,ScalarField},
+    F::TensorField
+)
+    @assert problem.pdim == problem.dim
+    gmsh.model.setCurrent(problem.name)
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    dof  = pdim * non
+
+    Fe = nodesToElements(F)
+    Fe_map = Dict(zip(Fe.numElem, Fe.A))
+
+    λ = coefficient isa Number ? coefficient : nodesToElements(coefficient)
+    Fe = nodesToElements(F)
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for mat in problem.material
+        for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                intPoints, intWeights =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+
+                _, _, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+
+                ∇h = reshape(dfun, :, length(intWeights))
+
+                for (e, elem) in enumerate(elemTags[it])
+                    nodeTags = elemNodeTags[it][(e-1)*numNodes+1 : e*numNodes]
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+
+                    Ke = zeros(pdim*numNodes, pdim*numNodes)
+
+                    for k in eachindex(intWeights)
+                        invJ = inv(Jac[1:dim, 3k-2:3k])'
+                        w = jacDet[k] * intWeights[k]
+
+                        Fgp = zeros(dim,dim)
+                        Felem = Fe_map[elem]
+                        for a in 1:numNodes
+                            Fgp .+= reshape(Felem[9a-8:9a,1],dim,dim) / numNodes
+                        end
+
+                        for a in 1:numNodes, b in 1:numNodes
+                            ∇Na = invJ * ∇h[3a-2:3a-(3-dim), k]
+                            ∇Nb = invJ * ∇h[3b-2:3b-(3-dim), k]
+
+                            for i in 1:dim, j in 1:dim
+                                ia = (a-1)*pdim + i
+                                ib = (b-1)*pdim + j
+                                Ke[ia,ib] += λ * (Fgp[i,i]*∇Na[i]) * (Fgp[j,j]*∇Nb[j]) * w
+                            end
+                        end
+                    end
+
+                    for a in 1:pdim*numNodes, b in 1:pdim*numNodes
+                        I[pos] = (nodeTags[div(a-1,pdim)+1]-1)*pdim + mod(a-1,pdim)+1
+                        J[pos] = (nodeTags[div(b-1,pdim)+1]-1)*pdim + mod(b-1,pdim)+1
+                        V[pos] = Ke[a,b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
+    return SystemMatrix(sparse(I,J,V,dof,dof), problem)
+end
+
+function poissonMatrixSymGradF(
+    problem::Problem;
+    coefficient::Union{Number,ScalarField},
+    F::TensorField
+)
+    @assert problem.pdim == problem.dim
+    gmsh.model.setCurrent(problem.name)
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    dof  = pdim * non
+
+    Fe = nodesToElements(F)
+    Fe_map = Dict(zip(Fe.numElem, Fe.A))
+
+    μ = coefficient isa Number ? coefficient : nodesToElements(coefficient)
+    Fe = nodesToElements(F)
+
+    lengthOfIJV = estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, lengthOfIJV)
+    J = Vector{Int}(undef, lengthOfIJV)
+    V = Vector{Float64}(undef, lengthOfIJV)
+    pos = 1
+
+    for mat in problem.material
+        for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                intPoints, intWeights =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+
+                _, _, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+
+                ∇h = reshape(dfun, :, length(intWeights))
+
+                for (e, elem) in enumerate(elemTags[it])
+                    nodeTags = elemNodeTags[it][(e-1)*numNodes+1 : e*numNodes]
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+
+                    Ke = zeros(pdim*numNodes, pdim*numNodes)
+
+                    for k in eachindex(intWeights)
+                        invJ = inv(Jac[1:dim, 3k-2:3k])'
+                        w = jacDet[k] * intWeights[k]
+
+                        Fgp = zeros(dim,dim)
+                        Felem = Fe_map[elem]
+                        for a in 1:numNodes
+                            Fgp .+= reshape(Felem[9a-8:9a,1],dim,dim) / numNodes
+                        end
+
+                        for a in 1:numNodes, b in 1:numNodes
+                            ∇Na = invJ * ∇h[3a-2:3a-(3-dim), k]
+                            ∇Nb = invJ * ∇h[3b-2:3b-(3-dim), k]
+
+                            GradNa = zeros(dim, dim)
+                            GradNb = zeros(dim, dim)
+                            for i in 1:dim
+                                GradNa[i, i] = ∇Na[i]
+                                GradNb[i, i] = ∇Nb[i]
+                            end
+
+                            Ea = 0.5 * (Fgp' * GradNa + GradNa' * Fgp)
+                            Eb = 0.5 * (Fgp' * GradNb + GradNb' * Fgp)
+
+                            #Ea = 0.5*(Fgp' * ∇Na + ∇Na' * Fgp)
+                            #Eb = 0.5*(Fgp' * ∇Nb + ∇Nb' * Fgp)
+
+                            for i in 1:dim, j in 1:dim
+                                ia = (a-1)*pdim + i
+                                ib = (b-1)*pdim + j
+                                Ke[ia,ib] += 2μ * Ea[i,j] * Eb[i,j] * w
+                            end
+                        end
+                    end
+
+                    for a in 1:pdim*numNodes, b in 1:pdim*numNodes
+                        I[pos] = (nodeTags[div(a-1,pdim)+1]-1)*pdim + mod(a-1,pdim)+1
+                        J[pos] = (nodeTags[div(b-1,pdim)+1]-1)*pdim + mod(b-1,pdim)+1
+                        V[pos] = Ke[a,b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
+    return SystemMatrix(sparse(I,J,V,dof,dof), problem)
+end
+
+
+"""
+    internalForceTL(problem; P)
+
+Internal force vector for Total Lagrange formulation.
+
+- P :: TensorField
+     First Piola–Kirchhoff stress, defined in reference configuration.
+
+Returns:
+- f_int :: Vector{Float64}
+"""
+function internalForceTL(problem::Problem, P::TensorField)
+
+    gmsh.model.setCurrent(problem.name)
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    dof  = pdim * non
+
+    Pe = nodesToElements(P)
+    Pmap = Dict(zip(Pe.numElem, Pe.A))
+
+    f = zeros(dof)
+
+    for mat in problem.material
+        for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                ip, wip =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss"*string(2order+1))
+
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
+
+                ∇h = reshape(dfun, :, length(wip))
+
+                for (e, elem) in enumerate(elemTags[it])
+                    nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, ip)
+                    Jac = reshape(jac, 3, :)
+
+                    Pelem = Pmap[elem]
+                    fe = zeros(pdim * numNodes)
+
+                    for k in eachindex(wip)
+                        invJ = inv(Jac[1:dim, 3k-2:3k])'
+                        w = jacDet[k] * wip[k]
+
+                        # interpolate P to Gauss point (simple average)
+                        Pgp = zeros(dim, dim)
+                        for a in 1:numNodes
+                            Pgp .+= reshape(Pelem[9a-8:9a,1], dim, dim) / numNodes
+                        end
+
+                        for a in 1:numNodes
+                            ∇Na = invJ * ∇h[3a-2:3a-(3-dim), k]
+                            for i in 1:dim
+                                ia = (a-1)*pdim + i
+                                fe[ia] += dot(Pgp[i, :], ∇Na) * w
+                            end
+                        end
+                    end
+
+                    # scatter
+                    for a in 1:numNodes, i in 1:dim
+                        I = (nodeTags[a]-1)*pdim + i
+                        f[I] += fe[(a-1)*pdim+i]
+                    end
+                end
+            end
+        end
+    end
+
+    return f
+end
+
+"""
+    externalTangentFollowerTL(problem; F, traction_phName, t_spatial)
+
+Consistent external tangent matrix for follower loads (Total Lagrange).
+
+- F :: TensorField
+- traction_phName :: String
+- t_spatial :: Vector{Float64} or Function
+
+Returns:
+- K_ext :: SparseMatrixCSC
+"""
+function externalTangentFollowerTL(
+    problem::Problem;
+    F::TensorField,
+    traction_phName::AbstractString,
+    t_spatial
+)
+
+    gmsh.model.setCurrent(problem.name)
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    dof  = pdim * non
+
+    Fe = nodesToElements(F)
+    Fmap = Dict(zip(Fe.numElem, Fe.A))
+
+    Id = zeros(dim,dim)
+    for i in 1:dim
+        Id[i,i] = 1
+    end
+
+    I = Int[]
+    J = Int[]
+    V = Float64[]
+
+    for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(traction_phName)
+        elemTypes, elemTags, elemNodeTags =
+            gmsh.model.mesh.getElements(edim, etag)
+
+        for it in eachindex(elemTypes)
+            et = elemTypes[it]
+            _, _, order, numNodes, _, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            ip, wip =
+                gmsh.model.mesh.getIntegrationPoints(et, "Gauss"*string(2order+1))
+
+            _, hfun, _ =
+                gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
+
+            _, dfun, _ =
+                gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
+
+            H  = reshape(hfun, numNodes, :)
+            ∇h = reshape(dfun, :, length(wip))
+
+            for (e, elem) in enumerate(elemTags[it])
+                nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
+                jac, jacDet, _ =
+                    gmsh.model.mesh.getJacobian(elem, ip)
+                Jac = reshape(jac, 3, :)
+
+                Fnode = Fmap[elem]
+                Ke = zeros(pdim*numNodes, pdim*numNodes)
+
+                for k in eachindex(wip)
+                    invJ = inv(Jac[1:dim, 3k-2:3k])'
+                    w = jacDet[k] * wip[k]
+
+                    # interpolate F
+                    Fgp = zeros(dim,dim)
+                    for a in 1:numNodes
+                        Fgp .+= reshape(Fnode[9a-8:9a,1], dim, dim) / numNodes
+                    end
+
+                    Jgp = det(Fgp)
+                    Finv = inv(Fgp)
+                    FinvT = Finv'
+
+                    if t_spatial isa Function
+                        tgp = t_spatial(0.0, 0.0, 0.0)
+                    else
+                        tgp = collect(Float64, t_spatial)
+                    end
+
+                    #tgp = (t_spatial isa Function) ? t_spatial(0.0,0.0,0.0) : t_spatial
+
+                    for a in 1:numNodes, b in 1:numNodes
+                        ∇Nb = invJ * ∇h[3b-2:3b-(3-dim), k]
+
+                        # δF from δu_bj
+                        for j in 1:dim
+                            #δF = zeros(dim,dim)
+                            #δF[j,:] .= ∇Nb
+
+                            #A = Finv * δF
+                            A = reshape(Finv[:, j], dim, 1) * reshape(∇Nb, 1, dim)
+                            dJFmT =
+                                Jgp * FinvT * (tr(A)*Id - A')
+
+                            dt0 = dJFmT * tgp
+
+                            for i in 1:dim
+                                ia = (a-1)*pdim + i
+                                jb = (b-1)*pdim + j
+                                Ke[ia,jb] += H[a,k] * dt0[i] * w
+                            end
+                        end
+                    end
+                end
+
+                # scatter Ke
+                for a in 1:pdim*numNodes, b in 1:pdim*numNodes
+                    Ig = (nodeTags[div(a-1,pdim)+1]-1)*pdim + mod(a-1,pdim)+1
+                    Jg = (nodeTags[div(b-1,pdim)+1]-1)*pdim + mod(b-1,pdim)+1
+                    push!(I, Ig); push!(J, Jg); push!(V, Ke[a,b])
+                end
+            end
+        end
+    end
+
+    return sparse(I,J,V,dof,dof)
+end
+

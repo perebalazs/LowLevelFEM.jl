@@ -2354,14 +2354,15 @@ copy(K::SystemMatrix) = SystemMatrix(copy(K.A), K.model)
 
 
 import Base:transpose,adjoint
+import SparseArrays: sparse
 """
     transpose(K::SystemMatrix)
     adjoint(K::SystemMatrix)
 
 Transpose / adjoint of a system matrix.
 """
-transpose(K::SystemMatrix) = SystemMatrix(transpose(K.A), K.test_model, K.model)
-adjoint(K::SystemMatrix)   = SystemMatrix(adjoint(K.A), K.test_model, K.model)
+transpose(K::SystemMatrix) = SystemMatrix(sparse(transpose(K.A)), K.test_model, K.model)
+adjoint(K::SystemMatrix)   = SystemMatrix(sparse(adjoint(K.A)), K.test_model, K.model)
 
 
 import LinearAlgebra: issymmetric

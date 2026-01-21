@@ -1,0 +1,207 @@
+% !TEX program = pdflatex
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+% --- Notation helpers ---
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Grad}{\nabla_0}   % reference gradient
+\newcommand{\Div}{\nabla_0\cdot} % reference divergence
+\newcommand{\F}{\bm F}
+\newcommand{\C}{\bm C}
+\newcommand{\E}{\bm E}
+\newcommand{\Ssig}{\bm S}
+\newcommand{\Pii}{\bm P}
+\newcommand{\I}{\bm I}
+\newcommand{\tr}{\mathrm{tr}}
+\newcommand{\dd}{\,\mathrm d}
+\renewcommand{\v}{\bm v}
+\newcommand{\uvec}{\bm u}
+\newcommand{\deltau}{\Delta\bm u}
+\newcommand{\etaV}{\delta\bm v} % virtual displacement (test function)
+
+\title{Nagy alakváltozású szilárdságtan: gyenge alak és Newton-iteráció (Total Lagrange)}
+\author{}
+\date{}
+
+\begin{document}
+	\maketitle
+	
+	\section{Kinematika és feszültségmértékek}
+	
+	Legyen a referencia konfiguráció $\Omega_0\subset\R^3$ határával $\partial\Omega_0=\Gamma_{0u}\cup\Gamma_{0t}$.
+	A leképezés:
+	\[
+	\bm x = \bm \chi(\bm X) = \bm X + \uvec(\bm X),
+	\qquad \bm X\in\Omega_0.
+	\]
+	Deformációgradiens:
+	\[
+	\F(\uvec) := \frac{\partial \bm x}{\partial \bm X} = \I + \Grad \uvec.
+	\]
+	Jobb Cauchy--Green-tenzor és Green--Lagrange alakváltozási tenzor:
+	\[
+	\C = \F^{T}\F,
+	\qquad
+	\E = \frac{1}{2}(\C-\I).
+	\]
+	
+	Total Lagrange leírásban tipikusan a II. Piola--Kirchhoff feszültséget használjuk:
+	\[
+	\Ssig = \Ssig(\E).
+	\]
+	(Hiperelaszticitás esetén $\Ssig = 2\,\partial\psi/\partial\C$, és a konzisztens anyagi tangens $\mathbb C := \partial\Ssig/\partial\E$.)
+	
+	\section{Erőegyensúly és peremfeltételek (referencia konfigurációban)}
+	
+	A referencia konfigurációban a test-erő sűrűség legyen $\bm b_0$ (N/m$^3$),
+	a kijelölt traction peremen a névleges felületi terhelés legyen $\bm t_0$ (N/m$^2$).
+	A peremfeltételek:
+	\[
+	\uvec=\bar{\uvec}\ \text{a } \Gamma_{0u}\text{-n}, 
+	\qquad
+	\Pii\,\bm N = \bm t_0\ \text{a } \Gamma_{0t}\text{-n},
+	\]
+	ahol $\bm N$ a referencia konfiguráció külső egységnormálisa, és az I. Piola--Kirchhoff feszültség:
+	\[
+	\Pii = \F\,\Ssig.
+	\]
+	
+	\section{Gyenge alak (virtuális munka elve)}
+	
+	Válasszunk tesztfüggvényt $\etaV\in \mathcal V_0$, ahol
+	\[
+	\mathcal V_0 := \{\etaV:\Omega_0\to\R^3\mid \etaV=\bm 0\ \text{a } \Gamma_{0u}\text{-n}\}.
+	\]
+	A belső és külső virtuális munka:
+	\[
+	\delta W_{\mathrm{int}}(\uvec;\etaV)
+	:= \int_{\Omega_0} \Pii(\uvec) : \Grad \etaV \dd V,
+	\]
+	\[
+	\delta W_{\mathrm{ext}}(\etaV)
+	:= \int_{\Omega_0} \etaV\cdot \bm b_0 \dd V
+	+ \int_{\Gamma_{0t}} \etaV\cdot \bm t_0 \dd A.
+	\]
+	A gyenge alak:
+	\begin{equation}
+		\boxed{
+			\delta W(\uvec;\etaV)
+			:= \delta W_{\mathrm{int}}(\uvec;\etaV) - \delta W_{\mathrm{ext}}(\etaV) = 0
+			\quad \forall\,\etaV\in\mathcal V_0.
+		}
+		\label{eq:weak}
+	\end{equation}
+	
+	\paragraph{Megjegyzés (terheléstípus).}
+	A fenti $\bm t_0$ és $\bm b_0$ \emph{referencia konfigurációhoz kötött} (``dead load'').
+	Ha a terhelés a jelenlegi konfigurációt követi (``follower load''), akkor $\delta W_{\mathrm{ext}}$ linearizációjában további tagok jelennek meg.
+	
+	\section{Newton--Raphson iteráció: reziduum és konzisztens linearizáció}
+	
+	A \eqref{eq:weak} egyenletből definiáljuk a nemlineáris operátort (reziduumot):
+	\[
+	R(\uvec)[\etaV] := \delta W(\uvec;\etaV).
+	\]
+	A feladat: találni $\uvec\in\mathcal U_{\bar u}$-t úgy, hogy
+	\[
+	R(\uvec)[\etaV]=0 \quad \forall\,\etaV\in\mathcal V_0,
+	\]
+	ahol $\mathcal U_{\bar u}$ a Dirichlet-peremfeltételt kielégítő függvénytér.
+	
+	\subsection{Newton-lépés}
+	
+	Adott $k$ iterációban $\uvec^k$ mellett keressük az inkrementumot $\deltau$, hogy
+	\begin{equation}
+		\boxed{
+			DR(\uvec^k)[\deltau,\etaV] = -R(\uvec^k)[\etaV]
+			\quad \forall\,\etaV\in\mathcal V_0,
+		}
+		\label{eq:newton}
+	\end{equation}
+	majd frissítünk:
+	\[
+	\uvec^{k+1} = \uvec^k + \deltau.
+	\]
+	
+	\subsection{A belső virtuális munka linearizációja (anyag + geometria)}
+	
+	Mivel a külső munka (dead load esetén) nem függ $\uvec$-től, ezért
+	\[
+	DR(\uvec)[\deltau,\etaV] = D\delta W_{\mathrm{int}}(\uvec;\etaV)[\deltau].
+	\]
+	A belső tag:
+	\[
+	\delta W_{\mathrm{int}}(\uvec;\etaV)=\int_{\Omega_0} \Pii(\uvec):\Grad\etaV\dd V
+	=\int_{\Omega_0} (\F(\uvec)\Ssig(\uvec)):\Grad\etaV\dd V.
+	\]
+	Szorzatszabállyal:
+	\[
+	D\Pii[\deltau] = D(\F\Ssig)[\deltau]
+	= (D\F[\deltau])\,\Ssig + \F\, (D\Ssig[\deltau]).
+	\]
+	Továbbá
+	\[
+	D\F[\deltau]=\Grad\deltau.
+	\]
+	
+	\paragraph{Anyagi rész.}
+	A $D\Ssig$ kinematikán keresztül:
+	\[
+	D\Ssig[\deltau] = \mathbb C : D\E[\deltau],
+	\qquad
+	\mathbb C := \frac{\partial \Ssig}{\partial \E}.
+	\]
+	A Green--Lagrange alakváltozás variációja:
+	\[
+	D\E[\deltau]
+	= \frac{1}{2}\left(D\F^{T}[\deltau]\F + \F^{T}D\F[\deltau]\right)
+	= \frac{1}{2}\left((\Grad\deltau)^{T}\F + \F^{T}\Grad\deltau\right).
+	\]
+	
+	\paragraph{Geometriai rész.}
+	A geometriai rész a $(D\F)\Ssig$ tagból származik.
+	
+	\subsection{Konzisztens bilineáris forma (tangens)}
+	
+	Ezekkel a Newton-baloldal (tangens) bilineáris formában:
+	\begin{equation}
+		\boxed{
+			DR(\uvec)[\deltau,\etaV]
+			=
+			\underbrace{\int_{\Omega_0} \left(\Grad\deltau\,\Ssig\right):\Grad\etaV\dd V}_{\text{geometriai (initial stress) rész}}
+			+
+			\underbrace{\int_{\Omega_0} \left(\F\,(\mathbb C : D\E[\deltau])\right):\Grad\etaV\dd V}_{\text{anyagi (material) rész}}.
+		}
+		\label{eq:tangent}
+	\end{equation}
+	
+	\paragraph{Ekvivalens alak (gyakran használt).}
+	A második tagban be lehet vezetni a \emph{virtuális} és \emph{inkrementális} Green--Lagrange alakváltozásokat:
+	\[
+	\delta\E(\etaV) = \frac{1}{2}\left((\Grad\etaV)^{T}\F + \F^{T}\Grad\etaV\right),
+	\qquad
+	\Delta\E(\deltau) = \frac{1}{2}\left((\Grad\deltau)^{T}\F + \F^{T}\Grad\deltau\right),
+	\]
+	amivel az anyagi rész sok anyagtörvény mellett írható:
+	\[
+	\int_{\Omega_0} \delta\E(\etaV) : \mathbb C : \Delta\E(\deltau)\dd V
+	\]
+	(ekkor figyelni kell az index-konvenciókra és arra, hogy $\mathbb C$ negyedrendű tenzor).
+	
+	\subsection{Newton-algoritmus (pszeudokód)}
+	
+	\begin{enumerate}
+		\item Válassz kezdeti tippet: $\uvec^0$.
+		\item $k=0,1,2,\dots$
+		\begin{enumerate}
+			\item Számítsd ki a reziduumot: $R(\uvec^k)[\etaV]$.
+			\item Állítsd elő a tangens bilineáris formát: $DR(\uvec^k)[\deltau,\etaV]$ a \eqref{eq:tangent} szerint.
+			\item Oldd meg: $DR(\uvec^k)[\deltau,\etaV] = -R(\uvec^k)[\etaV]\ \ \forall\etaV$.
+			\item Frissítés: $\uvec^{k+1}=\uvec^k+\deltau$.
+			\item Konvergencia-ellenőrzés (pl. $\|\deltau\|$ vagy $\|R\|$ alapján).
+		\end{enumerate}
+	\end{enumerate}
+	
+\end{document}

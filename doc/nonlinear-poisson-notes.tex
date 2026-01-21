@@ -1,0 +1,249 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{hyperref}
+
+\geometry{margin=2.5cm}
+
+\title{Total Lagrange formuláció a LowLevelFEM-ben\\
+	Gyenge alak és operátor-alapú implementáció}
+\author{}
+\date{}
+
+\begin{document}
+	\maketitle
+	
+	\section{Kiinduló probléma (Total Lagrange)}
+	
+	A referencia-konfigurációban ($\Omega_0$) felírt egyensúlyi egyenlet:
+	\[
+	\mathrm{Div}\,\bm P + \bm b_0 = \bm 0
+	\quad \text{in } \Omega_0
+	\]
+	
+	ahol
+	\[
+	\bm P = \bm F \bm S,
+	\qquad
+	\bm F = \bm I + \nabla_0 \bm u.
+	\]
+	
+	Peremfeltételek:
+	\[
+	\bm u = \bar{\bm u} \quad \text{on } \Gamma_{u,0},
+	\qquad
+	\bm P \bm N = \bm t_0 \quad \text{on } \Gamma_{t,0}.
+	\]
+	
+	---
+	
+	\section{Gyenge alak}
+	
+	A virtuális elmozdulás $\delta\bm u$ alkalmazásával:
+	\[
+	\int_{\Omega_0} \delta\bm F : \bm P \, \mathrm d\Omega_0
+	=
+	\int_{\Omega_0} \delta\bm u \cdot \bm b_0 \, \mathrm d\Omega_0
+	+
+	\int_{\Gamma_{t,0}} \delta\bm u \cdot \bm t_0 \, \mathrm d\Gamma_0,
+	\]
+	ahol
+	\[
+	\delta \bm F = \nabla_0 \delta \bm u.
+	\]
+	
+	Ez az egyenlet a nemlineáris reziduál:
+	\[
+	\bm r(\bm u) = \bm f_{\mathrm{int}}(\bm u) - \bm f_{\mathrm{ext}}(\bm u) = \bm 0.
+	\]
+	
+	---
+	
+	\section{Newton-iteráció}
+	
+	Newton-módszerrel:
+	\[
+	\bm K(\bm u^k)\,\Delta \bm u
+	=
+	\bm f_{\mathrm{ext}}(\bm u^k)
+	-
+	\bm f_{\mathrm{int}}(\bm u^k),
+	\]
+	
+	ahol a teljes tangens:
+	\[
+	\bm K =
+	\bm K_{\mathrm{mat}}
+	+
+	\bm K_{\mathrm{geo}}
+	-
+	\bm K_{\mathrm{ext}}.
+	\]
+	
+	---
+	
+	\section{Operátor-alapú bontás a LowLevelFEM-ben}
+	
+	A LowLevelFEM-ben a gyenge alak térfogati és felületi tagjai
+	különálló, "buta" operátorokként jelennek meg.
+	A nemlinearitás kizárólag a mezőkön (pl.\ $\bm F$, $\bm S$, $\bm P$) keresztül lép be.
+	
+	\subsection{\texttt{poissonMatrixVector}}
+	
+	\paragraph{Gyenge alakbeli eredet}
+	\[
+	\int_{\Omega_0}
+	\nabla_0 \delta \bm u : \bm S : \nabla_0 \bm u
+	\,\mathrm d\Omega_0
+	\]
+	
+	\paragraph{Szerep}
+	\begin{itemize}
+		\item geometriai merevség,
+		\item II.~PK-feszültséggel súlyozott gradiens--gradiens tag,
+		\item térfogati integrál.
+	\end{itemize}
+	
+	\paragraph{Megjegyzés}
+	A függvény teljes másodrendű tenzort (nem Voigt-formát) használ,
+	így közvetlenül alkalmas nagy alakváltozásos feladatokra.
+	
+	---
+	
+	\subsection{\texttt{gradDivMatrixF}}
+	
+	\paragraph{Gyenge alakbeli eredet}
+	\[
+	\int_{\Omega_0}
+	(\nabla_0 \cdot \delta \bm u)\,
+	\lambda\,
+	(\nabla_0 \cdot \bm u)
+	\,\mathrm d\Omega_0,
+	\quad
+	\text{deformált konfigurációhoz húzva } \bm F\text{-fel}.
+	\]
+	
+	\paragraph{Szerep}
+	\begin{itemize}
+		\item anyagi tangens volumetrikus része,
+		\item izotrop anyag $\lambda$ paramétere,
+		\item $\bm F$-függő (nagy alakváltozás).
+	\end{itemize}
+	
+	---
+	
+	\subsection{\texttt{poissonMatrixSymGradF}}
+	
+	\paragraph{Gyenge alakbeli eredet}
+	\[
+	\int_{\Omega_0}
+	2\mu\,
+	\delta \bm E : \bm E
+	\,\mathrm d\Omega_0,
+	\qquad
+	\bm E = \tfrac12(\bm F^T \nabla_0 \bm u + \nabla_0 \bm u^T \bm F).
+	\]
+	
+	\paragraph{Szerep}
+	\begin{itemize}
+		\item anyagi tangens deviátoros része,
+		\item izotrop anyag $\mu$ paramétere,
+		\item szimmetrikus Green--Lagrange-alapú forma.
+	\end{itemize}
+	
+	---
+	
+	\subsection{\texttt{internalForceTL}}
+	
+	\paragraph{Gyenge alakbeli eredet}
+	\[
+	\bm f_{\mathrm{int}}
+	=
+	\int_{\Omega_0}
+	\bm B^T \bm P
+	\,\mathrm d\Omega_0
+	=
+	\int_{\Omega_0}
+	\nabla_0 \bm N : \bm P
+	\,\mathrm d\Omega_0.
+	\]
+	
+	\paragraph{Szerep}
+	\begin{itemize}
+		\item nemlineáris belső erővektor,
+		\item minden Newton-iterációban újraszámolandó,
+		\item térfogati integrál.
+	\end{itemize}
+	
+	\paragraph{Megjegyzés}
+	A First Piola--Kirchhoff feszültség mezőként kerül be,
+	így az anyagmodell teljesen kívül marad.
+	
+	---
+	
+	\subsection{\texttt{externalTangentFollowerTL}}
+	
+	\paragraph{Gyenge alakbeli eredet}
+	Follower terhelés esetén:
+	\[
+	\bm t_0 = J \bm F^{-T} \bm t,
+	\]
+	
+	\[
+	\bm K_{\mathrm{ext}}
+	=
+	\int_{\Gamma_{t,0}}
+	\bm N^T
+	\frac{\partial (J\bm F^{-T})}{\partial \bm u}
+	\bm t
+	\,\mathrm d\Gamma_0.
+	\]
+	
+	\paragraph{Szerep}
+	\begin{itemize}
+		\item külső erők konzisztens Newton-tangense,
+		\item kizárólag felületi integrál,
+		\item csak follower load esetén nem nulla.
+	\end{itemize}
+	
+	\paragraph{Megjegyzés}
+	Dead load esetén ez a mátrix zérus,
+	és a meglévő \texttt{loadVector} elegendő.
+	
+	---
+	
+	\section{Összefoglaló táblázat}
+	
+	\[
+	\begin{array}{l|c|c|c}
+		\text{LowLevelFEM függvény} &
+		\text{Gyenge alak} &
+		\text{Integrál} &
+		\text{Newton-tag} \\
+		\hline
+		\texttt{poissonMatrixVector} & \bm K_{\mathrm{geo}} & \Omega_0 & igen \\
+		\texttt{gradDivMatrixF} & \bm K_{\mathrm{mat}} & \Omega_0 & igen \\
+		\texttt{poissonMatrixSymGradF} & \bm K_{\mathrm{mat}} & \Omega_0 & igen \\
+		\texttt{internalForceTL} & \bm f_{\mathrm{int}} & \Omega_0 & igen \\
+		\texttt{externalTangentFollowerTL} & \bm K_{\mathrm{ext}} & \Gamma_{t,0} & igen \\
+	\end{array}
+	\]
+	
+	---
+	
+	\section{Záró megjegyzés}
+	
+	A bemutatott struktúra lehetővé teszi, hogy:
+	\begin{itemize}
+		\item kis és nagy alakváltozás azonos operátorokra épüljön,
+		\item az anyagmodell és a geometria szétváljon,
+		\item a Newton-iteráció konzisztens maradjon.
+	\end{itemize}
+	
+	A LowLevelFEM filozófiája szerint az operátorok
+	\emph{minimális tudásúak},
+	míg a fizikai nemlinearitás a mezőkön keresztül jelenik meg.
+	
+\end{document}
