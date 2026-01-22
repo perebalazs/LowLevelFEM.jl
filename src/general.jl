@@ -2,6 +2,7 @@ export Problem, Material, getEigenVectors, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
+export SystemMatrix
 export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
@@ -1529,7 +1530,13 @@ Plain-text display in REPL and notebooks.
 """
 function Base.show(io::IO, ::MIME"text/plain", M::Union{ScalarField,VectorField,TensorField})
     # fejléc külön sorban (szebb notebookban)
-    println(io, nameof(typeof(M)))
+    if isNodal(M)
+        type = "nodal "
+    else
+        type = "elementwise "
+    end
+    
+    println(io, type, nameof(typeof(M)))
     
     io2 = IOContext(io, :compact => false)
     
