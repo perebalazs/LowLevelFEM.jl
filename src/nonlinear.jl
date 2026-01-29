@@ -2531,7 +2531,7 @@ The element contribution reads
 
 K_e = ∫ (∇N)ᵀ · S · (∇N) dΩ
 
-````
+```
 
 and is assembled into the global matrix.
 
@@ -2571,7 +2571,7 @@ Kgeo = initialStressMatrix(
 )
 
 K = Kmat + Kgeo
-````
+```
 
 ---
 
@@ -2751,7 +2751,7 @@ The element internal force contribution is computed as
 
 (f_e)*{ai} = ∫ (P_gp)*{iJ} (∇N_a)_J dΩ
 
-````
+```
 
 where:
 - `a` denotes the node index,
@@ -2794,7 +2794,7 @@ vector.
 f_int = internalForceVector(problem, Pfield)
 
 R = f_int - f_ext
-````
+```
 
 ---
 
@@ -2973,7 +2973,7 @@ leading to an external tangent contribution
 
 K_ext = ∂f_ext / ∂u
 
-````
+```
 
 which includes:
 - the variation of the Jacobian and inverse deformation gradient,
@@ -3019,7 +3019,7 @@ Kext = externalTangentFollower(
 )
 
 K = Kmat + Kgeo - Kext
-````
+```
 
 ---
 
@@ -3212,6 +3212,31 @@ function externalTangentFollower(
     return SystemMatrix(K, problem)
 end
 
+function _tensor_extension_test end
+
+function tensor_extension_test()
+    try
+        return _tensor_extension_test()
+    catch err
+        if err isa MethodError && err.f === _tensor_extension_test
+            error("""
+            tensor_extension_test requires the Tensors backend.
+
+            Please run first:
+                using Tensors
+            """)
+        else
+            rethrow()
+        end
+    end
+end
+
+function tensor_test() # <-- a LowLevelFEM modul része
+    return tensor_extension_test()
+end
+
+
+#=
 @inline function _rotation_from_F(F::AbstractMatrix{<:Real})
     U, _, Vt = svd(F)
     R = U * Vt
@@ -3221,6 +3246,7 @@ end
     end
     return R
 end
+=#
 
 #=
 @inline function _loadvec_helper(f, h, x, y, z, nnet, j, l, nsteps)
