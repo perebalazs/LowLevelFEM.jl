@@ -2306,12 +2306,21 @@ K = Kint + Kmat
 function materialTangentMatrix(
     problem::Problem;
     F::TensorField,
-    C::AbstractMatrix)
+    C::Union{AbstractMatrix,Nothing}=nothing,
+    energy::Union{Nothing,Function}=nothing,
+    params=nothing)
     
+    @assert xor(C !== nothing, energy !== nothing) """
+    Either provide `C` (6×6, Number or ScalarField entries),
+    or provide (`energy`, `params`) to compute the tangent at Gauss points.
+    """
+
     @assert problem.dim == 3
     @assert problem.pdim == 3
-    @assert size(C) == (6, 6)
-    @assert all(x -> (x isa Number) || (x isa ScalarField), C)
+    if C !== nothing
+        @assert size(C) == (6, 6)
+        @assert all(x -> (x isa Number) || (x isa ScalarField), C)
+    end
 
     gmsh.model.setCurrent(problem.name)
 
@@ -2325,14 +2334,17 @@ function materialTangentMatrix(
 
     # --- Preprocess C entries:
     # For ScalarField entries: build element->nodal-values map once.
-    Centry = Matrix{Any}(undef, 6, 6)
-    for I in CartesianIndices(C)
-        cij = C[I]
-        if cij isa ScalarField
-            ce = nodesToElements(cij)
-            Centry[I] = Dict(zip(ce.numElem, ce.A))  # elem => (numNodes×1) nodal values
-        else
-            Centry[I] = Float64(cij)
+    Centry = nothing
+    if C !== nothing
+        Centry = Matrix{Any}(undef, 6, 6)
+        for I in CartesianIndices(C)
+            cij = C[I]
+            if cij isa ScalarField
+                ce = nodesToElements(cij)
+                Centry[I] = Dict(zip(ce.numElem, ce.A))  # elem => (numNodes×1) nodal values
+            else
+                Centry[I] = Float64(cij)
+            end
         end
     end
 
@@ -2389,18 +2401,67 @@ function materialTangentMatrix(
                             Fgp .+= Na * reshape(Fnode[9a-8:9a, 1], 3, 3)
                         end
 
-                        # --- C at Gauss: Cgp_ij = Σ_a N_a Cij_a  (ha ScalarField)
                         Cgp = zeros(6, 6)
-                        for ii in 1:6, jj in 1:6
-                            cij = Centry[ii, jj]
-                            if cij isa Float64
-                                Cgp[ii, jj] = cij
-                            else
-                                # dict elem => nodalValues(numNodes×1)
-                                nod = cij[elem][:, 1]
-                                Cgp[ii, jj] = dot(nod, H[:, k])
+
+                        if energy !== nothing
+                            # -----------------------------
+                            # NEW PATH: energy-based tangent
+                            # -----------------------------
+                            # Build right Cauchy–Green at Gauss: C = F^T F
+                            # (use SMatrix for speed + wrapper expects SMatrix{3,3})
+                            Fgpm = @SMatrix [
+                                Fgp[1,1] Fgp[1,2] Fgp[1,3];
+                                Fgp[2,1] Fgp[2,2] Fgp[2,3];
+                                Fgp[3,1] Fgp[3,2] Fgp[3,3]
+                            ]
+   
+                            Cmat = transpose(Fgpm) * Fgpm  # SMatrix{3,3}
+   
+                            # tangent_from_energy returns 6×6 (Voigt) in your extension convention
+                            Ctan = tangent_from_energy(energy, Cmat, params)  # SMatrix{6,6}
+   
+                            # Convert to Matrix{Float64} for B' * Cgp * B
+                            Cgp .= Matrix(Ctan)
+   
+                            # IMPORTANT: your B uses engineering shear strains [E11,E22,E33,2E23,2E13,2E12]
+                            # so Cgp must map epsilon_eng -> sigma_voigt.
+                            # If Ctan was built for the "standard" Voigt with [E11,E22,E33,E23,E13,E12],
+                            # then divide shear columns by 2:
+                            @inbounds for jj in 4:6, ii in 1:6
+                                #Cgp[ii, jj] *= 0.5
+                            end
+   
+                            # Also: tangent from ψ(C) is ∂S/∂C; but your B is built from E.
+                            # Since C = 2E + I => ∂S/∂E = 2 * ∂S/∂C
+                            #Cgp .*= 2.0
+
+                        else
+                            # -----------------------------
+                            # OLD PATH: interpolate given C
+                            # -----------------------------
+                            @inbounds for ii in 1:6, jj in 1:6
+                                cij = Centry[ii, jj]
+                                if cij isa Float64
+                                    Cgp[ii, jj] = cij
+                                else
+                                    nod = cij[elem][:, 1]
+                                    Cgp[ii, jj] = dot(nod, H[:, k])
+                                end
                             end
                         end
+
+                        # --- C at Gauss: Cgp_ij = Σ_a N_a Cij_a  (ha ScalarField)
+                        #Cgp = zeros(6, 6)
+                        #for ii in 1:6, jj in 1:6
+                        #    cij = Centry[ii, jj]
+                        #    if cij isa Float64
+                        #        Cgp[ii, jj] = cij
+                        #    else
+                        #        # dict elem => nodalValues(numNodes×1)
+                        #        nod = cij[elem][:, 1]
+                        #        Cgp[ii, jj] = dot(nod, H[:, k])
+                        #    end
+                        #end
 
                         # --- build B(F)  (6 × 3numNodes)
                         # Column corresponds to dof (a,j): δu_{a,j}
@@ -2583,7 +2644,14 @@ K = Kmat + Kgeo
 """
 function initialStressMatrix(
     problem::Problem;
-    stress::TensorField)   # P, S, σ – a kód nem tudja, nem is érdekli
+    stress::Union{TensorField,Nothing}=nothing,   # P, S, σ – a kód nem tudja, nem is érdekli
+    energy::Union{Nothing,Function}=nothing,
+    params=nothing,
+    C::Union{Nothing,TensorField}=nothing)
+
+    @assert xor(stress !== nothing, energy !== nothing) """
+    Either `stress` OR (`energy`, `params`, `C`) must be provided.
+    """
 
     @assert problem.pdim == problem.dim
     gmsh.model.setCurrent(problem.name)
@@ -2594,8 +2662,15 @@ function initialStressMatrix(
     dof = pdim * non
 
     # elementwise nodal stresses
-    Se = nodesToElements(stress)
-    Smap = Dict(zip(Se.numElem, Se.A))
+    if stress !== nothing
+        Se = nodesToElements(stress)
+        Smap = Dict(zip(Se.numElem, Se.A))
+    end
+
+    if energy !== nothing
+        Ce = nodesToElements(C)
+        Cmap = Dict(zip(Ce.numElem, Ce.A))
+    end
 
     lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(problem)
     I = Vector{Int}(undef, lengthOfIJV)
@@ -2634,18 +2709,46 @@ function initialStressMatrix(
                         gmsh.model.mesh.getJacobian(elem, ip)
                     Jac = reshape(jac, 3, :)
 
-                    Selem = Smap[elem]
+                    if stress !== nothing
+                        Selem = Smap[elem]
+                    end
                     Ke = zeros(pdim * numNodes, pdim * numNodes)
 
                     for k in eachindex(wip)
                         invJ = inv(Jac[1:dim, 3k-2:3k])'
                         w = jacDet[k] * wip[k]
 
-                        # --- interpolate stress to Gauss point (CORRECT)
-                        Sgp = zeros(dim, dim)
-                        for a in 1:numNodes
-                            Na = H[a, k]
-                            Sgp .+= Na * reshape(Selem[9a-8:9a, 1], dim, dim)
+                        ## --- interpolate stress to Gauss point (CORRECT)
+                        #Sgp = zeros(dim, dim)
+                        #for a in 1:numNodes
+                        #    Na = H[a, k]
+                        #    Sgp .+= Na * reshape(Selem[9a-8:9a, 1], dim, dim)
+                        #end
+
+                        if stress !== nothing
+                            # -------------------------------
+                            # OLD PATH: stress interpolation
+                            # -------------------------------
+                            Sgp = zeros(dim, dim)
+                            for a in 1:numNodes
+                                Na = H[a, k]
+                                Sgp .+= Na * reshape(Selem[9a-8:9a, 1], dim, dim)
+                            end
+
+                        else
+                            # ----------------------------------
+                            # NEW PATH: energy → stress (PK2)
+                            # ----------------------------------
+                            Celem = Cmap[elem]
+
+                            Cgp = @SMatrix zeros(dim, dim)
+                            for a in 1:numNodes
+                                Na = H[a, k]
+                                Cgp += Na * reshape(Celem[9a-8:9a, 1], dim, dim)
+                            end
+
+                            # AD-based stress (NO tangent!)
+                            Sgp = stress_from_energy(energy, Cgp, params)
                         end
 
                         for a in 1:numNodes, b in 1:numNodes
@@ -2805,17 +2908,32 @@ R = f_int - f_ext
 * `externalTangentFollower`
 * `TensorField`
 """
-function internalForceVector(problem::Problem, P::TensorField)
+function internalForceVector(problem::Problem; P::Union{Nothing,TensorField}=nothing,
+    F::Union{Nothing,TensorField}=nothing,
+    energy::Union{Nothing,Function}=nothing,
+    params=nothing)
 
     gmsh.model.setCurrent(problem.name)
+
+    @assert xor(P !== nothing, energy !== nothing) """
+    Either provide `P` (TensorField),
+    or provide (`energy`, `params`, `F`) to compute it at Gauss points.
+    """
 
     dim = problem.dim
     pdim = problem.pdim
     non = problem.non
     dof = pdim * non
 
-    Pe = nodesToElements(P)
-    Pmap = Dict(zip(Pe.numElem, Pe.A))
+    if P !== nothing
+        Pe = nodesToElements(P)
+        Pmap = Dict(zip(Pe.numElem, Pe.A))
+    end
+
+    if F !== nothing
+        Fe = nodesToElements(F)
+        Fmap = Dict(zip(Fe.numElem, Fe.A))
+    end
 
     f = zeros(dof)
 
@@ -2850,7 +2968,12 @@ function internalForceVector(problem::Problem, P::TensorField)
                         gmsh.model.mesh.getJacobian(elem, ip)
                     Jac = reshape(jac, 3, :)
 
-                    Pelem = Pmap[elem]
+                    if P !== nothing
+                        Pelem = Pmap[elem]
+                    end
+                    if F !== nothing
+                        Felem = Fmap[elem]
+                    end
                     fe = zeros(pdim * numNodes)
 
                     for k in eachindex(wip)
@@ -2858,11 +2981,47 @@ function internalForceVector(problem::Problem, P::TensorField)
                         w = jacDet[k] * wip[k]
 
                         # --- interpolate P to Gauss point using shape functions
-                        Pgp = zeros(dim, dim)
-                        for a in 1:numNodes
-                            Na = H[a, k]
-                            Pgp .+= Na * reshape(Pelem[9a-8:9a, 1], dim, dim)
+                        #Pgp = zeros(dim, dim)
+                        #for a in 1:numNodes
+                        #    Na = H[a, k]
+                        #    Pgp .+= Na * reshape(Pelem[9a-8:9a, 1], dim, dim)
+                        #end
+
+                        if P !== nothing
+                            # -----------------------------
+                            # OLD PATH: interpolate given P
+                            # -----------------------------
+                            Pgp = zeros(dim, dim)
+                            for a in 1:numNodes
+                                Na = H[a, k]
+                                Pgp .+= Na * reshape(Pelem[9a-8:9a, 1], dim, dim)
+                            end
+                        else
+                            # --------------------------------
+                            # NEW PATH: energy-based P
+                            # --------------------------------
+                            # F at Gauss (már úgyis kiszámolod!)
+                            Fgp = zeros(dim, dim)
+                            for a in 1:numNodes
+                                Na = H[a, k]
+                                Fgp .+= Na * reshape(Felem[9a-8:9a, 1], dim, dim)
+                            end
+                            Fgpm = @SMatrix [
+                                Fgp[1,1] Fgp[1,2] Fgp[1,3];
+                                Fgp[2,1] Fgp[2,2] Fgp[2,3];
+                                Fgp[3,1] Fgp[3,2] Fgp[3,3]
+                            ]
+
+                            # Right Cauchy–Green
+                            Cmat = transpose(Fgpm) * Fgpm
+
+                            # PK2 stress from energy
+                            S = stress_from_energy(energy, Cmat, params)
+
+                            # Convert PK2 → PK1:  P = F * S
+                            Pgp = Matrix(Fgpm * S)
                         end
+
 
                         for a in 1:numNodes
                             ∇Na = invJ * ∇h[3a-2:3a-(3-dim), k]
@@ -3212,17 +3371,17 @@ function externalTangentFollower(
     return SystemMatrix(K, problem)
 end
 
-function _tensor_extension_test end
+# ========= PUBLIC API =========
 
-function tensor_extension_test()
+function stress_from_energy(ψ, C::SMatrix, p)
     try
-        return _tensor_extension_test()
+        return _stress_from_energy(ψ, C, p)
     catch err
-        if err isa MethodError && err.f === _tensor_extension_test
+        if err isa MethodError && err.f === _stress_from_energy
             error("""
-            tensor_extension_test requires the Tensors backend.
+            Energy-based stress computation requires Tensors.jl.
 
-            Please run first:
+            Please load it first:
                 using Tensors
             """)
         else
@@ -3231,9 +3390,31 @@ function tensor_extension_test()
     end
 end
 
-function tensor_test() # <-- a LowLevelFEM modul része
-    return tensor_extension_test()
+function tangent_from_energy(ψ, C::SMatrix, p)
+    try
+        return _tangent_from_energy(ψ, C, p)
+    catch err
+        if err isa MethodError && err.f === _tangent_from_energy
+            error("""
+            Energy-based tangent computation requires Tensors.jl.
+
+            Please load it first:
+                using Tensors
+            """)
+        else
+            rethrow()
+        end
+    end
 end
+
+
+# ========= EXTENSION HOOKS (NO METHODS!) =========
+
+function _stress_from_energy end
+function _tangent_from_energy end
+
+# ===========================================================================
+
 
 
 #=
