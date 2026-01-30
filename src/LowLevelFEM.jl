@@ -27,11 +27,12 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-#=
+
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
         prob = Problem([mat], type = :dummy)
+        bc = BoundaryCondition("dummy", ux=0)
         stiffnessMatrix(prob)
         solveDisplacement(prob)
         solveDisplacement(prob, condensed=true)
@@ -54,6 +55,7 @@ export probe_field
         solveStress(q, DoFResults=true)
         solveStress(q, T=T, DoFResults=true)
         #solvePressure(prob, [], [], 0.0; cav=false, periodicSlave="", periodicMaster="")
+        loadVector(prob, [])
 
         tsteps = [1.0]
         sfA = ScalarField([reshape(collect(1.0:3.0), 3, 1)], [;;], tsteps, [1], 1, :scalar, prob)
@@ -117,7 +119,11 @@ export probe_field
         curlCurlMatrix(prob)
         tensorLaplaceMatrix(prob)
         traceLaplaceMatrix(prob)
+        materialTangentMatrix(prob, F=tfA, C=[;;])
+        initialStressMatrix(prob, S=tfA)
+        internalForceVector(prob, P=tfA)
+        externalTangentFollower(prob, [bc], F=tfA)
     end
 end
-=#
+
 end #module

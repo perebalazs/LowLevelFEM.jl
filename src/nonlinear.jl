@@ -2166,12 +2166,20 @@ end
 #############################################################
 
 """
-    materialTangentMatrix(problem::Problem; F::TensorField, C::AbstractMatrix)
+    materialTangentMatrix(
+        problem::Problem;
+        F::TensorField,
+        C::AbstractMatrix,
+        energy::Function,
+        params
+    )
 
 Assembles the **material (constitutive) tangent stiffness matrix**
 for a 3D solid under **finite deformation (Total Lagrange formulation)**,
 using a user-provided deformation gradient field `F` and a material
-tangent matrix `C` given in **6×6 Mandel/Voigt form**.
+tangent matrix `C` given in **6×6 Mandel/Voigt form**. Alternatively,
+it can compute the material tangent from a **free-energy density**
+`energy` (hyperelastic formulation) via `Tensors.jl`.
 
 This function builds the matrix
 ```
@@ -2219,6 +2227,14 @@ supplied `C`, which may be spatially varying.
 C[i,j] isa Number || C[i,j] isa ScalarField
 
 ```
+
+- `energy::Function`  
+  Free-energy density `ψ(C, params)` of a hyperelastic material, evaluated
+  at the **right Cauchy–Green tensor** `C = FᵀF`. If provided, the tangent
+  is computed at Gauss points via `Tensors.jl` and `C` must be omitted.
+
+- `params`  
+  Optional parameter container passed through to `energy`.
 ---
 
 ## Mathematical formulation
@@ -2265,6 +2281,11 @@ separately.
 - finite strains,
 provided that `C` is consistent with the stress measure used elsewhere.
 
+- If `energy` is supplied, the routine constructs `C = FᵀF` at Gauss points
+  and obtains the constitutive tangent from the free-energy function using
+  `Tensors.jl`. This enables arbitrary hyperelastic laws without providing
+  a closed-form `C`.
+
 - The material tangent `C` is evaluated at Gauss points by interpolating
 nodal `ScalarField` values when necessary.
 
@@ -2309,58 +2330,49 @@ function materialTangentMatrix(
     C::Union{AbstractMatrix,Nothing}=nothing,
     energy::Union{Nothing,Function}=nothing,
     params=nothing)
-    
-    @assert xor(C !== nothing, energy !== nothing) """
-    Either provide `C` (6×6, Number or ScalarField entries),
-    or provide (`energy`, `params`) to compute the tangent at Gauss points.
-    """
 
-    @assert problem.dim == 3
-    @assert problem.pdim == 3
-    if C !== nothing
-        @assert size(C) == (6, 6)
-        @assert all(x -> (x isa Number) || (x isa ScalarField), C)
+    if problem.type == :dummy
+        return nothing
     end
+    @assert xor(C !== nothing, energy !== nothing)
+    @assert problem.dim == 3 && problem.pdim == 3
 
     gmsh.model.setCurrent(problem.name)
 
-    dim = 3
     pdim = 3
     dof = pdim * problem.non
 
-    # --- elementwise nodal F (9×numNodes per element)
+    # --- elementwise nodal F
     Fe = nodesToElements(F)
     Fmap = Dict(zip(Fe.numElem, Fe.A))
 
-    # --- Preprocess C entries:
-    # For ScalarField entries: build element->nodal-values map once.
+    # --- preprocess constant / field C (old path)
     Centry = nothing
     if C !== nothing
         Centry = Matrix{Any}(undef, 6, 6)
-        for I in CartesianIndices(C)
-            cij = C[I]
+        for Icart in CartesianIndices(C)
+            cij = C[Icart]
             if cij isa ScalarField
                 ce = nodesToElements(cij)
-                Centry[I] = Dict(zip(ce.numElem, ce.A))  # elem => (numNodes×1) nodal values
+                Centry[Icart] = Dict(zip(ce.numElem, ce.A)) # elem => nodal array
             else
-                Centry[I] = Float64(cij)
+                Centry[Icart] = Float64(cij)
             end
         end
     end
 
-    lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(problem)
-    I = Int[]
-    J = Int[]
-    V = Float64[]
-    sizehint!(I, lengthOfIJV)
-    sizehint!(J, lengthOfIJV)
-    sizehint!(V, lengthOfIJV)
+    # --- prealloc sparse triplets (pos-style, no push!)
+    len = LowLevelFEM.estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, len)
+    J = Vector{Int}(undef, len)
+    V = Vector{Float64}(undef, len)
+    pos = 1
 
     for mat in problem.material
-        for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+        for (_, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
 
             elemTypes, elemTags, elemNodeTags =
-                gmsh.model.mesh.getElements(edim, etag)
+                gmsh.model.mesh.getElements(problem.dim, etag)
 
             for it in eachindex(elemTypes)
                 et = elemTypes[it]
@@ -2368,9 +2380,9 @@ function materialTangentMatrix(
                     gmsh.model.mesh.getElementProperties(et)
 
                 ip, wip =
-                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order+1)")
 
-                # shape functions for interpolation
+                # shape functions
                 _, hfun, _ =
                     gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
                 H = reshape(hfun, numNodes, :)
@@ -2380,136 +2392,119 @@ function materialTangentMatrix(
                     gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
                 ∇h = reshape(dfun, :, length(wip))
 
+                ndofe = 3 * numNodes
+
+                # --- reusable buffers (element-level)
+                B = zeros(6, ndofe)
+                Ke = zeros(ndofe, ndofe)
+                Cgp = zeros(6, 6)
+                Fgp = zeros(3, 3)
+
+                # buffers for Ke update: tmp6 = Cgp*B
+                tmp6 = zeros(6, ndofe)
+
                 for (e, elem) in enumerate(elemTags[it])
                     nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
+                    Fnode = Fmap[elem]
 
                     jac, jacDet, _ =
                         gmsh.model.mesh.getJacobian(elem, ip)
                     Jac = reshape(jac, 3, :)
 
-                    Fnode = Fmap[elem]
-                    Ke = zeros(pdim * numNodes, pdim * numNodes)
+                    fill!(Ke, 0.0)
 
                     for k in eachindex(wip)
-                        invJ = inv(Jac[1:3, 3k-2:3k])'
+                        # --- invJ via StaticArrays (fast, no heap)
+                        Jm = @SMatrix [
+                            Jac[1, 3k-2] Jac[1, 3k-1] Jac[1, 3k];
+                            Jac[2, 3k-2] Jac[2, 3k-1] Jac[2, 3k];
+                            Jac[3, 3k-2] Jac[3, 3k-1] Jac[3, 3k]
+                        ]
+                        invJ = transpose(inv(Jm))
                         w = jacDet[k] * wip[k]
 
-                        # --- F at Gauss: Fgp = Σ_a N_a F_a
-                        Fgp = zeros(3, 3)
-                        for a in 1:numNodes
+                        # --- F at Gauss (avoid reshape alloc by manual fill)
+                        fill!(Fgp, 0.0)
+                        @inbounds for a in 1:numNodes
                             Na = H[a, k]
-                            Fgp .+= Na * reshape(Fnode[9a-8:9a, 1], 3, 3)
+                            base = 9a - 8
+
+                            Fgp[1, 1] += Na * Fnode[base+0, 1]
+                            Fgp[2, 1] += Na * Fnode[base+1, 1]
+                            Fgp[3, 1] += Na * Fnode[base+2, 1]
+
+                            Fgp[1, 2] += Na * Fnode[base+3, 1]
+                            Fgp[2, 2] += Na * Fnode[base+4, 1]
+                            Fgp[3, 2] += Na * Fnode[base+5, 1]
+
+                            Fgp[1, 3] += Na * Fnode[base+6, 1]
+                            Fgp[2, 3] += Na * Fnode[base+7, 1]
+                            Fgp[3, 3] += Na * Fnode[base+8, 1]
                         end
 
-                        Cgp = zeros(6, 6)
-
+                        # --- C at Gauss
                         if energy !== nothing
-                            # -----------------------------
-                            # NEW PATH: energy-based tangent
-                            # -----------------------------
-                            # Build right Cauchy–Green at Gauss: C = F^T F
-                            # (use SMatrix for speed + wrapper expects SMatrix{3,3})
-                            Fgpm = @SMatrix [
-                                Fgp[1,1] Fgp[1,2] Fgp[1,3];
-                                Fgp[2,1] Fgp[2,2] Fgp[2,3];
-                                Fgp[3,1] Fgp[3,2] Fgp[3,3]
-                            ]
-   
-                            Cmat = transpose(Fgpm) * Fgpm  # SMatrix{3,3}
-   
-                            # tangent_from_energy returns 6×6 (Voigt) in your extension convention
-                            Ctan = tangent_from_energy(energy, Cmat, params)  # SMatrix{6,6}
-   
-                            # Convert to Matrix{Float64} for B' * Cgp * B
-                            Cgp .= Matrix(Ctan)
-   
-                            # IMPORTANT: your B uses engineering shear strains [E11,E22,E33,2E23,2E13,2E12]
-                            # so Cgp must map epsilon_eng -> sigma_voigt.
-                            # If Ctan was built for the "standard" Voigt with [E11,E22,E33,E23,E13,E12],
-                            # then divide shear columns by 2:
-                            @inbounds for jj in 4:6, ii in 1:6
-                                #Cgp[ii, jj] *= 0.5
-                            end
-   
-                            # Also: tangent from ψ(C) is ∂S/∂C; but your B is built from E.
-                            # Since C = 2E + I => ∂S/∂E = 2 * ∂S/∂C
-                            #Cgp .*= 2.0
-
+                            Fm = SMatrix{3,3,Float64}(Fgp)
+                            Cmat = transpose(Fm) * Fm
+                            Ctan = LowLevelFEM.tangent_from_energy(energy, Cmat, params)  # expected 6×6
+                            Cgp .= Ctan
                         else
-                            # -----------------------------
-                            # OLD PATH: interpolate given C
-                            # -----------------------------
-                            @inbounds for ii in 1:6, jj in 1:6
-                                cij = Centry[ii, jj]
+                            @inbounds for i in 1:6, j in 1:6
+                                cij = Centry[i, j]
                                 if cij isa Float64
-                                    Cgp[ii, jj] = cij
+                                    Cgp[i, j] = cij
                                 else
                                     nod = cij[elem][:, 1]
-                                    Cgp[ii, jj] = dot(nod, H[:, k])
+                                    Cgp[i, j] = dot(nod, @view H[:, k])
                                 end
                             end
                         end
 
-                        # --- C at Gauss: Cgp_ij = Σ_a N_a Cij_a  (ha ScalarField)
-                        #Cgp = zeros(6, 6)
-                        #for ii in 1:6, jj in 1:6
-                        #    cij = Centry[ii, jj]
-                        #    if cij isa Float64
-                        #        Cgp[ii, jj] = cij
-                        #    else
-                        #        # dict elem => nodalValues(numNodes×1)
-                        #        nod = cij[elem][:, 1]
-                        #        Cgp[ii, jj] = dot(nod, H[:, k])
-                        #    end
-                        #end
-
-                        # --- build B(F)  (6 × 3numNodes)
-                        # Column corresponds to dof (a,j): δu_{a,j}
-                        # δF = e_j ⊗ ∇N_a^T
-                        # δE = sym(F^T δF) = 1/2 (F^T δF + δF^T F)
-                        B = zeros(6, 3 * numNodes)
-
-                        for a in 1:numNodes
-                            ∇Na = invJ * ∇h[3a-2:3a, k]  # 3-vector
+                        # --- build B (no allocations in ∇Na, v)
+                        fill!(B, 0.0)
+                        @inbounds for a in 1:numNodes
+                            gh = @view ∇h[3a-2:3a, k]
+                            ∇Na1 = invJ[1, 1] * gh[1] + invJ[1, 2] * gh[2] + invJ[1, 3] * gh[3]
+                            ∇Na2 = invJ[2, 1] * gh[1] + invJ[2, 2] * gh[2] + invJ[2, 3] * gh[3]
+                            ∇Na3 = invJ[3, 1] * gh[1] + invJ[3, 2] * gh[2] + invJ[3, 3] * gh[3]
 
                             for j in 1:3
-                                # v = F^T e_j = row j of F, as a column vector
-                                v = @view Fgp[j, :]  # length-3 row view
-
-                                # dE = 1/2 (v ⊗ ∇Na^T + ∇Na ⊗ v^T)
-                                dE11 = 0.5 * (v[1] * ∇Na[1] + ∇Na[1] * v[1])
-                                dE22 = 0.5 * (v[2] * ∇Na[2] + ∇Na[2] * v[2])
-                                dE33 = 0.5 * (v[3] * ∇Na[3] + ∇Na[3] * v[3])
-
-                                dE23 = 0.5 * (v[2] * ∇Na[3] + ∇Na[2] * v[3])
-                                dE13 = 0.5 * (v[1] * ∇Na[3] + ∇Na[1] * v[3])
-                                dE12 = 0.5 * (v[1] * ∇Na[2] + ∇Na[1] * v[2])
-
+                                v1 = Fgp[j, 1]
+                                v2 = Fgp[j, 2]
+                                v3 = Fgp[j, 3]
                                 col = (a - 1) * 3 + j
-                                B[1, col] = dE11
-                                B[2, col] = dE22
-                                B[3, col] = dE33
-                                B[4, col] = 2 * dE23
-                                B[5, col] = 2 * dE13
-                                B[6, col] = 2 * dE12
+
+                                B[1, col] = v1 * ∇Na1
+                                B[2, col] = v2 * ∇Na2
+                                B[3, col] = v3 * ∇Na3
+
+                                # engineering shear rows (E23,E13,E12) already with factor 2 in B definition
+                                B[4, col] = v2 * ∇Na3 + v3 * ∇Na2
+                                B[5, col] = v1 * ∇Na3 + v3 * ∇Na1
+                                B[6, col] = v1 * ∇Na2 + v2 * ∇Na1
                             end
                         end
 
-                        Ke .+= (B' * Cgp * B) * w
+                        # --- Ke += w * (B' * (Cgp*B)) using mul!
+                        mul!(tmp6, Cgp, B)                    # tmp6 = Cgp*B
+                        mul!(Ke, transpose(B), tmp6, w, 1.0)  # Ke = w*B'*tmp6 + 1*Ke
                     end
 
-                    # scatter Ke
-                    for a in 1:(3*numNodes), b in 1:(3*numNodes)
-                        Ig = (nodeTags[div(a - 1, 3)+1] - 1) * 3 + mod(a - 1, 3) + 1
-                        Jg = (nodeTags[div(b - 1, 3)+1] - 1) * 3 + mod(b - 1, 3) + 1
-                        push!(I, Ig)
-                        push!(J, Jg)
-                        push!(V, Ke[a, b])
+                    # --- scatter (pos-style)
+                    @inbounds for a in 1:ndofe, b in 1:ndofe
+                        I[pos] = (nodeTags[div(a - 1, 3)+1] - 1) * 3 + mod(a - 1, 3) + 1
+                        J[pos] = (nodeTags[div(b - 1, 3)+1] - 1) * 3 + mod(b - 1, 3) + 1
+                        V[pos] = Ke[a, b]
+                        pos += 1
                     end
                 end
             end
         end
     end
+
+    resize!(I, pos - 1)
+    resize!(J, pos - 1)
+    resize!(V, pos - 1)
 
     K = sparse(I, J, V, dof, dof)
     dropzeros!(K)
@@ -2517,7 +2512,13 @@ function materialTangentMatrix(
 end
 
 """
-    initialStressMatrix(problem::Problem; stress::TensorField)
+    initialStressMatrix(
+        problem::Problem;
+        stress::TensorField,
+        energy::Function,
+        C::TensorField,
+        params
+    )
 
 Assembles the **geometric (initial stress) stiffness matrix**
 associated with a given stress field, for finite deformation analysis
@@ -2562,6 +2563,18 @@ gradients yields the geometric stiffness.
   
   provided that the chosen stress measure is **consistent with the
   kinematic description used elsewhere** in the formulation.
+
+- `energy::Function`  
+  Free-energy density `ψ(C, params)` of a hyperelastic material. If
+  provided, the stress field is computed at Gauss points via `Tensors.jl`
+  from the supplied `C` and `stress` must be omitted.
+
+- `C::TensorField`  
+  Nodal field of the **right Cauchy–Green tensor** `C = FᵀF`. Required
+  when using the energy-based path.
+
+- `params`  
+  Optional parameter container passed through to `energy`.
 
 ---
 
@@ -2611,6 +2624,11 @@ and is assembled into the global matrix.
   stress field and the rest of the formulation is the responsibility of
   the caller.
 
+- If `energy` is supplied, `C` is interpolated to Gauss points and the
+  stress is obtained from the free-energy function using `Tensors.jl`.
+  This enables arbitrary hyperelastic laws without explicitly providing
+  a stress field.
+
 - The formulation corresponds to the classical **initial stress stiffness**
   encountered in large-deformation and stability (buckling) analyses.
 
@@ -2644,45 +2662,45 @@ K = Kmat + Kgeo
 """
 function initialStressMatrix(
     problem::Problem;
-    stress::Union{TensorField,Nothing}=nothing,   # P, S, σ – a kód nem tudja, nem is érdekli
+    S::Union{TensorField,Nothing}=nothing,
     energy::Union{Nothing,Function}=nothing,
     params=nothing,
     C::Union{Nothing,TensorField}=nothing)
 
-    @assert xor(stress !== nothing, energy !== nothing) """
-    Either `stress` OR (`energy`, `params`, `C`) must be provided.
-    """
-
-    @assert problem.pdim == problem.dim
+    if problem.type == :dummy
+        return nothing
+    end
+    stress= S
+    @assert xor(stress !== nothing, energy !== nothing)
     gmsh.model.setCurrent(problem.name)
 
     dim = problem.dim
-    pdim = problem.pdim
-    non = problem.non
-    dof = pdim * non
+    pdim = dim
+    dof = pdim * problem.non
 
-    # elementwise nodal stresses
+    # --- elementwise maps
+    Smap = nothing
+    Cmap = nothing
     if stress !== nothing
         Se = nodesToElements(stress)
         Smap = Dict(zip(Se.numElem, Se.A))
-    end
-
-    if energy !== nothing
+    else
         Ce = nodesToElements(C)
         Cmap = Dict(zip(Ce.numElem, Ce.A))
     end
 
-    lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(problem)
-    I = Vector{Int}(undef, lengthOfIJV)
-    J = Vector{Int}(undef, lengthOfIJV)
-    V = Vector{Float64}(undef, lengthOfIJV)
+    # --- prealloc sparse triplets (pos-style, no push!)
+    len = LowLevelFEM.estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, len)
+    J = Vector{Int}(undef, len)
+    V = Vector{Float64}(undef, len)
     pos = 1
 
     for mat in problem.material
-        for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+        for (_, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
 
             elemTypes, elemTags, elemNodeTags =
-                gmsh.model.mesh.getElements(edim, etag)
+                gmsh.model.mesh.getElements(dim, etag)
 
             for it in eachindex(elemTypes)
                 et = elemTypes[it]
@@ -2690,17 +2708,24 @@ function initialStressMatrix(
                     gmsh.model.mesh.getElementProperties(et)
 
                 ip, wip =
-                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order+1)")
 
-                # --- Lagrange shape functions (for stress interpolation)
+                # shape funcs
                 _, hfun, _ =
                     gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
                 H = reshape(hfun, numNodes, :)
 
-                # --- GradLagrange
+                # grad shape funcs
                 _, dfun, _ =
                     gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
                 ∇h = reshape(dfun, :, length(wip))
+
+                # reusable buffers (element-level)
+                Ke = zeros(pdim * numNodes, pdim * numNodes)
+                Sgp = zeros(dim, dim)
+
+                # energy path buffers (Gauss-level, reused)
+                CgpM = @MMatrix zeros(3, 3)  # mutable accumulator
 
                 for (e, elem) in enumerate(elemTags[it])
                     nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
@@ -2709,56 +2734,83 @@ function initialStressMatrix(
                         gmsh.model.mesh.getJacobian(elem, ip)
                     Jac = reshape(jac, 3, :)
 
-                    if stress !== nothing
-                        Selem = Smap[elem]
-                    end
-                    Ke = zeros(pdim * numNodes, pdim * numNodes)
+                    fill!(Ke, 0.0)
+
+                    # fetch element nodal arrays once
+                    Selem = stress !== nothing ? Smap[elem] : nothing
+                    Celem = energy !== nothing ? Cmap[elem] : nothing
 
                     for k in eachindex(wip)
-                        invJ = inv(Jac[1:dim, 3k-2:3k])'
+                        # --- invJ via StaticArrays (fast, no heap)
+                        Jm = @SMatrix [
+                            Jac[1, 3k-2] Jac[1, 3k-1] Jac[1, 3k];
+                            Jac[2, 3k-2] Jac[2, 3k-1] Jac[2, 3k];
+                            Jac[3, 3k-2] Jac[3, 3k-1] Jac[3, 3k]
+                        ]
+                        invJ = transpose(inv(Jm))
                         w = jacDet[k] * wip[k]
 
-                        ## --- interpolate stress to Gauss point (CORRECT)
-                        #Sgp = zeros(dim, dim)
-                        #for a in 1:numNodes
-                        #    Na = H[a, k]
-                        #    Sgp .+= Na * reshape(Selem[9a-8:9a, 1], dim, dim)
-                        #end
-
                         if stress !== nothing
-                            # -------------------------------
-                            # OLD PATH: stress interpolation
-                            # -------------------------------
-                            Sgp = zeros(dim, dim)
-                            for a in 1:numNodes
+                            # --- interpolate stress to Gauss
+                            fill!(Sgp, 0.0)
+                            @inbounds for a in 1:numNodes
                                 Na = H[a, k]
-                                Sgp .+= Na * reshape(Selem[9a-8:9a, 1], dim, dim)
+                                base = 9a - 8
+                                # manual reshape(Selem[...],3,3) without alloc
+                                Sgp[1, 1] += Na * Selem[base+0, 1]
+                                Sgp[2, 1] += Na * Selem[base+1, 1]
+                                Sgp[3, 1] += Na * Selem[base+2, 1]
+                                Sgp[1, 2] += Na * Selem[base+3, 1]
+                                Sgp[2, 2] += Na * Selem[base+4, 1]
+                                Sgp[3, 2] += Na * Selem[base+5, 1]
+                                Sgp[1, 3] += Na * Selem[base+6, 1]
+                                Sgp[2, 3] += Na * Selem[base+7, 1]
+                                Sgp[3, 3] += Na * Selem[base+8, 1]
                             end
-
                         else
-                            # ----------------------------------
-                            # NEW PATH: energy → stress (PK2)
-                            # ----------------------------------
-                            Celem = Cmap[elem]
-
-                            Cgp = @SMatrix zeros(dim, dim)
-                            for a in 1:numNodes
+                            # --- interpolate C to Gauss (MMatrix accumulator)
+                            fill!(CgpM, 0.0)
+                            @inbounds for a in 1:numNodes
                                 Na = H[a, k]
-                                Cgp += Na * reshape(Celem[9a-8:9a, 1], dim, dim)
+                                base = 9a - 8
+                                CgpM[1, 1] += Na * Celem[base+0, 1]
+                                CgpM[2, 1] += Na * Celem[base+1, 1]
+                                CgpM[3, 1] += Na * Celem[base+2, 1]
+                                CgpM[1, 2] += Na * Celem[base+3, 1]
+                                CgpM[2, 2] += Na * Celem[base+4, 1]
+                                CgpM[3, 2] += Na * Celem[base+5, 1]
+                                CgpM[1, 3] += Na * Celem[base+6, 1]
+                                CgpM[2, 3] += Na * Celem[base+7, 1]
+                                CgpM[3, 3] += Na * Celem[base+8, 1]
                             end
-
-                            # AD-based stress (NO tangent!)
-                            Sgp = stress_from_energy(energy, Cgp, params)
+                            # convert once, call stress_from_energy (expects SMatrix{3,3})
+                            Cgp = SMatrix{3,3,Float64}(CgpM)
+                            S = LowLevelFEM.stress_from_energy(energy, Cgp, params)  # should return 3×3 (SMatrix or Matrix)
+                            Sgp .= S
                         end
 
-                        for a in 1:numNodes, b in 1:numNodes
-                            ∇Na = invJ * ∇h[3a-2:3a-(3-dim), k]
-                            ∇Nb = invJ * ∇h[3b-2:3b-(3-dim), k]
+                        # --- geometric stiffness contribution
+                        @inbounds for a in 1:numNodes, b in 1:numNodes
+                            # ∇N = invJ * grad_hat (manual for speed)
+                            ghA = @view ∇h[3a-2:3a, k]
+                            ghB = @view ∇h[3b-2:3b, k]
 
-                            # scalar geometric stiffness contribution
-                            g = dot(∇Na, Sgp * ∇Nb)
+                            ∇Na1 = invJ[1, 1] * ghA[1] + invJ[1, 2] * ghA[2] + invJ[1, 3] * ghA[3]
+                            ∇Na2 = invJ[2, 1] * ghA[1] + invJ[2, 2] * ghA[2] + invJ[2, 3] * ghA[3]
+                            ∇Na3 = invJ[3, 1] * ghA[1] + invJ[3, 2] * ghA[2] + invJ[3, 3] * ghA[3]
 
-                            # distribute to displacement components (i = i only)
+                            ∇Nb1 = invJ[1, 1] * ghB[1] + invJ[1, 2] * ghB[2] + invJ[1, 3] * ghB[3]
+                            ∇Nb2 = invJ[2, 1] * ghB[1] + invJ[2, 2] * ghB[2] + invJ[2, 3] * ghB[3]
+                            ∇Nb3 = invJ[3, 1] * ghB[1] + invJ[3, 2] * ghB[2] + invJ[3, 3] * ghB[3]
+
+                            # t = Sgp * ∇Nb
+                            t1 = Sgp[1, 1] * ∇Nb1 + Sgp[1, 2] * ∇Nb2 + Sgp[1, 3] * ∇Nb3
+                            t2 = Sgp[2, 1] * ∇Nb1 + Sgp[2, 2] * ∇Nb2 + Sgp[2, 3] * ∇Nb3
+                            t3 = Sgp[3, 1] * ∇Nb1 + Sgp[3, 2] * ∇Nb2 + Sgp[3, 3] * ∇Nb3
+
+                            g = ∇Na1 * t1 + ∇Na2 * t2 + ∇Na3 * t3
+
+                            # distribute to displacement components (i=i only)
                             for i in 1:dim
                                 ia = (a - 1) * pdim + i
                                 ib = (b - 1) * pdim + i
@@ -2767,8 +2819,8 @@ function initialStressMatrix(
                         end
                     end
 
-                    # scatter
-                    for a in 1:pdim*numNodes, b in 1:pdim*numNodes
+                    # --- scatter (pos-style)
+                    @inbounds for a in 1:pdim*numNodes, b in 1:pdim*numNodes
                         I[pos] = (nodeTags[div(a - 1, pdim)+1] - 1) * pdim + mod(a - 1, pdim) + 1
                         J[pos] = (nodeTags[div(b - 1, pdim)+1] - 1) * pdim + mod(b - 1, pdim) + 1
                         V[pos] = Ke[a, b]
@@ -2789,11 +2841,18 @@ function initialStressMatrix(
 end
 
 """
-    internalForceVector(problem::Problem, P::TensorField)
+    internalForceVector(
+        problem::Problem;
+        P::TensorField,
+        F::TensorField,
+        energy::Function,
+        params
+    )
 
 Assembles the **internal force vector** associated with a given
 first-order stress tensor field `P`, using a finite deformation
-formulation.
+formulation. Alternatively, `P` can be computed from a **free-energy
+density** `energy` (hyperelastic formulation) via `Tensors.jl`.
 
 The function computes
 
@@ -2835,6 +2894,18 @@ Typical choices for `P` include:
 The function does **not** distinguish between these cases; ensuring
 consistency with the rest of the formulation is the responsibility of
 the caller.
+
+- `F::TensorField`  
+  Nodal deformation gradient field. Required when using the energy-based
+  path to compute `P` internally.
+
+- `energy::Function`  
+  Free-energy density `ψ(C, params)` of a hyperelastic material. If
+  provided, the routine constructs `C = FᵀF`, computes `S` via `Tensors.jl`,
+  and forms `P = F * S` at Gauss points.
+
+- `params`  
+  Optional parameter container passed through to `energy`.
 
 ---
 
@@ -2878,6 +2949,10 @@ vector.
   functions. No symmetry or push-forward/pull-back operations are
   applied internally.
 
+- If `energy` is supplied, `P` is computed at Gauss points from the
+  free-energy function using `Tensors.jl`, enabling arbitrary
+  hyperelastic laws without explicitly providing a stress field.
+
 - The formulation corresponds to a Total Lagrange–type internal force
   expression when `P` is interpreted as the first Piola–Kirchhoff stress.
 
@@ -2908,11 +2983,16 @@ R = f_int - f_ext
 * `externalTangentFollower`
 * `TensorField`
 """
-function internalForceVector(problem::Problem; P::Union{Nothing,TensorField}=nothing,
+function internalForceVector(
+    problem::Problem;
+    P::Union{Nothing,TensorField}=nothing,
     F::Union{Nothing,TensorField}=nothing,
     energy::Union{Nothing,Function}=nothing,
     params=nothing)
 
+    if problem.type == :dummy
+        return nothing
+    end
     gmsh.model.setCurrent(problem.name)
 
     @assert xor(P !== nothing, energy !== nothing) """
@@ -2924,13 +3004,16 @@ function internalForceVector(problem::Problem; P::Union{Nothing,TensorField}=not
     pdim = problem.pdim
     non = problem.non
     dof = pdim * non
+    @assert dim == 3 && pdim == 3  # jelen implementáció
 
+    # --- elementwise maps
+    Pmap = nothing
+    Fmap = nothing
     if P !== nothing
         Pe = nodesToElements(P)
         Pmap = Dict(zip(Pe.numElem, Pe.A))
-    end
-
-    if F !== nothing
+    else
+        @assert F !== nothing
         Fe = nodesToElements(F)
         Fmap = Dict(zip(Fe.numElem, Fe.A))
     end
@@ -2949,17 +3032,22 @@ function internalForceVector(problem::Problem; P::Union{Nothing,TensorField}=not
                     gmsh.model.mesh.getElementProperties(et)
 
                 ip, wip =
-                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order + 1)")
 
-                # --- Lagrange shape functions (for proper interpolation of P)
+                # --- shape functions
                 _, hfun, _ =
                     gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
                 H = reshape(hfun, numNodes, :)
 
-                # --- GradLagrange
+                # --- grad shape
                 _, dfun, _ =
                     gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
                 ∇h = reshape(dfun, :, length(wip))
+
+                # --- reusable buffers
+                fe = zeros(pdim * numNodes)
+                Pgp = zeros(3, 3)  # Float64 buffer
+                Fgp = zeros(3, 3)  # only used in energy-path
 
                 for (e, elem) in enumerate(elemTags[it])
                     nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
@@ -2968,83 +3056,104 @@ function internalForceVector(problem::Problem; P::Union{Nothing,TensorField}=not
                         gmsh.model.mesh.getJacobian(elem, ip)
                     Jac = reshape(jac, 3, :)
 
-                    if P !== nothing
-                        Pelem = Pmap[elem]
-                    end
-                    if F !== nothing
-                        Felem = Fmap[elem]
-                    end
-                    fe = zeros(pdim * numNodes)
+                    Pelem = (P !== nothing) ? Pmap[elem] : nothing
+                    Felem = (energy !== nothing) ? Fmap[elem] : nothing
+
+                    fill!(fe, 0.0)
 
                     for k in eachindex(wip)
-                        invJ = inv(Jac[1:dim, 3k-2:3k])'
+                        # --- invJ via StaticArrays
+                        Jm = @SMatrix [
+                            Jac[1, 3k-2] Jac[1, 3k-1] Jac[1, 3k];
+                            Jac[2, 3k-2] Jac[2, 3k-1] Jac[2, 3k];
+                            Jac[3, 3k-2] Jac[3, 3k-1] Jac[3, 3k]
+                        ]
+                        invJ = transpose(inv(Jm))
                         w = jacDet[k] * wip[k]
 
-                        # --- interpolate P to Gauss point using shape functions
-                        #Pgp = zeros(dim, dim)
-                        #for a in 1:numNodes
-                        #    Na = H[a, k]
-                        #    Pgp .+= Na * reshape(Pelem[9a-8:9a, 1], dim, dim)
-                        #end
-
                         if P !== nothing
-                            # -----------------------------
-                            # OLD PATH: interpolate given P
-                            # -----------------------------
-                            Pgp = zeros(dim, dim)
-                            for a in 1:numNodes
+                            # --- interpolate P to Gauss into Pgp buffer (no alloc)
+                            fill!(Pgp, 0.0)
+                            @inbounds for a in 1:numNodes
                                 Na = H[a, k]
-                                Pgp .+= Na * reshape(Pelem[9a-8:9a, 1], dim, dim)
+                                base = 9a - 8
+                                # column-major (ugyanaz, mint reshape(x,3,3))
+                                Pgp[1, 1] += Na * Pelem[base+0, 1]
+                                Pgp[2, 1] += Na * Pelem[base+1, 1]
+                                Pgp[3, 1] += Na * Pelem[base+2, 1]
+
+                                Pgp[1, 2] += Na * Pelem[base+3, 1]
+                                Pgp[2, 2] += Na * Pelem[base+4, 1]
+                                Pgp[3, 2] += Na * Pelem[base+5, 1]
+
+                                Pgp[1, 3] += Na * Pelem[base+6, 1]
+                                Pgp[2, 3] += Na * Pelem[base+7, 1]
+                                Pgp[3, 3] += Na * Pelem[base+8, 1]
                             end
                         else
-                            # --------------------------------
-                            # NEW PATH: energy-based P
-                            # --------------------------------
-                            # F at Gauss (már úgyis kiszámolod!)
-                            Fgp = zeros(dim, dim)
-                            for a in 1:numNodes
+                            # --- energy path: Fgp -> C -> S -> P = F*S
+                            fill!(Fgp, 0.0)
+                            @inbounds for a in 1:numNodes
                                 Na = H[a, k]
-                                Fgp .+= Na * reshape(Felem[9a-8:9a, 1], dim, dim)
+                                base = 9a - 8
+                                Fgp[1, 1] += Na * Felem[base+0, 1]
+                                Fgp[2, 1] += Na * Felem[base+1, 1]
+                                Fgp[3, 1] += Na * Felem[base+2, 1]
+                                Fgp[1, 2] += Na * Felem[base+3, 1]
+                                Fgp[2, 2] += Na * Felem[base+4, 1]
+                                Fgp[3, 2] += Na * Felem[base+5, 1]
+                                Fgp[1, 3] += Na * Felem[base+6, 1]
+                                Fgp[2, 3] += Na * Felem[base+7, 1]
+                                Fgp[3, 3] += Na * Felem[base+8, 1]
                             end
-                            Fgpm = @SMatrix [
-                                Fgp[1,1] Fgp[1,2] Fgp[1,3];
-                                Fgp[2,1] Fgp[2,2] Fgp[2,3];
-                                Fgp[3,1] Fgp[3,2] Fgp[3,3]
-                            ]
 
-                            # Right Cauchy–Green
-                            Cmat = transpose(Fgpm) * Fgpm
+                            Fm = SMatrix{3,3,Float64}(Fgp)
+                            Cmat = transpose(Fm) * Fm
+                            S = LowLevelFEM.stress_from_energy(energy, Cmat, params)  # 3×3 (SMatrix ok)
+                            Pm = Fm * S
 
-                            # PK2 stress from energy
-                            S = stress_from_energy(energy, Cmat, params)
-
-                            # Convert PK2 → PK1:  P = F * S
-                            Pgp = Matrix(Fgpm * S)
+                            # copy back into Pgp buffer (avoid Matrix(Pm))
+                            @inbounds begin
+                                Pgp[1, 1] = Pm[1, 1]
+                                Pgp[1, 2] = Pm[1, 2]
+                                Pgp[1, 3] = Pm[1, 3]
+                                Pgp[2, 1] = Pm[2, 1]
+                                Pgp[2, 2] = Pm[2, 2]
+                                Pgp[2, 3] = Pm[2, 3]
+                                Pgp[3, 1] = Pm[3, 1]
+                                Pgp[3, 2] = Pm[3, 2]
+                                Pgp[3, 3] = Pm[3, 3]
+                            end
                         end
 
+                        # --- fe accumulation
+                        @inbounds for a in 1:numNodes
+                            gh = @view ∇h[3a-2:3a, k]
+                            ∇Na1 = invJ[1, 1] * gh[1] + invJ[1, 2] * gh[2] + invJ[1, 3] * gh[3]
+                            ∇Na2 = invJ[2, 1] * gh[1] + invJ[2, 2] * gh[2] + invJ[2, 3] * gh[3]
+                            ∇Na3 = invJ[3, 1] * gh[1] + invJ[3, 2] * gh[2] + invJ[3, 3] * gh[3]
 
-                        for a in 1:numNodes
-                            ∇Na = invJ * ∇h[3a-2:3a-(3-dim), k]
-                            for i in 1:dim
-                                ia = (a - 1) * pdim + i
-                                fe[ia] += dot(Pgp[i, :], ∇Na) * w
-                            end
+                            base = (a - 1) * pdim
+                            # dot(Pgp[i,:], ∇Na) kézzel, hogy ne allokáljon view/vec
+                            fe[base+1] += (Pgp[1, 1] * ∇Na1 + Pgp[1, 2] * ∇Na2 + Pgp[1, 3] * ∇Na3) * w
+                            fe[base+2] += (Pgp[2, 1] * ∇Na1 + Pgp[2, 2] * ∇Na2 + Pgp[2, 3] * ∇Na3) * w
+                            fe[base+3] += (Pgp[3, 1] * ∇Na1 + Pgp[3, 2] * ∇Na2 + Pgp[3, 3] * ∇Na3) * w
                         end
                     end
 
-                    # scatter
-                    for a in 1:numNodes, i in 1:dim
-                        Ig = (nodeTags[a] - 1) * pdim + i
-                        f[Ig] += fe[(a-1)*pdim+i]
+                    # scatter fe into global f
+                    @inbounds for a in 1:numNodes
+                        nt = nodeTags[a]
+                        base = (a - 1) * pdim
+                        f[(nt-1)*pdim+1] += fe[base+1]
+                        f[(nt-1)*pdim+2] += fe[base+2]
+                        f[(nt-1)*pdim+3] += fe[base+3]
                     end
                 end
             end
         end
     end
 
-    if pdim ≠ 3
-        error("dim ≠ 3 is not implemented yet")
-    end
     return VectorField([], reshape(f, :, 1), [0.0], [], 1, :v3D, problem)
 end
 
@@ -3194,22 +3303,32 @@ function externalTangentFollower(
     loads::Vector{BoundaryCondition};
     F::TensorField)
 
+    if problem.type == :dummy
+        return nothing
+    end
     gmsh.model.setCurrent(problem.name)
 
     dim  = problem.dim
     pdim = problem.pdim
     non  = problem.non
     dof  = pdim * non
+    @assert dim == 3 && pdim == 3
 
+    # --- elementwise F
     Fe   = nodesToElements(F)
     Fmap = Dict(zip(Fe.numElem, Fe.A))
 
-    Id = Matrix{Float64}(LinearAlgebra.I, dim, dim)
+    #Id = Matrix{Float64}(I, 3, 3)
+    Id = [1.0 0 0; 0 1 0; 0 0 1]
 
-    I = Int[]
-    J = Int[]
-    V = Float64[]
+    # --- pos-style sparse
+    len = LowLevelFEM.estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, len)
+    J = Vector{Int}(undef, len)
+    V = Vector{Float64}(undef, len)
+    pos = 1
 
+    # --- global node coordinates cache
     ncoord2 = zeros(3 * non)
 
     for bc in loads
@@ -3228,9 +3347,6 @@ function externalTangentFollower(
         if p !== nothing && (fx !== nothing || fy !== nothing || fz !== nothing)
             error("externalTangentFollowerTL: p and fx/fy/fz cannot be defined together.")
         end
-        if p !== nothing && dim != 3
-            error("externalTangentFollowerTL: pressure is only allowed on 3D solids.")
-        end
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(name)
 
@@ -3238,14 +3354,15 @@ function externalTangentFollower(
             elemTypes, elemTags, elemNodeTags =
                 gmsh.model.mesh.getElements(edim, etag)
 
-            nodeTags, ncoord, _ =
+            nodeTagsAll, ncoord, _ =
                 gmsh.model.mesh.getNodes(edim, etag, true, false)
 
-            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:end]
-            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:end]
-            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:end]
+            @inbounds begin
+                ncoord2[nodeTagsAll*3 .- 2] = ncoord[1:3:end]
+                ncoord2[nodeTagsAll*3 .- 1] = ncoord[2:3:end]
+                ncoord2[nodeTagsAll*3 .- 0] = ncoord[3:3:end]
+            end
 
-            # reference normal (loadVector-szerű)
             nv = (p !== nothing) ? -normalVector(problem, name) : nothing
 
             for it in eachindex(elemTypes)
@@ -3254,7 +3371,7 @@ function externalTangentFollower(
                     gmsh.model.mesh.getElementProperties(et)
 
                 ip, wip =
-                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order + 1)")
 
                 _, hfun, _ =
                     gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
@@ -3264,109 +3381,126 @@ function externalTangentFollower(
                     gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
                 ∇h = reshape(dfun, :, length(wip))
 
-                nnoe = reshape(elemNodeTags[it], numNodes, :)'
-                nnet = zeros(Int, length(elemTags[it]), numNodes)
+                ndofe = pdim * numNodes
+
+                # --- reusable buffers
+                Ke   = zeros(ndofe, ndofe)
+                Fgp  = zeros(3, 3)
+                tgp  = zeros(3)
+                dt0  = zeros(3)
+                tloc = zeros(3)
 
                 for (l, elem) in enumerate(elemTags[it])
-                    for a in 1:numNodes
-                        nnet[l, a] = nnoe[l, a]
-                    end
+                    nodeTags =
+                        @view elemNodeTags[it][(l-1)*numNodes+1:l*numNodes]
 
                     jac, jacDet, _ =
                         gmsh.model.mesh.getJacobian(elem, ip)
                     Jac = reshape(jac, 3, :)
 
                     Fnode = Fmap[elem]
-                    Ke = zeros(pdim * numNodes, pdim * numNodes)
+                    fill!(Ke, 0.0)
 
                     for j in eachindex(wip)
-                        invJ = inv(Jac[1:dim, 3j-2:3j])'
+                        Jm = @SMatrix [
+                            Jac[1,3j-2] Jac[1,3j-1] Jac[1,3j];
+                            Jac[2,3j-2] Jac[2,3j-1] Jac[2,3j];
+                            Jac[3,3j-2] Jac[3,3j-1] Jac[3,3j]
+                        ]
+                        invJ = transpose(inv(Jm))
                         w = jacDet[j] * wip[j]
 
-                        # --- interpolate F
-                        Fgp = zeros(dim, dim)
-                        for a in 1:numNodes
-                            Fgp .+= h[a, j] * reshape(Fnode[9a-8:9a, 1], dim, dim)
+                        # --- F at Gauss (reshape-safe)
+                        fill!(Fgp, 0.0)
+                        @inbounds for a in 1:numNodes
+                            Na = h[a, j]
+                            base = 9a - 8
+                            Fgp[1,1] += Na * Fnode[base+0,1]
+                            Fgp[2,1] += Na * Fnode[base+1,1]
+                            Fgp[3,1] += Na * Fnode[base+2,1]
+                            Fgp[1,2] += Na * Fnode[base+3,1]
+                            Fgp[2,2] += Na * Fnode[base+4,1]
+                            Fgp[3,2] += Na * Fnode[base+5,1]
+                            Fgp[1,3] += Na * Fnode[base+6,1]
+                            Fgp[2,3] += Na * Fnode[base+7,1]
+                            Fgp[3,3] += Na * Fnode[base+8,1]
                         end
 
-                        Jgp   = det(Fgp)
-                        Finv  = inv(Fgp)
-                        FinvT = Finv'
+                        Fm = SMatrix{3,3,Float64}(Fgp)
+                        Finv = inv(Fm)
+                        FinvT = transpose(Finv)
+                        Jgp = det(Fm)
 
-                        # --- Gauss point coordinates
-                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
-                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
-                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        # --- Gauss coordinates
+                        x = 0.0; y = 0.0; z = 0.0
+                        @inbounds for a in 1:numNodes
+                            Na = h[a,j]
+                            nt = nodeTags[a]
+                            x += Na * ncoord2[3nt-2]
+                            y += Na * ncoord2[3nt-1]
+                            z += Na * ncoord2[3nt-0]
+                        end
 
-                        # --- traction at GP
-                        tgp = zeros(dim)
-
+                        # --- traction
+                        fill!(tgp, 0.0)
                         if p !== nothing
-                            pval = _tangent_load_helper(p, h, x, y, z, nnet, j, l, 1)[1]
-                            nval = zeros(dim)
-                            for d in 1:dim
-                                nval[d] = h[:, j]' * nv[d].a[nnet[l, :], 1]
+                            pval = _tangent_load_helper(p, h, x, y, z, nodeTags, j, 1, 1)[1]
+                            for d in 1:3
+                                tgp[d] = -pval * (h[:,j]' * nv[d].a[nodeTags,1])
                             end
-                            tgp .= -pval .* nval
                         else
                             if fx !== nothing
-                                tgp[1] = _tangent_load_helper(fx, h, x, y, z, nnet, j, l, 1)[1]
+                                tgp[1] = _tangent_load_helper(fx, h, x, y, z, nodeTags, j, 1, 1)[1]
                             end
-                            if dim ≥ 2 && fy !== nothing
-                                tgp[2] = _tangent_load_helper(fy, h, x, y, z, nnet, j, l, 1)[1]
+                            if fy !== nothing
+                                tgp[2] = _tangent_load_helper(fy, h, x, y, z, nodeTags, j, 1, 1)[1]
                             end
-                            if dim == 3 && fz !== nothing
-                                tgp[3] = _tangent_load_helper(fz, h, x, y, z, nnet, j, l, 1)[1]
+                            if fz !== nothing
+                                tgp[3] = _tangent_load_helper(fz, h, x, y, z, nodeTags, j, 1, 1)[1]
                             end
                         end
 
-                        Rgp = _rotation_from_F(Fgp)
                         tgp .= Fgp * tgp
+                        tloc .= Finv * tgp
 
                         for a in 1:numNodes, b in 1:numNodes
-                            ∇Nb = invJ * ∇h[3b-2:3b-(3-dim), j]
+                            ghb = @view ∇h[3b-2:3b, j]
+                            ∇Nb = invJ * ghb
 
-                            for jb in 1:dim
-                                A = reshape(Finv[:, jb], dim, 1) *
-                                    reshape(∇Nb, 1, dim)
+                            for jb in 1:3
+                                # --- unchanged physics
+                                fcol = Finv[:,jb]
+                                α = dot(fcol, ∇Nb)
 
-                                dJFmT =
-                                    Jgp * FinvT * (tr(A) * Id - A')
+                                dJFmT = Jgp * FinvT * (α*Id - (∇Nb*fcol'))
+                                dt0 .= dJFmT * tgp
 
-                                dt0 = dJFmT * tgp
-
-                                # --- EXTRA follower tangent term for t = F * t_loc ---
-                                # tgp = Fgp * tloc  →  tloc = Finv * tgp
-                                tloc = Finv * tgp
-
-                                # δF * tloc = (∇Nb ⋅ tloc) e_j
                                 dFt = dot(∇Nb, tloc)
-
-                                for ia in 1:dim
-                                    dt0[ia] += Jgp * FinvT[ia, jb] * dFt
+                                @inbounds for ia in 1:3
+                                    dt0[ia] += Jgp * FinvT[ia,jb] * dFt
                                 end
 
-                                for ia in 1:dim
-                                    Ke[(a-1)*pdim+ia, (b-1)*pdim+jb] +=
-                                        h[a, j] * dt0[ia] * w
+                                @inbounds for ia in 1:3
+                                    Ke[(a-1)*3+ia,(b-1)*3+jb] +=
+                                        h[a,j] * dt0[ia] * w
                                 end
                             end
                         end
                     end
 
-                    for a in 1:pdim*numNodes, b in 1:pdim*numNodes
-                        Ig = (nnet[l, div(a-1,pdim)+1] - 1) * pdim + mod(a-1,pdim) + 1
-                        Jg = (nnet[l, div(b-1,pdim)+1] - 1) * pdim + mod(b-1,pdim) + 1
-                        push!(I, Ig)
-                        push!(J, Jg)
-                        push!(V, Ke[a, b])
+                    @inbounds for a in 1:ndofe, b in 1:ndofe
+                        I[pos] = (nodeTags[div(a-1,3)+1]-1)*3 + mod(a-1,3) + 1
+                        J[pos] = (nodeTags[div(b-1,3)+1]-1)*3 + mod(b-1,3) + 1
+                        V[pos] = Ke[a,b]
+                        pos += 1
                     end
                 end
             end
         end
     end
 
-    K = sparse(I, J, V, dof, dof)
+    resize!(I,pos-1); resize!(J,pos-1); resize!(V,pos-1)
+    K = sparse(I,J,V,dof,dof)
     dropzeros!(K)
     return SystemMatrix(K, problem)
 end

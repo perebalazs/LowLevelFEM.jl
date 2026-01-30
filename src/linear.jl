@@ -3097,6 +3097,10 @@ Types:
 - `F`: Union{Nothing,TensorField}
 """
 function loadVector(problem, loads; F=nothing)
+    if problem.type == :dummy
+        return nothing
+    end
+    
     gmsh.model.setCurrent(problem.name)
     if !isa(loads, Vector)
         error("loadVector: loads are not arranged in a vector. Put them in [...]")
