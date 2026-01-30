@@ -2,6 +2,7 @@ export Problem, Material, getEigenVectors, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
+export mergeFields
 export SystemMatrix
 export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
@@ -2378,6 +2379,102 @@ function Base.setindex!(T::TensorField, v::VectorField, i::Int, ::Colon)
     return T
 end
 
+"""
+    mergeFields(u::Vector{<:LowLevelFEM.AbstractField})
+
+Concatenates multiple Fields along a common pseudo-time axis.
+
+Interpretation of `nsteps`:
+- If `nsteps == 1`, the Field is treated as an iteration state
+  (pseudo-time index: 1, 2, 3, ...).
+- If `nsteps > 1`, the Field is treated as a time history, and its
+  internal time vector `t` is preserved.
+
+When concatenating multiple time histories, continuity of time is
+enforced by shifting each subsequent segment such that it starts
+after the previous one. The time increment between segments is
+estimated from the last two time points of the previous Field.
+If this information is unavailable (`nsteps == 1`), a unit increment
+(`Δt = 1`) is assumed.
+
+This function is intended for post-processing and visualization
+(e.g. merging iteration histories or successive load/time segments),
+not for time-accurate integration.
+
+All input Fields must:
+- have the same number of degrees of freedom,
+- belong to the same model,
+- share the same Field type (ScalarField, VectorField, or TensorField).
+
+Returns a Field of the same concrete type as the first element of `uu`.
+
+# Exaples
+
+u1 = solveDisplacement(problem, load=[load1])   # nsteps = 1
+u2 = solveDisplacement(problem, load=[load2])   # nsteps = 1
+u3 = solveDisplacement(problem, load=[load3])   # nsteps = 1
+
+u_steps = mergeFields([u1, u2, u3])
+
+# Warning
+
+The time increment between concatenated segments is estimated heuristically.
+
+When a Field has `nsteps == 1`, it is interpreted as an iteration state
+and a unit pseudo-time increment (`Δt = 1`) is assumed when concatenating
+with subsequent segments.
+
+This heuristic ensures continuity of the time axis but does NOT represent
+physical time. The resulting time vector should therefore be used only for
+post-processing and visualization, not for time-accurate analysis.
+"""
+function mergeFields(uu::Vector{<:AbstractField})
+    nn = length(uu)
+    @assert nn ≥ 1
+
+    # --- összes időlépés
+    n = 0
+    for u in uu
+        n += u.nsteps
+    end
+
+    ndofs = size(uu[1].a, 1)
+    a = zeros(ndofs, n)
+    t = zeros(n)
+
+    # --- első blokk
+    ns = uu[1].nsteps
+    a[:, 1:ns] .= uu[1].a
+
+    if ns == 1
+        t[1] = 1.0                  # iterációs lépés
+    else
+        t[1:ns] .= uu[1].t          # valódi idő
+    end
+    c = ns
+
+    # --- további blokkok
+    for i in 2:nn
+        ui = uu[i]
+        ns = ui.nsteps
+
+        a[:, c+1:c+ns] .= ui.a
+
+        # időlépés becslés az előző szegmensből
+        if uu[i-1].nsteps > 1
+            dt = uu[i-1].t[end] - uu[i-1].t[end-1]
+        else
+            dt = 1.0
+        end
+
+        t[c+1:c+ns] .= ui.t .+ (t[c] + dt)
+        c += ns
+    end
+
+    # --- visszaépítés: ugyanaz a Field típus, mint az első
+    T = typeof(uu[1])
+    return T([], a, t, [], n, uu[1].type, uu[1].model)
+end
 
 """
     Eigen(f, ϕ, model)

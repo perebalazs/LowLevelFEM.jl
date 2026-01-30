@@ -5,6 +5,7 @@ export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, su
 export solveDeformation, showDeformationResults
 export grad_xy
 export materialTangentMatrix, initialStressMatrix, externalTangentFollower, internalForceVector
+export IIPiolaKirchhoff
 
 """
     nodePositionVector(problem)
@@ -3503,6 +3504,91 @@ function externalTangentFollower(
     K = sparse(I,J,V,dof,dof)
     dropzeros!(K)
     return SystemMatrix(K, problem)
+end
+
+"""
+    IIPiolaKirchhoff(energy, C::TensorField, params)
+
+Computes the nodal Second Piola–Kirchhoff (II PK) stress tensor field
+from a given nodal Right Cauchy–Green deformation tensor field.
+
+For each time step and each node, the II PK stress is evaluated as
+
+    S = ∂ψ(C, params) / ∂C
+
+using the provided free energy function `energy` and material parameters
+`params`. The stress evaluation is performed directly at the nodal
+values of `C`, without Gauss-point integration or spatial averaging.
+
+This function is intended for post-processing, visualization, and
+diagnostic purposes. The resulting stress field is energy-consistent
+with the constitutive model but is not suitable for assembling internal
+forces or tangents, which require Gauss-point evaluation.
+
+Arguments:
+- `energy::Function`:
+    Free energy density ψ(C, params).
+- `C::TensorField`:
+    Nodal Right Cauchy–Green deformation tensor field.
+- `params::NamedTuple`:
+    Material parameters passed to `energy`.
+
+Requirements:
+- The problem must be three-dimensional (`dim = pdim = 3`).
+- The input field `C` must be defined nodally.
+
+Returns:
+- `TensorField`:
+    Nodal Second Piola–Kirchhoff stress field with the same time steps
+    and model as `C`.
+
+Notes:
+- The stress is computed independently at each node and time step.
+- No interpolation, integration, or smoothing is performed.
+- For use in weak forms or Newton iterations, Gauss-point evaluation
+  should be used instead.
+"""
+function IIPiolaKirchhoff(
+    energy::Function,
+    C::TensorField,
+    params::NamedTuple)
+
+    problem = C.model
+    @assert problem.dim == 3 && problem.pdim == 3
+
+    C0 = elementsToNodes(C)
+    non = problem.non
+    nsteps = C.nsteps
+    S = zeros(9 * non, nsteps)
+
+    @inbounds for j in 1:nsteps
+        @inbounds for a in 1:non
+            base = 9*(a-1)
+
+            # --- C at node (column-major safe)
+            Cn = @SMatrix [
+                C0.a[base+1,j] C0.a[base+4,j] C0.a[base+7,j];
+                C0.a[base+2,j] C0.a[base+5,j] C0.a[base+8,j];
+                C0.a[base+3,j] C0.a[base+6,j] C0.a[base+9,j]
+            ]
+
+            # --- II PK stress
+            Sn = LowLevelFEM.stress_from_energy(energy, Cn, params)
+
+            # --- store back (same layout as TensorField)
+            S[base+1,j] = Sn[1,1]
+            S[base+2,j] = Sn[2,1]
+            S[base+3,j] = Sn[3,1]
+            S[base+4,j] = Sn[1,2]
+            S[base+5,j] = Sn[2,2]
+            S[base+6,j] = Sn[3,2]
+            S[base+7,j] = Sn[1,3]
+            S[base+8,j] = Sn[2,3]
+            S[base+9,j] = Sn[3,3]
+        end
+    end
+
+    return TensorField([], S, C.t, [], nsteps, :tensor, C.model)
 end
 
 # ========= PUBLIC API =========
