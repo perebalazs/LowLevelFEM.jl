@@ -1,6 +1,6 @@
 //+
 SetFactory("OpenCASCADE");
-Box(1) = {0, 0, 0, 1, 1, 1};
+Box(1) = {0, 0, 0, 10, 1, 1};
 
 //+
 Transfinite Curve {:} = 10 Using Progression 1;
@@ -38,3 +38,7 @@ Physical Point("P", 20) = {9};
 Physical Curve("topleft", 21) = {3};
 //+
 Physical Point("topleftfront", 22) = {3};
+//+
+Physical Curve("frontright", 23) = {6};
+//+
+Physical Curve("rearright", 24) = {8};
