@@ -117,6 +117,14 @@ export probe_field
         curlCurlMatrix(prob)
         tensorLaplaceMatrix(prob)
         traceLaplaceMatrix(prob)
+<<<<<<< Updated upstream
+=======
+        materialTangentMatrix(prob, F=tfA, C=[;;])
+        initialStressMatrix(prob, S=tfA)
+        internalForceVector(prob, P=tfA)
+        externalTangentFollower(prob, [bc], F=tfA)
+        loadVector(prob, [], F=tfA)
+>>>>>>> Stashed changes
     end
 end
 

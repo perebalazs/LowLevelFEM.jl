@@ -26,275 +26,6 @@ function nodePositionVector(problem)
     return VectorField([], reshape(r, :,1), [0], [], 1, :v3D, problem)
 end
 
-#=
-function ∇_old(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
-    problem = rr.model
-    gmsh.model.setCurrent(problem.name)
-    if rr.a == [;;]
-        r = elementsToNodes(rr)
-    else
-        r = rr
-    end
-    DoFResults=false
-    
-    nsteps = r.nsteps
-    ε = []
-    numElem = Int[]
-    ncoord2 = zeros(3 * problem.non)
-    dim = problem.dim
-    pdim = problem.pdim
-    non = problem.non
-    type = :e
-    if DoFResults == true
-        E1 = zeros(non * 9, nsteps)
-        pcs = zeros(Int64, non * dim)
-    end
-
-    for ipg in 0:length(problem.material)
-        phName = ""
-        if ipg == 0
-            if rr.model.geometry.nameVolume ≠ ""
-                phName = rr.model.geometry.nameVolume
-            else
-                continue
-            end
-        else
-            phName = problem.material[ipg].phName
-        end
-        #ν = problem.material[ipg].ν
-        dim = 0
-        if problem.dim == 3 && r isa VectorField && nabla == :grad
-            dim = 3
-            pdim = 3
-            rowsOfB = 9
-            b = 1
-            sz = 9
-        elseif problem.dim == 3 && r isa VectorField && nabla == :div
-            dim = 3
-            pdim = 3
-            rowsOfB = 9
-            b = 1
-            sz = 1
-        elseif problem.dim == 3 && r isa VectorField && nabla == :curl
-            dim = 3
-            pdim = 3
-            rowsOfB = 9
-            b = 1
-            sz = 3
-        elseif (problem.dim == 1 || problem.dim == 2 || problem.dim == 3) && r isa ScalarField
-            dim = 3
-            pdim = 1
-            rowsOfB = 3
-            b = 1
-            sz = 3
-        elseif r isa TensorField && nabla == :div
-            dim = 3
-            pdim = 9
-            rowsOfB = 3
-            b = 1
-            sz = 3
-        elseif problem.dim == 2 && problem.type == :AxiSymmetric
-            dim = 2
-            rowsOfB = 4
-            b = 1
-        else
-            error("∇: dimension is $(problem.dim), problem type is $(problem.type).")
-        end
-
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-        for idm in 1:length(dimTags)
-            dimTag = dimTags[idm]
-            edim = dimTag[1]
-            etag = dimTag[2]
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
-            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
-            for i in 1:length(elemTypes)
-                et = elemTypes[i]
-                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                #e0 = zeros(rowsOfB * numNodes)
-                nodeCoord = zeros(numNodes * 3)
-                for k in 1:dim, j = 1:numNodes
-                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
-                end
-                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
-                ∇h = reshape(dfun, :, numNodes)
-                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
-                h = reshape(fun, :, numNodes)
-                nnet = zeros(Int, length(elemTags[i]), numNodes)
-                invJac = zeros(3, 3numNodes)
-                ∂h = zeros(3, numNodes * numNodes)
-                B = zeros(rowsOfB * numNodes, pdim * numNodes) # spzeros????
-                nn2 = zeros(Int, pdim * numNodes)
-                rr = zeros(numNodes)
-                for j in 1:length(elemTags[i])
-                    elem = elemTags[i][j]
-                    for k in 1:numNodes
-                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
-                    end
-                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
-                    Jac = reshape(jac, 3, :)
-                    for k in 1:numNodes
-                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
-                        rr[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
-                    end
-                    ∂h .*= 0
-                    for k in 1:numNodes, l in 1:numNodes
-                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
-                    end
-                    B .*= 0
-                    if dim == 3 && r isa VectorField
-                        for k in 1:numNodes, l in 1:numNodes
-                            B[k*9-(9-1), l*3-(3-1)] = B[k*9-(9-2), l*3-(3-2)] = B[k*9-(9-3), l*3-(3-3)] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*9-(9-4), l*3-(3-1)] = B[k*9-(9-5), l*3-(3-2)] = B[k*9-(9-6), l*3-(3-3)] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*9-(9-7), l*3-(3-1)] = B[k*9-(9-8), l*3-(3-2)] = B[k*9-(9-9), l*3-(3-3)] = ∂h[3, (k-1)*numNodes+l]
-                        end
-                    elseif (dim == 1 || dim == 2 || dim == 3) && rowsOfB == 3 && r isa ScalarField
-                        for k in 1:numNodes, l in 1:numNodes
-                            B[k*3-(3-1), l] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*3-(3-2), l] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*3-(3-3), l] = ∂h[3, (k-1)*numNodes+l]
-                        end
-                    elseif r isa TensorField && nabla == :div
-                        for k in 1:numNodes, l in 1:numNodes
-                            B[k*3-(3-1), l*9-(9-1)] = B[k*3-(3-2), l*9-(9-2)] = B[k*3-(3-3), l*9-(9-3)] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*3-(3-1), l*9-(9-4)] = B[k*3-(3-2), l*9-(9-5)] = B[k*3-(3-3), l*9-(9-6)] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*3-(3-1), l*9-(9-7)] = B[k*3-(3-2), l*9-(9-8)] = B[k*3-(3-3), l*9-(9-9)] = ∂h[3, (k-1)*numNodes+l]
-                        end
-                    elseif dim == 2 && rowsOfB == 4
-                        for k in 1:numNodes, l in 1:numNodes
-                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
-                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
-                            B[k*4-2, l*2-1] = rr[k] < 1e-10 ? 0 : h[l, k] / rr[k]
-                        end
-                    else
-                        error("∇: rows of B is $rowsOfB, dimension of the problem is $dim.")
-                    end
-                    push!(numElem, elem)
-                    for k in 1:pdim
-                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
-                    end
-                    e = zeros(sz * numNodes, nsteps) # tensors have nine elements
-                    for k in 1:numNodes
-                        if rowsOfB == 9 && dim == 3 && r isa VectorField
-                            B1 = B[k*9-8:k*9, 1:3*numNodes]
-                            for kk in 1:nsteps
-                                e0 = B1 * r.a[nn2, kk]
-                                if DoFResults == false
-                                    if nabla == :grad
-                                        e[(k-1)*9+1:k*9, kk] = [e0[1], e0[2], e0[3],
-                                            e0[4], e0[5], e0[6],
-                                            e0[7], e0[8], e0[9]]
-                                    elseif nabla == :div
-                                        e[k, kk] = e0[1] + e0[5] + e0[9]
-                                    elseif nabla == :curl
-                                        e[(k-1)*3+1:k*3, kk] = [e0[6] - e0[8],
-                                            e0[7] - e0[3],
-                                            e0[2] - e0[4]]
-                                    end
-                                end
-                                if DoFResults == true
-                                    if nabla == :grad
-                                        E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3], e0[4], e0[5], e0[6], e0[7], e0[8], e0[9]]
-                                    elseif nabla == :div
-                                        E1[nnet[j, k], kk] .+= e0[1] + e0[5] + e0[9]
-                                    elseif nabla == :curl
-                                        E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[6] - e0[8], e0[7] - e0[3], e0[2] - e0[4]]
-                                    end
-                                end
-                            end
-                        elseif rowsOfB == 3 && (dim == 1 || dim == 2 || dim == 3) && r isa ScalarField && nabla == :grad
-                            B1 = B[k*3-2:k*3, 1:numNodes]
-                            for kk in 1:nsteps
-                                e0 = B1 * r.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*3+1:k*3, kk] = [e0[1], e0[2], e0[3]]
-                                end
-                                if DoFResults == true
-                                    E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3]]
-                                end
-                            end
-                        elseif r isa TensorField && nabla == :div
-                            B1 = B[k*3-2:k*3, 1:9*numNodes]
-                            for kk in 1:nsteps
-                                e0 = B1 * r.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*3+1:k*3, kk] = [e0[1], e0[2], e0[3]]
-                                end
-                                if DoFResults == true
-                                    E1[3*nnet[j, k]-2:3*nnet[j,k], kk] .+= [e0[1], e0[2], e0[3]]
-                                end
-                            end
-                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
-                            B1 = B[k*4-3:k*4, 1:2*numNodes]
-                            for kk in 1:nsteps
-                                e0 = B1 * r.a[nn2, kk]
-                                if DoFResults == false
-                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
-                                        e0[4]/2, e0[3], 0,
-                                        0, 0, e0[2]]
-                                end
-                                if DoFResults == true
-                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], 0, e0[4], e0[3], 0, 0, 0, e0[2]]
-                                end
-                            end
-                        else
-                            error("∇: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
-                        end
-                    end
-                    if DoFResults == true
-                        pcs[nnet[j,1:numNodes]] .+= 1
-                    end
-                    if DoFResults == false
-                        push!(ε, e)
-                    end
-                end
-            end
-        end
-    end
-    if DoFResults == true
-        for k in 1:rowsOfB
-            for l in 1:non
-                E1[k + rowsOfB * l - rowsOfB, :] ./= pcs[l]
-            end
-        end
-    end
-    if DoFResults == true
-        if r isa VectorField && nabla == :grad
-            return TensorField([], E1, r.t, [], nsteps, :e, problem)
-        elseif r isa VectorField && nabla == :div
-            return ScalarField([], E1, r.t, [], nsteps, :scalar, problem)
-        elseif r isa VectorField && nabla == :curl
-            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
-        elseif r isa ScalarField
-            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
-        elseif r isa TensorField && nabla == :div
-            return VectorField([], E1, r.t, [], nsteps, :v3D, problem)
-        end
-    else
-        if r isa VectorField && nabla == :grad
-            type = :tensor
-            return TensorField(ε, [;;], r.t, numElem, nsteps, type, problem)
-        elseif r isa VectorField && nabla == :div
-            type = :scalar
-            return ScalarField(ε, [;;], r.t, numElem, nsteps, type, problem)
-        elseif r isa VectorField && nabla == :curl
-            type = :v3D
-            return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
-        elseif r isa ScalarField
-            type = :v3D
-            return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
-        elseif r isa TensorField && nabla == :div
-            type = :v3D
-            return VectorField(ε, [;;], r.t, numElem, nsteps, type, problem)
-        end
-    end
-end
-=#
-
 # --- gyors cache-ek elemtípusra (et) ---
 const _prop_cache = Dict{Int, Tuple{Int,Int,Vector{Float64}}}()   # et => (dim, numNodes, nodeCoord)
 const _basis_cache = Dict{Int, Tuple{Matrix{Float64}, Matrix{Float64}}}()  # et => (∇h, h)
@@ -1028,6 +759,7 @@ function dx(rr::ScalarField)
     return ScalarField(ε, [;;], r.t, numElem, nsteps, :scalar, problem)
 end
 
+#=
 """
     tangentMatrixConstitutive(r::VectorField)
 
@@ -1219,7 +951,9 @@ function tangentMatrixConstitutive(r::VectorField)
     dropzeros!(K)
     return SystemMatrix(K, problem)
 end
+=#
 
+#=
 """
     tangentMatrixInitialStress(r::VectorField)
 
@@ -1388,7 +1122,9 @@ function tangentMatrixInitialStress(r::VectorField)
     dropzeros!(K)
     return SystemMatrix(K, problem)
 end
+=#
 
+#=
 """
     equivalentNodalForce(r::VectorField)
 
@@ -1563,7 +1299,9 @@ function equivalentNodalForce(r::VectorField)
     end
     return VectorField([], reshape(f, :,1), [0], [], 1, :v3D, problem)
 end
+=#
 
+#=
 """
     nonFollowerLoadVector(r::VectorField, load)
 
@@ -1721,7 +1459,9 @@ function nonFollowerLoadVector(r::VectorField, loads)
     end
     return VectorField([], reshape(fp, :,1), [0], [], 1, :v3D, problem)
 end
+=#
 
+#=
 """
     applyDeformationBoundaryConditions!(deformVec, supports)
 
@@ -1816,7 +1556,9 @@ function applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
         end
     end
 end
+=#
 
+#=
 """
     suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
 
@@ -2017,7 +1759,9 @@ function suppressDeformationAtBoundaries!(stiffMat, loadVec, supports)
     #dropzeros!(massMat)
     #dropzeros!(dampMat)
 end
+=#
 
+#=
 """
     suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
 
@@ -2046,7 +1790,9 @@ function suppressDeformationAtBoundaries(stiffMat, loadVec, supports)
     suppressDeformationAtBoundaries!(K1, f1, supports)
     return K1, f1
 end
+=#
 
+#=
 """
     solveDeformation(problem::Problem, load, supp;
                     followerLoad=false,
@@ -2136,6 +1882,7 @@ function solveDeformation(problem, load, supp;
         return r1
     end
 end
+=#
 
 """
     showDeformationResults(r::VectorField, comp; name=String, visible=Boolean)
