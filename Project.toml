@@ -1,12 +1,12 @@
 name = "LowLevelFEM"
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
+keywords = ["finite-element-method", "mechanics", "FEM", "Julia", "continuum-mechanics", "structural-analysis", "heat-conduction", "coupled-thermo-mechanical-problems", "transient-problems", "vector-field-operations", "gmsh"]
 version = "1.11.2"
 authors = ["Balázs Pere"]
 description = "LowLevelFEM.jl is a finite element method (FEM) toolbox written entirely in the Julia programming language."
-keywords = ["finite-element-method", "mechanics", "FEM", "Julia", "continuum-mechanics", "structural-analysis", "heat-conduction", "coupled-thermo-mechanical-problems", "transient-problems", "vector-field-operations", "gmsh"]
+documentation = "https://perebalazs.github.io/LowLevelFEM.jl/stable/"
 homepage = "https://github.com/perebalazs/LowLevelFEM.jl"
 repository = "https://github.com/perebalazs/LowLevelFEM.jl"
-documentation = "https://perebalazs.github.io/LowLevelFEM.jl/stable/"
 
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
@@ -19,6 +19,12 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 gmsh_jll = "630162c2-fc9b-58b3-9910-8442a8a132e6"
 
+[weakdeps]
+Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
+
+[extensions]
+LowLevelFEMTensorsExt = ["Tensors"]
+
 [compat]
 Arpack = "0.5"
 IterativeSolvers = "0.9.4"
@@ -28,6 +34,7 @@ Polyester = "0.7.18"
 PrecompileTools = "1.2.1"
 SparseArrays = "1.10.0, 1.11.0, 1.12.0"
 StaticArrays = "1.9.14"
+Tensors = "1"
 gmsh_jll = "4.13, 4.14, 4.15"
 julia = "1"
 
@@ -36,9 +43,3 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test"]
-
-[weakdeps]
-Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
-
-[extensions]
-LowLevelFEMTensorsExt = ["Tensors"]
