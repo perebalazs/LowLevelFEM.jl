@@ -3015,6 +3015,31 @@ function elasticSupportMatrix(problem, elSupports)
     return SystemMatrix(C, problem)
 end
 
+
+@inline function _rotation_from_F(F::AbstractMatrix{<:Real})
+    U, _, Vt = svd(F)
+    R = U * Vt
+    if det(R) < 0
+        U[:, end] .*= -1
+        R = U * Vt
+    end
+    return R
+end
+
+@inline function _loadvec_helper(f, h, x, y, z, nnet, j, l, nsteps)
+    if f isa Number
+        return fill(f, nsteps)
+    elseif f isa Function
+        return fill(f(x, y, z), nsteps)
+    elseif f isa ScalarField && isNodal(f)
+        v = h[:, j]' * f.a[nnet[l, :], :]
+        return vec(v)
+    else
+        error("loadVector: internal error.")
+    end
+end
+
+#=
 @inline function _loadvec_helper(f, h, x, y, z, nnet, j, l, nsteps)
     if f isa Number
         return fill(f, nsteps)
@@ -3027,9 +3052,10 @@ end
         error("loadVector: internal error.")
     end
 end
+=#
 
 """
-    loadVector(problem, loads)
+    loadVector(problem, loads; F=nothing)
                             
 Assembles the right-hand-side vector associated with external mechanical loads
 in weak-form finite element problems.
@@ -3058,6 +3084,9 @@ appropriate geometric factor (e.g. `2πr`) in the load definition or coefficient
 
 Returns a `VectorField` for vector-valued problems (`pdim > 1`) and a `ScalarField`
 for scalar problems (`pdim == 1`).
+
+If `F` is the deformation gradient (a `TensorField`), then the function solves the follower load
+for large displacement problems (in 3D).
                             
 Return: `loadVec`
                             
@@ -3065,8 +3094,314 @@ Types:
 - `problem`: Problem
 - `loads`: Vector{BoundaryCondition}
 - `loadVec`: VectorField
+- `F`: Union{Nothing,TensorField}
 """
-function loadVector(problem, loads)
+function loadVector(problem, loads; F=nothing)
+    if problem.type == :dummy
+        return nothing
+    end
+    
+    gmsh.model.setCurrent(problem.name)
+    if !isa(loads, Vector)
+        error("loadVector: loads are not arranged in a vector. Put them in [...]")
+    end
+
+    Fe = nothing
+    Fmap = nothing
+    if F !== nothing
+        Fe = nodesToElements(F)
+        Fmap = Dict(zip(Fe.numElem, Fe.A))
+    end
+
+    pdim = problem.pdim
+    DIM = problem.dim
+    b = problem.thickness
+    non = problem.non
+    dof = pdim * non
+    ncoord2 = zeros(3 * problem.non)
+    f = nothing
+    fp = zeros(dof,1)
+    nsteps = 1
+    for n in 1:length(loads)
+        name = loads[n].phName
+        fx = loads[n].fx
+        fy = loads[n].fy
+        fz = loads[n].fz
+        T = loads[n].T
+        p = loads[n].p
+        hc = loads[n].h
+        T0 = loads[n].T
+        qn = loads[n].qn
+        hs = loads[n].h
+
+        q = loads[n].q
+
+        fxy = loads[n].fxy
+        fyz = loads[n].fyz
+        fzx = loads[n].fzx
+        
+        fyx = loads[n].fyx
+        fzy = loads[n].fzy
+        fxz = loads[n].fxz
+
+        fx  = (fx  isa ScalarField && isElementwise(fx))  ? elementsToNodes(fx)  : fx
+        fy  = (fy  isa ScalarField && isElementwise(fy))  ? elementsToNodes(fy)  : fy
+        fz  = (fz  isa ScalarField && isElementwise(fz))  ? elementsToNodes(fz)  : fz
+        T   = (T   isa ScalarField && isElementwise(T))   ? elementsToNodes(T)   : T
+        p   = (p   isa ScalarField && isElementwise(p))   ? elementsToNodes(p)   : p
+        hc  = (hc  isa ScalarField && isElementwise(hc))  ? elementsToNodes(hc)  : hc
+        T0  = (T0  isa ScalarField && isElementwise(T0))  ? elementsToNodes(T0)  : T0
+        qn  = (qn  isa ScalarField && isElementwise(qn))  ? elementsToNodes(qn)  : qn
+        hs  = (hs  isa ScalarField && isElementwise(hs))  ? elementsToNodes(hs)  : hs
+        q   = (q   isa ScalarField && isElementwise(q))   ? elementsToNodes(q)   : q
+        fxy = (fxy isa ScalarField && isElementwise(fxy)) ? elementsToNodes(fxy) : fxy
+        fyz = (fyz isa ScalarField && isElementwise(fyz)) ? elementsToNodes(fyz) : fyz
+        fzx = (fzx isa ScalarField && isElementwise(fzx)) ? elementsToNodes(fzx) : fzx
+        fyx = (fyx isa ScalarField && isElementwise(fyx)) ? elementsToNodes(fyx) : fyx
+        fzy = (fzy isa ScalarField && isElementwise(fzy)) ? elementsToNodes(fzy) : fzy
+        fxz = (fxz isa ScalarField && isElementwise(fxz)) ? elementsToNodes(fxz) : fxz
+    
+        nsteps = 1
+        for i in [fx, fy , fz, T,  p, hc, T0, qn, hs, q, fxy, fyz, fzx, fyx, fzy, fxz]
+            if i isa ScalarField
+                nsteps = max(nsteps, i.nsteps)
+            end
+        end
+        if nsteps > size(fp, 2)
+            fp = hcat(fp, zeros(dof, nsteps - size(fp,2)))
+        end
+
+        (qn !== nothing || hc !== nothing || hs !== nothing || T !== nothing) && (fx !== nothing || fy !== nothing || fz !== nothing) &&
+            error("loadVector: qn/h/T∞ and fx/fy/fz cannot be defined in the same BC.")
+        if pdim == 1 || pdim == 2 || pdim == 3 || pdim == 9
+            f = zeros(pdim, nsteps)
+        else
+            error("loadVector: dimension of the problem is $(problem.dim).")
+        end
+        if p !== nothing && DIM == 3 && pdim == 3
+            nv = -normalVector(problem, name)
+            ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
+            ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
+            ez = VectorField(problem, [field(name, fx=0, fy=0, fz=1)])
+            if p isa Number || p isa ScalarField
+                fy = elementsToNodes((nv ⋅ ey) * p)
+                fz = elementsToNodes((nv ⋅ ez) * p)
+                fx = elementsToNodes((nv ⋅ ex) * p)
+            elseif p isa Function
+                pp = scalarField(problem, [field(name, f=p)])
+                fy = elementsToNodes((nv ⋅ ey) * pp)
+                fz = elementsToNodes((nv ⋅ ez) * pp)
+                fx = elementsToNodes((nv ⋅ ex) * pp)
+            end
+        end
+        if p !== nothing && DIM ≠ 3
+            error("loadVector: pressure can be given on a surface of a 3D solid.")
+        end
+        fx = fx !== nothing ? fx : 0.0
+        fy = fy !== nothing ? fy : 0.0
+        fz = fz !== nothing ? fz : 0.0
+        dimTags = gmsh.model.getEntitiesForPhysicalName(name)
+        for i ∈ 1:length(dimTags)
+            dimTag = dimTags[i]
+            dim = dimTag[1]
+            tag = dimTag[2]
+            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for ii in 1:length(elementTypes)
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+                nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(2order+1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elementTags[ii]), numNodes)
+                H = zeros(pdim * numIntPoints, pdim * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdim
+                            H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                        end
+                    end
+                end
+                f1 = zeros(pdim * numNodes, nsteps)
+                nn2 = zeros(Int, pdim * numNodes)
+                @inbounds for l in 1:length(elementTags[ii])
+                    elem = elementTags[ii][l]
+                    for k in 1:numNodes
+                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    fill!(f1, 0.0)
+                    @inbounds for j in 1:numIntPoints
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        if hc !== nothing && T0 !== nothing
+                            if hc isa Function
+                                error("heatConvectionVector: h cannot be a function.")
+                            end
+                            f[1,:] .= _loadvec_helper(T0, h, x, y, z, nnet, j, l, nsteps) * hc
+                        elseif qn !== nothing
+                            f[1,:] .= _loadvec_helper(qn, h, x, y, z, nnet, j, l, nsteps)
+                        elseif hs !== nothing
+                            f[1,:] .= _loadvec_helper(hs, h, x, y, z, nnet, j, l, nsteps)
+                        elseif q !== nothing
+                            f[1,:] .= _loadvec_helper(q, h, x, y, z, nnet, j, l, nsteps)
+                        elseif fx !== nothing && pdim <= 3
+                            f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim > 1 && pdim <= 3
+                            f[2,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim == 3
+                            f[3,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim == 9
+                            fill!(f, 0.0)
+                            if fx !== nothing
+                                f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fy !== nothing
+                                f[5,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fz !== nothing
+                                f[9,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fxy !== nothing
+                                f[4,:] .= _loadvec_helper(fxy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fyz !== nothing
+                                f[8,:] .= _loadvec_helper(fyz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fzx !== nothing
+                                f[3,:] .= _loadvec_helper(fzx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fyx !== nothing
+                                f[2,:] .= _loadvec_helper(fyx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fzy !== nothing
+                                f[6,:] .= _loadvec_helper(fzy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fxz !== nothing
+                                f[7,:] .= _loadvec_helper(fxz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                        end
+
+                        # -------- FOLLOWER LOAD (Total Lagrange, Piola) ----------
+                        if F !== nothing
+                            # F elemértékek
+                            Fnode = Fmap[elem]   # 9*numNodes × 1
+
+                            # F interpoláció Gauss-pontra (pont úgy, ahogy Kext-ben)
+                            Fgp = zeros(DIM, DIM)
+                            for a in 1:numNodes
+                                Na = h[a, j]
+                                Fgp .+= Na * reshape(Fnode[9a-8:9a], DIM, DIM)
+                            end
+
+                            Rgp = _rotation_from_F(Fgp)
+
+                            Jgp = det(Fgp)
+                            FinvT = inv(Fgp)'
+
+                            if !(Jgp > 0)
+                                error("Element inversion detected: det(Fgp) = $Jgp at elem=$elem, gp=$j")
+                            end
+
+                            # reference surface normal at GP from reference Jacobian
+                            t1 = Jac[:, 3*j-2]          # first tangent in reference
+                            t2 = Jac[:, 3*j-1]          # second tangent in reference
+                            nref = cross(t1, t2)
+                            Ja_ref = norm(nref)         # ugyanaz, mint amit lent Ja-ként használsz
+                            N0 = nref / Ja_ref          # unit normal in reference
+
+                            # Nanson scalar: da = |J F^{-T} N0| dA
+                            scale = norm(Jgp * FinvT * N0)
+
+                            # Piola transzformáció a traction-re
+                            for s in 1:nsteps
+                                ##f[:,s] .= Jgp * FinvT * f[:,s]
+                                #f[:, s] .= Rgp * f[:, s]          # t = R * t_loc  (itt f a traction, lokálisnak tekint
+                                #f[:, s] .= Jgp * FinvT * f[:, s]  # Piola: t0 = J F^{-T} t
+                                #f[:, s] .= Rgp * f[:, s]        # true follower: rotate traction with body
+                                #f[:, s] .*= scale               # ONLY area scaling (no FinvT acting on t)
+                                f[:, s] .= Fgp * f[:, s]        # true follower: rotate traction with body
+                            end
+                        end
+                        # ---------------------------------------------------------
+
+                        r = x
+                        H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                        ############### NANSON ######## 3D ###################################
+                        if DIM == 3 && dim == 3
+                            Ja = jacDet[j]
+                        elseif DIM == 3 && dim == 2
+                            xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                            yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                            zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                            Ja = √(xy^2 + yz^2 + zx^2)
+                        elseif DIM == 3 && dim == 1
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                        elseif DIM == 3 && dim == 0
+                            Ja = 1
+                            ############ 2D #######################################################
+                        elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = jacDet[j] * b
+                        elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * jacDet[j] * r
+                        elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                        elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                        elseif DIM == 2 && dim == 0
+                            Ja = 1
+                            ############ 1D #######################################################
+                        elseif DIM == 1 && dim == 1
+                            Ja = Jac[1, 3*j-2] * b
+                        elseif DIM == 1 && dim == 0
+                            Ja = 1
+                        else
+                            error("loadVector: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                        end
+                        f1 += H1' * f * Ja * intWeights[j]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                    end
+                    fp[nn2,1:nsteps] .+= f1
+                end
+            end
+        end
+    end
+    type = :null
+    if pdim == 3
+        type = :v3D
+    elseif pdim == 2
+        type = :v2D
+    elseif pdim == 1
+        type = :scalar
+    elseif pdim == 9
+        type = :tensor
+    else
+        error("loadVector: wrong pdim ($pdim).")
+    end
+    ts = [i for i in 0:nsteps-1]
+    if type == :v3D || type == :v2D
+        return VectorField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+
+    elseif type == :scalar
+        return ScalarField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+
+    elseif type == :tensor
+        return TensorField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+    end
+end
+
+function loadVectorOld(problem, loads)
     gmsh.model.setCurrent(problem.name)
     if !isa(loads, Vector)
         error("loadVector: loads are not arranged in a vector. Put them in [...]")

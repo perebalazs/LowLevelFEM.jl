@@ -1972,11 +1972,12 @@ function _assemble_ns_advection!(
 end
 =#
 
-
+############# Large Deformations ###########################################
+#=
 function poissonMatrixVector(
     problem::Problem;
-    coefficient::TensorField
-)
+    coefficient::TensorField)
+
     @assert problem.pdim == problem.dim
     gmsh.model.setCurrent(problem.name)
 
@@ -2062,15 +2063,17 @@ function poissonMatrixVector(
     end
 
     resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
-    return SystemMatrix(sparse(I,J,V,dof,dof), problem)
+    K =  sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
 end
 
 
 function gradDivMatrixF(
     problem::Problem;
     coefficient::Union{Number,ScalarField},
-    F::TensorField
-)
+    F::TensorField)
+
     @assert problem.pdim == problem.dim
     gmsh.model.setCurrent(problem.name)
 
@@ -2154,14 +2157,16 @@ function gradDivMatrixF(
     end
 
     resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
-    return SystemMatrix(sparse(I,J,V,dof,dof), problem)
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
 end
 
 function poissonMatrixSymGradF(
     problem::Problem;
     coefficient::Union{Number,ScalarField},
-    F::TensorField
-)
+    F::TensorField)
+
     @assert problem.pdim == problem.dim
     gmsh.model.setCurrent(problem.name)
 
@@ -2258,7 +2263,9 @@ function poissonMatrixSymGradF(
     end
 
     resize!(I, pos-1); resize!(J, pos-1); resize!(V, pos-1)
-    return SystemMatrix(sparse(I,J,V,dof,dof), problem)
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
 end
 
 
@@ -2344,7 +2351,10 @@ function internalForceTL(problem::Problem, P::TensorField)
         end
     end
 
-    return f
+    if pdim ≠ 3
+        error("dim ≠ 3 is not implemented yet")
+    end
+    return VectorField([], reshape(f, :,1), [0.0], [], 1, :v3D, problem)
 end
 
 """
@@ -2363,8 +2373,7 @@ function externalTangentFollowerTL(
     problem::Problem;
     F::TensorField,
     traction_phName::AbstractString,
-    t_spatial
-)
+    t_spatial)
 
     gmsh.model.setCurrent(problem.name)
 
@@ -2471,6 +2480,9 @@ function externalTangentFollowerTL(
         end
     end
 
-    return sparse(I,J,V,dof,dof)
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
 end
 
+=#

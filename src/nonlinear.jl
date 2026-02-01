@@ -4,6 +4,8 @@ export equivalentNodalForce, nonFollowerLoadVector
 export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, suppressDeformationAtBoundaries
 export solveDeformation, showDeformationResults
 export grad_xy
+export materialTangentMatrix, initialStressMatrix, externalTangentFollower, internalForceVector
+export IIPiolaKirchhoff
 
 """
     nodePositionVector(problem)
@@ -1906,3 +1908,1806 @@ end
 function showDeformationResults(r::VectorField; name="vector", visible=false)
     return showDeformationResults(r, :vector, name=name, visible=visible)
 end
+
+#############################################################
+# New approach ##############################################
+#############################################################
+
+"""
+    materialTangentMatrix(
+        problem::Problem;
+        F::TensorField,
+        C::AbstractMatrix,
+        energy::Function,
+        params
+    )
+
+Assembles the **material (constitutive) tangent stiffness matrix**
+for a 3D solid under **finite deformation (Total Lagrange formulation)**,
+using a user-provided deformation gradient field `F` and a material
+tangent matrix `C` given in **6×6 Mandel/Voigt form**. Alternatively,
+it can compute the material tangent from a **free-energy density**
+`energy` (hyperelastic formulation) via `Tensors.jl`.
+
+This function builds the matrix
+```
+
+K_mat = ∫_Ω B(F)ᵀ · C · B(F) dΩ
+
+```
+where `B(F)` is the nonlinear strain–displacement matrix associated with
+the Green–Lagrange strain, and `C` is the material tangent
+∂S/∂E expressed in Mandel notation.
+
+The routine is **material-agnostic**: it does not assume any specific
+constitutive law. The material behavior is entirely defined by the
+supplied `C`, which may be spatially varying.
+
+---
+
+## Arguments
+
+- `problem::Problem`  
+  The finite element problem definition.  
+  Must satisfy:
+  - `problem.dim == 3`
+  - `problem.pdim == 3`
+
+---
+
+## Keyword arguments
+
+- `F::TensorField`  
+  Nodal deformation gradient field.
+  Each node stores the full 3×3 deformation gradient `F`,
+  which is interpolated to Gauss points during integration.
+
+- `C::AbstractMatrix` (size `6×6`)  
+  Material tangent matrix in Mandel/Voigt notation.
+
+  Each entry `C[i,j]` may be either:
+  - a `Number` (constant material tangent), or
+  - a `ScalarField` (spatially varying material tangent component).
+
+  All entries must satisfy:
+```
+
+C[i,j] isa Number || C[i,j] isa ScalarField
+
+```
+
+- `energy::Function`  
+  Free-energy density `ψ(C, params)` of a hyperelastic material, evaluated
+  at the **right Cauchy–Green tensor** `C = FᵀF`. If provided, the tangent
+  is computed at Gauss points via `Tensors.jl` and `C` must be omitted.
+
+- `params`  
+  Optional parameter container passed through to `energy`.
+---
+
+## Mathematical formulation
+
+- Strain measure: **Green–Lagrange strain**
+```
+
+E = 1/2 (FᵀF − I)
+
+```
+- Variation:
+```
+
+δE = sym(Fᵀ δF)
+
+```
+- Tangent contribution:
+```
+
+δS = C : δE
+
+```
+- Element stiffness contribution:
+```
+
+K_e = ∫ B(F)ᵀ · C · B(F) dΩ
+
+```
+The strain–displacement matrix `B(F)` is constructed consistently with
+Mandel notation (shear components scaled by 2).
+
+---
+
+## Notes
+
+- This function assembles **only the material part** of the tangent
+stiffness matrix.  
+The **geometric stiffness** (stress-dependent part) must be assembled
+separately.
+
+- The formulation is suitable for:
+- hyperelastic materials,
+- finite rotations,
+- finite strains,
+provided that `C` is consistent with the stress measure used elsewhere.
+
+- If `energy` is supplied, the routine constructs `C = FᵀF` at Gauss points
+  and obtains the constitutive tangent from the free-energy function using
+  `Tensors.jl`. This enables arbitrary hyperelastic laws without providing
+  a closed-form `C`.
+
+- The material tangent `C` is evaluated at Gauss points by interpolating
+nodal `ScalarField` values when necessary.
+
+---
+
+## Returns
+
+- `SystemMatrix`  
+Sparse global material tangent stiffness matrix of size `(ndof × ndof)`.
+
+---
+
+## Typical usage
+
+```julia
+Kmat = materialTangentMatrix(
+  problem;
+  F = Ffield,
+  C = Cvoigt   # 6×6 matrix of Number / ScalarField
+)
+
+K = Kint + Kmat
+```
+
+---
+
+## See also
+
+- `initialStressMatrix`
+
+- `internalForceVector`
+
+- `externalTangentFollower`
+
+- `TensorField`
+
+- `ScalarField`  
+"""
+function materialTangentMatrix(
+    problem::Problem;
+    F::TensorField,
+    C::Union{AbstractMatrix,Nothing}=nothing,
+    energy::Union{Nothing,Function}=nothing,
+    params=nothing)
+
+    if problem.type == :dummy
+        return nothing
+    end
+    @assert xor(C !== nothing, energy !== nothing)
+    @assert problem.dim == 3 && problem.pdim == 3
+
+    gmsh.model.setCurrent(problem.name)
+
+    pdim = 3
+    dof = pdim * problem.non
+
+    # --- elementwise nodal F
+    Fe = nodesToElements(F)
+    Fmap = Dict(zip(Fe.numElem, Fe.A))
+
+    # --- preprocess constant / field C (old path)
+    Centry = nothing
+    if C !== nothing
+        Centry = Matrix{Any}(undef, 6, 6)
+        for Icart in CartesianIndices(C)
+            cij = C[Icart]
+            if cij isa ScalarField
+                ce = nodesToElements(cij)
+                Centry[Icart] = Dict(zip(ce.numElem, ce.A)) # elem => nodal array
+            else
+                Centry[Icart] = Float64(cij)
+            end
+        end
+    end
+
+    # --- prealloc sparse triplets (pos-style, no push!)
+    len = LowLevelFEM.estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, len)
+    J = Vector{Int}(undef, len)
+    V = Vector{Float64}(undef, len)
+    pos = 1
+
+    for mat in problem.material
+        for (_, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(problem.dim, etag)
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                ip, wip =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order+1)")
+
+                # shape functions
+                _, hfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
+                H = reshape(hfun, numNodes, :)
+
+                # gradients
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
+                ∇h = reshape(dfun, :, length(wip))
+
+                ndofe = 3 * numNodes
+
+                # --- reusable buffers (element-level)
+                B = zeros(6, ndofe)
+                Ke = zeros(ndofe, ndofe)
+                Cgp = zeros(6, 6)
+                Fgp = zeros(3, 3)
+
+                # buffers for Ke update: tmp6 = Cgp*B
+                tmp6 = zeros(6, ndofe)
+
+                for (e, elem) in enumerate(elemTags[it])
+                    nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
+                    Fnode = Fmap[elem]
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, ip)
+                    Jac = reshape(jac, 3, :)
+
+                    fill!(Ke, 0.0)
+
+                    for k in eachindex(wip)
+                        # --- invJ via StaticArrays (fast, no heap)
+                        Jm = @SMatrix [
+                            Jac[1, 3k-2] Jac[1, 3k-1] Jac[1, 3k];
+                            Jac[2, 3k-2] Jac[2, 3k-1] Jac[2, 3k];
+                            Jac[3, 3k-2] Jac[3, 3k-1] Jac[3, 3k]
+                        ]
+                        invJ = transpose(inv(Jm))
+                        w = jacDet[k] * wip[k]
+
+                        # --- F at Gauss (avoid reshape alloc by manual fill)
+                        fill!(Fgp, 0.0)
+                        @inbounds for a in 1:numNodes
+                            Na = H[a, k]
+                            base = 9a - 8
+
+                            Fgp[1, 1] += Na * Fnode[base+0, 1]
+                            Fgp[2, 1] += Na * Fnode[base+1, 1]
+                            Fgp[3, 1] += Na * Fnode[base+2, 1]
+
+                            Fgp[1, 2] += Na * Fnode[base+3, 1]
+                            Fgp[2, 2] += Na * Fnode[base+4, 1]
+                            Fgp[3, 2] += Na * Fnode[base+5, 1]
+
+                            Fgp[1, 3] += Na * Fnode[base+6, 1]
+                            Fgp[2, 3] += Na * Fnode[base+7, 1]
+                            Fgp[3, 3] += Na * Fnode[base+8, 1]
+                        end
+
+                        # --- C at Gauss
+                        if energy !== nothing
+                            Fm = SMatrix{3,3,Float64}(Fgp)
+                            Cmat = transpose(Fm) * Fm
+                            Ctan = LowLevelFEM.tangent_from_energy(energy, Cmat, params)  # expected 6×6
+                            Cgp .= Ctan
+                        else
+                            @inbounds for i in 1:6, j in 1:6
+                                cij = Centry[i, j]
+                                if cij isa Float64
+                                    Cgp[i, j] = cij
+                                else
+                                    nod = cij[elem][:, 1]
+                                    Cgp[i, j] = dot(nod, @view H[:, k])
+                                end
+                            end
+                        end
+
+                        # --- build B (no allocations in ∇Na, v)
+                        fill!(B, 0.0)
+                        @inbounds for a in 1:numNodes
+                            gh = @view ∇h[3a-2:3a, k]
+                            ∇Na1 = invJ[1, 1] * gh[1] + invJ[1, 2] * gh[2] + invJ[1, 3] * gh[3]
+                            ∇Na2 = invJ[2, 1] * gh[1] + invJ[2, 2] * gh[2] + invJ[2, 3] * gh[3]
+                            ∇Na3 = invJ[3, 1] * gh[1] + invJ[3, 2] * gh[2] + invJ[3, 3] * gh[3]
+
+                            for j in 1:3
+                                v1 = Fgp[j, 1]
+                                v2 = Fgp[j, 2]
+                                v3 = Fgp[j, 3]
+                                col = (a - 1) * 3 + j
+
+                                B[1, col] = v1 * ∇Na1
+                                B[2, col] = v2 * ∇Na2
+                                B[3, col] = v3 * ∇Na3
+
+                                # engineering shear rows (E23,E13,E12) already with factor 2 in B definition
+                                B[4, col] = v2 * ∇Na3 + v3 * ∇Na2
+                                B[5, col] = v1 * ∇Na3 + v3 * ∇Na1
+                                B[6, col] = v1 * ∇Na2 + v2 * ∇Na1
+                            end
+                        end
+
+                        # --- Ke += w * (B' * (Cgp*B)) using mul!
+                        mul!(tmp6, Cgp, B)                    # tmp6 = Cgp*B
+                        mul!(Ke, transpose(B), tmp6, w, 1.0)  # Ke = w*B'*tmp6 + 1*Ke
+                    end
+
+                    # --- scatter (pos-style)
+                    @inbounds for a in 1:ndofe, b in 1:ndofe
+                        I[pos] = (nodeTags[div(a - 1, 3)+1] - 1) * 3 + mod(a - 1, 3) + 1
+                        J[pos] = (nodeTags[div(b - 1, 3)+1] - 1) * 3 + mod(b - 1, 3) + 1
+                        V[pos] = Ke[a, b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    resize!(I, pos - 1)
+    resize!(J, pos - 1)
+    resize!(V, pos - 1)
+
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+"""
+    initialStressMatrix(
+        problem::Problem;
+        stress::TensorField,
+        energy::Function,
+        C::TensorField,
+        params
+    )
+
+Assembles the **geometric (initial stress) stiffness matrix**
+associated with a given stress field, for finite deformation analysis
+in a **Total Lagrange–type formulation**.
+
+The function computes the matrix
+
+```
+
+K_geo = ∫_Ω G(S) dΩ
+
+```
+
+where `G(S)` represents the geometric stiffness contribution induced by
+the supplied stress tensor field `stress`. The stress measure itself
+(`P`, `S`, or `σ`) is **not interpreted** by the routine; it is treated
+purely as a second-order tensor field whose contraction with displacement
+gradients yields the geometric stiffness.
+
+---
+
+## Arguments
+
+- `problem::Problem`  
+  Finite element problem definition.
+  Must satisfy:
+  - `problem.dim == problem.pdim`
+
+---
+
+## Keyword arguments
+
+- `stress::TensorField`  
+  Nodal stress tensor field.
+  
+  Each node stores a full `dim×dim` tensor, which is interpolated to Gauss
+  points using standard Lagrange shape functions. The physical meaning
+  of the tensor is left to the caller; typical choices include:
+  - First Piola–Kirchhoff stress `P`,
+  - Second Piola–Kirchhoff stress `S`,
+  - Cauchy stress `σ`,
+  
+  provided that the chosen stress measure is **consistent with the
+  kinematic description used elsewhere** in the formulation.
+
+- `energy::Function`  
+  Free-energy density `ψ(C, params)` of a hyperelastic material. If
+  provided, the stress field is computed at Gauss points via `Tensors.jl`
+  from the supplied `C` and `stress` must be omitted.
+
+- `C::TensorField`  
+  Nodal field of the **right Cauchy–Green tensor** `C = FᵀF`. Required
+  when using the energy-based path.
+
+- `params`  
+  Optional parameter container passed through to `energy`.
+
+---
+
+## Mathematical formulation
+
+At each Gauss point, the stress tensor `S_gp` is obtained by interpolation
+from nodal values. The geometric stiffness contribution is computed as
+
+```
+
+g_ab = (∇N_a)ᵀ · S_gp · (∇N_b)
+
+```
+
+and distributed to the displacement components as
+
+```
+
+(K_geo)_ai,bi = g_ab
+
+```
+
+with no coupling between different displacement directions (`i = i` only).
+
+The element contribution reads
+
+```
+
+K_e = ∫ (∇N)ᵀ · S · (∇N) dΩ
+
+```
+
+and is assembled into the global matrix.
+
+---
+
+## Notes
+
+- This function assembles **only the geometric (stress-dependent) part**
+  of the tangent stiffness matrix.
+  The **material (constitutive) tangent** must be assembled separately,
+  e.g. via `materialTangentMatrix`.
+
+- The routine is **stress-measure agnostic**:
+  it does not enforce symmetry or specific push-forward/pull-back
+  operations. Ensuring energetic and kinematic consistency between the
+  stress field and the rest of the formulation is the responsibility of
+  the caller.
+
+- If `energy` is supplied, `C` is interpolated to Gauss points and the
+  stress is obtained from the free-energy function using `Tensors.jl`.
+  This enables arbitrary hyperelastic laws without explicitly providing
+  a stress field.
+
+- The formulation corresponds to the classical **initial stress stiffness**
+  encountered in large-deformation and stability (buckling) analyses.
+
+---
+
+## Returns
+
+- `SystemMatrix`  
+  Sparse global geometric stiffness matrix of size `(ndof × ndof)`.
+
+---
+
+## Typical usage
+
+```julia
+Kgeo = initialStressMatrix(
+    problem;
+    stress = Sfield   # TensorField (P, S, or σ)
+)
+
+K = Kmat + Kgeo
+```
+
+---
+
+## See also
+
+* `materialTangentMatrix`
+* `internalForceVector`
+* `TensorField`
+"""
+function initialStressMatrix(
+    problem::Problem;
+    S::Union{TensorField,Nothing}=nothing,
+    energy::Union{Nothing,Function}=nothing,
+    params=nothing,
+    C::Union{Nothing,TensorField}=nothing)
+
+    if problem.type == :dummy
+        return nothing
+    end
+    stress= S
+    @assert xor(stress !== nothing, energy !== nothing)
+    gmsh.model.setCurrent(problem.name)
+
+    dim = problem.dim
+    pdim = dim
+    dof = pdim * problem.non
+
+    # --- elementwise maps
+    Smap = nothing
+    Cmap = nothing
+    if stress !== nothing
+        Se = nodesToElements(stress)
+        Smap = Dict(zip(Se.numElem, Se.A))
+    else
+        Ce = nodesToElements(C)
+        Cmap = Dict(zip(Ce.numElem, Ce.A))
+    end
+
+    # --- prealloc sparse triplets (pos-style, no push!)
+    len = LowLevelFEM.estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, len)
+    J = Vector{Int}(undef, len)
+    V = Vector{Float64}(undef, len)
+    pos = 1
+
+    for mat in problem.material
+        for (_, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(dim, etag)
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                ip, wip =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order+1)")
+
+                # shape funcs
+                _, hfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
+                H = reshape(hfun, numNodes, :)
+
+                # grad shape funcs
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
+                ∇h = reshape(dfun, :, length(wip))
+
+                # reusable buffers (element-level)
+                Ke = zeros(pdim * numNodes, pdim * numNodes)
+                Sgp = zeros(dim, dim)
+
+                # energy path buffers (Gauss-level, reused)
+                CgpM = @MMatrix zeros(3, 3)  # mutable accumulator
+
+                for (e, elem) in enumerate(elemTags[it])
+                    nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, ip)
+                    Jac = reshape(jac, 3, :)
+
+                    fill!(Ke, 0.0)
+
+                    # fetch element nodal arrays once
+                    Selem = stress !== nothing ? Smap[elem] : nothing
+                    Celem = energy !== nothing ? Cmap[elem] : nothing
+
+                    for k in eachindex(wip)
+                        # --- invJ via StaticArrays (fast, no heap)
+                        Jm = @SMatrix [
+                            Jac[1, 3k-2] Jac[1, 3k-1] Jac[1, 3k];
+                            Jac[2, 3k-2] Jac[2, 3k-1] Jac[2, 3k];
+                            Jac[3, 3k-2] Jac[3, 3k-1] Jac[3, 3k]
+                        ]
+                        invJ = transpose(inv(Jm))
+                        w = jacDet[k] * wip[k]
+
+                        if stress !== nothing
+                            # --- interpolate stress to Gauss
+                            fill!(Sgp, 0.0)
+                            @inbounds for a in 1:numNodes
+                                Na = H[a, k]
+                                base = 9a - 8
+                                # manual reshape(Selem[...],3,3) without alloc
+                                Sgp[1, 1] += Na * Selem[base+0, 1]
+                                Sgp[2, 1] += Na * Selem[base+1, 1]
+                                Sgp[3, 1] += Na * Selem[base+2, 1]
+                                Sgp[1, 2] += Na * Selem[base+3, 1]
+                                Sgp[2, 2] += Na * Selem[base+4, 1]
+                                Sgp[3, 2] += Na * Selem[base+5, 1]
+                                Sgp[1, 3] += Na * Selem[base+6, 1]
+                                Sgp[2, 3] += Na * Selem[base+7, 1]
+                                Sgp[3, 3] += Na * Selem[base+8, 1]
+                            end
+                        else
+                            # --- interpolate C to Gauss (MMatrix accumulator)
+                            fill!(CgpM, 0.0)
+                            @inbounds for a in 1:numNodes
+                                Na = H[a, k]
+                                base = 9a - 8
+                                CgpM[1, 1] += Na * Celem[base+0, 1]
+                                CgpM[2, 1] += Na * Celem[base+1, 1]
+                                CgpM[3, 1] += Na * Celem[base+2, 1]
+                                CgpM[1, 2] += Na * Celem[base+3, 1]
+                                CgpM[2, 2] += Na * Celem[base+4, 1]
+                                CgpM[3, 2] += Na * Celem[base+5, 1]
+                                CgpM[1, 3] += Na * Celem[base+6, 1]
+                                CgpM[2, 3] += Na * Celem[base+7, 1]
+                                CgpM[3, 3] += Na * Celem[base+8, 1]
+                            end
+                            # convert once, call stress_from_energy (expects SMatrix{3,3})
+                            Cgp = SMatrix{3,3,Float64}(CgpM)
+                            S = LowLevelFEM.stress_from_energy(energy, Cgp, params)  # should return 3×3 (SMatrix or Matrix)
+                            Sgp .= S
+                        end
+
+                        # --- geometric stiffness contribution
+                        @inbounds for a in 1:numNodes, b in 1:numNodes
+                            # ∇N = invJ * grad_hat (manual for speed)
+                            ghA = @view ∇h[3a-2:3a, k]
+                            ghB = @view ∇h[3b-2:3b, k]
+
+                            ∇Na1 = invJ[1, 1] * ghA[1] + invJ[1, 2] * ghA[2] + invJ[1, 3] * ghA[3]
+                            ∇Na2 = invJ[2, 1] * ghA[1] + invJ[2, 2] * ghA[2] + invJ[2, 3] * ghA[3]
+                            ∇Na3 = invJ[3, 1] * ghA[1] + invJ[3, 2] * ghA[2] + invJ[3, 3] * ghA[3]
+
+                            ∇Nb1 = invJ[1, 1] * ghB[1] + invJ[1, 2] * ghB[2] + invJ[1, 3] * ghB[3]
+                            ∇Nb2 = invJ[2, 1] * ghB[1] + invJ[2, 2] * ghB[2] + invJ[2, 3] * ghB[3]
+                            ∇Nb3 = invJ[3, 1] * ghB[1] + invJ[3, 2] * ghB[2] + invJ[3, 3] * ghB[3]
+
+                            # t = Sgp * ∇Nb
+                            t1 = Sgp[1, 1] * ∇Nb1 + Sgp[1, 2] * ∇Nb2 + Sgp[1, 3] * ∇Nb3
+                            t2 = Sgp[2, 1] * ∇Nb1 + Sgp[2, 2] * ∇Nb2 + Sgp[2, 3] * ∇Nb3
+                            t3 = Sgp[3, 1] * ∇Nb1 + Sgp[3, 2] * ∇Nb2 + Sgp[3, 3] * ∇Nb3
+
+                            g = ∇Na1 * t1 + ∇Na2 * t2 + ∇Na3 * t3
+
+                            # distribute to displacement components (i=i only)
+                            for i in 1:dim
+                                ia = (a - 1) * pdim + i
+                                ib = (b - 1) * pdim + i
+                                Ke[ia, ib] += g * w
+                            end
+                        end
+                    end
+
+                    # --- scatter (pos-style)
+                    @inbounds for a in 1:pdim*numNodes, b in 1:pdim*numNodes
+                        I[pos] = (nodeTags[div(a - 1, pdim)+1] - 1) * pdim + mod(a - 1, pdim) + 1
+                        J[pos] = (nodeTags[div(b - 1, pdim)+1] - 1) * pdim + mod(b - 1, pdim) + 1
+                        V[pos] = Ke[a, b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    resize!(I, pos - 1)
+    resize!(J, pos - 1)
+    resize!(V, pos - 1)
+
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+"""
+    internalForceVector(
+        problem::Problem;
+        P::TensorField,
+        F::TensorField,
+        energy::Function,
+        params
+    )
+
+Assembles the **internal force vector** associated with a given
+first-order stress tensor field `P`, using a finite deformation
+formulation. Alternatively, `P` can be computed from a **free-energy
+density** `energy` (hyperelastic formulation) via `Tensors.jl`.
+
+The function computes
+
+```
+
+f_int = ∫_Ω B_Pᵀ · P dΩ
+
+```
+
+where `P` is interpolated to Gauss points and contracted with the
+gradients of the shape functions. The routine is **stress-measure
+agnostic**: it treats `P` purely as a second-order tensor field and does
+not enforce any specific constitutive interpretation.
+
+---
+
+## Arguments
+
+- `problem::Problem`  
+  Finite element problem definition.
+  The routine currently supports only:
+```
+
+problem.dim  == 3
+problem.pdim == 3
+
+```
+
+- `P::TensorField`  
+Nodal stress tensor field.
+Each node stores a full `dim×dim` tensor, which is interpolated to Gauss
+points using Lagrange shape functions.
+
+Typical choices for `P` include:
+- First Piola–Kirchhoff stress,
+- Second Piola–Kirchhoff stress (with compatible kinematics),
+- Cauchy stress (if used consistently).
+
+The function does **not** distinguish between these cases; ensuring
+consistency with the rest of the formulation is the responsibility of
+the caller.
+
+- `F::TensorField`  
+  Nodal deformation gradient field. Required when using the energy-based
+  path to compute `P` internally.
+
+- `energy::Function`  
+  Free-energy density `ψ(C, params)` of a hyperelastic material. If
+  provided, the routine constructs `C = FᵀF`, computes `S` via `Tensors.jl`,
+  and forms `P = F * S` at Gauss points.
+
+- `params`  
+  Optional parameter container passed through to `energy`.
+
+---
+
+## Mathematical formulation
+
+At each Gauss point, the stress tensor is obtained as
+
+```
+
+P_gp = Σ_a N_a P_a
+
+```
+
+The element internal force contribution is computed as
+
+```
+
+(f_e)*{ai} = ∫ (P_gp)*{iJ} (∇N_a)_J dΩ
+
+```
+
+where:
+- `a` denotes the node index,
+- `i` denotes the displacement component,
+- `∇N_a` is the gradient of the shape function in the reference
+  configuration.
+
+The resulting element vector is assembled into the global internal force
+vector.
+
+---
+
+## Notes
+
+- This function assembles **only the internal force vector**.
+  The associated tangent contributions must be assembled separately via:
+  - `materialTangentMatrix` (constitutive tangent),
+  - `initialStressMatrix` (geometric tangent).
+
+- The stress field `P` is interpolated using standard Lagrange shape
+  functions. No symmetry or push-forward/pull-back operations are
+  applied internally.
+
+- If `energy` is supplied, `P` is computed at Gauss points from the
+  free-energy function using `Tensors.jl`, enabling arbitrary
+  hyperelastic laws without explicitly providing a stress field.
+
+- The formulation corresponds to a Total Lagrange–type internal force
+  expression when `P` is interpreted as the first Piola–Kirchhoff stress.
+
+---
+
+## Returns
+
+- `VectorField`  
+  Global internal force vector of size `(ndof)`, returned as a
+  `VectorField` with one time step.
+
+---
+
+## Typical usage
+
+```julia
+f_int = internalForceVector(problem, Pfield)
+
+R = f_int - f_ext
+```
+
+---
+
+## See also
+
+* `materialTangentMatrix`
+* `initialStressMatrix`
+* `externalTangentFollower`
+* `TensorField`
+"""
+function internalForceVector(
+    problem::Problem;
+    P::Union{Nothing,TensorField}=nothing,
+    F::Union{Nothing,TensorField}=nothing,
+    energy::Union{Nothing,Function}=nothing,
+    params=nothing)
+
+    if problem.type == :dummy
+        return nothing
+    end
+    gmsh.model.setCurrent(problem.name)
+
+    @assert xor(P !== nothing, energy !== nothing) """
+    Either provide `P` (TensorField),
+    or provide (`energy`, `params`, `F`) to compute it at Gauss points.
+    """
+
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    dof = pdim * non
+    @assert dim == 3 && pdim == 3  # jelen implementáció
+
+    # --- elementwise maps
+    Pmap = nothing
+    Fmap = nothing
+    if P !== nothing
+        Pe = nodesToElements(P)
+        Pmap = Dict(zip(Pe.numElem, Pe.A))
+    else
+        @assert F !== nothing
+        Fe = nodesToElements(F)
+        Fmap = Dict(zip(Fe.numElem, Fe.A))
+    end
+
+    f = zeros(dof)
+
+    for mat in problem.material
+        for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(mat.phName)
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                ip, wip =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order + 1)")
+
+                # --- shape functions
+                _, hfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
+                H = reshape(hfun, numNodes, :)
+
+                # --- grad shape
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
+                ∇h = reshape(dfun, :, length(wip))
+
+                # --- reusable buffers
+                fe = zeros(pdim * numNodes)
+                Pgp = zeros(3, 3)  # Float64 buffer
+                Fgp = zeros(3, 3)  # only used in energy-path
+
+                for (e, elem) in enumerate(elemTags[it])
+                    nodeTags = elemNodeTags[it][(e-1)*numNodes+1:e*numNodes]
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, ip)
+                    Jac = reshape(jac, 3, :)
+
+                    Pelem = (P !== nothing) ? Pmap[elem] : nothing
+                    Felem = (energy !== nothing) ? Fmap[elem] : nothing
+
+                    fill!(fe, 0.0)
+
+                    for k in eachindex(wip)
+                        # --- invJ via StaticArrays
+                        Jm = @SMatrix [
+                            Jac[1, 3k-2] Jac[1, 3k-1] Jac[1, 3k];
+                            Jac[2, 3k-2] Jac[2, 3k-1] Jac[2, 3k];
+                            Jac[3, 3k-2] Jac[3, 3k-1] Jac[3, 3k]
+                        ]
+                        invJ = transpose(inv(Jm))
+                        w = jacDet[k] * wip[k]
+
+                        if P !== nothing
+                            # --- interpolate P to Gauss into Pgp buffer (no alloc)
+                            fill!(Pgp, 0.0)
+                            @inbounds for a in 1:numNodes
+                                Na = H[a, k]
+                                base = 9a - 8
+                                # column-major (ugyanaz, mint reshape(x,3,3))
+                                Pgp[1, 1] += Na * Pelem[base+0, 1]
+                                Pgp[2, 1] += Na * Pelem[base+1, 1]
+                                Pgp[3, 1] += Na * Pelem[base+2, 1]
+
+                                Pgp[1, 2] += Na * Pelem[base+3, 1]
+                                Pgp[2, 2] += Na * Pelem[base+4, 1]
+                                Pgp[3, 2] += Na * Pelem[base+5, 1]
+
+                                Pgp[1, 3] += Na * Pelem[base+6, 1]
+                                Pgp[2, 3] += Na * Pelem[base+7, 1]
+                                Pgp[3, 3] += Na * Pelem[base+8, 1]
+                            end
+                        else
+                            # --- energy path: Fgp -> C -> S -> P = F*S
+                            fill!(Fgp, 0.0)
+                            @inbounds for a in 1:numNodes
+                                Na = H[a, k]
+                                base = 9a - 8
+                                Fgp[1, 1] += Na * Felem[base+0, 1]
+                                Fgp[2, 1] += Na * Felem[base+1, 1]
+                                Fgp[3, 1] += Na * Felem[base+2, 1]
+                                Fgp[1, 2] += Na * Felem[base+3, 1]
+                                Fgp[2, 2] += Na * Felem[base+4, 1]
+                                Fgp[3, 2] += Na * Felem[base+5, 1]
+                                Fgp[1, 3] += Na * Felem[base+6, 1]
+                                Fgp[2, 3] += Na * Felem[base+7, 1]
+                                Fgp[3, 3] += Na * Felem[base+8, 1]
+                            end
+
+                            Fm = SMatrix{3,3,Float64}(Fgp)
+                            Cmat = transpose(Fm) * Fm
+                            S = LowLevelFEM.stress_from_energy(energy, Cmat, params)  # 3×3 (SMatrix ok)
+                            Pm = Fm * S
+
+                            # copy back into Pgp buffer (avoid Matrix(Pm))
+                            @inbounds begin
+                                Pgp[1, 1] = Pm[1, 1]
+                                Pgp[1, 2] = Pm[1, 2]
+                                Pgp[1, 3] = Pm[1, 3]
+                                Pgp[2, 1] = Pm[2, 1]
+                                Pgp[2, 2] = Pm[2, 2]
+                                Pgp[2, 3] = Pm[2, 3]
+                                Pgp[3, 1] = Pm[3, 1]
+                                Pgp[3, 2] = Pm[3, 2]
+                                Pgp[3, 3] = Pm[3, 3]
+                            end
+                        end
+
+                        # --- fe accumulation
+                        @inbounds for a in 1:numNodes
+                            gh = @view ∇h[3a-2:3a, k]
+                            ∇Na1 = invJ[1, 1] * gh[1] + invJ[1, 2] * gh[2] + invJ[1, 3] * gh[3]
+                            ∇Na2 = invJ[2, 1] * gh[1] + invJ[2, 2] * gh[2] + invJ[2, 3] * gh[3]
+                            ∇Na3 = invJ[3, 1] * gh[1] + invJ[3, 2] * gh[2] + invJ[3, 3] * gh[3]
+
+                            base = (a - 1) * pdim
+                            # dot(Pgp[i,:], ∇Na) kézzel, hogy ne allokáljon view/vec
+                            fe[base+1] += (Pgp[1, 1] * ∇Na1 + Pgp[1, 2] * ∇Na2 + Pgp[1, 3] * ∇Na3) * w
+                            fe[base+2] += (Pgp[2, 1] * ∇Na1 + Pgp[2, 2] * ∇Na2 + Pgp[2, 3] * ∇Na3) * w
+                            fe[base+3] += (Pgp[3, 1] * ∇Na1 + Pgp[3, 2] * ∇Na2 + Pgp[3, 3] * ∇Na3) * w
+                        end
+                    end
+
+                    # scatter fe into global f
+                    @inbounds for a in 1:numNodes
+                        nt = nodeTags[a]
+                        base = (a - 1) * pdim
+                        f[(nt-1)*pdim+1] += fe[base+1]
+                        f[(nt-1)*pdim+2] += fe[base+2]
+                        f[(nt-1)*pdim+3] += fe[base+3]
+                    end
+                end
+            end
+        end
+    end
+
+    return VectorField([], reshape(f, :, 1), [0.0], [], 1, :v3D, problem)
+end
+
+@inline function _tangent_load_helper(f, h, x, y, z, nnet, j, l, nsteps)
+    if f isa Number
+        return fill(f, nsteps)
+    elseif f isa Function
+        return fill(f(x, y, z), nsteps)
+    elseif f isa ScalarField && isNodal(f)
+        v = h[:, j]' * f.a[nnet[l, :], :]
+        return vec(v)
+    else
+        error("externalTangentFollowerTL: invalid load type.")
+    end
+end
+
+"""
+    externalTangentFollower(
+        problem::Problem,
+        loads::Vector{BoundaryCondition};
+        F::TensorField
+    )
+
+Assembles the **external tangent stiffness matrix associated with
+follower (configuration-dependent) surface loads** for a finite
+deformation analysis.
+
+The function computes the linearization of the external force vector
+with respect to the displacement field when the applied tractions rotate
+and/or stretch together with the deforming body.
+
+---
+
+## Arguments
+
+- `problem::Problem`  
+  Finite element problem definition.
+
+- `loads::Vector{BoundaryCondition}`  
+  Boundary conditions defining surface tractions or pressures acting on
+  the current configuration. Supported load types:
+  - surface traction components (`fx`, `fy`, `fz`),
+  - surface pressure (`p`, only for 3D solids).
+
+  Each boundary condition is interpreted as a **follower load**, i.e.
+  its direction and/or magnitude may depend on the deformation.
+
+---
+
+## Keyword arguments
+
+- `F::TensorField`  
+  Nodal deformation gradient field.
+  Each node stores the full deformation gradient `F`, which is
+  interpolated to Gauss points and used to:
+  - rotate the applied tractions,
+  - compute the Jacobian and inverse deformation gradient,
+  - form the consistent external tangent matrix.
+
+---
+
+## Mathematical formulation
+
+The external force vector for follower tractions may be written as
+
+```
+
+f_ext = ∫_Γ Nᵀ · t(F) dΓ
+
+```
+
+where the traction vector depends on the deformation gradient, typically
+through a relation of the form
+
+```
+
+t = J F⁻ᵀ t₀    or    t = F · t_loc
+
+```
+
+The present implementation linearizes this expression consistently,
+leading to an external tangent contribution
+
+```
+
+K_ext = ∂f_ext / ∂u
+
+```
+
+which includes:
+- the variation of the Jacobian and inverse deformation gradient,
+- the variation of the traction due to rotation/stretching with `F`.
+
+Both pressure loads and vector-valued surface tractions are supported.
+
+---
+
+## Notes
+
+- This function assembles **only the tangent contribution** of follower
+  loads.  
+  The corresponding external force vector must be assembled separately,
+  e.g. using `loadVector` with deformation-dependent tractions.
+
+- Dead loads (loads fixed in the reference configuration) **must not**
+  be passed to this function. For dead loads, the external tangent is
+  identically zero.
+
+- The formulation assumes a **Total Lagrange–type description** and is
+  intended for large-rotation and large-deformation problems.
+
+- For pressure loads, the reference normal vector is obtained from the
+  undeformed geometry and appropriately transformed.
+
+---
+
+## Returns
+
+- `SystemMatrix`  
+  Sparse global external tangent stiffness matrix of size `(ndof × ndof)`.
+
+---
+
+## Typical usage
+
+```julia
+Kext = externalTangentFollower(
+    problem,
+    loads;
+    F = Ffield
+)
+
+K = Kmat + Kgeo - Kext
+```
+
+---
+
+## See also
+
+* `loadVector`
+* `internalForceVector`
+* `materialTangentMatrix`
+* `initialStressVector`
+"""
+function externalTangentFollower(
+    problem::Problem,
+    loads::Vector{BoundaryCondition};
+    F::TensorField)
+
+    if problem.type == :dummy
+        return nothing
+    end
+    gmsh.model.setCurrent(problem.name)
+
+    dim  = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    dof  = pdim * non
+    @assert dim == 3 && pdim == 3
+
+    # --- elementwise F
+    Fe   = nodesToElements(F)
+    Fmap = Dict(zip(Fe.numElem, Fe.A))
+
+    #Id = Matrix{Float64}(I, 3, 3)
+    Id = [1.0 0 0; 0 1 0; 0 0 1]
+
+    # --- pos-style sparse
+    len = LowLevelFEM.estimateLengthOfIJV(problem)
+    I = Vector{Int}(undef, len)
+    J = Vector{Int}(undef, len)
+    V = Vector{Float64}(undef, len)
+    pos = 1
+
+    # --- global node coordinates cache
+    ncoord2 = zeros(3 * non)
+
+    for bc in loads
+        name = bc.phName
+
+        fx = bc.fx
+        fy = bc.fy
+        fz = bc.fz
+        p  = bc.p
+
+        fx = (fx isa ScalarField && isElementwise(fx)) ? elementsToNodes(fx) : fx
+        fy = (fy isa ScalarField && isElementwise(fy)) ? elementsToNodes(fy) : fy
+        fz = (fz isa ScalarField && isElementwise(fz)) ? elementsToNodes(fz) : fz
+        p  = (p  isa ScalarField && isElementwise(p )) ? elementsToNodes(p ) : p
+
+        if p !== nothing && (fx !== nothing || fy !== nothing || fz !== nothing)
+            error("externalTangentFollowerTL: p and fx/fy/fz cannot be defined together.")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(name)
+
+        for (edim, etag) in dimTags
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            nodeTagsAll, ncoord, _ =
+                gmsh.model.mesh.getNodes(edim, etag, true, false)
+
+            @inbounds begin
+                ncoord2[nodeTagsAll*3 .- 2] = ncoord[1:3:end]
+                ncoord2[nodeTagsAll*3 .- 1] = ncoord[2:3:end]
+                ncoord2[nodeTagsAll*3 .- 0] = ncoord[3:3:end]
+            end
+
+            nv = (p !== nothing) ? -normalVector(problem, name) : nothing
+
+            for it in eachindex(elemTypes)
+                et = elemTypes[it]
+                _, _, order, numNodes, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                ip, wip =
+                    gmsh.model.mesh.getIntegrationPoints(et, "Gauss$(2order + 1)")
+
+                _, hfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "Lagrange")
+                h = reshape(hfun, numNodes, :)
+
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(et, ip, "GradLagrange")
+                ∇h = reshape(dfun, :, length(wip))
+
+                ndofe = pdim * numNodes
+
+                # --- reusable buffers
+                Ke   = zeros(ndofe, ndofe)
+                Fgp  = zeros(3, 3)
+                tgp  = zeros(3)
+                dt0  = zeros(3)
+                tloc = zeros(3)
+
+                for (l, elem) in enumerate(elemTags[it])
+                    nodeTags =
+                        @view elemNodeTags[it][(l-1)*numNodes+1:l*numNodes]
+
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, ip)
+                    Jac = reshape(jac, 3, :)
+
+                    Fnode = Fmap[elem]
+                    fill!(Ke, 0.0)
+
+                    for j in eachindex(wip)
+                        Jm = @SMatrix [
+                            Jac[1,3j-2] Jac[1,3j-1] Jac[1,3j];
+                            Jac[2,3j-2] Jac[2,3j-1] Jac[2,3j];
+                            Jac[3,3j-2] Jac[3,3j-1] Jac[3,3j]
+                        ]
+                        invJ = transpose(inv(Jm))
+                        w = jacDet[j] * wip[j]
+
+                        # --- F at Gauss (reshape-safe)
+                        fill!(Fgp, 0.0)
+                        @inbounds for a in 1:numNodes
+                            Na = h[a, j]
+                            base = 9a - 8
+                            Fgp[1,1] += Na * Fnode[base+0,1]
+                            Fgp[2,1] += Na * Fnode[base+1,1]
+                            Fgp[3,1] += Na * Fnode[base+2,1]
+                            Fgp[1,2] += Na * Fnode[base+3,1]
+                            Fgp[2,2] += Na * Fnode[base+4,1]
+                            Fgp[3,2] += Na * Fnode[base+5,1]
+                            Fgp[1,3] += Na * Fnode[base+6,1]
+                            Fgp[2,3] += Na * Fnode[base+7,1]
+                            Fgp[3,3] += Na * Fnode[base+8,1]
+                        end
+
+                        Fm = SMatrix{3,3,Float64}(Fgp)
+                        Finv = inv(Fm)
+                        FinvT = transpose(Finv)
+                        Jgp = det(Fm)
+
+                        # --- Gauss coordinates
+                        x = 0.0; y = 0.0; z = 0.0
+                        @inbounds for a in 1:numNodes
+                            Na = h[a,j]
+                            nt = nodeTags[a]
+                            x += Na * ncoord2[3nt-2]
+                            y += Na * ncoord2[3nt-1]
+                            z += Na * ncoord2[3nt-0]
+                        end
+
+                        # --- traction
+                        fill!(tgp, 0.0)
+                        if p !== nothing
+                            pval = _tangent_load_helper(p, h, x, y, z, nodeTags, j, 1, 1)[1]
+                            for d in 1:3
+                                tgp[d] = -pval * (h[:,j]' * nv[d].a[nodeTags,1])
+                            end
+                        else
+                            if fx !== nothing
+                                tgp[1] = _tangent_load_helper(fx, h, x, y, z, nodeTags, j, 1, 1)[1]
+                            end
+                            if fy !== nothing
+                                tgp[2] = _tangent_load_helper(fy, h, x, y, z, nodeTags, j, 1, 1)[1]
+                            end
+                            if fz !== nothing
+                                tgp[3] = _tangent_load_helper(fz, h, x, y, z, nodeTags, j, 1, 1)[1]
+                            end
+                        end
+
+                        tgp .= Fgp * tgp
+                        tloc .= Finv * tgp
+
+                        for a in 1:numNodes, b in 1:numNodes
+                            ghb = @view ∇h[3b-2:3b, j]
+                            ∇Nb = invJ * ghb
+
+                            for jb in 1:3
+                                # --- unchanged physics
+                                fcol = Finv[:,jb]
+                                α = dot(fcol, ∇Nb)
+
+                                dJFmT = Jgp * FinvT * (α*Id - (∇Nb*fcol'))
+                                dt0 .= dJFmT * tgp
+
+                                dFt = dot(∇Nb, tloc)
+                                @inbounds for ia in 1:3
+                                    dt0[ia] += Jgp * FinvT[ia,jb] * dFt
+                                end
+
+                                @inbounds for ia in 1:3
+                                    Ke[(a-1)*3+ia,(b-1)*3+jb] +=
+                                        h[a,j] * dt0[ia] * w
+                                end
+                            end
+                        end
+                    end
+
+                    @inbounds for a in 1:ndofe, b in 1:ndofe
+                        I[pos] = (nodeTags[div(a-1,3)+1]-1)*3 + mod(a-1,3) + 1
+                        J[pos] = (nodeTags[div(b-1,3)+1]-1)*3 + mod(b-1,3) + 1
+                        V[pos] = Ke[a,b]
+                        pos += 1
+                    end
+                end
+            end
+        end
+    end
+
+    resize!(I,pos-1); resize!(J,pos-1); resize!(V,pos-1)
+    K = sparse(I,J,V,dof,dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+"""
+    IIPiolaKirchhoff(energy, C::TensorField, params)
+
+Computes the nodal Second Piola–Kirchhoff (II PK) stress tensor field
+from a given nodal Right Cauchy–Green deformation tensor field.
+
+For each time step and each node, the II PK stress is evaluated as
+
+    S = ∂ψ(C, params) / ∂C
+
+using the provided free energy function `energy` and material parameters
+`params`. The stress evaluation is performed directly at the nodal
+values of `C`, without Gauss-point integration or spatial averaging.
+
+This function is intended for post-processing, visualization, and
+diagnostic purposes. The resulting stress field is energy-consistent
+with the constitutive model but is not suitable for assembling internal
+forces or tangents, which require Gauss-point evaluation.
+
+Arguments:
+- `energy::Function`:
+    Free energy density ψ(C, params).
+- `C::TensorField`:
+    Nodal Right Cauchy–Green deformation tensor field.
+- `params::NamedTuple`:
+    Material parameters passed to `energy`.
+
+Requirements:
+- The problem must be three-dimensional (`dim = pdim = 3`).
+- The input field `C` must be defined nodally.
+
+Returns:
+- `TensorField`:
+    Nodal Second Piola–Kirchhoff stress field with the same time steps
+    and model as `C`.
+
+Notes:
+- The stress is computed independently at each node and time step.
+- No interpolation, integration, or smoothing is performed.
+- For use in weak forms or Newton iterations, Gauss-point evaluation
+  should be used instead.
+"""
+function IIPiolaKirchhoff(
+    energy::Function,
+    C::TensorField,
+    params::NamedTuple)
+
+    problem = C.model
+    @assert problem.dim == 3 && problem.pdim == 3
+
+    C0 = elementsToNodes(C)
+    non = problem.non
+    nsteps = C.nsteps
+    S = zeros(9 * non, nsteps)
+
+    @inbounds for j in 1:nsteps
+        @inbounds for a in 1:non
+            base = 9*(a-1)
+
+            # --- C at node (column-major safe)
+            Cn = @SMatrix [
+                C0.a[base+1,j] C0.a[base+4,j] C0.a[base+7,j];
+                C0.a[base+2,j] C0.a[base+5,j] C0.a[base+8,j];
+                C0.a[base+3,j] C0.a[base+6,j] C0.a[base+9,j]
+            ]
+
+            # --- II PK stress
+            Sn = LowLevelFEM.stress_from_energy(energy, Cn, params)
+
+            # --- store back (same layout as TensorField)
+            S[base+1,j] = Sn[1,1]
+            S[base+2,j] = Sn[2,1]
+            S[base+3,j] = Sn[3,1]
+            S[base+4,j] = Sn[1,2]
+            S[base+5,j] = Sn[2,2]
+            S[base+6,j] = Sn[3,2]
+            S[base+7,j] = Sn[1,3]
+            S[base+8,j] = Sn[2,3]
+            S[base+9,j] = Sn[3,3]
+        end
+    end
+
+    return TensorField([], S, C.t, [], nsteps, :tensor, C.model)
+end
+
+# ========= PUBLIC API =========
+
+function stress_from_energy(ψ, C::SMatrix, p)
+    try
+        return _stress_from_energy(ψ, C, p)
+    catch err
+        if err isa MethodError && err.f === _stress_from_energy
+            error("""
+            Energy-based stress computation requires Tensors.jl.
+
+            Please load it first:
+                using Tensors
+            """)
+        else
+            rethrow()
+        end
+    end
+end
+
+function tangent_from_energy(ψ, C::SMatrix, p)
+    try
+        return _tangent_from_energy(ψ, C, p)
+    catch err
+        if err isa MethodError && err.f === _tangent_from_energy
+            error("""
+            Energy-based tangent computation requires Tensors.jl.
+
+            Please load it first:
+                using Tensors
+            """)
+        else
+            rethrow()
+        end
+    end
+end
+
+
+# ========= EXTENSION HOOKS (NO METHODS!) =========
+
+function _stress_from_energy end
+function _tangent_from_energy end
+
+# ===========================================================================
+
+
+
+#=
+@inline function _rotation_from_F(F::AbstractMatrix{<:Real})
+    U, _, Vt = svd(F)
+    R = U * Vt
+    if det(R) < 0
+        U[:, end] .*= -1
+        R = U * Vt
+    end
+    return R
+end
+=#
+
+#=
+@inline function _loadvec_helper(f, h, x, y, z, nnet, j, l, nsteps)
+    if f isa Number
+        return fill(f, nsteps)
+    elseif f isa Function
+        return fill(f(x, y, z), nsteps)
+    elseif f isa ScalarField && isNodal(f)
+        v = h[:, j]' * f.a[nnet[l, :], :]
+        return vec(v)
+    else
+        error("loadVector: internal error.")
+    end
+end
+
+function loadVectorNew(problem, loads; F=nothing)
+    gmsh.model.setCurrent(problem.name)
+    if !isa(loads, Vector)
+        error("loadVector: loads are not arranged in a vector. Put them in [...]")
+    end
+
+    Fe = nothing
+    Fmap = nothing
+    if F !== nothing
+        Fe = nodesToElements(F)
+        Fmap = Dict(zip(Fe.numElem, Fe.A))
+    end
+
+    pdim = problem.pdim
+    DIM = problem.dim
+    b = problem.thickness
+    non = problem.non
+    dof = pdim * non
+    ncoord2 = zeros(3 * problem.non)
+    f = nothing
+    fp = zeros(dof,1)
+    nsteps = 1
+    for n in 1:length(loads)
+        name = loads[n].phName
+        fx = loads[n].fx
+        fy = loads[n].fy
+        fz = loads[n].fz
+        T = loads[n].T
+        p = loads[n].p
+        hc = loads[n].h
+        T0 = loads[n].T
+        qn = loads[n].qn
+        hs = loads[n].h
+
+        q = loads[n].q
+
+        fxy = loads[n].fxy
+        fyz = loads[n].fyz
+        fzx = loads[n].fzx
+        
+        fyx = loads[n].fyx
+        fzy = loads[n].fzy
+        fxz = loads[n].fxz
+
+        fx  = (fx  isa ScalarField && isElementwise(fx))  ? elementsToNodes(fx)  : fx
+        fy  = (fy  isa ScalarField && isElementwise(fy))  ? elementsToNodes(fy)  : fy
+        fz  = (fz  isa ScalarField && isElementwise(fz))  ? elementsToNodes(fz)  : fz
+        T   = (T   isa ScalarField && isElementwise(T))   ? elementsToNodes(T)   : T
+        p   = (p   isa ScalarField && isElementwise(p))   ? elementsToNodes(p)   : p
+        hc  = (hc  isa ScalarField && isElementwise(hc))  ? elementsToNodes(hc)  : hc
+        T0  = (T0  isa ScalarField && isElementwise(T0))  ? elementsToNodes(T0)  : T0
+        qn  = (qn  isa ScalarField && isElementwise(qn))  ? elementsToNodes(qn)  : qn
+        hs  = (hs  isa ScalarField && isElementwise(hs))  ? elementsToNodes(hs)  : hs
+        q   = (q   isa ScalarField && isElementwise(q))   ? elementsToNodes(q)   : q
+        fxy = (fxy isa ScalarField && isElementwise(fxy)) ? elementsToNodes(fxy) : fxy
+        fyz = (fyz isa ScalarField && isElementwise(fyz)) ? elementsToNodes(fyz) : fyz
+        fzx = (fzx isa ScalarField && isElementwise(fzx)) ? elementsToNodes(fzx) : fzx
+        fyx = (fyx isa ScalarField && isElementwise(fyx)) ? elementsToNodes(fyx) : fyx
+        fzy = (fzy isa ScalarField && isElementwise(fzy)) ? elementsToNodes(fzy) : fzy
+        fxz = (fxz isa ScalarField && isElementwise(fxz)) ? elementsToNodes(fxz) : fxz
+    
+        nsteps = 1
+        for i in [fx, fy , fz, T,  p, hc, T0, qn, hs, q, fxy, fyz, fzx, fyx, fzy, fxz]
+            if i isa ScalarField
+                nsteps = max(nsteps, i.nsteps)
+            end
+        end
+        if nsteps > size(fp, 2)
+            fp = hcat(fp, zeros(dof, nsteps - size(fp,2)))
+        end
+
+        (qn !== nothing || hc !== nothing || hs !== nothing || T !== nothing) && (fx !== nothing || fy !== nothing || fz !== nothing) &&
+            error("loadVector: qn/h/T∞ and fx/fy/fz cannot be defined in the same BC.")
+        if pdim == 1 || pdim == 2 || pdim == 3 || pdim == 9
+            f = zeros(pdim, nsteps)
+        else
+            error("loadVector: dimension of the problem is $(problem.dim).")
+        end
+        if p !== nothing && DIM == 3 && pdim == 3
+            nv = -normalVector(problem, name)
+            ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
+            ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
+            ez = VectorField(problem, [field(name, fx=0, fy=0, fz=1)])
+            if p isa Number || p isa ScalarField
+                fy = elementsToNodes((nv ⋅ ey) * p)
+                fz = elementsToNodes((nv ⋅ ez) * p)
+                fx = elementsToNodes((nv ⋅ ex) * p)
+            elseif p isa Function
+                pp = scalarField(problem, [field(name, f=p)])
+                fy = elementsToNodes((nv ⋅ ey) * pp)
+                fz = elementsToNodes((nv ⋅ ez) * pp)
+                fx = elementsToNodes((nv ⋅ ex) * pp)
+            end
+        end
+        if p !== nothing && DIM ≠ 3
+            error("loadVector: pressure can be given on a surface of a 3D solid.")
+        end
+        fx = fx !== nothing ? fx : 0.0
+        fy = fy !== nothing ? fy : 0.0
+        fz = fz !== nothing ? fz : 0.0
+        dimTags = gmsh.model.getEntitiesForPhysicalName(name)
+        for i ∈ 1:length(dimTags)
+            dimTag = dimTags[i]
+            dim = dimTag[1]
+            tag = dimTag[2]
+            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for ii in 1:length(elementTypes)
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+                nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(2order+1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elementTags[ii]), numNodes)
+                H = zeros(pdim * numIntPoints, pdim * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdim
+                            H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                        end
+                    end
+                end
+                f1 = zeros(pdim * numNodes, nsteps)
+                nn2 = zeros(Int, pdim * numNodes)
+                @inbounds for l in 1:length(elementTags[ii])
+                    elem = elementTags[ii][l]
+                    for k in 1:numNodes
+                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    fill!(f1, 0.0)
+                    @inbounds for j in 1:numIntPoints
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        if hc !== nothing && T0 !== nothing
+                            if hc isa Function
+                                error("heatConvectionVector: h cannot be a function.")
+                            end
+                            f[1,:] .= _loadvec_helper(T0, h, x, y, z, nnet, j, l, nsteps) * hc
+                        elseif qn !== nothing
+                            f[1,:] .= _loadvec_helper(qn, h, x, y, z, nnet, j, l, nsteps)
+                        elseif hs !== nothing
+                            f[1,:] .= _loadvec_helper(hs, h, x, y, z, nnet, j, l, nsteps)
+                        elseif q !== nothing
+                            f[1,:] .= _loadvec_helper(q, h, x, y, z, nnet, j, l, nsteps)
+                        elseif fx !== nothing && pdim <= 3
+                            f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim > 1 && pdim <= 3
+                            f[2,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim == 3
+                            f[3,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim == 9
+                            fill!(f, 0.0)
+                            if fx !== nothing
+                                f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fy !== nothing
+                                f[5,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fz !== nothing
+                                f[9,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fxy !== nothing
+                                f[4,:] .= _loadvec_helper(fxy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fyz !== nothing
+                                f[8,:] .= _loadvec_helper(fyz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fzx !== nothing
+                                f[3,:] .= _loadvec_helper(fzx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fyx !== nothing
+                                f[2,:] .= _loadvec_helper(fyx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fzy !== nothing
+                                f[6,:] .= _loadvec_helper(fzy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fxz !== nothing
+                                f[7,:] .= _loadvec_helper(fxz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                        end
+
+                        # -------- FOLLOWER LOAD (Total Lagrange, Piola) ----------
+                        if F !== nothing
+                            # F elemértékek
+                            Fnode = Fmap[elem]   # 9*numNodes × 1
+
+                            # F interpoláció Gauss-pontra (pont úgy, ahogy Kext-ben)
+                            Fgp = zeros(DIM, DIM)
+                            for a in 1:numNodes
+                                Na = h[a, j]
+                                Fgp .+= Na * reshape(Fnode[9a-8:9a], DIM, DIM)
+                            end
+
+                            Rgp = _rotation_from_F(Fgp)
+
+                            Jgp = det(Fgp)
+                            FinvT = inv(Fgp)'
+
+                            if !(Jgp > 0)
+                                error("Element inversion detected: det(Fgp) = $Jgp at elem=$elem, gp=$j")
+                            end
+
+                            # reference surface normal at GP from reference Jacobian
+                            t1 = Jac[:, 3*j-2]          # first tangent in reference
+                            t2 = Jac[:, 3*j-1]          # second tangent in reference
+                            nref = cross(t1, t2)
+                            Ja_ref = norm(nref)         # ugyanaz, mint amit lent Ja-ként használsz
+                            N0 = nref / Ja_ref          # unit normal in reference
+
+                            # Nanson scalar: da = |J F^{-T} N0| dA
+                            scale = norm(Jgp * FinvT * N0)
+
+                            # Piola transzformáció a traction-re
+                            for s in 1:nsteps
+                                ##f[:,s] .= Jgp * FinvT * f[:,s]
+                                #f[:, s] .= Rgp * f[:, s]          # t = R * t_loc  (itt f a traction, lokálisnak tekint
+                                #f[:, s] .= Jgp * FinvT * f[:, s]  # Piola: t0 = J F^{-T} t
+                                #f[:, s] .= Rgp * f[:, s]        # true follower: rotate traction with body
+                                #f[:, s] .*= scale               # ONLY area scaling (no FinvT acting on t)
+                                f[:, s] .= Fgp * f[:, s]        # true follower: rotate traction with body
+                            end
+                        end
+                        # ---------------------------------------------------------
+
+                        r = x
+                        H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                        ############### NANSON ######## 3D ###################################
+                        if DIM == 3 && dim == 3
+                            Ja = jacDet[j]
+                        elseif DIM == 3 && dim == 2
+                            xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                            yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                            zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                            Ja = √(xy^2 + yz^2 + zx^2)
+                        elseif DIM == 3 && dim == 1
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                        elseif DIM == 3 && dim == 0
+                            Ja = 1
+                            ############ 2D #######################################################
+                        elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = jacDet[j] * b
+                        elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * jacDet[j] * r
+                        elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                        elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                        elseif DIM == 2 && dim == 0
+                            Ja = 1
+                            ############ 1D #######################################################
+                        elseif DIM == 1 && dim == 1
+                            Ja = Jac[1, 3*j-2] * b
+                        elseif DIM == 1 && dim == 0
+                            Ja = 1
+                        else
+                            error("loadVector: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                        end
+                        f1 += H1' * f * Ja * intWeights[j]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                    end
+                    fp[nn2,1:nsteps] .+= f1
+                end
+            end
+        end
+    end
+    type = :null
+    if pdim == 3
+        type = :v3D
+    elseif pdim == 2
+        type = :v2D
+    elseif pdim == 1
+        type = :scalar
+    elseif pdim == 9
+        type = :tensor
+    else
+        error("loadVector: wrong pdim ($pdim).")
+    end
+    ts = [i for i in 0:nsteps-1]
+    if type == :v3D || type == :v2D
+        return VectorField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+
+    elseif type == :scalar
+        return ScalarField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+
+    elseif type == :tensor
+        return TensorField([], reshape(fp, :, nsteps), ts, [], nsteps, type, problem)
+    end
+end
+=#
