@@ -123,6 +123,7 @@ export probe_field
         initialStressMatrix(prob, S=tfA)
         internalForceVector(prob, P=tfA)
         externalTangentFollower(prob, [bc], F=tfA)
+        loadVector(prob, [], F=tfA)
     end
 end
 

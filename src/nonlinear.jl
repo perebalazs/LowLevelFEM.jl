@@ -1,8 +1,9 @@
 export nodePositionVector, ∇, curl, rot, div, grad
-export tangentMatrixConstitutive, tangentMatrixInitialStress
-export equivalentNodalForce, nonFollowerLoadVector
-export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, suppressDeformationAtBoundaries
-export solveDeformation, showDeformationResults
+#export tangentMatrixConstitutive, tangentMatrixInitialStress
+#export equivalentNodalForce, nonFollowerLoadVector
+#export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, suppressDeformationAtBoundaries
+#export solveDeformation, showDeformationResults
+export showDeformationResults
 export grad_xy
 export materialTangentMatrix, initialStressMatrix, externalTangentFollower, internalForceVector
 export IIPiolaKirchhoff
