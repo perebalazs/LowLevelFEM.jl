@@ -35,6 +35,7 @@ which are assembled into bilinear forms and global system matrices.
 - Visualization and plots: Gmsh-based views for displacements, stresses, strains, heat flux, with animation for dynamics; plot results along user-defined paths; show results on surfaces.
 - Coordinate systems: rotate nodal DOFs with constant or function-defined local coordinate systems (incl. curvilinear).
 - Truss structures (static, transient, modal analysis)
+- **Nonlinear solid mechanics (Total Lagrangian formulation)** Energy-based hyperelasticity with consistent stress and tangent operators, including geometric stiffness and follower loads for large-deformation problems.
 
 ## Installation
 
@@ -98,7 +99,6 @@ and in the [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stable/).
 
 ## Planned features
 
-* Other material laws (incompressible Neo-Hooke, Mooney-Rivlin, etc.)
 * Beam, shell elements
 * Contact problems (penalty, Lagrange multiplier)
 * Multithreading (partially implemented)
