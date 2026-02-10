@@ -26,7 +26,7 @@ The package is suitable not only for classical structural mechanics problems, bu
 - Geometry and meshing: integrates with `gmsh` for 2D/3D geometry, meshing, and physical groups.
 - Problem types: 3D solids, 2D plane stress/plane strain, axisymmetric; 3D/2D heat conduction and axisymmetric heat conduction.
 - Elements and order: standard line/triangle/quad/tetra/hex/pyramid/wedge with Lagrange order up to 10.
-- Materials: linear elastic (Hooke) and large deformation laws (St. Venant–Kirchhoff, compressible Neo-Hooke).
+- Materials: linear elastic (Hooke) and hyperelastic materials given by their free energy function. Direct input of 6×6 constitutive matrix is also possible.
 - Matrices: stiffness `K`, mass `M` (lumped or consistent), proportional damping `C` (Rayleigh/Caughey),
   heat conduction/capacity, latent heat, convection matrices/vectors, and generic Poisson-type operators
   for scalar and vector fields.
