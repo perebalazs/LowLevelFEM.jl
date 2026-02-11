@@ -2817,19 +2817,19 @@ function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐ�
     if K.model != M.model
         error("dampingMatrix: problem of K and M are not the same.")
     end
-    dof, dof = size(M)
-    dof2, dof2 = size(K)
-    if dof != nnz(M)
+    dof, dof = size(M.A)
+    dof2, dof2 = size(K.A)
+    if dof != nnz(M.A)
         error("dampingMatrix: M is not lumped!")
     end
     if dof != dof2
         error("dampingMatrix: sizes of M and K are not match: $dof <--> $dof2!")
     end
-    invM = spdiagm(1 ./ diag(M))
+    invM = spdiagm(1 ./ diag(M.A))
     C = spzeros(dof, dof)
-    MK = copy(K)
-    iMK = invM * K
-    C += α * M
+    MK = copy(K.A)
+    iMK = invM * K.A
+    C += α * M.A
     C += β[1] * MK
     for i in 2:length(β)
         MK *= iMK
