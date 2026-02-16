@@ -287,8 +287,8 @@ struct Problem
             dim = 3
             pdim = 3
         elseif type == :ScalarField
-            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
-            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be equal or less than three.")
+            dim0 < 1 && error("Problem: dimension of a :ScalarField problem must be one, two or three.")
+            dim0 > 3 && error("Problem: dimension of a :ScalarField problem must be equal or less than three.")
             dim = dim0
             pdim = 1
         elseif type == :VectorField
@@ -297,6 +297,12 @@ struct Problem
             dim0 > 3 && error("Problem: dimension of a :VectorField problem must be two or three.")
             dim = dim0
             pdim = dim0
+        elseif type == :TensorField
+            dim0 < 1 && error("Problem: dimension of a :TensorField problem must be one, two or three.")
+            dim0 == 1 && error("Problem: dimension of a :TensorField problem must be greater than one.")
+            dim0 > 3 && error("Problem: dimension of a :TensorField problem must be two or three.")
+            dim = dim0
+            pdim = 9
         elseif type == :Reynolds
             geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
