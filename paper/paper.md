@@ -36,10 +36,10 @@ using LowLevelFEM
 gmsh.initialize()
 gmsh.open("model.geo")
 
-mat = material("body", E=2e5, ν=0.3)
+mat  = Material("body", E=2e5, ν=0.3)
 prob = Problem([mat], type=:PlaneStress)  # :Solid, :PlaneStrain, :AxiSymmetric, :HeatConduction, ...
 
-bc   = displacementConstraint("supp", ux=0, uy=0)
+bc    = displacementConstraint("supp", ux=0, uy=0)
 force = load("load", fy=-1)
 
 u = solveDisplacement(prob, load=[force], support=[bc])
@@ -99,10 +99,10 @@ LowLevelFEM is structured around a minimal set of core abstractions. The `Proble
 
 The package separates:  
 
-- mesh and geometry handling (delegated to Gmsh),  
-- operator assembly,  
-- solution procedures,  
-- post-processing of scalar, vector, and tensor fields.  
+* mesh and geometry handling (delegated to Gmsh),  
+* operator assembly,  
+* solution procedures,  
+* post-processing of scalar, vector, and tensor fields.  
 
 This modular structure allows users to either follow a high-level workflow (`solveDisplacement`, `solveStress`) or construct custom pipelines at a lower level. The implementation leverages Julia’s multiple dispatch and just-in-time compilation to maintain readable code while achieving competitive performance.
 
