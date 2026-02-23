@@ -1327,6 +1327,7 @@ end
 
 """
     FDM(K, C, q, bc, T0, n, Δt; ϑ=0.5)
+    FDM(K, C, q, T0, n, Δt; ϑ=0.5, support=bc)
 
 Solves a transient diffusion-type problem (e.g. heat conduction) using the
 finite difference method in time (ϑ-method).

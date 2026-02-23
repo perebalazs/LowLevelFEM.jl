@@ -11,7 +11,7 @@ export rotateNodes, CoordinateSystem
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
 export plotOnPath, showOnSurface
-export openPreProcessor, openPostProcessor, setParameter, setParameters
+export openPreProcessor, openPostProcessor, setParameter, setParameters, getParameter
 export probe
 export saveField, loadField, isSaved
 export ∂x, ∂y, ∂z, ∂t
@@ -5780,6 +5780,21 @@ Types:
 """
 function setParameter(name, value)
     gmsh.parser.setNumber(name, [value])
+end
+
+"""
+    getParameter(name)
+
+Gets the value of the parameter `name`. 
+
+Returns: value
+
+Types:
+- `name`: String
+- `value`: Float64
+"""
+function getParameter(name)
+    return gmsh.parser.getNumber(name)[1]
 end
 
 """

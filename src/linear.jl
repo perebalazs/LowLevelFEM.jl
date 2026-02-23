@@ -5737,7 +5737,7 @@ function smallestPeriodTime(K, M; support=Vector{BoundaryCondition}())
 end
 
 """
-    smallestEigenValue(K, M)
+    smallestEigenValue(K, M, support=[])
                             
 Solves the largest eigenvalue for a transient problem given by stiffness (heat conduction)
 matrix `K` and the mass (heat capacity) matrix `M` (`C`).
@@ -5747,6 +5747,7 @@ Return: `λₘₐₓ`
 Types:
 - `K`: SystemMatrix
 - `M`: SystemMatrix
+- `support`: Vector{BoundaryCondition}
 - `λₘₐₓ`: Float64 
 """
 function smallestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
@@ -5766,7 +5767,7 @@ function smallestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{Bou
 end
 
 """
-    largestEigenValue(K, M)
+    largestEigenValue(K, M, support=[])
                             
 Solves the smallest eigenvalue for a transient problem given by stiffness (heat conduction)
 matrix `K` and the mass (heat capacity) matrix `M` (`C`).
@@ -5776,6 +5777,7 @@ Return: `λₘᵢₙ`
 Types:
 - `K`: SystemMatrix
 - `M`: SystemMatrix
+- `support`: Vector{BoundaryCondition}
 - `λₘᵢₙ`: Float64 
 """
 function largestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
