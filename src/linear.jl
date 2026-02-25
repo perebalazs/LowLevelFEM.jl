@@ -3039,21 +3039,6 @@ end
     end
 end
 
-#=
-@inline function _loadvec_helper(f, h, x, y, z, nnet, j, l, nsteps)
-    if f isa Number
-        return fill(f, nsteps)
-    elseif f isa Function
-        return fill(f(x, y, z), nsteps)
-    elseif f isa ScalarField && isNodal(f)
-        v = h[:, j]' * f.a[nnet[l, :],:]
-        return vec(v)
-    else
-        error("loadVector: internal error.")
-    end
-end
-=#
-
 """
     loadVector(problem, loads; F=nothing)
                             

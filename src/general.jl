@@ -15,6 +15,7 @@ export openPreProcessor, openPostProcessor, setParameter, setParameters, getPara
 export probe
 export saveField, loadField, isSaved
 export ∂x, ∂y, ∂z, ∂t
+export structured_rect_mesh, structured_box_mesh
 
 """
     Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
@@ -4997,8 +4998,10 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     elseif ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
+    elseif factor != 0
+        gmsh.view.option.setNumber(uvec, "VectorType", 5)
+        gmsh.view.option.setNumber(uvec, "DisplacementFactor", factor)
     end
-    gmsh.view.option.setNumber(uvec, "DisplacementFactor", factor)
     return uvec
 end
 
@@ -5073,8 +5076,9 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStrainResults(E, comp; name=comp, visible=false, smooth=true)
+function showStrainResults(E0, comp; name=comp, visible=false, smooth=true)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    E = nodesToElements(E0)
     problem = E.model
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
@@ -5239,8 +5243,9 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showStressResults(S::TensorField, comp; name=comp, visible=false, smooth=false)
+function showStressResults(S0::TensorField, comp; name=comp, visible=false, smooth=false)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
+    S = nodesToElements(S0)
     problem = S.model
     gmsh.model.setCurrent(problem.name)
     gmsh.option.setNumber("Mesh.VolumeEdges", 0)
@@ -5348,7 +5353,8 @@ Types:
 - `smooth`: Boolean
 - `tag`: Integer
 """
-function showHeatFluxResults(S::VectorField, comp; name=comp, visible=false, smooth=true, factor=0)
+function showHeatFluxResults(S0::VectorField, comp; name=comp, visible=false, smooth=true, factor=0)
+    S = nodesToElements(S0)
     problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
@@ -5447,7 +5453,8 @@ function showHeatFluxResults(S::VectorField, comp; name=comp, visible=false, smo
     return SS
 end
 
-function showScalarResults(S; name="ScalarField", visible=false, smooth=false, factor=0)
+function showScalarResults(S0; name="ScalarField", visible=false, smooth=false, factor=0)
+    S = nodesToElements(S0)
     problem = S.model
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
     gmsh.model.setCurrent(problem.name)
@@ -5957,4 +5964,230 @@ Types:
 """
 function isSaved(fileName::String)
     return isfile(fileName * "-LLF-Data.jld2")
+end
+
+"""
+    structured_rect_mesh(; x0=0.0, y0=0.0,
+                           lx=1.0, ly=1.0,
+                           n=10,
+                           dx=lx/n, dy=ly/n,
+                           order=1)
+
+Create a structured quadrilateral mesh of a rectangular 2D domain using Gmsh.
+
+The domain is defined by its lower-left corner `(x0, y0)` and its dimensions
+`lx × ly`. A transfinite structured mesh is generated and recombined into
+quadrilateral elements.
+
+# Keyword Arguments
+- `x0, y0`: Coordinates of the lower-left corner.
+- `lx, ly`: Domain dimensions.
+- `n`: Default subdivision parameter (used to define `dx`, `dy`).
+- `dx, dy`: Target element sizes in x and y directions.
+- `order`: Polynomial order of the finite elements.
+
+# Physical Groups
+The following physical groups are created:
+- 1D boundaries: `"bottom"`, `"right"`, `"top"`, `"left"`
+- 2D domain: `"surface"`
+- 0D corner points: `"leftbottom"`, `"rightbottom"`, `"righttop"`, `"lefttop"`
+
+# Notes
+- A transfinite structured mesh is enforced.
+- Elements are recombined into quadrilaterals.
+- The mesh is generated but not written to file.
+- The function assumes that Gmsh is already initialized.
+
+Returns `nothing`.
+
+Note: These helper functions are primarily intended for rapid prototyping,
+testing and educational examples in LowLevelFEM workflows.
+"""
+function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1)
+
+    gmsh.option.setNumber("General.Verbosity", 0)
+
+    # --------------------------------------------------
+    # Geometry
+    # --------------------------------------------------
+    # Box: origin (0,0,0), size l x l x l
+    box = gmsh.model.occ.addRectangle(x0, y0, 0.0, lx, ly)
+
+    gmsh.model.occ.synchronize()
+    #return
+
+    # --------------------------------------------------
+    # Physical groups
+    # --------------------------------------------------
+    gmsh.model.addPhysicalGroup(1, [1], -1, "bottom")
+    gmsh.model.addPhysicalGroup(1, [2], -1, "right")
+    gmsh.model.addPhysicalGroup(1, [3], -1, "top")
+    gmsh.model.addPhysicalGroup(1, [4], -1, "left")
+
+    gmsh.model.addPhysicalGroup(2, [1], -1, "surface")
+
+    gmsh.model.addPhysicalGroup(0, [1], -1, "leftbottom")
+    gmsh.model.addPhysicalGroup(0, [2], -1, "rightbottom")
+    gmsh.model.addPhysicalGroup(0, [3], -1, "righttop")
+    gmsh.model.addPhysicalGroup(0, [4], -1, "lefttop")
+
+    # --------------------------------------------------
+    # Mesh settings (structured hex mesh)
+    # --------------------------------------------------
+    #gmsh.option.setNumber("Mesh.Algorithm3D", 1)      # Delaunay for recombination
+    gmsh.option.setNumber("Mesh.RecombineAll", 1)
+    #gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 1)
+
+    #gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
+
+    d = min(dx, dy)
+
+    gmsh.model.mesh.setTransfiniteCurve(1, ceil(lx / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(3, ceil(lx / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(2, ceil(ly / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(4, ceil(ly / d) + 1)
+
+    gmsh.model.mesh.setTransfiniteSurface(1)
+
+    gmsh.option.setNumber("Mesh.ElementOrder", order)
+
+    # Characteristic length control
+    #lc = min(dx, dy)
+    #gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc)
+    #gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
+
+    # --------------------------------------------------
+    # Generate mesh
+    # --------------------------------------------------
+    gmsh.model.mesh.generate(2)
+
+    # --------------------------------------------------
+    # Save
+    # --------------------------------------------------
+    #gmsh.write("cube.msh")
+
+    #gmsh.finalize()
+
+    return nothing
+end
+
+"""
+    structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0,
+                          lx=1.0, ly=1.0, lz=1.0,
+                          n=10,
+                          dx=lx/n, dy=ly/n, dz=lz/n,
+                          order=1)
+
+Create a structured hexahedral mesh of a rectangular 3D domain using Gmsh.
+
+The domain is defined by its lower-front-left corner `(x0, y0, z0)` and its
+dimensions `lx × ly × lz`. A fully transfinite structured mesh is generated
+and recombined into hexahedral elements.
+
+# Keyword Arguments
+- `x0, y0, z0`: Coordinates of the origin corner.
+- `lx, ly, lz`: Domain dimensions.
+- `n`: Default subdivision parameter.
+- `dx, dy, dz`: Target element sizes in each direction.
+- `order`: Polynomial order of the finite elements.
+
+# Physical Groups
+The following physical groups are created:
+- 2D boundary faces: `"left"`, `"right"`, `"front"`, `"rear"`,
+  `"bottom"`, `"top"`
+- 3D domain: `"volume"`
+
+# Notes
+- A transfinite structured mesh is enforced in all directions.
+- Elements are recombined into hexahedra.
+- The mesh is generated but not written to file.
+- The function assumes that Gmsh is already initialized.
+
+Returns `nothing`.
+
+Note: These helper functions are primarily intended for rapid prototyping,
+testing and educational examples in LowLevelFEM workflows.
+"""
+function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1)
+
+    gmsh.option.setNumber("General.Verbosity", 0)
+
+    # --------------------------------------------------
+    # Geometry
+    # --------------------------------------------------
+    # Box: origin (0,0,0), size l x l x l
+    box = gmsh.model.occ.addBox(x0, y0, z0, lx, ly, lz)
+
+    gmsh.model.occ.synchronize()
+    #return
+
+    # --------------------------------------------------
+    # Physical groups
+    # --------------------------------------------------
+    gmsh.model.addPhysicalGroup(2, [1], -1, "left")
+    gmsh.model.addPhysicalGroup(2, [2], -1, "right")
+    gmsh.model.addPhysicalGroup(2, [6], -1, "front")
+    gmsh.model.addPhysicalGroup(2, [5], -1, "rear")
+    gmsh.model.addPhysicalGroup(2, [3], -1, "bottom")
+    gmsh.model.addPhysicalGroup(2, [4], -1, "top")
+
+    gmsh.model.addPhysicalGroup(3, [1], -1, "volume")
+
+    # --------------------------------------------------
+    # Mesh settings (structured hex mesh)
+    # --------------------------------------------------
+    #gmsh.option.setNumber("Mesh.Algorithm3D", 1)      # Delaunay for recombination
+    gmsh.option.setNumber("Mesh.RecombineAll", 1)
+    #gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 1)
+
+    #gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
+
+    d = min(dx, dy)
+
+    gmsh.model.mesh.setTransfiniteCurve(9, ceil(lx / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(10, ceil(lx / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(11, ceil(lx / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(12, ceil(lx / d) + 1)
+
+    gmsh.model.mesh.setTransfiniteCurve(2, ceil(ly / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(4, ceil(ly / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(6, ceil(ly / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(8, ceil(ly / d) + 1)
+
+    gmsh.model.mesh.setTransfiniteCurve(1, ceil(lz / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(3, ceil(lz / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(5, ceil(lz / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(7, ceil(lz / d) + 1)
+
+    gmsh.model.mesh.setTransfiniteSurface(1)
+    gmsh.model.mesh.setTransfiniteSurface(2)
+    gmsh.model.mesh.setTransfiniteSurface(3)
+    gmsh.model.mesh.setTransfiniteSurface(4)
+    gmsh.model.mesh.setTransfiniteSurface(5)
+    gmsh.model.mesh.setTransfiniteSurface(6)
+
+    gmsh.model.mesh.setTransfiniteVolume(1)
+
+    #gmsh.model.mesh.setTransfiniteAutomatic()
+
+    gmsh.option.setNumber("Mesh.ElementOrder", order)
+
+    # Characteristic length control
+    #lc = min(dx, dy, dz)
+    #gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc)
+    #gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
+
+    # --------------------------------------------------
+    # Generate mesh
+    # --------------------------------------------------
+    gmsh.model.mesh.generate(3)
+
+    # --------------------------------------------------
+    # Save
+    # --------------------------------------------------
+    #gmsh.write("cube.msh")
+
+    #gmsh.finalize()
+
+    return nothing
 end
