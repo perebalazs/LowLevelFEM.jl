@@ -1,5 +1,6 @@
 export Problem, Material, getEigenVectors, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
+export LoadCondition
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export mergeFields
@@ -249,6 +250,136 @@ struct Problem
     thickness::Float64
     non::Int64
     geometry::Geometry
+    field::Symbol
+    rhs_field::Symbol
+    Problem() = new()
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs)
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none,
+        nameTopSurface="", nameVolume="", dim::Int=3,
+        field::Symbol=:unknown, rhs_field::Symbol=:rhs)
+        if type == :dummy
+            return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field)
+        end
+        pdim = 3
+        dim0 = dim
+
+        #if Sys.CPU_THREADS != Threads.nthreads()
+        #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
+        #end
+        geometry = Geometry()
+
+        if type == :Solid
+            dim = 3
+            pdim = 3
+        elseif type == :PlaneStress
+            dim = 2
+            pdim = 2
+        elseif type == :PlaneStrain
+            dim = 2
+            pdim = 2
+        elseif type == :AxiSymmetric
+            dim = 2
+            pdim = 2
+        elseif type == :PlaneHeatConduction
+            dim = 2
+            pdim = 1
+        elseif type == :HeatConduction
+            dim = 3
+            pdim = 1
+        elseif type == :AxiSymmetricHeatConduction
+            dim = 2
+            pdim = 1
+        elseif type == :Truss
+            dim = 3
+            pdim = 3
+        elseif type == :ScalarField
+            dim0 < 1 && error("Problem: dimension of a :ScalarField problem must be one, two or three.")
+            dim0 > 3 && error("Problem: dimension of a :ScalarField problem must be equal or less than three.")
+            dim = dim0
+            pdim = 1
+        elseif type == :VectorField
+            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
+            dim0 == 1 && error("Problem: dimension of a :VectorField problem must be greater than one.")
+            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be two or three.")
+            dim = dim0
+            pdim = dim0
+        elseif type == :TensorField
+            dim0 < 1 && error("Problem: dimension of a :TensorField problem must be one, two or three.")
+            dim0 == 1 && error("Problem: dimension of a :TensorField problem must be greater than one.")
+            dim0 > 3 && error("Problem: dimension of a :TensorField problem must be two or three.")
+            dim = dim0
+            pdim = 9
+        elseif type == :Reynolds
+            geometry = Geometry(nameTopSurface, nameVolume)
+            dim = geometry.dim
+            pdim = 1
+        else
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Truss`, `:ScalarField`, `VectorField`.
+            Now problem type = $type ????")
+        end
+        if !isa(mat, Vector)
+            error("Problem: materials are not arranged in a vector. Put them in [...]")
+        end
+        name = gmsh.model.getCurrent()
+        gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
+        gmsh.option.setString("View.Format", "%.6g")
+
+        material = mat
+
+        if bandwidth ≠ :none
+            elemTags = []
+            for ipg in 1:length(material)
+                phName = material[ipg].phName
+                dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+                for idm in 1:length(dimTags)
+                    dimTag = dimTags[idm]
+                    edim = dimTag[1]
+                    etag = dimTag[2]
+                    if edim != dim && (type != :Truss || edim != 1)
+                        error("Problem: dimension of the problem ($dim) is different than the dimension of finite elements ($edim).")
+                    end
+                    elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
+                    for i in 1:length(elementTags)
+                        if length(elementTags[i]) == 0
+                            error("Problem: No mesh in model '$name'.")
+                        end
+                        for j in 1:length(elementTags[i])
+                            push!(elemTags, elementTags[i][j])
+                        end
+                    end
+                end
+            end
+
+            if bandwidth != :RCMK && bandwidth != :Hilbert && bandwidth != :Metis && bandwidth != :none
+                error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
+            end
+
+            #method = bandwidth == :none ? :RCMK : bandwidth
+            oldTags, newTags = gmsh.model.mesh.computeRenumbering(bandwidth, elemTags)
+            #permOldTags = sortperm(oldTags)
+            #sortNewTags = 1:length(oldTags)
+            #newTags[permOldTags] = sortNewTags
+            gmsh.model.mesh.renumberNodes(oldTags, newTags)
+        end
+
+        nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes()
+        non = length(nodeTags)
+        return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field)
+    end
+end
+#=
+struct Problem
+    name::String
+    type::Symbol
+    dim::Int64
+    pdim::Int64
+    material::Vector{Material}
+    thickness::Float64
+    non::Int64
+    geometry::Geometry
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim::Int=3)
@@ -362,6 +493,7 @@ struct Problem
         return new(name, type, dim, pdim, material, thickness, non, geometry)
     end
 end
+=#
 
 """
     Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
@@ -1450,6 +1582,23 @@ See also:
 """
 struct BoundaryCondition
     phName::String
+    problem::Union{Problem,Nothing}
+    values::Dict{Symbol,Union{Number,Function,ScalarField}}
+
+    function BoundaryCondition(phName::String; problem=nothing, kwargs...)
+        vals = Dict{Symbol,Union{Number,Function,ScalarField}}()
+        for (k, v) in kwargs
+            if v === nothing
+                continue
+            end
+            vals[k] = v
+        end
+        return new(phName, problem, vals)
+    end
+end
+#=
+struct BoundaryCondition
+    phName::String
 
     # Dirichlet-type (primary variables)
     ux::Union{Nothing, Number, Function, ScalarField}
@@ -1498,10 +1647,119 @@ struct BoundaryCondition
         return new(values...)
     end
 end
+=#
 
+function BoundaryConditionFields(bc::BoundaryCondition)
+    return keys(bc.values)
+end
+#=
 function BoundaryConditionFields(bc::BoundaryCondition)
     return filter(f -> getfield(bc, f) !== nothing,
                   fieldnames(BoundaryCondition))
+end
+=#
+
+"""
+    LoadCondition(phName; problem=nothing, kwargs...)
+
+Generic load specification for assembling right-hand side vectors.
+
+- `phName` is a Gmsh physical group name.
+- `problem` optionally binds the load to a specific field (required for multi-field).
+- `values` stores component-wise load data, such as `fx`, `fy`, `q`, `σxx`, etc.,
+  as `Number`, `Function`, or `ScalarField`.
+
+The interpretation (surface traction vs body force vs flux, etc.) is decided
+by the assembly routine, not by this struct.
+"""
+struct LoadCondition
+    phName::String
+    problem::Union{Problem,Nothing}
+    values::Dict{Symbol,Union{Number,Function,ScalarField}}
+
+    function LoadCondition(phName::String; problem=nothing, kwargs...)
+        vals = Dict{Symbol,Union{Number,Function,ScalarField}}()
+        for (k, v) in kwargs
+            vals[k] = v
+        end
+        return new(phName, problem, vals)
+    end
+end
+
+function loads_for_problem(loads::Vector{LoadCondition}, P::Problem)
+    return filter(lc -> lc.problem === nothing || lc.problem === P, loads)
+end
+
+"""
+    _extract_rhs_components(problem, vals)
+
+Extract RHS components using `problem.rhs_field` prefix.
+Returns a Dict{String,Any} mapping component string -> value.
+"""
+function _extract_rhs_components(problem::Problem, vals::Dict)
+    prefix = String(problem.rhs_field)
+    comps = Dict{String,Union{Number,Function,ScalarField}}()
+
+    for (sym, val) in vals
+        s = String(sym)
+        if startswith(s, prefix)
+            comp = s[length(prefix)+1:end]
+            comps[comp] = val
+        end
+    end
+    return comps
+end
+
+"""
+    _check_load_keys(problem, vals)
+
+Validate load keys. Throws error if invalid combination is detected.
+"""
+function _check_load_keys(problem::Problem, vals::Dict)
+
+    rhs_comps = _extract_rhs_components(problem, vals)
+
+    p = get(vals, :p, nothing)
+    T = get(vals, :T, nothing)
+    h = get(vals, :h, nothing)
+    qn = get(vals, :qn, nothing)
+    hs = get(vals, :hs, nothing)
+    q = get(vals, :q, nothing)
+
+    # --- Solid-like problems ---
+    if problem.type in (:Solid, :PlaneStress, :PlaneStrain, :AxiSymmetric)
+
+        if p !== nothing && !isempty(rhs_comps)
+            error("loadVector: pressure and RHS components cannot be given together.")
+        end
+
+        # --- Heat problems ---
+    elseif problem.type in (:HeatConduction,
+        :PlaneHeatConduction,
+        :AxiSymmetricHeatConduction)
+
+        count = 0
+        for x in (hs, qn, h, q)
+            count += x !== nothing ? 1 : 0
+        end
+
+        if count > 1
+            error("loadVector: multiple heat-type loads defined in same LoadCondition.")
+        end
+    end
+
+    # unknown keys
+    allowed = Set([:p, :T, :h, :qn, :hs, :q])
+    for (sym, _) in vals
+        s = String(sym)
+        if startswith(s, String(problem.rhs_field))
+            continue
+        elseif sym in allowed
+            continue
+        else
+            error("loadVector: unknown load key '$sym'.")
+        end
+    end
 end
 
 using SparseArrays
@@ -3770,6 +4028,85 @@ function normalVector1D(problem::Problem, phName::String)
     return VectorField(normalvectors, [;;], [0.0], numElem, 1, :v3D, problem)
 end
 
+function parse_component(sym::Symbol, problem::Problem)
+    s = String(sym)
+    pf = String(problem.field)
+
+    if !startswith(s, pf)
+        return nothing
+    end
+
+    comp = s[length(pf)+1:end]   # lehet "", "x", "xy", stb.
+
+    return comp
+end
+
+function component_index(problem::Problem, suffix::String)
+
+    if problem.pdim == 1
+        return 1
+
+    elseif problem.pdim == 2 || problem.pdim == 3
+        if suffix == "x"
+            return 1
+        elseif suffix == "y"
+            return 2
+        elseif suffix == "z"
+            return 3
+        else
+            error("Unknown component '$suffix'")
+        end
+
+    elseif problem.pdim == 9
+        tensor_map = Dict(
+            "xx"=>1, "yx"=>2, "zx"=>3,
+            "xy"=>4, "yy"=>5, "zy"=>6,
+            "xz"=>7, "yz"=>8, "zz"=>9
+        )
+
+        if haskey(tensor_map, suffix)
+            return tensor_map[suffix]
+        else
+            error("Unknown tensor component '$suffix'")
+        end
+
+    else
+        error("Unsupported pdim $(problem.pdim)")
+    end
+end
+
+@inline function nodeToDof(problem::Problem, node::Int, comp::Int)
+    return (node - 1) * problem.pdim + comp
+end
+
+function nodesOnPhysicalGroup(problem::Problem, phName::String)
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    isempty(dimTags) && error("Physical group '$phName' not found.")
+
+    nodes = Int[]
+
+    for dimTag in dimTags
+        edim = dimTag[1]
+        etag = dimTag[2]
+
+        # csak valódi perem entitás
+        if edim < problem.dim
+            elementTypes, elementTags, nodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for nt in nodeTags
+                append!(nodes, nt)
+            end
+        else
+            error("Cannot apply Dirichlet BC on entity of dimension $edim in $(problem.dim)D problem.")
+        end
+    end
+
+    return unique(nodes)
+end
+
 """
     constrainedDoFs(problem, supports)
 
@@ -3782,6 +4119,41 @@ Types:
 - `supports`: Vector{BoundaryCondition}
 - `DoFs`: Vector{Int64}
 """
+function constrainedDoFs(problem::Problem,
+    supports::Vector{BoundaryCondition})
+
+    dofs = Int[]
+
+    for bc in supports
+
+        # multi-field check
+        if bc.problem !== nothing && bc.problem !== problem
+            continue
+        end
+
+        node_ids = nodesOnPhysicalGroup(problem, bc.phName)
+
+        for (sym, val) in bc.values
+            comp = String(sym)
+            fld = String(problem.field)
+
+            if !startswith(comp, fld)
+                continue
+            end
+
+            suffix = comp[length(fld)+1:end]
+
+            cidx = component_index(problem, suffix)
+
+            for node in node_ids
+                push!(dofs, (node - 1) * problem.pdim + cidx)
+            end
+        end
+    end
+
+    return unique(dofs)
+end
+#=
 function constrainedDoFs(problem, supports)
     if !isa(supports, Vector)
         error("constrainedDoFs: supports are not arranged in a vector. Put them in [...]")
@@ -3902,6 +4274,7 @@ function constrainedDoFs(problem, supports)
     
     return cdofs
 end
+=#
 
 """
     allDoFs(problem)
