@@ -1677,6 +1677,9 @@ struct LoadCondition
     problem::Union{Problem,Nothing}
     values::Dict{Symbol,Union{Number,Function,ScalarField}}
 
+    function LoadCondition(name, prob, vals)
+        return new(name, prob, vals)        
+    end
     function LoadCondition(phName::String; problem=nothing, kwargs...)
         vals = Dict{Symbol,Union{Number,Function,ScalarField}}()
         for (k, v) in kwargs
@@ -1749,7 +1752,7 @@ function _check_load_keys(problem::Problem, vals::Dict)
     end
 
     # unknown keys
-    allowed = Set([:p, :T, :h, :qn, :hs, :q])
+    allowed = Set([:p, :T, :h, :qn, :hs, :q, :T∞])
     for (sym, _) in vals
         s = String(sym)
         if startswith(s, String(problem.rhs_field))
@@ -3324,7 +3327,9 @@ function scalarField(problem, dataField)
     for i in 1:length(dataField)
         #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
         name = dataField[i].phName
-        f = dataField[i].f
+        #f = dataField[i].f
+        vals = dataField[i].values
+        f = get(vals, :f, nothing)
         if f === nothing
             error("scalarField: f is not defined")
         end

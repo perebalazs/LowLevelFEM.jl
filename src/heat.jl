@@ -6,6 +6,7 @@ export applyHeatConvection!
 export solveTemperature, solveHeatFlux
 export initialTemperature, initialTemperature!
 export FDM
+export BoundaryCondition_to_LoadCondition
 
 """
     heatConductionMatrix(problem)
@@ -620,6 +621,15 @@ function heatSourceVector(problem, loads)
     return loadVector(problem, loads)
 end
 
+function BoundaryCondition_to_LoadCondition(bc::Vector{BoundaryCondition})
+    lc = LoadCondition[]
+    for cond in bc
+        lcond = LoadCondition(cond.phName, cond.problem, cond.values)
+        push!(lc, lcond)
+    end
+    return lc
+end
+
 """
     heatConvectionVector(problem, heatConvection)
 
@@ -640,7 +650,8 @@ function heatConvectionVector(problem, heatConvection)
     if !isa(heatConvection, Vector)
         error("heatConvectionVector: heat convections are not arranged in a vector. Put them in [...]")
     end
-    return loadVector(problem, heatConvection)
+    hc = BoundaryCondition_to_LoadCondition(heatConvection)
+    return loadVector(problem, hc)
 end
 
 """
@@ -1034,7 +1045,7 @@ This is the **high-level, user-facing temperature solver**.
   vector, then solves the reduced linear system.
 """
 function solveTemperature(problem::Problem; 
-                          heatFlux::Vector{BoundaryCondition}=BoundaryCondition[], 
+                          heatFlux::Vector{LoadCondition}=LoadCondition[], 
                           temperatureConstraint::Vector{BoundaryCondition}=BoundaryCondition[], 
                           heatConvection::Vector{BoundaryCondition}=BoundaryCondition[]
                           )

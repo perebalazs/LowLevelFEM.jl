@@ -2879,13 +2879,15 @@ function elasticSupportMatrix(problem, elSupports)
     for n in 1:length(elSupports)
         #name, kx, ky, kz = elSupports[n]
         name = elSupports[n].phName
-        kx = elSupports[n].kx
-        ky = elSupports[n].ky
-        kz = elSupports[n].kz
+        vals = elSupports[n].values
+        kx = get(vals, :kx, nothing)
+        ky = get(vals, :ky, nothing)
+        kz = get(vals, :kz, nothing)
         kx = kx !== nothing ? kx : 0
         ky = ky !== nothing ? ky : 0
         kz = kz !== nothing ? kz : 0
-        hc = elSupports[n].h !== nothing ? elSupports[n].h : 0
+        h = get(vals, :h, nothing)
+        hc = h !== nothing ? h : 0
         if problem.pdim == 3
             f = [0, 0, 0]
         elseif problem.pdim == 2
@@ -2945,10 +2947,10 @@ function elasticSupportMatrix(problem, elSupports)
                             y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
                         end
-                        if elSupports[n].h !== nothing && problem.pdim == 1
+                        if h !== nothing && problem.pdim == 1
                             f[1] = hc
                         end
-                        if elSupports[n].kx !== nothing
+                        if kx !== nothing
                             f[1] = isa(kx, Function) ? kx(x, y, z) : kx
                         end
                         if problem.pdim > 1
@@ -3130,8 +3132,8 @@ function loadVector(problem, loads; F=nothing)
         h = get(vals, :h, nothing)
         qn = get(vals, :qn, nothing)
         hs = get(vals, :hs, nothing)
-        hc = get(vals, :hc, nothing)
-        T0 = get(vals, :T0, nothing)
+        hc = get(vals, :h, nothing)
+        T0 = get(vals, :T∞, nothing)
         q = get(vals, :q, nothing)
 
         # --- initialize RHS components ---
@@ -3170,7 +3172,7 @@ function loadVector(problem, loads; F=nothing)
         end
 
         # elementwise → nodal conversion
-        for ref in (fx, fy, fz, p, T, h, qn, hs, q, fxy, fyz, fzx, fyx, fzy, fxz)
+        for ref in (fx, fy, fz, p, T, hc, qn, hs, q, fxy, fyz, fzx, fyx, fzy, fxz)
             if ref isa ScalarField && isElementwise(ref)
                 ref = elementsToNodes(ref)
             end
@@ -3764,7 +3766,7 @@ This is the **high-level, user-facing displacement solver**.
   routine after assembling the stiffness matrix and load vector.
 """
 function solveDisplacement(problem::Problem; 
-                           load::Vector{BoundaryCondition}=BoundaryCondition[], 
+                           load::Vector{LoadCondition}=LoadCondition[], 
                            support::Vector{BoundaryCondition}=BoundaryCondition[], 
                            elasticSupport::Vector{BoundaryCondition}=BoundaryCondition[],
                            condensed=true,
