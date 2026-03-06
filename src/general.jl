@@ -515,16 +515,86 @@ end
 ndofs(P::Problem) = P.non * P.pdim
 
 """
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem)
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem)
+    SystemMatrix_(blocks::Matrix{SystemMatrix})
 
-Structure containing the stiffness/mass/heat conduction/heat capacity/latent heat/... matrix and the 
-associated `Problem` (with its trial field) and another `Problem` (with a test field).
+Construct a global block system matrix from a matrix of `SystemMatrix` blocks.
 
-Types:
-- `A`: SparseMatrixCSC{Float64}
-- `model`: Problem
-- `test_model`: Problem
+This function assembles a global sparse matrix from a block structure where each
+block represents the discretization of a bilinear form between two fields
+(test and trial problems). The blocks are assumed to correspond to different
+fields in a multifield formulation.
+
+The function performs the following steps:
+
+1. Determine the ordering of **trial problems** from the columns of the block matrix.
+
+2. Determine the ordering of **test problems** from the rows of the block matrix.
+
+3. Verify that the block system is **square in the field sense**, i.e.
+   
+       trial_problems[i] === test_problems[i]
+   
+   for all fields.
+
+4. Compute global DOF offsets for each field.
+
+5. Assemble the global sparse matrix by inserting the entries of each block
+   at the appropriate offset position.
+
+Each block `blocks[i,j]` must satisfy
+
+    blocks[i,j].test_model  → test Problem (row space)
+    blocks[i,j].model       → trial Problem (column space)
+    blocks[i,j].A           → sparse block matrix
+
+The resulting global matrix has the structure
+
+    [ A₁₁  A₁₂  ⋯ ]
+    [ A₂₁  A₂₂  ⋯ ]
+    [ ⋮    ⋮    ⋱ ]
+
+where `Aᵢⱼ` couples the `j`-th trial field with the `i`-th test field.
+
+# Arguments
+
+- `blocks::Matrix{SystemMatrix}`: Matrix of block matrices representing the
+  bilinear operators between fields.
+
+# Returns
+
+- `SystemMatrix`: A global system matrix containing the assembled sparse matrix
+  and metadata about the involved `Problem`s and their DOF offsets.
+
+# Errors
+
+An error is thrown if:
+
+- no trial or test problems are found in the block matrix,
+- the block system is not square in the field sense,
+- a block contains inconsistent matrix dimensions.
+
+# Example
+
+```julia
+Auu = ∫(ε(Pu) ⋅ C ⋅ ε(Pu))
+Aup = ∫(Div(Pu) ⋅ Id(Pp))
+Apu = ∫(Div(Pu) ⋅ Id(Pp))'
+App = ∫(Grad(Pp) ⋅ Grad(Pp) * δ)
+
+K = SystemMatrix_([
+    Auu  Aup
+    Apu  App
+])
+```
+
+This assembles the global block system
+
+```
+[ Kuu  Kup ]
+[ Kpu  Kpp ]
+```
+
+corresponding to a two-field problem.  
 """
 struct SystemMatrix
     A::SparseMatrixCSC
@@ -1545,7 +1615,11 @@ end
 """
     SystemVector
 
-Unified global RHS vector for single-field and multi-field systems.
+Unified global right-hand-side (RHS) vector for both single-field and
+multi-field finite element systems.
+
+This type stores the global load vector together with metadata describing
+how the vector is associated with one or multiple `Problem`s.
 
 # Fields
 - `a::Vector{Float64}`
@@ -1553,17 +1627,29 @@ Unified global RHS vector for single-field and multi-field systems.
 
 Single-field metadata:
 - `model::Union{Problem,Nothing}`
-    Problem for single-field case.
+    The associated `Problem` in the single-field case.
 
 Multi-field metadata:
 - `problems::Union{Vector{Problem},Nothing}`
-    Ordered list of Problems (trial order).
+    Ordered list of `Problem`s defining the block structure of the system.
+    The ordering corresponds to the trial-field ordering used when assembling
+    the global `SystemMatrix`.
+
 - `offsets::Union{Vector{Int},Nothing}`
-    Starting global DOF indices of each Problem.
+    Starting global DOF index of each field in the concatenated vector.
 
 # Semantics
-- If `problems === nothing` → single-field case.
-- If `problems !== nothing` → multi-field case.
+- If `problems === nothing` → **single-field system**
+- If `problems !== nothing` → **multi-field system**
+
+In the multi-field case the global vector has the structure
+
+    a = [ a₁
+          a₂
+          ⋮ ]
+
+where each subvector `aᵢ` corresponds to the RHS contribution of the
+`i`-th field (Problem) in the system.
 """
 struct SystemVector
     a::Vector{Float64}
@@ -1576,11 +1662,32 @@ struct SystemVector
     offsets::Union{Vector{Int},Nothing}
 end
 
+"""
+    SystemVector(field)
 
-# ============================================================
-# Single-field constructor
-# ============================================================
+Construct a global RHS vector from a single finite element field.
 
+Supported field types:
+
+    ScalarField
+    VectorField
+    TensorField
+
+The field values are extracted from the first load step
+
+    field.a[:,1]
+
+and stored as a global vector.
+
+# Arguments
+- `field`: Field object containing nodal RHS values.
+
+# Returns
+- `SystemVector_` representing a single-field RHS vector.
+
+# Notes
+This constructor assumes that the field contains a single load step.
+"""
 function SystemVector(field::Union{ScalarField,VectorField,TensorField})
 
     # assume single load step
@@ -1589,20 +1696,56 @@ function SystemVector(field::Union{ScalarField,VectorField,TensorField})
     return SystemVector(a, field.model, nothing, nothing)
 end
 
-
-# ============================================================
-# Multi-field constructor (explicit order)
-# ============================================================
-
 """
     SystemVector(fields::Vector)
 
-Construct global RHS vector from a vector of
-ScalarField / VectorField / TensorField objects.
+Construct a global RHS vector for a multifield system from a vector of
+field objects (`ScalarField`, `VectorField`, or `TensorField`).
 
-Order of fields determines block ordering.
-User is responsible for matching this order
-to the SystemMatrix trial ordering.
+The order of fields determines the block ordering of the global vector.
+This ordering must be consistent with the ordering used when assembling
+the corresponding `SystemMatrix`.
+
+# Arguments
+- `fields::Vector`
+    Vector of field objects providing RHS values for each field.
+
+# Returns
+- `SystemVector` containing the concatenated global RHS vector and
+  metadata describing the involved `Problem`s and their DOF offsets.
+
+# Global structure
+If the fields correspond to Problems `P₁, P₂, …`, the resulting vector is
+
+    a = [ a₁
+          a₂
+          ⋮ ]
+
+where each `aᵢ` is the RHS vector of field `Pᵢ`.
+
+# Errors
+An error is thrown if:
+- the field list is empty,
+- the same `Problem` appears multiple times,
+- the local RHS size does not match the DOF count of its `Problem`.
+
+# Example
+```julia
+fu = bodyForce(Pu)
+fp = pressureLoad(Pp)
+
+rhs = SystemVector_([fu, fp])
+````
+
+This constructs a global RHS vector for a two-field system with ordering
+
+```
+[ u
+  p ]
+```
+
+See also: [`SystemMatrix_`](@ref)
+
 """
 function SystemVector(fields::Vector)
 

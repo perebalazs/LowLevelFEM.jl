@@ -21,6 +21,7 @@ include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")
 include("poisson.jl")
+include("multifield.jl")
 #include("fieldtools.jl")
 #using .FieldTools
 include("extra.jl")
