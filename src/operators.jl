@@ -2330,13 +2330,13 @@ end
 Addition and subtraction of system matrices.
 """
 function +(A::SystemMatrix, B::SystemMatrix)
-    SystemMatrix(A.A + B.A, A.model)
+    SystemMatrix(A.A + B.A, A.model, A.test_model, A.problems, A.offsets)
 end
 function -(A::SystemMatrix, B::SystemMatrix)
-    SystemMatrix(A.A - B.A, A.model)
+    SystemMatrix(A.A - B.A, A.model, A.test_model, A.problems, A.offsets)
 end
 function -(A::SystemMatrix)
-    SystemMatrix(-A.A, A.model)
+    SystemMatrix(-A.A, A.model, A.test_model, A.problems, A.offsets)
 end
 
 
@@ -2350,7 +2350,7 @@ import Base:copy
 
 Returns a deep copy of the system matrix.
 """
-copy(K::SystemMatrix) = SystemMatrix(copy(K.A), K.model)
+copy(K::SystemMatrix) = SystemMatrix(copy(K.A), K.model, K.test_model, K.problems, K.offsets)
 
 
 import Base:transpose,adjoint
@@ -2361,8 +2361,8 @@ import SparseArrays: sparse
 
 Transpose / adjoint of a system matrix.
 """
-transpose(K::SystemMatrix) = SystemMatrix(sparse(transpose(K.A)), K.test_model, K.model)
-adjoint(K::SystemMatrix)   = SystemMatrix(sparse(adjoint(K.A)), K.test_model, K.model)
+transpose(K::SystemMatrix) = SystemMatrix(sparse(transpose(K.A)), K.test_model, K.model, K.problems, K.offsets)
+adjoint(K::SystemMatrix)   = SystemMatrix(sparse(adjoint(K.A)), K.test_model, K.model, K.problems, K.offsets)
 
 
 import LinearAlgebra: issymmetric
@@ -2621,7 +2621,7 @@ function *(A::Transformation, B::SystemMatrix)
     non = A.non
     dim = A.dim
     if dim * non == n
-        return SystemMatrix(dropzeros(A.T * B.A), B.model)
+        return SystemMatrix(dropzeros(A.T * B.A), B.model, B.test_model, B.problems, B.offsets)
     else
         error("*(A::Transformation, B::SystemMatrix): size missmatch dim * non = $dim * $non ≠ $n.")
     end
@@ -2632,7 +2632,7 @@ function *(B::SystemMatrix, A::Transformation)
     non = A.non
     dim = A.dim
     if dim * non == n
-        return SystemMatrix(dropzeros(B.A * A.T), B.model)
+        return SystemMatrix(dropzeros(B.A * A.T), B.model, B.test_model, B.problems, B.offsets)
     else
         error("*(A::Transformation, B::SystemMatrix): size missmatch dim * non = $dim * $non ≠ $n.")
     end

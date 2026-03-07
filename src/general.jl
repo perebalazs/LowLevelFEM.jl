@@ -1,9 +1,10 @@
 export Problem, Material, getEigenVectors, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
+export LoadCondition
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export mergeFields
-export SystemMatrix
+export SystemMatrix, SystemVector
 export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
@@ -249,6 +250,154 @@ struct Problem
     thickness::Float64
     non::Int64
     geometry::Geometry
+    field::Symbol
+    rhs_field::Symbol
+    Problem() = new()
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs)
+    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none,
+        nameTopSurface="", nameVolume="", dim::Int=3,
+        field::Symbol=:unknown, rhs_field::Symbol=:rhs)
+        if type == :dummy
+            return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field)
+        end
+        pdim = 3
+        dim0 = dim
+
+        #if Sys.CPU_THREADS != Threads.nthreads()
+        #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
+        #end
+        geometry = Geometry()
+
+        if type == :Solid
+            dim = 3
+            pdim = 3
+            field = :u
+            rhs_field = :f
+        elseif type == :PlaneStress
+            dim = 2
+            pdim = 2
+            field = :u
+            rhs_field = :f
+        elseif type == :PlaneStrain
+            dim = 2
+            pdim = 2
+            field = :u
+            rhs_field = :f
+        elseif type == :AxiSymmetric
+            dim = 2
+            pdim = 2
+            field = :u
+            rhs_field = :f
+        elseif type == :PlaneHeatConduction
+            dim = 2
+            pdim = 1
+            field = :T
+            rhs_field = :q
+        elseif type == :HeatConduction
+            dim = 3
+            pdim = 1
+            field = :T
+            rhs_field = :q
+        elseif type == :AxiSymmetricHeatConduction
+            dim = 2
+            pdim = 1
+            field = :T
+            rhs_field = :q
+        elseif type == :Truss
+            dim = 3
+            pdim = 3
+            field = :u
+            rhs_field = :f
+        elseif type == :ScalarField
+            dim0 < 1 && error("Problem: dimension of a :ScalarField problem must be one, two or three.")
+            dim0 > 3 && error("Problem: dimension of a :ScalarField problem must be equal or less than three.")
+            dim = dim0
+            pdim = 1
+        elseif type == :VectorField
+            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
+            dim0 == 1 && error("Problem: dimension of a :VectorField problem must be greater than one.")
+            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be two or three.")
+            dim = dim0
+            pdim = dim0
+        elseif type == :TensorField
+            dim0 < 1 && error("Problem: dimension of a :TensorField problem must be one, two or three.")
+            dim0 == 1 && error("Problem: dimension of a :TensorField problem must be greater than one.")
+            dim0 > 3 && error("Problem: dimension of a :TensorField problem must be two or three.")
+            dim = dim0
+            pdim = 9
+        elseif type == :Reynolds
+            geometry = Geometry(nameTopSurface, nameVolume)
+            dim = geometry.dim
+            pdim = 1
+            field = :p
+            rhs_field = :q
+        else
+            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Truss`, `:ScalarField`, `VectorField`.
+            Now problem type = $type ????")
+        end
+        if !isa(mat, Vector)
+            error("Problem: materials are not arranged in a vector. Put them in [...]")
+        end
+        name = gmsh.model.getCurrent()
+        gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
+        gmsh.option.setString("View.Format", "%.6g")
+
+        material = mat
+
+        if bandwidth ≠ :none
+            elemTags = []
+            for ipg in 1:length(material)
+                phName = material[ipg].phName
+                dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+                for idm in 1:length(dimTags)
+                    dimTag = dimTags[idm]
+                    edim = dimTag[1]
+                    etag = dimTag[2]
+                    if edim != dim && (type != :Truss || edim != 1)
+                        error("Problem: dimension of the problem ($dim) is different than the dimension of finite elements ($edim).")
+                    end
+                    elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
+                    for i in 1:length(elementTags)
+                        if length(elementTags[i]) == 0
+                            error("Problem: No mesh in model '$name'.")
+                        end
+                        for j in 1:length(elementTags[i])
+                            push!(elemTags, elementTags[i][j])
+                        end
+                    end
+                end
+            end
+
+            if bandwidth != :RCMK && bandwidth != :Hilbert && bandwidth != :Metis && bandwidth != :none
+                error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
+            end
+
+            #method = bandwidth == :none ? :RCMK : bandwidth
+            oldTags, newTags = gmsh.model.mesh.computeRenumbering(bandwidth, elemTags)
+            #permOldTags = sortperm(oldTags)
+            #sortNewTags = 1:length(oldTags)
+            #newTags[permOldTags] = sortNewTags
+            gmsh.model.mesh.renumberNodes(oldTags, newTags)
+        end
+
+        nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes()
+        non = length(nodeTags)
+        return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field)
+    end
+end
+#=
+struct Problem
+    name::String
+    type::Symbol
+    dim::Int64
+    pdim::Int64
+    material::Vector{Material}
+    thickness::Float64
+    non::Int64
+    geometry::Geometry
     Problem() = new()
     Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim::Int=3)
@@ -362,6 +511,7 @@ struct Problem
         return new(name, type, dim, pdim, material, thickness, non, geometry)
     end
 end
+=#
 
 """
     Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
@@ -381,23 +531,234 @@ struct Transformation
 end
 
 """
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem)
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem)
+    ndofs(problem::Problem)
 
-Structure containing the stiffness/mass/heat conduction/heat capacity/latent heat/... matrix and the 
-associated `Problem` (with its trial field) and another `Problem` (with a test field).
+Return total number of dofs for a single-field problem.
+"""
 
-Types:
-- `A`: SparseMatrixCSC{Float64}
-- `model`: Problem
-- `test_model`: Problem
+ndofs(P::Problem) = P.non * P.pdim
+
+"""
+    SystemMatrix(blocks::Matrix{SystemMatrix})
+
+Construct a global block system matrix from a matrix of `SystemMatrix` blocks.
+
+This function assembles a global sparse matrix from a block structure where each
+block represents the discretization of a bilinear form between two fields
+(test and trial problems). The blocks are assumed to correspond to different
+fields in a multifield formulation.
+
+The function performs the following steps:
+
+1. Determine the ordering of **trial problems** from the columns of the block matrix.
+
+2. Determine the ordering of **test problems** from the rows of the block matrix.
+
+3. Verify that the block system is **square in the field sense**, i.e.
+   
+       trial_problems[i] === test_problems[i]
+   
+   for all fields.
+
+4. Compute global DOF offsets for each field.
+
+5. Assemble the global sparse matrix by inserting the entries of each block
+   at the appropriate offset position.
+
+Each block `blocks[i,j]` must satisfy
+
+    blocks[i,j].test_model  → test Problem (row space)
+    blocks[i,j].model       → trial Problem (column space)
+    blocks[i,j].A           → sparse block matrix
+
+The resulting global matrix has the structure
+
+    [ A₁₁  A₁₂  ⋯ ]
+    [ A₂₁  A₂₂  ⋯ ]
+    [ ⋮    ⋮    ⋱ ]
+
+where `Aᵢⱼ` couples the `j`-th trial field with the `i`-th test field.
+
+# Arguments
+
+- `blocks::Matrix{SystemMatrix}`: Matrix of block matrices representing the
+  bilinear operators between fields.
+
+# Returns
+
+- `SystemMatrix`: A global system matrix containing the assembled sparse matrix
+  and metadata about the involved `Problem`s and their DOF offsets.
+
+# Errors
+
+An error is thrown if:
+
+- no trial or test problems are found in the block matrix,
+- the block system is not square in the field sense,
+- a block contains inconsistent matrix dimensions.
+
+# Example
+
+```julia
+Auu = ∫(ε(Pu) ⋅ C ⋅ ε(Pu))
+Aup = ∫(Div(Pu) ⋅ Id(Pp))
+Apu = ∫(Div(Pu) ⋅ Id(Pp))'
+App = ∫(Grad(Pp) ⋅ Grad(Pp) * δ)
+
+K = SystemMatrix([
+    Auu  Aup
+    Apu  App
+])
+```
+
+This assembles the global block system
+
+```
+[ Kuu  Kup ]
+[ Kpu  Kpp ]
+```
+
+corresponding to a two-field problem.  
 """
 struct SystemMatrix
     A::SparseMatrixCSC
-    model::Problem
-    test_model::Problem
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem) = new(A, model, test_model)
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem) = new(A, model, model)
+    model::Union{Problem,Nothing}
+    test_model::Union{Problem,Nothing}
+    problems::Union{Vector{Problem},Nothing}      # többmezős meta
+    offsets::Union{Vector{Int},Nothing}           # globális kezdő indexek
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem) = new(A, model, test_model, nothing, nothing)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem) = new(A, model, model, nothing, nothing)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem, problems::Union{Vector{Problem},Nothing}, offsets::Union{Vector{Int},Nothing}) = new(A, model, test_model, problems, offsets)
+    function SystemMatrix(blocks::Matrix{SystemMatrix})
+
+        nrows, ncols = size(blocks)
+   
+        # ----------------------------------------------------------
+        # 1) Collect trial problems (column-based order)
+        # ----------------------------------------------------------
+        trial_problems = Problem[]
+   
+        function push_unique!(vec, P)
+            P === nothing && return
+            if all(q -> q !== P, vec)
+                push!(vec, P)
+            end
+        end
+   
+        for j in 1:ncols
+            for i in 1:nrows
+                blk = blocks[i, j]
+                if blk.model !== nothing
+                    push_unique!(trial_problems, blk.model)
+                    break
+                end
+            end
+        end
+   
+        isempty(trial_problems) &&
+            error("No trial Problems found in block matrix.")
+   
+        # ----------------------------------------------------------
+        # 2) Collect test problems (row-based order)
+        # ----------------------------------------------------------
+        test_problems = Problem[]
+   
+        for i in 1:nrows
+            for j in 1:ncols
+                blk = blocks[i, j]
+                if blk.test_model !== nothing
+                    push_unique!(test_problems, blk.test_model)
+                    break
+                end
+            end
+        end
+   
+        isempty(test_problems) &&
+            error("No test Problems found in block matrix.")
+   
+        # ----------------------------------------------------------
+        # 3) Field-level square check
+        # ----------------------------------------------------------
+        if length(trial_problems) != length(test_problems) ||
+           any(trial_problems[i] !== test_problems[i]
+               for i in eachindex(trial_problems))
+            error("Block system is not square in field sense. Trial and test spaces differ.")
+        end
+   
+        problems = trial_problems
+   
+        # ----------------------------------------------------------
+        # 4) Compute global offsets (based on trial ordering)
+        # ----------------------------------------------------------
+        offsets = Vector{Int}(undef, length(problems))
+        offsets[1] = 0
+        for i in 2:length(problems)
+            offsets[i] = offsets[i-1] + ndofs(problems[i-1])
+        end
+   
+        total_dofs = offsets[end] + ndofs(problems[end])
+   
+        # helper
+        function problem_index(P)
+            for (k, q) in enumerate(problems)
+                if q === P
+                    return k
+                end
+            end
+            error("Problem not found in metadata.")
+        end
+   
+        # ----------------------------------------------------------
+        # 5) Assemble global sparse matrix
+        # ----------------------------------------------------------
+        I = Int[]
+        J = Int[]
+        V = Float64[]
+   
+        for bi in 1:nrows
+            for bj in 1:ncols
+   
+                blk = blocks[bi, bj]
+                blk.A === nothing && continue
+                isempty(blk.A) && continue
+   
+                rowP = blk.test_model
+                colP = blk.model
+   
+                rowP === nothing && error("Block missing test_model.")
+                colP === nothing && error("Block missing model.")
+   
+                iP = problem_index(rowP)
+                jP = problem_index(colP)
+   
+                row_offset = offsets[iP]
+                col_offset = offsets[jP]
+   
+                rows, cols, vals = findnz(blk.A)
+   
+                # size consistency check
+                if !isempty(rows)
+                    if maximum(rows) > ndofs(rowP) || maximum(cols) > ndofs(colP)
+                        error("Block size mismatch in block ($bi,$bj).")
+                    end
+                end
+                #if maximum(rows) > ndofs(rowP) ||
+                #   maximum(cols) > ndofs(colP)
+                #    error("Block size mismatch in block ($bi,$bj).")
+                #end
+   
+                for k in eachindex(vals)
+                    push!(I, row_offset + rows[k])
+                    push!(J, col_offset + cols[k])
+                    push!(V, vals[k])
+                end
+            end
+        end
+   
+        A_big = sparse(I, J, V, total_dofs, total_dofs)
+   
+        return new(A_big, nothing, nothing, problems, offsets)
+    end
 end
 
 """
@@ -556,7 +917,8 @@ struct ScalarField <: AbstractField
         @inbounds for data in dataField
             #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
             phName = data.phName
-            f = data.f
+            vals = data.values
+            f = get(vals, :f, nothing)
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
             for (edim, etag) in dimTags
@@ -833,9 +1195,10 @@ struct VectorField <: AbstractField
         for i in 1:length(dataField)
             #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
             phName = dataField[i].phName
-            fx = dataField[i].fx
-            fy = dataField[i].fy
-            fz = dataField[i].fz
+            vals = dataField[i].values
+            fx = get(vals, :fx, nothing)
+            fy = get(vals, :fy, nothing)
+            fz = get(vals, :fz, nothing)
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -1111,15 +1474,16 @@ struct TensorField <: AbstractField
         for i in 1:length(dataField)
             #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
             phName = dataField[i].phName
-            fx = dataField[i].fx
-            fy = dataField[i].fy
-            fz = dataField[i].fz
-            fxy = dataField[i].fxy
-            fyz = dataField[i].fyz
-            fzx = dataField[i].fzx
-            fyx = dataField[i].fyx
-            fzy = dataField[i].fzy
-            fxz = dataField[i].fxz
+            vals = dataField[i].values
+            fx = get(vals, :fx, nothing)
+            fy = get(vals, :fy, nothing)
+            fz = get(vals, :fz, nothing)
+            fxy = get(vals, :fxy, nothing)
+            fyz = get(vals, :fyz, nothing)
+            fzx = get(vals, :fzx, nothing)
+            fyx = get(vals, :fyx, nothing)
+            fzy = get(vals, :fzy, nothing)
+            fxz = get(vals, :fxz, nothing)
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
             for idm in 1:length(dimTags)
                 dimTag = dimTags[idm]
@@ -1271,6 +1635,193 @@ struct TensorField <: AbstractField
         # --- 4) TensorField visszaadása ---
         return TensorField(A, [;;], t, numElem, nsteps, :tensor, prob)
     end
+end
+
+"""
+    SystemVector
+
+Unified global right-hand-side (RHS) vector for both single-field and
+multi-field finite element systems.
+
+This type stores the global load vector together with metadata describing
+how the vector is associated with one or multiple `Problem`s.
+
+# Fields
+- `a::Vector{Float64}`
+    Global RHS vector.
+
+Single-field metadata:
+- `model::Union{Problem,Nothing}`
+    The associated `Problem` in the single-field case.
+
+Multi-field metadata:
+- `problems::Union{Vector{Problem},Nothing}`
+    Ordered list of `Problem`s defining the block structure of the system.
+    The ordering corresponds to the trial-field ordering used when assembling
+    the global `SystemMatrix`.
+
+- `offsets::Union{Vector{Int},Nothing}`
+    Starting global DOF index of each field in the concatenated vector.
+
+# Semantics
+- If `problems === nothing` → **single-field system**
+- If `problems !== nothing` → **multi-field system**
+
+In the multi-field case the global vector has the structure
+
+    a = [ a₁
+          a₂
+          ⋮ ]
+
+where each subvector `aᵢ` corresponds to the RHS contribution of the
+`i`-th field (Problem) in the system.
+"""
+struct SystemVector
+    a::Vector{Float64}
+
+    # ---- Single-field metadata ----
+    model::Union{Problem,Nothing}
+
+    # ---- Block metadata ----
+    problems::Union{Vector{Problem},Nothing}
+    offsets::Union{Vector{Int},Nothing}
+end
+
+"""
+    SystemVector(field)
+
+Construct a global RHS vector from a single finite element field.
+
+Supported field types:
+
+    ScalarField
+    VectorField
+    TensorField
+
+The field values are extracted from the first load step
+
+    field.a[:,1]
+
+and stored as a global vector.
+
+# Arguments
+- `field`: Field object containing nodal RHS values.
+
+# Returns
+- `SystemVector` representing a single-field RHS vector.
+
+# Notes
+This constructor assumes that the field contains a single load step.
+"""
+function SystemVector(field::Union{ScalarField,VectorField,TensorField})
+
+    # assume single load step
+    a = vec(field.a[:, 1])
+
+    return SystemVector(a, field.model, nothing, nothing)
+end
+
+"""
+    SystemVector(fields::Vector)
+
+Construct a global RHS vector for a multifield system from a vector of
+field objects (`ScalarField`, `VectorField`, or `TensorField`).
+
+The order of fields determines the block ordering of the global vector.
+This ordering must be consistent with the ordering used when assembling
+the corresponding `SystemMatrix`.
+
+# Arguments
+- `fields::Vector`
+    Vector of field objects providing RHS values for each field.
+
+# Returns
+- `SystemVector` containing the concatenated global RHS vector and
+  metadata describing the involved `Problem`s and their DOF offsets.
+
+# Global structure
+If the fields correspond to Problems `P₁, P₂, …`, the resulting vector is
+
+    a = [ a₁
+          a₂
+          ⋮ ]
+
+where each `aᵢ` is the RHS vector of field `Pᵢ`.
+
+# Errors
+An error is thrown if:
+- the field list is empty,
+- the same `Problem` appears multiple times,
+- the local RHS size does not match the DOF count of its `Problem`.
+
+# Example
+```julia
+fu = bodyForce(Pu)
+fp = pressureLoad(Pp)
+
+rhs = SystemVector([fu, fp])
+````
+
+This constructs a global RHS vector for a two-field system with ordering
+
+```
+[ u
+  p ]
+```
+
+See also: [`SystemMatrix`](@ref)
+
+"""
+function SystemVector(fields::Vector)
+
+    isempty(fields) && error("SystemVector: empty field list.")
+
+    # ----------------------------------------------------------
+    # 1) Extract problems in GIVEN order
+    # ----------------------------------------------------------
+    problems = Problem[]
+
+    for f in fields
+        P = f.model
+        push!(problems, P)
+    end
+
+    # check uniqueness (no duplicate fields)
+    length(unique(problems)) == length(problems) ||
+        error("SystemVector: duplicate Problems in field list.")
+
+    # ----------------------------------------------------------
+    # 2) Compute offsets (trial order)
+    # ----------------------------------------------------------
+    offsets = Vector{Int}(undef, length(problems))
+    offsets[1] = 0
+
+    for i in 2:length(problems)
+        offsets[i] = offsets[i-1] + ndofs(problems[i-1])
+    end
+
+    total_dofs = offsets[end] + ndofs(problems[end])
+    a_global = zeros(total_dofs)
+
+    # ----------------------------------------------------------
+    # 3) Fill global vector
+    # ----------------------------------------------------------
+    for (idx, f) in enumerate(fields)
+
+        P = f.model
+        offset = offsets[idx]
+        nloc = ndofs(P)
+
+        # single load step assumption
+        a_local = vec(f.a[:, 1])
+
+        length(a_local) == nloc ||
+            error("SystemVector: local RHS size mismatch for problem $(P.name).")
+
+        a_global[offset+1:offset+nloc] .= a_local
+    end
+
+    return SystemVector(a_global, nothing, problems, offsets)
 end
 
 """
@@ -1450,6 +2001,23 @@ See also:
 """
 struct BoundaryCondition
     phName::String
+    problem::Union{Problem,Nothing}
+    values::Dict{Symbol,Union{Number,Function,ScalarField}}
+
+    function BoundaryCondition(phName::String; problem=nothing, kwargs...)
+        vals = Dict{Symbol,Union{Number,Function,ScalarField}}()
+        for (k, v) in kwargs
+            if v === nothing
+                continue
+            end
+            vals[k] = v
+        end
+        return new(phName, problem, vals)
+    end
+end
+#=
+struct BoundaryCondition
+    phName::String
 
     # Dirichlet-type (primary variables)
     ux::Union{Nothing, Number, Function, ScalarField}
@@ -1498,10 +2066,139 @@ struct BoundaryCondition
         return new(values...)
     end
 end
+=#
 
+"""
+    BoundaryConditionFields(bc::BoundaryCondition)
+
+Return the defined field keys of a boundary condition.
+
+# Arguments
+- `bc::BoundaryCondition`: Boundary condition object with named values.
+
+# Returns
+- An iterator over `Symbol` keys present in `bc.values`.
+
+# Example
+```julia
+keys = BoundaryConditionFields(bc)
+```
+"""
+function BoundaryConditionFields(bc::BoundaryCondition)
+    return keys(bc.values)
+end
+#=
 function BoundaryConditionFields(bc::BoundaryCondition)
     return filter(f -> getfield(bc, f) !== nothing,
                   fieldnames(BoundaryCondition))
+end
+=#
+
+"""
+    LoadCondition(phName; problem=nothing, kwargs...)
+
+Generic load specification for assembling right-hand side vectors.
+
+- `phName` is a Gmsh physical group name.
+- `problem` optionally binds the load to a specific field (required for multi-field).
+- `values` stores component-wise load data, such as `fx`, `fy`, `q`, `σxx`, etc.,
+  as `Number`, `Function`, or `ScalarField`.
+
+The interpretation (surface traction vs body force vs flux, etc.) is decided
+by the assembly routine, not by this struct.
+"""
+struct LoadCondition
+    phName::String
+    problem::Union{Problem,Nothing}
+    values::Dict{Symbol,Union{Number,Function,ScalarField,Nothing}}
+
+    function LoadCondition(name, prob, vals)
+        return new(name, prob, vals)        
+    end
+    function LoadCondition(phName::String; problem=nothing, kwargs...)
+        vals = Dict{Symbol,Union{Number,Function,ScalarField,Nothing}}()
+        for (k, v) in kwargs
+            v = v isa ScalarField ? elementsToNodes(v) : v
+            vals[k] = v
+        end
+        return new(phName, problem, vals)
+    end
+end
+
+function loads_for_problem(loads::Vector{LoadCondition}, P::Problem)
+    return filter(lc -> lc.problem === nothing || lc.problem === P, loads)
+end
+
+"""
+    _extract_rhs_components(problem, vals)
+
+Extract RHS components using `problem.rhs_field` prefix.
+Returns a Dict{String,Any} mapping component string -> value.
+"""
+function _extract_rhs_components(problem::Problem, vals::Dict)
+    prefix = String(problem.rhs_field)
+    comps = Dict{String,Union{Number,Function,ScalarField,Nothing}}()
+
+    for (sym, val) in vals
+        s = String(sym)
+        if startswith(s, prefix)
+            comp = s[length(prefix)+1:end]
+            comps[comp] = val
+        end
+    end
+    return comps
+end
+
+"""
+    _check_load_keys(problem, vals)
+
+Validate load keys. Throws error if invalid combination is detected.
+"""
+function _check_load_keys(problem::Problem, vals::Dict)
+
+    rhs_comps = _extract_rhs_components(problem, vals)
+
+    p = get(vals, :p, nothing)
+    T = get(vals, :T, nothing)
+    h = get(vals, :h, nothing)
+    qn = get(vals, :qn, nothing)
+    hs = get(vals, :hs, nothing)
+    q = get(vals, :q, nothing)
+
+    # --- Solid-like problems ---
+    if problem.type in (:Solid, :PlaneStress, :PlaneStrain, :AxiSymmetric)
+
+        if p !== nothing && !isempty(rhs_comps)
+            error("loadVector: pressure and RHS components cannot be given together.")
+        end
+
+        # --- Heat problems ---
+    elseif problem.type in (:HeatConduction,
+        :PlaneHeatConduction,
+        :AxiSymmetricHeatConduction)
+
+        count = 0
+        for x in (hs, qn, h, q)
+            count += x !== nothing ? 1 : 0
+        end
+
+        if count > 1
+            error("loadVector: multiple heat-type loads defined in same LoadCondition.")
+        end
+    end
+
+    # unknown keys
+    allowed = Set([:p, :T, :h, :qn, :hs, :q, :T∞])
+    for (sym, _) in vals
+        s = String(sym)
+        if startswith(s, String(problem.rhs_field))
+            continue
+        elseif sym in allowed
+            continue
+        else
+            error("loadVector: unknown load key '$sym'.")
+        end
+    end
 end
 
 using SparseArrays
@@ -2792,9 +3489,9 @@ function load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
     if p !== nothing
         if p isa ScalarField
             pp = elementsToNodes(p)
-            return BoundaryCondition(name, p=pp)
+            return LoadCondition(name, p=pp)
         end
-        return BoundaryCondition(name, p=p)
+        return LoadCondition(name, p=p)
     end
     if fx !== nothing
         ffx = fx isa ScalarField ? elementsToNodes(fx) : fx
@@ -2811,7 +3508,7 @@ function load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
     else
         ffz = fz
     end
-    return BoundaryCondition(name, fx=ffx, fy=ffy, fz=ffz)
+    return LoadCondition(name, fx=ffx, fy=ffy, fz=ffz)
 end
 #=
 function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number, Function, ScalarField}=0, fz::Union{Number, Function, ScalarField}=0, p::Union{Number, Function, ScalarField}=0)
@@ -2913,7 +3610,7 @@ Types:
 function heatFlux(name; qn=nothing)
     qn === nothing &&
         error("heatFlux: qn must be specified.")
-    return BoundaryCondition(name, qn=qn)
+    return LoadCondition(name, qn=qn)
     #=
     p1 =0
     p2 =0
@@ -2939,7 +3636,7 @@ Types:
 function heatSource(name; h=nothing)
     h === nothing &&
         error("heatSource: h must be specified.")
-    return BoundaryCondition(name, h=h)
+    return LoadCondition(name, h=h)
     #=
     p1 =0
     p2 =0
@@ -3066,7 +3763,9 @@ function scalarField(problem, dataField)
     for i in 1:length(dataField)
         #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
         name = dataField[i].phName
-        f = dataField[i].f
+        #f = dataField[i].f
+        vals = dataField[i].values
+        f = get(vals, :f, nothing)
         if f === nothing
             error("scalarField: f is not defined")
         end
@@ -3137,9 +3836,10 @@ function vectorField(problem, dataField)
     for i in 1:length(dataField)
         #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
         name = dataField[i].phName
-        fx = dataField[i].fx
-        fy = dataField[i].fy
-        fz = dataField[i].fz
+        vals = dataField[i].values
+        fx = get(vals, :fx, nothing)
+        fy = get(vals, :fy, nothing)
+        fz = get(vals, :fz, nothing)
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function)
@@ -3242,15 +3942,16 @@ function tensorField(problem, dataField; type=:e)
     for i in 1:length(dataField)
         #name, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = dataField[i]
         name = dataField[i].phName
-        fx = dataField[i].fx
-        fy = dataField[i].fy
-        fz = dataField[i].fz
-        fxy = dataField[i].fxy
-        fyz = dataField[i].fyz
-        fzx = dataField[i].fzx
-        fyx = dataField[i].fyx
-        fzy = dataField[i].fzy
-        fxz = dataField[i].fxz
+        vals = dataField[i].values
+        fx = get(vals, :fx, nothing)
+        fy = get(vals, :fy, nothing)
+        fz = get(vals, :fz, nothing)
+        fxy = get(vals, :fxy, nothing)
+        fyz = get(vals, :fyz, nothing)
+        fzx = get(vals, :fzx, nothing)
+        fyx = get(vals, :fyx, nothing)
+        fzy = get(vals, :fzy, nothing)
+        fxz = get(vals, :fxz, nothing)
         phg = getTagForPhysicalName(name)
         nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
         if isa(fx, Function) || isa(fy, Function) || isa(fz, Function) || isa(fxy, Function) || isa(fyz, Function) || isa(fzx, Function)
@@ -3770,6 +4471,85 @@ function normalVector1D(problem::Problem, phName::String)
     return VectorField(normalvectors, [;;], [0.0], numElem, 1, :v3D, problem)
 end
 
+function parse_component(sym::Symbol, problem::Problem)
+    s = String(sym)
+    pf = String(problem.field)
+
+    if !startswith(s, pf)
+        return nothing
+    end
+
+    comp = s[length(pf)+1:end]   # lehet "", "x", "xy", stb.
+
+    return comp
+end
+
+function component_index(problem::Problem, suffix::String)
+
+    if problem.pdim == 1
+        return 1
+
+    elseif problem.pdim == 2 || problem.pdim == 3
+        if suffix == "x"
+            return 1
+        elseif suffix == "y"
+            return 2
+        elseif suffix == "z"
+            return 3
+        else
+            error("Unknown component '$suffix'")
+        end
+
+    elseif problem.pdim == 9
+        tensor_map = Dict(
+            "xx"=>1, "yx"=>2, "zx"=>3,
+            "xy"=>4, "yy"=>5, "zy"=>6,
+            "xz"=>7, "yz"=>8, "zz"=>9
+        )
+
+        if haskey(tensor_map, suffix)
+            return tensor_map[suffix]
+        else
+            error("Unknown tensor component '$suffix'")
+        end
+
+    else
+        error("Unsupported pdim $(problem.pdim)")
+    end
+end
+
+@inline function nodeToDof(problem::Problem, node::Int, comp::Int)
+    return (node - 1) * problem.pdim + comp
+end
+
+function nodesOnPhysicalGroup(problem::Problem, phName::String)
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    isempty(dimTags) && error("Physical group '$phName' not found.")
+
+    nodes = Int[]
+
+    for dimTag in dimTags
+        edim = dimTag[1]
+        etag = dimTag[2]
+
+        # csak valódi perem entitás
+        if edim < problem.dim || true
+            elementTypes, elementTags, nodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for nt in nodeTags
+                append!(nodes, nt)
+            end
+        else
+            error("Cannot apply Dirichlet BC on entity of dimension $edim in $(problem.dim)D problem.")
+        end
+    end
+
+    return unique(nodes)
+end
+
 """
     constrainedDoFs(problem, supports)
 
@@ -3782,6 +4562,41 @@ Types:
 - `supports`: Vector{BoundaryCondition}
 - `DoFs`: Vector{Int64}
 """
+function constrainedDoFs(problem::Problem,
+    supports::Vector{BoundaryCondition})
+
+    dofs = Int[]
+
+    for bc in supports
+
+        # multi-field check
+        if bc.problem !== nothing && bc.problem !== problem
+            continue
+        end
+
+        node_ids = nodesOnPhysicalGroup(problem, bc.phName)
+
+        for (sym, val) in bc.values
+            comp = String(sym)
+            fld = String(problem.field)
+
+            if !startswith(comp, fld)
+                continue
+            end
+
+            suffix = comp[length(fld)+1:end]
+
+            cidx = component_index(problem, suffix)
+
+            for node in node_ids
+                push!(dofs, (node - 1) * problem.pdim + cidx)
+            end
+        end
+    end
+
+    return unique(dofs)
+end
+#=
 function constrainedDoFs(problem, supports)
     if !isa(supports, Vector)
         error("constrainedDoFs: supports are not arranged in a vector. Put them in [...]")
@@ -3902,6 +4717,7 @@ function constrainedDoFs(problem, supports)
     
     return cdofs
 end
+=#
 
 """
     allDoFs(problem)

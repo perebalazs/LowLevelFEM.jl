@@ -12,6 +12,15 @@ The package is suitable not only for classical structural mechanics problems, bu
 Weak forms are discretized into elementary differential operators (grad, div, curl),
 which are assembled into bilinear forms and global system matrices.
 
+## Documentation Map
+
+- [Getting Started](getting-started/index.md)
+- [Tutorials](tutorials/index.md)
+- [Manual](manual/index.md)
+- [API Reference](reference/index.md)
+- [Explanations](explanations/index.md)
+- [News](news/index.md)
+
 ## Requirements
 
 - Julia 1.x
