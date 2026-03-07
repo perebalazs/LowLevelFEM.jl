@@ -274,27 +274,43 @@ struct Problem
         if type == :Solid
             dim = 3
             pdim = 3
+            field = :u
+            rhs_field = :f
         elseif type == :PlaneStress
             dim = 2
             pdim = 2
+            field = :u
+            rhs_field = :f
         elseif type == :PlaneStrain
             dim = 2
             pdim = 2
+            field = :u
+            rhs_field = :f
         elseif type == :AxiSymmetric
             dim = 2
             pdim = 2
+            field = :u
+            rhs_field = :f
         elseif type == :PlaneHeatConduction
             dim = 2
             pdim = 1
+            field = :T
+            rhs_field = :q
         elseif type == :HeatConduction
             dim = 3
             pdim = 1
+            field = :T
+            rhs_field = :q
         elseif type == :AxiSymmetricHeatConduction
             dim = 2
             pdim = 1
+            field = :T
+            rhs_field = :q
         elseif type == :Truss
             dim = 3
             pdim = 3
+            field = :u
+            rhs_field = :f
         elseif type == :ScalarField
             dim0 < 1 && error("Problem: dimension of a :ScalarField problem must be one, two or three.")
             dim0 > 3 && error("Problem: dimension of a :ScalarField problem must be equal or less than three.")
@@ -316,6 +332,8 @@ struct Problem
             geometry = Geometry(nameTopSurface, nameVolume)
             dim = geometry.dim
             pdim = 1
+            field = :p
+            rhs_field = :q
         else
             error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Truss`, `:ScalarField`, `VectorField`.
             Now problem type = $type ????")
@@ -511,6 +529,12 @@ struct Transformation
     non::Int64
     dim::Int64
 end
+
+"""
+    ndofs(problem::Problem)
+
+Return total number of dofs for a single-field problem.
+"""
 
 ndofs(P::Problem) = P.non * P.pdim
 
@@ -892,7 +916,7 @@ struct ScalarField <: AbstractField
         @inbounds for data in dataField
             #phName, f, fx, fy, fz, fxy, fyz, fzx, fyx, fzy, fxz = data
             phName = data.phName
-            vals = dataField[i].values
+            vals = data.values
             f = get(vals, :f, nothing)
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
@@ -2069,14 +2093,15 @@ by the assembly routine, not by this struct.
 struct LoadCondition
     phName::String
     problem::Union{Problem,Nothing}
-    values::Dict{Symbol,Union{Number,Function,ScalarField}}
+    values::Dict{Symbol,Union{Number,Function,ScalarField,Nothing}}
 
     function LoadCondition(name, prob, vals)
         return new(name, prob, vals)        
     end
     function LoadCondition(phName::String; problem=nothing, kwargs...)
-        vals = Dict{Symbol,Union{Number,Function,ScalarField}}()
+        vals = Dict{Symbol,Union{Number,Function,ScalarField,Nothing}}()
         for (k, v) in kwargs
+            v = v isa ScalarField ? elementsToNodes(v) : v
             vals[k] = v
         end
         return new(phName, problem, vals)
@@ -2095,7 +2120,7 @@ Returns a Dict{String,Any} mapping component string -> value.
 """
 function _extract_rhs_components(problem::Problem, vals::Dict)
     prefix = String(problem.rhs_field)
-    comps = Dict{String,Union{Number,Function,ScalarField}}()
+    comps = Dict{String,Union{Number,Function,ScalarField,Nothing}}()
 
     for (sym, val) in vals
         s = String(sym)
@@ -3447,9 +3472,9 @@ function load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
     if p !== nothing
         if p isa ScalarField
             pp = elementsToNodes(p)
-            return BoundaryCondition(name, p=pp)
+            return LoadCondition(name, p=pp)
         end
-        return BoundaryCondition(name, p=p)
+        return LoadCondition(name, p=p)
     end
     if fx !== nothing
         ffx = fx isa ScalarField ? elementsToNodes(fx) : fx
@@ -3466,7 +3491,7 @@ function load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
     else
         ffz = fz
     end
-    return BoundaryCondition(name, fx=ffx, fy=ffy, fz=ffz)
+    return LoadCondition(name, fx=ffx, fy=ffy, fz=ffz)
 end
 #=
 function load(name; fx::Union{Number, Function, ScalarField}=0, fy::Union{Number, Function, ScalarField}=0, fz::Union{Number, Function, ScalarField}=0, p::Union{Number, Function, ScalarField}=0)
@@ -3568,7 +3593,7 @@ Types:
 function heatFlux(name; qn=nothing)
     qn === nothing &&
         error("heatFlux: qn must be specified.")
-    return BoundaryCondition(name, qn=qn)
+    return LoadCondition(name, qn=qn)
     #=
     p1 =0
     p2 =0
@@ -3594,7 +3619,7 @@ Types:
 function heatSource(name; h=nothing)
     h === nothing &&
         error("heatSource: h must be specified.")
-    return BoundaryCondition(name, h=h)
+    return LoadCondition(name, h=h)
     #=
     p1 =0
     p2 =0
@@ -4493,7 +4518,7 @@ function nodesOnPhysicalGroup(problem::Problem, phName::String)
         etag = dimTag[2]
 
         # csak valódi perem entitás
-        if edim < problem.dim
+        if edim < problem.dim || true
             elementTypes, elementTags, nodeTags =
                 gmsh.model.mesh.getElements(edim, etag)
 

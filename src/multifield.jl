@@ -233,12 +233,12 @@ struct AdvOp <: AbstractOp
     b::NTuple{3,Float64}
 end
 
-"""
-    ndofs(problem::Problem)
-
-Return total number of dofs for a single-field problem.
-"""
-ndofs(P::Problem) = P.non * P.pdim
+#"""
+#    ndofs(problem::Problem)
+#
+#Return total number of dofs for a single-field problem.
+#"""
+#ndofs(P::Problem) = P.non * P.pdim
 
 """
     op_outdim(op, P)
@@ -536,6 +536,7 @@ function build_B!(B::AbstractMatrix, op::AdvOp,
 
     return B
 end
+
 @inline function _build_elemwise_coeff_dict(coef::ScalarField)
     p = nodesToElements(coef)
     return Dict(zip(p.numElem, p.A))  # elemTag => coeff nodal vector(s)
@@ -1207,6 +1208,21 @@ end
 ⋅(t::TensorMiddle, b::OpApplied) =
     BilinearTerm(t.a, t.C, b)
 
+⋅(a::OpApplied, P::Problem) =
+    BilinearTerm(a, 1.0, Id(P))
+
+⋅(P::Problem, b::OpApplied) =
+    BilinearTerm(Id(P), 1.0, b)
+
+⋅(a::OpApplied, C::Union{Number,ScalarField}, P::Problem) =
+    BilinearTerm(a, C, Id(P))
+
+⋅(P::Problem, C::Union{Number,ScalarField}, b::OpApplied) =
+    BilinearTerm(Id(P), C, b)
+
+*(c::Union{Number,ScalarField}, P::Problem) =
+    c * Id(P)
+
 # ------------------------------------------------------------
 # Weak expression tree
 # ------------------------------------------------------------
@@ -1444,37 +1460,37 @@ end
 # Fallback forms
 # ------------------------------------------------------------
 
-function ∫(t::BilinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
+#function ∫(t::BilinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
+#
+#    dom = _domain_spec(; Ω=Ω, Γ=Γ)
+#
+#    assemble_operator(
+#        t.a.P,
+#        t.a.op,
+#        t.b.P,
+#        t.b.op,
+#        coefficient=coef,
+#        weight=weight,
+#        domain=dom
+#    )
+#
+#end
 
-    dom = _domain_spec(; Ω=Ω, Γ=Γ)
-
-    assemble_operator(
-        t.a.P,
-        t.a.op,
-        t.b.P,
-        t.b.op,
-        coefficient=coef,
-        weight=weight,
-        domain=dom
-    )
-
-end
-
-function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
-
-    dom = _domain_spec(; Ω=Ω, Γ=Γ)
-
-    assemble_operator(
-        a.P,
-        a.op,
-        b.P,
-        b.op,
-        coefficient=coef,
-        weight=weight,
-        domain=dom
-    )
-
-end
+#function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
+#
+#    dom = _domain_spec(; Ω=Ω, Γ=Γ)
+#
+#    assemble_operator(
+#        a.P,
+#        a.op,
+#        b.P,
+#        b.op,
+#        coefficient=coef,
+#        weight=weight,
+#        domain=dom
+#    )
+#
+#end
 
 function ∫(t::BilinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
     dom = _domain_spec(; Ω=Ω, Γ=Γ)

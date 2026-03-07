@@ -179,7 +179,7 @@ end
 
 # --- internal helpers ---------------------------------------------------------
 
-@inline function _build_elemwise_coeff_dict(coefficient::ScalarField)
+@inline function _build_elemwise_coeff_dict_(coefficient::ScalarField)
     p = nodesToElements(coefficient)               # elementwise
     return p, Dict(zip(p.numElem, p.A))            # elemTag => nodal coeff vector(s)
 end
@@ -188,7 +188,7 @@ end
 #    return nothing
 #end
 
-@inline function _coeff_at_gp(pa::Dict{<:Integer, <:AbstractMatrix}, elem::Integer, hcol::AbstractVector)
+@inline function _coeff_at_gp_(pa::Dict{<:Integer, <:AbstractMatrix}, elem::Integer, hcol::AbstractVector)
     # in your original code: pa0 = pa[elem][:,1]; val = dot(pa0, h[:,k])
     return dot(view(pa[elem], :, 1), hcol)
 end
@@ -223,7 +223,7 @@ function _assemble_poissonlike!(
     if coefficient isa Number
         pconst = Float64(coefficient)
     else
-        _, pa = _build_elemwise_coeff_dict(coefficient)
+        _, pa = _build_elemwise_coeff_dict_(coefficient)
     end
 
     pos = pos0
@@ -292,7 +292,7 @@ function _assemble_poissonlike!(
                 # integrate
                 if coefficient isa ScalarField
                     @inbounds for k in 1:numIntPoints
-                        valc = _coeff_at_gp(pa, elem, view(h, :, k))
+                        valc = _coeff_at_gp_(pa, elem, view(h, :, k))
                         w    = jacDet[k] * intWeights[k] * valc
                         kernel!(Ke, w, k, h, ∂h, numNodes, pdim, dim, elem; dir=dir)
                     end
