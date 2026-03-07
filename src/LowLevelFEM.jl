@@ -28,12 +28,13 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-#=
+
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
         prob = Problem([mat], type = :dummy)
         bc = BoundaryCondition("dummy", ux=0)
+        lc = LoadCondition("dummy", ux=0)
         stiffnessMatrix(prob)
         solveDisplacement(prob)
         solveDisplacement(prob, condensed=true)
@@ -123,9 +124,9 @@ export probe_field
         materialTangentMatrix(prob, F=tfA, C=[;;])
         initialStressMatrix(prob, S=tfA)
         internalForceVector(prob, P=tfA)
-        externalTangentFollower(prob, [bc], F=tfA)
+        externalTangentFollower(prob, [lc], F=tfA)
         loadVector(prob, [], F=tfA)
     end
 end
-=#
+
 end #module

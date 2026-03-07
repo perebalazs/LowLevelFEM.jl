@@ -2922,7 +2922,7 @@ end
 """
     externalTangentFollower(
         problem::Problem,
-        loads::Vector{BoundaryCondition};
+        loads::Vector{LoadCondition};
         F::TensorField
     )
 
@@ -2941,7 +2941,7 @@ and/or stretch together with the deforming body.
 - `problem::Problem`  
   Finite element problem definition.
 
-- `loads::Vector{BoundaryCondition}`  
+- `loads::Vector{LoadCondition}`  
   Boundary conditions defining surface tractions or pressures acting on
   the current configuration. Supported load types:
   - surface traction components (`fx`, `fy`, `fz`),
@@ -3049,7 +3049,7 @@ K = Kmat + Kgeo - Kext
 """
 function externalTangentFollower(
     problem::Problem,
-    loads::Vector{BoundaryCondition};
+    loads::Vector{LoadCondition};
     F::TensorField)
 
     if problem.type == :dummy
@@ -3082,11 +3082,13 @@ function externalTangentFollower(
 
     for bc in loads
         name = bc.phName
-
-        fx = bc.fx
-        fy = bc.fy
-        fz = bc.fz
-        p  = bc.p
+        vals = bc.values
+        _check_load_keys(problem, vals)
+        rhs_comps = _extract_rhs_components(problem, vals)
+        fx = get(rhs_comps, "x", nothing)
+        fy = get(rhs_comps, "y", nothing)
+        fz = get(rhs_comps, "z", nothing)
+        p = get(vals, :p, nothing)
 
         fx = (fx isa ScalarField && isElementwise(fx)) ? elementsToNodes(fx) : fx
         fy = (fy isa ScalarField && isElementwise(fy)) ? elementsToNodes(fy) : fy
