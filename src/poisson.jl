@@ -1097,6 +1097,25 @@ function traceLaplaceMatrix(
     return SystemMatrix(K, problem)
 end
 
+"""
+    beltramiMichellMatrix(problem::Problem; coeff_laplace=1.0, coeff_trace=1.0)
+
+Assemble the Beltrami-Michell operator as
+`tensorLaplaceMatrix + traceLaplaceMatrix`.
+
+# Arguments
+- `problem::Problem`: Tensor-field problem definition.
+- `coeff_laplace`: Coefficient for `tensorLaplaceMatrix`.
+- `coeff_trace`: Coefficient for `traceLaplaceMatrix`.
+
+# Returns
+- `SystemMatrix`: Sum of the two assembled operators.
+
+# Example
+```julia
+Kbm = beltramiMichellMatrix(problem; coeff_laplace=1.0, coeff_trace=1.0)
+```
+"""
 function beltramiMichellMatrix(
     problem::Problem;
     coeff_laplace::Union{Number,ScalarField} = 1.0,

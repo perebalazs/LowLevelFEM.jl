@@ -1123,12 +1123,130 @@ struct OpApplied
     op
 end
 
+"""
+    Grad(P)
+
+Create a weak-form DSL gradient operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object for `∇`.
+
+# Example
+```julia
+K = ∫(Grad(Pu) ⋅ Grad(Pu); Ω="solid")
+```
+"""
 Grad(P) = OpApplied(P, GradOp())
+
+"""
+    Div(P)
+
+Create a weak-form DSL divergence operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object for `∇⋅`.
+
+# Example
+```julia
+A = ∫(Div(Pu) ⋅ Div(Pu); Ω="domain")
+```
+"""
 Div(P) = OpApplied(P, DivOp())
+
+"""
+    Curl(P)
+
+Create a weak-form DSL curl operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object for curl.
+
+# Example
+```julia
+A = ∫(Curl(Pu) ⋅ Curl(Pu); Ω="domain")
+```
+"""
 Curl(P) = OpApplied(P, CurlOp())
+
+"""
+    SymGrad(P)
+
+Create a weak-form DSL symmetric-gradient operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object for `ε(u)`.
+
+# Example
+```julia
+K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu); Ω="solid")
+```
+"""
 SymGrad(P) = OpApplied(P, SymGradOp())
+
+"""
+    Id(P)
+
+Create a weak-form DSL identity operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object for identity mapping.
+
+# Example
+```julia
+M = ∫(Id(Pu) ⋅ Id(Pu); Ω="solid")
+```
+"""
 Id(P) = OpApplied(P, IdOp())
+
+"""
+    TensorDiv(P)
+
+Create a weak-form DSL tensor-divergence operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object for tensor divergence.
+
+# Example
+```julia
+A = ∫(TensorDiv(Pσ) ⋅ TensorDiv(Pσ); Ω="solid")
+```
+"""
 TensorDiv(P) = OpApplied(P, TensorDivOp())
+
+"""
+    Adv(P)
+
+Create a weak-form DSL advection operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object for advection terms.
+
+# Example
+```julia
+A = ∫(Adv(Pu) ⋅ Id(Pu); Ω="domain")
+```
+"""
 Adv(P) = OpApplied(P, AdvOp())
 
 function _check_scalarfield(sf::ScalarField)
@@ -1514,8 +1632,42 @@ function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weigh
         coefficient=coef, domain=dom, weight=weight)
 end
 
+"""
+    ∫Ω(name, expr)
+
+Convenience wrapper for volume integration on physical group `name`.
+
+# Arguments
+- `name`: Gmsh physical group name used as domain `Ω`.
+- `expr::WeakExpr`: Weak-form expression to assemble.
+
+# Returns
+- `SystemMatrix`: Assembled matrix over the selected volume.
+
+# Example
+```julia
+K = ∫Ω("solid", Grad(Pu) ⋅ Grad(Pu))
+```
+"""
 ∫Ω(name, expr) = ∫(expr; Ω=name)
 
+"""
+    ∫Γ(name, expr)
+
+Convenience wrapper for boundary integration on physical group `name`.
+
+# Arguments
+- `name`: Gmsh physical group name used as boundary `Γ`.
+- `expr::WeakExpr`: Weak-form expression to assemble.
+
+# Returns
+- `SystemMatrix`: Assembled matrix over the selected boundary.
+
+# Example
+```julia
+KΓ = ∫Γ("loaded_boundary", Id(Pu) ⋅ Id(Pu))
+```
+"""
 ∫Γ(name, expr) = ∫(expr; Γ=name)
 
 const ε = SymGrad

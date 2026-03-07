@@ -465,6 +465,22 @@ function projectScalarField(pp::Union{ScalarField,Vector{ScalarField}}; from="",
     return ret
 end
 
+"""
+    fieldsToVolume(p0::Union{ScalarField,Vector{ScalarField}})
+
+Project lubricant-surface scalar field(s) to the configured lubricant volume.
+
+# Arguments
+- `p0`: One `ScalarField` or a vector of `ScalarField`s defined on the source surface.
+
+# Returns
+- `Vector{ScalarField}`: Elementwise scalar fields on `model.geometry.nameVolume`.
+
+# Example
+```julia
+pv = fieldsToVolume(p_surface)
+```
+"""
 function fieldsToVolume(p0::Union{ScalarField,Vector{ScalarField}})
     if p0 isa Vector
         p = p0

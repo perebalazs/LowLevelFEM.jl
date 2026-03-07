@@ -621,6 +621,22 @@ function heatSourceVector(problem, loads)
     return loadVector(problem, loads)
 end
 
+"""
+    BoundaryCondition_to_LoadCondition(bc::Vector{BoundaryCondition})
+
+Convert boundary-condition entries to load-condition entries.
+
+# Arguments
+- `bc::Vector{BoundaryCondition}`: Boundary condition definitions.
+
+# Returns
+- `Vector{LoadCondition}`: Load conditions with copied `phName`, `problem`, and `values`.
+
+# Example
+```julia
+loads = BoundaryCondition_to_LoadCondition(bc)
+```
+"""
 function BoundaryCondition_to_LoadCondition(bc::Vector{BoundaryCondition})
     lc = LoadCondition[]
     for cond in bc

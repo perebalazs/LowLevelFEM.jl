@@ -539,7 +539,7 @@ Return total number of dofs for a single-field problem.
 ndofs(P::Problem) = P.non * P.pdim
 
 """
-    SystemMatrix_(blocks::Matrix{SystemMatrix})
+    SystemMatrix(blocks::Matrix{SystemMatrix})
 
 Construct a global block system matrix from a matrix of `SystemMatrix` blocks.
 
@@ -605,7 +605,7 @@ Aup = ∫(Div(Pu) ⋅ Id(Pp))
 Apu = ∫(Div(Pu) ⋅ Id(Pp))'
 App = ∫(Grad(Pp) ⋅ Grad(Pp) * δ)
 
-K = SystemMatrix_([
+K = SystemMatrix([
     Auu  Aup
     Apu  App
 ])
@@ -1707,7 +1707,7 @@ and stored as a global vector.
 - `field`: Field object containing nodal RHS values.
 
 # Returns
-- `SystemVector_` representing a single-field RHS vector.
+- `SystemVector` representing a single-field RHS vector.
 
 # Notes
 This constructor assumes that the field contains a single load step.
@@ -1758,7 +1758,7 @@ An error is thrown if:
 fu = bodyForce(Pu)
 fp = pressureLoad(Pp)
 
-rhs = SystemVector_([fu, fp])
+rhs = SystemVector([fu, fp])
 ````
 
 This constructs a global RHS vector for a two-field system with ordering
@@ -1768,7 +1768,7 @@ This constructs a global RHS vector for a two-field system with ordering
   p ]
 ```
 
-See also: [`SystemMatrix_`](@ref)
+See also: [`SystemMatrix`](@ref)
 
 """
 function SystemVector(fields::Vector)
@@ -2067,6 +2067,22 @@ struct BoundaryCondition
 end
 =#
 
+"""
+    BoundaryConditionFields(bc::BoundaryCondition)
+
+Return the defined field keys of a boundary condition.
+
+# Arguments
+- `bc::BoundaryCondition`: Boundary condition object with named values.
+
+# Returns
+- An iterator over `Symbol` keys present in `bc.values`.
+
+# Example
+```julia
+keys = BoundaryConditionFields(bc)
+```
+"""
 function BoundaryConditionFields(bc::BoundaryCondition)
     return keys(bc.values)
 end
