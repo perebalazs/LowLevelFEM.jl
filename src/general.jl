@@ -626,8 +626,9 @@ struct SystemMatrix
     test_model::Union{Problem,Nothing}
     problems::Union{Vector{Problem},Nothing}      # többmezős meta
     offsets::Union{Vector{Int},Nothing}           # globális kezdő indexek
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem) = new(A, model, test_model)
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem) = new(A, model, model)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem) = new(A, model, test_model, nothing, nothing)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem) = new(A, model, model, nothing, nothing)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem, problems::Union{Vector{Problem},Nothing}, offsets::Union{Vector{Int},Nothing}) = new(A, model, test_model, problems, offsets)
     function SystemMatrix(blocks::Matrix{SystemMatrix})
 
         nrows, ncols = size(blocks)
