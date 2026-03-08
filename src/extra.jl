@@ -104,6 +104,8 @@ function initialize(problem::Problem)
 end
 
 """
+    projectScalarField(pp::Union{ScalarField,Vector{ScalarField}}; from="", to="", gap=false, binSize=0.7)
+
     projectScalarField(p::Union{ScalarField,Vector{ScalarField}}; from="", to="", gap=false, binSize=0.7)
 
 Projects a scalar field defined on a 2D surface onto the nodes of another mesh

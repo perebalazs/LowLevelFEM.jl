@@ -109,6 +109,8 @@ end
 =#
 
 """
+    /(AA::ScalarField, BB::ScalarField)
+
     /(A::ScalarField, B::ScalarField)
 
 Performs element-wise division of two `ScalarField` objects on the same set of elements.
@@ -503,6 +505,8 @@ import LinearAlgebra.norm
 import LinearAlgebra.diagm
 
 """
+    *(AA::ScalarField, BB::VectorField)
+
     *(A::ScalarField, B::VectorField)
 
 Scales a `VectorField` by a `ScalarField` element-wise on matching elements.
@@ -567,6 +571,8 @@ function *(AA::ScalarField, BB::VectorField)
 end
 
 """
+    *(BB::VectorField, AA::ScalarField)
+
     *(B::VectorField, A::ScalarField)
 
 Scales a `VectorField` by a `ScalarField` element-wise on matching elements.
@@ -626,6 +632,8 @@ function *(BB::VectorField, AA::ScalarField)
 end
 
 """
+    /(BB::VectorField, AA::ScalarField)
+
     /(B::VectorField, A::ScalarField)
 
 Divides a `VectorField` by a `ScalarField` element-wise on matching elements.
@@ -1113,6 +1121,8 @@ end
 =#
 
 """
+    ×(AA::VectorField, BB::VectorField)
+
     ×(a::VectorField, b::VectorField)
 
 Element-wise 3D vector cross product on matching elements.
@@ -1181,6 +1191,8 @@ function ×(AA::VectorField, BB::VectorField)
 end
 
 """
+    norm(AA::VectorField)
+
     norm(A::VectorField)
 
 Element-wise Euclidean norm of a `VectorField`.
@@ -1210,6 +1222,8 @@ function norm(AA::VectorField)
 end
 
 """
+    diagm(AA::VectorField)
+
     diagm(A::VectorField)
 
 Creates a diagonal `TensorField` from a `VectorField` (dim=3), i.e., places vector
@@ -1264,6 +1278,8 @@ export unitTensor
 export trace
 
 """
+    *(AA::TensorField, BB::TensorField)
+
     *(A::TensorField, B::TensorField)
 
 Tensor contraction (matrix multiplication) for each element/node: reshapes 9×1 blocks
@@ -1317,6 +1333,8 @@ function *(AA::TensorField, BB::TensorField)
 end
 
 """
+    ⋅(AA::TensorField, BB::TensorField)
+
     ⋅(A::TensorField, B::TensorField)
 
 Element-wise (Hadamard) product followed by summation of all components, yielding a
@@ -1836,6 +1854,8 @@ function transpose(A::TensorField)
 end
 
 """
+    adjoint(AA::TensorField)
+
     adjoint(A::TensorField)
 
 Adjoint (conjugate transpose) of each 3×3 tensor block.
@@ -1869,6 +1889,8 @@ function adjoint(AA::TensorField)
 end
 
 """
+    unitTensor(AA::TensorField)
+
     unitTensor(A::TensorField)
 
 Creates an identity tensor field (I) with the same element structure and time steps as `A`.
@@ -1902,6 +1924,8 @@ function unitTensor(AA::TensorField)
 end
 
 """
+    trace(AA::TensorField)
+
     trace(A::TensorField)
 
 Computes the trace of each 3×3 tensor block.
@@ -1941,6 +1965,8 @@ function trace(AA::TensorField)
 end
 
 """
+    det(AA::TensorField)
+
     det(A::TensorField)
 
 Computes the determinant of each 3×3 tensor block.
@@ -1980,6 +2006,8 @@ function det(AA::TensorField)
 end
 
 """
+    inv(AA::TensorField)
+
     inv(A::TensorField)
 
 Matrix inverse of each 3×3 tensor block.

@@ -51,7 +51,7 @@ function make_ws_axi(dim::Int, numNodes::Int, numIntPoints::Int, rowsOfB::Int, d
 end
 
 """
-    stiffnessMatrix(problem; forceOneThread=true)
+    stiffnessMatrix(problem::Problem; forceOneThread=true)
 
 Solves the stiffness matrix of the `problem`.
 
@@ -1536,8 +1536,8 @@ function stiffnessMatrixTruss(problem; elements=[])
 end
 
 """
-    nonLinearStiffnessMatrix(problem, q)
-                        
+    nonLinearStiffnessMatrix(q::VectorField)
+
 Solves the nonlinear stiffness matrix of the `problem`. `q` is a displacement field.
                         
 Returns: `stiffMat`
@@ -1823,8 +1823,8 @@ function nonLinearStiffnessMatrixAXI(problem; elements=[])
 end
 
 """
-    massMatrix(problem; lumped=...)
-                        
+    massMatrix(problem; lumped=true)
+
 Solves the mass matrix of the `problem`. If `lumped` is true, computes the lumped mass matrix.
                         
 Returns: `massMat`
@@ -2783,8 +2783,9 @@ function massMatrixTruss(problem; lumped=false)
 end
 
 """
-    dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=..., β=...)
-                            
+    dampingMatrix(K::SystemMatrix, M::SystemMatrix, ωₘₐₓ::Float64; 
+                  α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
+
 Generates the damping matrix for proportional damping. C = αM + βK, or
 C = αM + β₁K + β₂KM⁻¹K + β₃KM⁻¹KM⁻¹K + ⋯. The latter corresponds to a damping characteristic
 given by a power series in the natural frequencies with odd exponents. ξᵢ (`ξ` in the
@@ -2840,8 +2841,8 @@ function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐ�
 end
 
 """
-    elasticSupportMatrix(problem, elSupp)
-                            
+    elasticSupportMatrix(problem, elSupports)
+
 Solves the elastic support matrix of the `problem`. `elSupp` is a vector of elastic
 supports defined in function `elasticSupport`. With the displacementent vector `q` in hand the
 reaction force vector `fR` arising from the elastic support can be solved.
@@ -3449,7 +3450,7 @@ end
 end
 
 """
-    _bc_component_map(problem)
+    _bc_component_map(problem::Problem)
 
 Return Dict mapping component string → component index (1:pdim)
 """
@@ -3477,8 +3478,9 @@ function _bc_component_map(problem::Problem)
 end
 
 """
-    applyBoundaryConditions!(field::Union{ScalarField,VectorField,TensorField}, supports::Vector{BoundaryCondition})
-                            
+    applyBoundaryConditions!(field::Union{ScalarField,VectorField,TensorField}, 
+                             supports::Vector{BoundaryCondition})
+
 Applies boundary conditions `supports` on a `ScalarField`, `VectorField` or `TensorField`
 `field`. Mesh details are in `problem`. `supports` is `BoundaryCondition`.
                             
@@ -3562,8 +3564,10 @@ function applyBoundaryConditions!(
 end
 
 """
-    applyBoundaryConditions(problem::Problem, supports::Vector{BoundaryCondition})
-                            
+    applyBoundaryConditions(problem::Problem, 
+                            supports::Vector{BoundaryCondition}; 
+                            steps::Int=1)
+
 Create a `ScalarField`, `VectorField` or `TensorField` and applies the boundary 
 conditions `supports` on it. Mesh details are in `problem`. `supports` is `BoundaryCondition`.
                             
@@ -3601,8 +3605,8 @@ end
 
 
 """
-    applyElasticSupport!(stiffMat, elastSupp)
-                            
+    applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
+
 Applies elastic support boundary conditions `elastSupp` on a stiffness matrix
 `stiffMat`. Mesh details are in `problem`. `elastSupp` is a tuple of `name`
 of physical group and prescribed `kx`, `ky` and `kz` stiffnesses.
@@ -3623,12 +3627,13 @@ function applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
 end
 
 """
-    solveDisplacement(K, f; support = BoundaryCondition[],
-                      iterative = false,
-                      reltol = sqrt(eps()),
-                      maxiter = K.model.non * K.model.dim,
-                      preconditioner = Identity(),
-                      ordering = true)
+    solveDisplacement(K::SystemMatrix, f::VectorField; 
+                      support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                      iterative=false, 
+                      reltol::Real = sqrt(eps()), 
+                      maxiter::Int = K.model.non * K.model.dim, 
+                      preconditioner = Identity(), 
+                      ordering=true)
 
 Solves the linear system
 
@@ -3710,16 +3715,16 @@ function solveDisplacement(K::SystemMatrix, f::VectorField;
 end
 
 """
-    solveDisplacement(problem;
-                      load = LoadCondition[],
-                      support = BoundaryCondition[],
-                      elasticSupport = BoundaryCondition[],
-                      condensed = true,
-                      iterative = false,
-                      reltol = sqrt(eps()),
-                      maxiter = problem.non * problem.dim,
-                      preconditioner = Identity(),
-                      ordering = true)
+    solveDisplacement(problem::Problem; 
+                      load::Vector{LoadCondition}=LoadCondition[], 
+                      support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                      elasticSupport::Vector{BoundaryCondition}=BoundaryCondition[], 
+                      condensed=true, 
+                      iterative=false, 
+                      reltol::Real = sqrt(eps()), 
+                      maxiter::Int = problem.non * problem.dim, 
+                      preconditioner = Identity(), 
+                      ordering=true)
 
 Computes the displacement vector `u` for a given [`Problem`] subject to external
 loads, essential supports, and optional elastic supports.
@@ -4478,8 +4483,11 @@ end
 end
 
 """
-    solveStress(q; T=..., T₀=..., DoFResults=false)
-                            
+    solveStress(q::VectorField; 
+                T=ScalarField([],[;;],[0.0],[],0,:null,q.model), 
+                T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model), 
+                DoFResults=false)
+
 Solves the stress field `S` from displacement vector `q`. Stress field is given
 per elements, so it usually contains jumps at the boundary of elements. Details
 of mesh is available in `problem`. If `DoFResults` is true, `S` is a matrix with
@@ -5203,8 +5211,12 @@ function solveAxialForce(q::VectorField)
 end
 
 """
-    solveEigenModes(K, M; n=6, fₘᵢₙ=1.01)
-                            
+    solveEigenModes(K::SystemMatrix, 
+                    M::SystemMatrix; 
+                    n=6, 
+                    fₘᵢₙ=0.01, 
+                    directSolver=false)
+
 Solves the eigen frequencies and mode shapes of a problem given by stiffness
 matrix `K` and the mass matrix `M`. `n` is the number of eigenfrequencies to solve,
 and solves the eigenfrequencies greater than `fₘᵢₙ`. Returns the struct of eigenfrequencies
@@ -5276,8 +5288,13 @@ function solveBucklingModes(K, Knl; n=6)
 end
 
 """
-    solveModalAnalysis(problem; support=[]; load=[], n=6, fₘᵢₙ=0.00001, directSolver=false)
-                            
+    solveModalAnalysis(problem::Problem; 
+                       support=Vector{BoundaryCondition}(), 
+                       load=Vector{BoundaryCondition}(), 
+                       n=6, 
+                       fₘᵢₙ=0.00001, 
+                       directSolver=false)
+
 Solves the first `n` eigenfrequencies and the corresponding 
 mode shapes for the `problem`, when `load` and 
 `support` are applied. `load` and `contraints` are optional. 
@@ -5356,8 +5373,11 @@ function solveModalAnalysis(problem; support=Vector{BoundaryCondition}(), load=V
 end
 
 """
-    solveBuckling(problem; load=[], support=[], n=6)
-                            
+    solveBuckling(problem::Problem; 
+                  load=Vector{BoundaryCondition}(), 
+                  support=Vector{BoundaryCondition}(), 
+                  n=6)
+
 Solves the multipliers for the first `n` critical forces and the corresponding 
 buckling shapes for the instability of the `problem`, when `loads` and 
 `support` are applied. Result can be presented by `showBucklingResults`
@@ -5403,8 +5423,12 @@ function solveBuckling(problem; load=Vector{BoundaryCondition}(), support=Vector
 end
 
 """
-    initialDisplacement(problem, name; ux=..., uy=..., uz=...)
-                            
+    initialDisplacement(problem::Problem, 
+                        name::String; 
+                        ux=nothing, 
+                        uy=nothing, 
+                        uz=nothing)
+
 Sets the displacement values `ux`, `uy` and `uz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Returns the initial
 displacement vector `u0`.
@@ -5425,8 +5449,12 @@ function initialDisplacement(problem, name; ux=nothing, uy=nothing, uz=nothing)
 end
 
 """
-    initialDisplacement!(u0, name; ux=..., uy=..., uz=...)
-                            
+    initialDisplacement!(u0::VectorField, 
+                         name::String; 
+                         ux=nothing, 
+                         uy=nothing, 
+                         uz=nothing)
+
 Changes the displacement values to `ux`, `uy` and `uz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
 displacement vector `u0`.
@@ -5446,8 +5474,12 @@ function initialDisplacement!(u0, name; ux=nothing, uy=nothing, uz=nothing)
 end
 
 """
-    initialVelocity(problem, name; vx=..., vy=..., vz=...)
-                            
+    initialVelocity(problem::Problem, 
+                    name::String; 
+                    vx=nothing, 
+                    vy=nothing, 
+                    vz=nothing)
+
 Sets the velocity values `vx`, `vy` and `vz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Returns the initial
 velocity vector `v0`.
@@ -5468,8 +5500,12 @@ function initialVelocity(problem, name; vx=nothing, vy=nothing, vz=nothing)
 end
 
 """
-    initialVelocity!(v0, name; vx=..., vy=..., vz=...)
-                            
+    initialVelocity!(u0::VectorField, 
+                     name::String; 
+                     vx=nothing, 
+                     vy=nothing, 
+                     vz=nothing)
+
 Changes the velocity values `vx`, `vy` and `vz` (depending on the dimension of
 the `problem`) at nodes belonging to physical group `name`. Original values are in
 velocity vector `v0`.
@@ -5489,8 +5525,10 @@ function initialVelocity!(u0, name; vx=nothing, vy=nothing, vz=nothing)
 end
 
 """
-    largestPeriodTime(K, M, bc)
-                            
+    largestPeriodTime(K::SystemMatrix, 
+                      M::SystemMatrix; 
+                      support=Vector{BoundaryCondition}())
+
 Solves the largest period of time for a dynamic problem given by stiffness
 matrix `K` and the mass matrix `M`, `bc` is a vector of `BoundaryCondition` where the
 displacement is given.
@@ -5520,8 +5558,10 @@ function largestPeriodTime(K, M; support=Vector{BoundaryCondition}())
 end
 
 """
-    smallestPeriodTime(K, M, support=[])
-                            
+    smallestPeriodTime(K::SystemMatrix, 
+                       M::SystemMatrix; 
+                       support=Vector{BoundaryCondition}())
+
 Solves the smallest period of time for a dynamic problem given by stiffness
 matrix `K` and the mass matrix `M`, `support` is a vector of `BoundaryCondition` where the
 displacement is given.
@@ -5549,8 +5589,10 @@ function smallestPeriodTime(K, M; support=Vector{BoundaryCondition}())
 end
 
 """
-    smallestEigenValue(K, M, support=[])
-                            
+    smallestEigenValue(K::SystemMatrix, 
+                       M::SystemMatrix; 
+                       support=Vector{BoundaryCondition}())
+
 Solves the largest eigenvalue for a transient problem given by stiffness (heat conduction)
 matrix `K` and the mass (heat capacity) matrix `M` (`C`).
                             
@@ -5579,8 +5621,10 @@ function smallestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{Bou
 end
 
 """
-    largestEigenValue(K, M, support=[])
-                            
+    largestEigenValue(K::SystemMatrix, 
+                      M::SystemMatrix; 
+                      support=Vector{BoundaryCondition}())
+
 Solves the smallest eigenvalue for a transient problem given by stiffness (heat conduction)
 matrix `K` and the mass (heat capacity) matrix `M` (`C`).
                             
@@ -5607,10 +5651,20 @@ function largestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{Boun
 end
 
 """
-    CDM(K, M, C, f, bc, u0, v0, n, Δt)
+    CDM(K::SystemMatrix, 
+        M::SystemMatrix, 
+        C::SystemMatrix, 
+        f::VectorField, 
+        bc::Vector{BoundaryCondition}, 
+        u0::VectorField, 
+        v0::VectorField, 
+        n::Int, 
+        Δt::Float64)
+aliases:
+
     CDM(K, M, f, bc, u0, v0, n, Δt)
-    CDM(K, M, C, f, u0, v0, n, Δt; support=[])
-    CDM(K, M, f, u0, v0, n, Δt; support=[])
+    CDM(K, M, C, f, u0, v0, n, Δt; support=BoundaryCondition[])
+    CDM(K, M, f, u0, v0, n, Δt; support=BoundaryCondition[])
 
 Solves a transient structural dynamic problem using the **central difference method (CDM)**,
 an explicit time integration scheme. (support ≡ bc)
@@ -5763,7 +5817,21 @@ CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::Vec
     CDM(K, M, f, support,  uu0, vv0, n, Δt)
 
 """
-    HHT(K, M, f, bc, u0, v0, n, Δt; α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2)
+    HHT(K::SystemMatrix, 
+        M::SystemMatrix, 
+        f::VectorField, 
+        bc::Vector{BoundaryCondition}, 
+        u0::VectorField, 
+        v0::VectorField, 
+        n::Int, 
+        Δt::Float64; 
+        α = 0.0, 
+        δ = 0.0, 
+        γ = 0.5 + δ, 
+        β = 0.25 * (0.5 + γ)^2)
+
+alias:
+
     HHT(K, M, f, u0, v0, n, Δt; α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2)
 
 Solves a transient structural dynamic problem using the **Hilber–Hughes–Taylor
@@ -6041,8 +6109,17 @@ end
 =#
 
 """
-    CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=..., ξ=..., β=..., show_β=..., show_ξ=...)
-                            
+    CDMaccuracyAnalysis(ωₘᵢₙ::Float64, 
+                        ωₘₐₓ::Float64, 
+                        Δt::Float64, 
+                        type::Symbol; 
+                        n=100, 
+                        α=0.0, 
+                        ξ=0.01, 
+                        β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], 
+                        show_β=false, 
+                        show_ξ=false)
+
 Gives some functions (graphs) for accuracy analysis of the CDM method. 
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
 **Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the

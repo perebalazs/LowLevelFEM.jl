@@ -9,7 +9,7 @@ export FDM
 export BoundaryCondition_to_LoadCondition
 
 """
-    heatConductionMatrix(problem)
+    heatConductionMatrix(problem::Problem)
 
 Solves the heat conduction matrix of the `problem`.
 
@@ -243,7 +243,7 @@ function heatCondMatrixAXI(problem; elements=[])
 end
 
 """
-    heatCapacityMatrix(problem; lumped=...)
+    heatCapacityMatrix(problem::Problem; lumped=false)
 
 Solves the heat capacity matrix of the `problem`. If `lumped` is true, solves lumped heat capacity matrix.
 
@@ -376,7 +376,9 @@ function heatCapacityMatrix(problem; elements=[], lumped=false)
 end
 
 """
-    latentHeatMatrix(problem, u, v, T0)
+    latentHeatMatrix(u::VectorField, 
+                     v::VectorField, 
+                     T0::ScalarField)
 
 Solves the latent heat matrix of the `problem`. With this matrix the generated heat due to deformations
 (given with displacement field `u` and velocity field `v`) can be solved. `T0` is the current temperature
@@ -565,7 +567,7 @@ function heatConvectionMatrix(problem, heatConvection)
 end
 
 """
-    heatFluxVector(problem, heatFlux)
+    heatFluxVector(problem::Problem, heatFlux::Vector{LoadCondition})
 
 Solves a heat flux or heat source vector of `problem`. `heatFlux` is a tuple of name of physical group 
 `name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
@@ -593,7 +595,7 @@ function heatFluxVector(problem, loads)
 end
 
 """
-    heatSourceVector(problem, heatSource)
+    heatSourceVector(problem::Problem, heatSource::Vector{LoadCondition})
 
 Solves a heat flux or heat source vector of `problem`. `heatSource` is a tuple of name of physical group 
 `name`, heat flux `qn` normal to the surface of the body. The outward direction is positive.
@@ -671,7 +673,9 @@ function heatConvectionVector(problem, heatConvection)
 end
 
 """
-    thermalLoadVector(problem, T; T₀=...)
+    thermalLoadVector(problem::Problem, 
+                      T::ScalarField; 
+                      T₀=ScalarField([], zeros(problem.non, 1), [0], [], 1, :scalar, problem))
 
 Solves the thermal load vector from a temperature field `T` for problem `problem`.
 `T₀` is the initial temperature field. `problem` is an elastic problem.
@@ -977,8 +981,9 @@ function applyHeatConvection!(heatCondMat, heatFluxVec, heatConv)
 end
 
 """
-    solveTemperature(K, q;
-                     temperatureConstraint = [])
+    solveTemperature(K::SystemMatrix, 
+                     q::ScalarField; 
+                     temperatureConstraint=Vector{BoundaryCondition}())
 
 Solves the linear heat conduction problem
 
@@ -1023,10 +1028,10 @@ function solveTemperature(K::SystemMatrix, q::ScalarField; temperatureConstraint
 end
 
 """
-    solveTemperature(problem;
-                     heatFlux = BoundaryCondition[],
-                     temperatureConstraint = BoundaryCondition[],
-                     heatConvection = BoundaryCondition[])
+    solveTemperature(problem::Problem; 
+                     heatFlux::Vector{LoadCondition}=LoadCondition[], 
+                     temperatureConstraint::Vector{BoundaryCondition}=BoundaryCondition[], 
+                     heatConvection::Vector{BoundaryCondition}=BoundaryCondition[])
 
 Computes the temperature field `T` for a given [`Problem`] subject to prescribed
 heat fluxes, temperature constraints, and optional heat convection boundary
@@ -1079,7 +1084,7 @@ function solveTemperature(problem::Problem;
 end
 
 """
-    solveTemperature(problem, u; T0=273.0)
+    solveTemperature(problem::Problem, u::VectorField; T0=273.0)
 
 Solves the raise of temperature `T` during reversible (no dissipation) elastic deformations,
 where `u` is the displacement field, and `problem` is a heat cunduction problem.
@@ -1301,7 +1306,7 @@ function solveHeatFlux(T; DoFResults=false)
 end
 
 """
-    initialTemperature(problem, name; T=...)
+    initialTemperature(problem::Problem, name::String; T=nothing)
 
 Sets the temperature value `T` at nodes belonging to physical group `name`.
 Returns the `T0` initial nodal temperature vector.
@@ -1328,7 +1333,9 @@ function initialTemperature(problem, name; T=nothing)
 end
 
 """
-    initialTemperature!(T0, name; T=...)
+    initialTemperature!(T0::ScalarField, 
+                        name::String; 
+                        T=nothing)
 
 Changes the tempetature value to `T` at nodes belonging to physical group `name`.
 Original values are in temperature vector `T0`.
@@ -1353,7 +1360,17 @@ function initialTemperature!(T0, name; T=nothing)
 end
 
 """
-    FDM(K, C, q, bc, T0, n, Δt; ϑ=0.5)
+    FDM(K::SystemMatrix, 
+        C::SystemMatrix, 
+        q::Union{ScalarField,VectorField}, 
+        bc::Vector{BoundaryCondition}, 
+        T0::Union{ScalarField,VectorField}, 
+        n::Int, 
+        Δt::Float64; 
+        ϑ=0.5)
+
+alias:
+
     FDM(K, C, q, T0, n, Δt; ϑ=0.5, support=bc)
 
 Solves a transient diffusion-type problem (e.g. heat conduction) using the
@@ -1602,7 +1619,7 @@ function FDM_old(K::SystemMatrix, C::SystemMatrix, q::ScalarField,
 end
 
 """
-    FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type, n=100, ϑ=...)
+    FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type=:SR, n=100, ϑ=0.5)
 
 Gives a functions (graphs) for accuracy analysis of the ϑ-method[^5]. 
 `λₘᵢₙ` and `λₘₐₓ` are the smallest and largest eigenvalues of the

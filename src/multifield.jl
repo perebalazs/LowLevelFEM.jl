@@ -241,7 +241,7 @@ end
 #ndofs(P::Problem) = P.non * P.pdim
 
 """
-    op_outdim(op, P)
+    op_outdim(::IdOp, P::Problem)
 
 Return the number of components produced by applying
 operator `op` to a field described by `Problem` `P`.
@@ -299,7 +299,7 @@ function op_outdim(op::AdvOp, P::Problem)
 end
 
 """
-    build_B!(B, op, P, k, h, ∂h, numNodes)
+    build_B!(B::AbstractMatrix, ::IdOp, P::Problem, k::Int, h, ∂h, numNodes::Int)
 
 Construct the operator matrix `B` at Gauss point `k`.
 
@@ -547,6 +547,8 @@ end
 end
 
 """
+    _eval_tensor_at_gp(C, pa, elem, hgp)
+
 Evaluate scalar or tensor coefficient at Gauss point.
 
 Supports:
@@ -592,9 +594,12 @@ function _eval_tensor_at_gp(C, pa, elem, hgp)
 end
 
 """
-    assemble_operator(Pu, op_u, Ps, op_s;
-                      coefficient=1.0,
-                      weight=nothing,
+    assemble_operator(Pu::Problem, 
+                      op_u::AbstractOp, 
+                      Ps::Problem, 
+                      op_s::AbstractOp; 
+                      coefficient::Union{Number,ScalarField}=1.0, 
+                      weight=nothing, 
                       domain=nothing)
 
 Assemble the sparse matrix corresponding to the bilinear form
@@ -950,8 +955,21 @@ function compliance9_iso(E, nu; penalty=1e8)
 end
 
 """
-    solveField(K, F; support=[])
+    solveField(K::SystemMatrix, 
+               F::SystemVector; 
+               support::Vector{BoundaryCondition}=BoundaryCondition[])
 
+single field version:
+
+    solveField(K::SystemMatrix, 
+               f::Union{ScalarField,VectorField}; 
+               support::Vector{BoundaryCondition}=BoundaryCondition[], 
+               iterative=false, 
+               reltol::Real = sqrt(eps()), 
+               maxiter::Int = K.model.non * K.model.dim, 
+               preconditioner = Identity(), 
+               ordering=true)
+    
 Solve the linear system
 
     K * x = F
@@ -969,7 +987,7 @@ Global system matrix (`SystemMatrix`).
 
 `F`
 
-Global RHS vector (`SystemVector`).
+Global RHS vector (`SystemVector` or `ScalarField` or `VectorField`)
 
 # Keyword arguments
 
@@ -1532,7 +1550,7 @@ end
 # ------------------------------------------------------------
 
 """
-    ∫(expr; Ω=nothing, Γ=nothing)
+    ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing)
 
 Assemble a finite element operator from a weak-form expression.
 

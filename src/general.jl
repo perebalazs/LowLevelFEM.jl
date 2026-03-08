@@ -531,7 +531,7 @@ struct Transformation
 end
 
 """
-    ndofs(problem::Problem)
+    ndofs(P::Problem)
 
 Return total number of dofs for a single-field problem.
 """
@@ -1688,7 +1688,7 @@ struct SystemVector
 end
 
 """
-    SystemVector(field)
+    SystemVector(field::Union{ScalarField,VectorField,TensorField})
 
 Construct a global RHS vector from a single finite element field.
 
@@ -2130,7 +2130,7 @@ function loads_for_problem(loads::Vector{LoadCondition}, P::Problem)
 end
 
 """
-    _extract_rhs_components(problem, vals)
+    _extract_rhs_components(problem::Problem, vals::Dict)
 
 Extract RHS components using `problem.rhs_field` prefix.
 Returns a Dict{String,Any} mapping component string -> value.
@@ -2150,7 +2150,7 @@ function _extract_rhs_components(problem::Problem, vals::Dict)
 end
 
 """
-    _check_load_keys(problem, vals)
+    _check_load_keys(problem::Problem, vals::Dict)
 
 Validate load keys. Throws error if invalid combination is detected.
 """
@@ -2705,6 +2705,8 @@ function time_derivative!(a, t, src)
 end
 
 """
+    Base.getindex(v::VectorField, k::Int)
+
     v[k] -> ScalarField
 
 Extract the k-th component (1,2,3) of a `VectorField` as a `ScalarField`.
@@ -2756,6 +2758,8 @@ function Base.getindex(v::VectorField, k::Int)
 end
 
 """
+    Base.getindex(T::TensorField, i::Int, j::Int)
+
     T[i,j] -> ScalarField
 
 Extract a single tensor component (i,j) from a 3×3 `TensorField`.
@@ -2805,6 +2809,8 @@ function Base.getindex(T::TensorField, i::Int, j::Int)
 end
 
 """
+    Base.getindex(T::TensorField, i::Int, ::Colon)
+
     T[i,:] -> VectorField
 
 Extract the i-th row of a 3×3 `TensorField` as a 3-component `VectorField`.
@@ -2831,6 +2837,8 @@ function Base.getindex(T::TensorField, i::Int, ::Colon)
 end
 
 """
+    Base.getindex(T::TensorField, ::Colon, j::Int)
+
     T[:,j] -> VectorField
 
 Extract the j-th column of a 3×3 `TensorField` as a 3-component `VectorField`.
@@ -2857,6 +2865,8 @@ function Base.getindex(T::TensorField, ::Colon, j::Int)
 end
 
 """
+    Base.getindex(T::TensorField, I...)
+
 Invalid index pattern for `TensorField`.
 
 Allowed:
@@ -2885,6 +2895,8 @@ function Base.getindex(T::TensorField, I...)
 end
 
 """
+    Base.setindex!(v::VectorField, s::ScalarField, k::Int)
+
     v[k] = s
 
 Assign a scalar component into a `VectorField`.
@@ -2961,6 +2973,8 @@ function Base.setindex!(v::VectorField, s::ScalarField, k::Int)
 end
 
 """
+    Base.setindex!(T::TensorField, s::ScalarField, i::Int, j::Int)
+
     T[i, j] = s
     T[i, :] = v
     T[:, j] = v
@@ -3084,7 +3098,7 @@ function Base.setindex!(T::TensorField, v::VectorField, i::Int, ::Colon)
 end
 
 """
-    mergeFields(u::Vector{<:LowLevelFEM.AbstractField})
+    mergeFields(uu::Vector{<:AbstractField})
 
 Concatenates multiple Fields along a common pseudo-time axis.
 
@@ -3247,6 +3261,8 @@ end
 
 #=
 """
+    material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, μ=E/(1+ν)/2, λ=2μ*ν/(1-2ν), κ=2μ*(1+ν)/(1-2ν)/3, η=1e-7, p₀=0.1, A=1)
+
     material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8, α=1.2e-5, λ=νE/(1+ν)/(1-2ν), μ=E/(1+ν)/2, κ=E/(1-2ν)/3)
 
 Returns a structure in which `name` is the name of a physical group,
@@ -3404,7 +3420,7 @@ function getEigenValues(A::VectorField)
 end
 
 """
-    displacementConstraint(name; ux=..., uy=..., uz=...)
+    displacementConstraint(name; ux=nothing, uy=nothing, uz=nothing)
 
 Specifies displacement constraints on the physical group `name`. At least one of `ux`, `uy`,
 or `uz` must be provided (depending on the problem dimension). `ux`, `uy`, or `uz` can be a
@@ -3468,7 +3484,7 @@ end
 =#
 
 """
-    load(name; fx=..., fy=..., fz=...)
+    load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
 
 Specifies a distributed load on the physical group `name`. At least one of `fx`, `fy`, or `fz`
 must be provided (depending on the problem dimension). `fx`, `fy`, or `fz` can be a constant
@@ -3542,7 +3558,7 @@ end
 =#
 
 """
-    elasticSupport(name; kx=..., ky=..., kz=...)
+    elasticSupport(name; kx=nothing, ky=nothing, kz=nothing)
 
 Specifies distributed stiffness for an elastic support on the physical group `name`.
 `kx`, `ky`, or `kz` can be a constant or a function of `x`, `y`, and `z`.
@@ -3570,7 +3586,7 @@ end
 =#
 
 """
-    temperatureConstraint(name; T=...)
+    temperatureConstraint(name; T=nothing)
 
 Specifies temperature constraints on the physical group `name`.
 `T` can be a constant or a function of `x`, `y`, and `z`.
@@ -3595,7 +3611,7 @@ end
 =#
 
 """
-    heatFlux(name; qn=...)
+    heatFlux(name; qn=nothing)
 
 Specifies the heat flux normal to the surface of the physical group `name`.
 `qn` can be a constant or a function of `x`, `y`, and `z`.
@@ -3621,7 +3637,7 @@ function heatFlux(name; qn=nothing)
 end
 
 """
-    heatSource(name; h=...)
+    heatSource(name; h=nothing)
 
 Specifies the volumetric heat source in the physical group `name`.
 `h` can be a constant or a function of `x`, `y`, and `z`.
@@ -3647,7 +3663,7 @@ function heatSource(name; h=nothing)
 end
 
 """
-    heatConvection(name; h=..., T∞=...)
+    heatConvection(name; h=nothing, T∞=nothing)
 
 Specifies convective boundary conditions on the surface in the physical group `name`.
 `h` is the heat transfer coefficient of the surrounding medium; `Tₐ` is the ambient temperature.
@@ -3667,7 +3683,7 @@ function heatConvection(name; h=nothing, T∞=nothing)
 end
 
 """
-    generateMesh(problem, surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
+    generateMesh(surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, internalNodes=0)
 
 Obsolete; use a Gmsh script (.geo) instead.
 
@@ -3692,7 +3708,9 @@ function generateMesh(surf, elemSize; approxOrder=1, algorithm=6, quadrangle=0, 
 end
 
 """
-    field(name; f=..., fx=..., fy=..., fz=..., fxy=..., fyz=..., fzx=...)
+    field(name; f=nothing, fx=nothing, fy=nothing, fz=nothing, 
+                fxy=nothing, fyx=nothing, fyz=nothing, 
+                fzy=nothing, fzx=nothing, fxz=nothing)
 
 Specifies the value of a scalar, vector, or tensor field on the physical group `name`.
 At least one of `fx`, `fy`, or `fz` etc. must be provided (depending on the problem dimension).
@@ -3797,7 +3815,7 @@ function scalarField(problem::Problem, phName::String, data::Union{Number,Functi
 end
 
 """
-    vectorField(problem, dataField; type=...)
+    vectorField(problem::Problem, dataField::Vector{BoundaryCondition})
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
@@ -3903,7 +3921,7 @@ vectorField(sm::Vector{ScalarField}) = elementsToNodes(VectorField([sm[1], sm[2]
 tensorField(sm) = elementsToNodes(TensorField(sm))
 
 """
-    tensorField(problem, dataField; type=...)
+    tensorField(problem::Problem, dataField::Vector{BoundaryCondition}; type=:e)
 
 Defines a vector field from `dataField`, which is a tuple of `name` of physical group and
 prescribed values or functions. Mesh details are in `problem`. `type` can be an arbitrary `Symbol`,
@@ -4551,7 +4569,7 @@ function nodesOnPhysicalGroup(problem::Problem, phName::String)
 end
 
 """
-    constrainedDoFs(problem, supports)
+    constrainedDoFs(problem::Problem, supports::Vector{BoundaryCondition})
 
 Returns the serial numbers of constrained degrees of freedom. Support is a vector of boundary conditions given with the function `displacementConstraint`.
 
@@ -4820,7 +4838,8 @@ function elementsToNodes(S)
 end
 
 """
-    nodesToElements(T, onPhysicalGroup="")
+    nodesToElements(T::Union{ScalarField,VectorField,TensorField}; 
+                    onPhysicalGroup="")
 
 Solves the element results `F` from the nodal results `T`.
 `T` can be ScalarField, VectorField or TensorField.
@@ -4949,7 +4968,7 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
 end
 
 """
-    isNodal(field)
+    isNodal(field::Union{ScalarField,VectorField,TensorField})
 
 Check if a given field is defined at nodes (nodal quantity).
 
@@ -4974,7 +4993,7 @@ function isNodal(a::Union{ScalarField,VectorField,TensorField})
 end
 
 """
-isElementwise(field)
+    isElementwise(field::Union{ScalarField,VectorField,TensorField})
 
 Check if a given field is defined per element (elementwise quantity).
 
@@ -4999,7 +5018,7 @@ function isElementwise(a::Union{ScalarField,VectorField,TensorField})
 end
 
 """
-    expandTo3D(v2D::VectorField)
+    expandTo3D(V2D::VectorField)
 
 Expand a 2D vector field into 3D by adding a zero z-component.
 
@@ -5035,7 +5054,7 @@ function expandTo3D(a::VectorField)
 end
 
 """
-    projectTo2D(v3D::VectorField)
+    projectTo2D(V3D::VectorField)
 
 Project a 3D vector field onto the xy-plane by discarding the z-component.
 
@@ -5071,7 +5090,7 @@ function projectTo2D(a::VectorField)
 end
 
 """
-    fieldError(F)
+    fieldError(F::Union{ScalarField,VectorField,TensorField})
 
 Computes the deviation of field results `F` (stresses, strains, heat flux components) at nodes
 where the field has jumps. The result can be displayed with the `showDoFResults` function.
@@ -5136,7 +5155,7 @@ function fieldError(S)
 end
 
 """
-    resultant(field, phName)
+    resultant(field::VectorField, phName::String)
 
 Computes the resultant of vector field `field` on the physical group `phName`.
 Returns the resultant(s) in a `tuple`. The number of elements in the tuple depends on the
@@ -5467,7 +5486,7 @@ end
 ∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1) = integrate(problem, phName, f, step=step)
 
 """
-    time_integral!(s, t, d; s0 = 0.0)
+    time_integral!(s, t, d; s0=0.0)
 
 Reconstruct a time-dependent signal `s` from its time derivative `d`
 using the inverse of the second-order central difference scheme.
@@ -5661,7 +5680,8 @@ function rotateNodes(problem, phName, CoordSys)
 end
 
 """
-    showDoFResults(q, comp; name=..., visible=..., factor=0)
+    showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Symbol; 
+                   name=comp, visible=false, factor=0)
 
 Loads nodal results into a View in Gmsh. `q` is the field to show, `comp` is
 the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
@@ -5834,7 +5854,7 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}; name=q.ty
 end
 
 """
-    showModalResults(Φ, name=..., visible=...)
+    showModalResults(Φ::Eigen; name="", visible=false)
 
 Loads modal results into a View in Gmsh. `Φ` is an `Eigen` struct. `name` is a title to display and
 `visible` is a Boolean to toggle the initial visibility in Gmsh on or off. Click on ▷| to change
@@ -5853,7 +5873,7 @@ function showModalResults(Φ::Eigen; name=:modal, visible=false, ff=1)
 end
 
 """
-    showBucklingResults(Φ, name=..., visible=...)
+    showBucklingResults(Φ::Eigen; name="", visible=false)
 
 Loads buckling results into a View in Gmsh. `Φ` is an `Eigen` struct. `name` is a title to display and
 `visible` is a Boolean to toggle the initial visibility in Gmsh on or off. Click on ▷| to change
@@ -5872,7 +5892,8 @@ function showBucklingResults(Φ::Eigen; name="buckling", visible=false, ff=2)
 end
 
 """
-    showStrainResults(E, comp; name=..., visible=..., smooth=...)
+    showStrainResults(E::TensorField, comp::Symbol; 
+                      name=comp, visible=false, smooth=true)
 
 Loads strain results into a View in Gmsh. `E` is a strain field to show, `comp` is
 the component of the field (:e, :ex, :ey, :ez, :exy, :eyz, :ezx),
@@ -5973,6 +5994,9 @@ function showStrainResults(E0, comp; name=comp, visible=false, smooth=true)
 end
 
 """
+    showElementResults(F::Union{ScalarField,VectorField,TensorField}, comp=:Symbol; 
+                       name=comp, visible=false, smooth=false, factor=0)
+
     showElementResults(F, comp; name=..., visible=..., smooth=...)
 
 Same as `ShowStressResults` or `showStrainResults`, depending on the type of `F` data field.
@@ -6040,7 +6064,8 @@ function showHeatFluxResults(q::VectorField; name="VectorField", visible=false, 
 end
 
 """
-    showStressResults(S, comp; name=..., visible=..., smooth=...)
+    showStressResults(S0::TensorField, comp::Symbol; 
+                      name=comp, visible=false, smooth=false)
 
 Loads stress results into a View in Gmsh. `S` is a stress field to show, `comp` is
 the component of the field (:s, :sx, :sy, :sz, :sxy, :syz, :szx, :seqv),
@@ -6151,7 +6176,8 @@ function showStressResults(S0::TensorField, comp; name=comp, visible=false, smoo
 end
 
 """
-    showHeatFluxResults(Q, comp; name=..., visible=..., smooth=...)
+    showHeatFluxResults(S0::VectorField, comp::Symbol; 
+                        name=comp, visible=false, smooth=true, factor=0)
 
 Loads heat flux results into a View in Gmsh. `Q` is a heat flux field to show, `comp` is
 the component of the field (:qvec, :qx, :qy, :qz, :q),
@@ -6325,7 +6351,8 @@ function showScalarResults(S0; name="ScalarField", visible=false, smooth=false, 
 end
 
 """
-    plotOnPath(pathName, field; points=100, step=..., plot=..., name=..., visible=..., offsetX=..., offsetY=..., offsetZ=...)
+    plotOnPath(pathName, field; points=100, step=..., plot=false, 
+               name="field [\$field] on \$pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
 
 Loads a 2D plot along a path into a View in Gmsh. `field` is the View id in
 Gmsh from which the field data is imported. `pathName` is the name of a
@@ -6450,7 +6477,9 @@ function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="fie
 end
 
 """
-    showOnSurface(field, phName; grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, name=phName, visible=false)
+    showOnSurface(field::Number, phName::String; 
+                  grad=false, component=:x, offsetX=0, offsetY=0, offsetZ=0, 
+                  name=phName, visible=false)
 
 Shows the values of a scalar field on a surface with physical name `phName`.
 `field` is the tag of a View in Gmsh. The values of the field are calculated at the
@@ -6557,7 +6586,7 @@ function showOnSurface(field::ScalarField, phName::String; name=phName)
 end
 
 """
-    openPreProcessor(; openGL=...)
+    openPreProcessor(; openGL=false)
 
 Launches the Gmsh preprocessor window with OpenGL disabled by default.
 
@@ -6636,7 +6665,8 @@ function setParameters(name, value)
 end
 
 """
-    probe(A::Union{ScalarField,VectorField,TensorField}, x::Number, y::Number, z::Number; step=Int)
+    probe(A::Union{ScalarField,VectorField,TensorField}, 
+          x::Number, y::Number, z::Number; step=Int)
 
 Get the value of the field `A` at point coordinates `x`, `y`, `z` at time step `step`.
 
@@ -6712,7 +6742,7 @@ function probe(A::ScalarField, x, y, z; step=1)
 end
 
 """
-    probe(A::Union{ScalarField,VectorField,TensorField}, s::String; step=Int)
+    probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step=1)
 
 Get the value of the field `A` at a point given by its physical name in Gmsh at time step `step`.
 

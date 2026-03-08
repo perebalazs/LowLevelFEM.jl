@@ -2259,7 +2259,7 @@ end
 ###############################################################################
 
 """
-    ldiv_sparse!(X, K, F)
+    ldiv_sparse!(X::SparseMatrixCSC, K::Union{SystemMatrix,SparseMatrixCSC}, F::SparseMatrixCSC)
 
 Solves the sparse linear system `K * X = F` column-by-column, where `F` is a
 sparse matrix representing multiple right-hand sides.
@@ -2310,8 +2310,8 @@ end
 ###############################################################################
 
 """
-    *(A::SystemMatrix, c::Number)
-    *(c::Number, A::SystemMatrix)
+    *(A::SystemMatrix, b::Number)
+    *(b::Number, A::SystemMatrix)
 
 Scalar multiplication of a system matrix.
 """

@@ -126,6 +126,14 @@ export probe_field
         internalForceVector(prob, P=tfA)
         externalTangentFollower(prob, [lc], F=tfA)
         loadVector(prob, [], F=tfA)
+        try
+            ∫(Grad(Problem()) ⋅ Grad(Problem()))
+            ∫(Problem() ⋅ Problem())
+            ∫(Div(Problem()) ⋅ Div(Problem()))
+            ∫(SymGrad(Problem()) ⋅ SymGrad(Problem()))
+        catch
+            #
+        end
     end
 end
 

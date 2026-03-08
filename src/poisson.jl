@@ -748,7 +748,12 @@ end
 ∫∇oN_c_∇oN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = poissonMatrix(problem, coefficient=coefficient)
 
 """
-    advectionMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0, dir::Int=1)
+    advectionMatrix(problem::Problem; 
+                    coefficient::Union{Number,ScalarField}=1.0, 
+                    dir::Int = 1)
+
+aliases:
+
     ∫N_c_∂N∂x_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     ∫N_c_∂N∂y_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
     ∫N_c_∂N∂z_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
@@ -1004,7 +1009,8 @@ end
 ∫∇xN_c_∇xN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = curlCurlMatrix(problem, coefficient=coefficient)
 
 """
-    tensorLaplaceMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    tensorLaplaceMatrix(problem::Problem; 
+                        coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the tensor Laplace operator
 
@@ -1053,7 +1059,8 @@ function tensorLaplaceMatrix(
 end
 
 """
-    traceLaplaceMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    traceLaplaceMatrix(problem::Problem; 
+                       coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the trace Laplace operator
 
@@ -1098,7 +1105,9 @@ function traceLaplaceMatrix(
 end
 
 """
-    beltramiMichellMatrix(problem::Problem; coeff_laplace=1.0, coeff_trace=1.0)
+    beltramiMichellMatrix(problem::Problem; 
+    coeff_laplace::Union{Number,ScalarField}=1.0, 
+    coeff_trace::Union{Number,ScalarField}=1.0)
 
 Assemble the Beltrami-Michell operator as
 `tensorLaplaceMatrix + traceLaplaceMatrix`.
@@ -1127,7 +1136,8 @@ function beltramiMichellMatrix(
 end
 
 """
-    tensorDivDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=1.0)
+    tensorDivDivMatrix(problem::Problem; 
+                       coefficient::Union{Number,ScalarField}=1.0)
 
 Assembles the tensor div–div matrix
 
@@ -1344,9 +1354,20 @@ function loadTensor(
 end
 
 """
-    solveField(K, f; support=BoundaryCondition[], iterative=false,
-               reltol=sqrt(eps()), maxiter=..., preconditioner=Identity(),
+    solveField(K::SystemMatrix, 
+               f::Union{ScalarField,VectorField}; 
+               support::Vector{BoundaryCondition}=BoundaryCondition[], 
+               iterative=false, 
+               reltol::Real = sqrt(eps()), 
+               maxiter::Int = K.model.non * K.model.dim, 
+               preconditioner = Identity(), 
                ordering=true)
+    
+multifield version:
+
+    solveField(K::SystemMatrix, 
+               F::SystemVector; 
+               support::Vector{BoundaryCondition}=BoundaryCondition[])
 
 Solves a linear static field problem with Dirichlet boundary conditions.
 
@@ -2289,6 +2310,8 @@ end
 
 
 """
+    internalForceTL(problem::Problem, P::TensorField)
+
     internalForceTL(problem; P)
 
 Internal force vector for Total Lagrange formulation.
@@ -2377,6 +2400,8 @@ function internalForceTL(problem::Problem, P::TensorField)
 end
 
 """
+    externalTangentFollowerTL( problem::Problem; F::TensorField, traction_phName::AbstractString, t_spatial)
+
     externalTangentFollowerTL(problem; F, traction_phName, t_spatial)
 
 Consistent external tangent matrix for follower loads (Total Lagrange).

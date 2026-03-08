@@ -1306,6 +1306,8 @@ end
 
 #=
 """
+    nonFollowerLoadVector(r::VectorField, loads)
+
     nonFollowerLoadVector(r::VectorField, load)
 
 Solves the non-follower load vector (when solving large deformation problems).
@@ -1466,6 +1468,8 @@ end
 
 #=
 """
+    applyDeformationBoundaryConditions!(deformVec, supports; fact=1.0)
+
     applyDeformationBoundaryConditions!(deformVec, supports)
 
 Applies displacement boundary conditions `supports` on deformation vector `deformVec`.
@@ -1797,6 +1801,8 @@ end
 
 #=
 """
+    solveDeformation(problem, load, supp; followerLoad=false, loadSteps = 3, rampedLoad = true, rampedSupport = false, maxIteration = 10, saveSteps = false, saveIterations = false, plotConvergence = false, relativeError = 1e-5, initialDeformation=nodePositionVector(problem))
+
     solveDeformation(problem::Problem, load, supp;
                     followerLoad=false,
                     loadSteps = 3,
@@ -1888,7 +1894,10 @@ end
 =#
 
 """
-    showDeformationResults(r::VectorField, comp; name=String, visible=Boolean)
+    showDeformationResults(r::VectorField, 
+                           comp::Symbol; 
+                           name=comp, 
+                           visible=false)
 
 Shows deformation result, where `r` contains the position vectors of nodes 
 in the *current configuration*.
@@ -1915,13 +1924,11 @@ end
 #############################################################
 
 """
-    materialTangentMatrix(
-        problem::Problem;
-        F::TensorField,
-        C::AbstractMatrix,
-        energy::Function,
-        params
-    )
+    materialTangentMatrix(problem::Problem; 
+                          F::TensorField, 
+                          C::Union{AbstractMatrix,Nothing}=nothing, 
+                          energy::Union{Nothing,Function}=nothing, 
+                          params=nothing)
 
 Assembles the **material (constitutive) tangent stiffness matrix**
 for a 3D solid under **finite deformation (Total Lagrange formulation)**,
@@ -2261,13 +2268,11 @@ function materialTangentMatrix(
 end
 
 """
-    initialStressMatrix(
-        problem::Problem;
-        stress::TensorField,
-        energy::Function,
-        C::TensorField,
-        params
-    )
+    initialStressMatrix(problem::Problem; 
+                        S::Union{TensorField,Nothing}=nothing, 
+                        energy::Union{Nothing,Function}=nothing, 
+                        C::Union{Nothing,TensorField}=nothing,
+                        params=nothing)
 
 Assembles the **geometric (initial stress) stiffness matrix**
 associated with a given stress field, for finite deformation analysis
@@ -2300,7 +2305,7 @@ gradients yields the geometric stiffness.
 
 ## Keyword arguments
 
-- `stress::TensorField`  
+- `S::TensorField`  
   Nodal stress tensor field.
   
   Each node stores a full `dim×dim` tensor, which is interpolated to Gauss
@@ -2590,13 +2595,11 @@ function initialStressMatrix(
 end
 
 """
-    internalForceVector(
-        problem::Problem;
-        P::TensorField,
-        F::TensorField,
-        energy::Function,
-        params
-    )
+    internalForceVector(problem::Problem; 
+                        P::Union{Nothing,TensorField}=nothing, 
+                        F::Union{Nothing,TensorField}=nothing, 
+                        energy::Union{Nothing,Function}=nothing, 
+                        params=nothing)
 
 Assembles the **internal force vector** associated with a given
 first-order stress tensor field `P`, using a finite deformation
