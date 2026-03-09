@@ -1,4 +1,3 @@
-
 """
 LowLevelFEM Multifield Operator Kernel
 
@@ -659,7 +658,7 @@ Sparse matrix representing the discretized bilinear form.
 function assemble_operator(
     Pu::Problem, op_u::AbstractOp,
     Ps::Problem, op_s::AbstractOp;
-    coefficient::Union{Number,ScalarField}=1.0,
+    coefficient::Union{Number,ScalarField,AbstractMatrix}=1.0,
     weight=nothing,
     domain=nothing)
 
@@ -695,7 +694,7 @@ function assemble_operator(
         # build dictionaries for all ScalarFields inside matrix
         for c in coefficient
             if c isa ScalarField
-                pa = _build_elemwise_coeff_dict(c)
+                merge!(pa, _build_elemwise_coeff_dict(c))
             end
         end
     end
@@ -809,10 +808,8 @@ function assemble_operator(
 
                     # integrate
                     @inbounds for k in 1:numIntPoints
-                        #cval = (coefficient isa ScalarField) ? _coeff_at_gp(pa, elem, view(h, :, k)) : pconst
-                        #w = jacDet[k] * intWeights[k] * cval
                         Cgp = _eval_tensor_at_gp(coefficient, pa, elem, view(h, :, k))
-                        if Cgp isa Number
+                        if Cgp isa Number && weight === nothing
 
                             w = jacDet[k] * intWeights[k] * Cgp
 
@@ -821,7 +818,7 @@ function assemble_operator(
 
                             mul!(Ke, transpose(Bs), Bu, w, 1.0)
 
-                        else
+                        elseif Cgp isa AbstractMatrix && weight === nothing
 
                             w = jacDet[k] * intWeights[k]
 
@@ -831,30 +828,11 @@ function assemble_operator(
                             mul!(tmpBu, Cgp, Bu)
                             mul!(Ke, transpose(Bs), tmpBu, w, 1.0)
 
+                        else
+                            error("assemble_operator error")
                         end
-
-                        build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
-
-                        # optional weighting of Bu (vector or matrix)
-                        if weight !== nothing
-                            if weight isa AbstractVector
-                                @inbounds for r in 1:size(Bu, 1)
-                                    wr = weight[r]
-                                    @inbounds for c in 1:size(Bu, 2)
-                                        Bu[r, c] *= wr
-                                    end
-                                end
-                            else
-                                mul!(tmpBu, weight, Bu)
-                                Bu .= tmpBu
-                            end
-                        end
-
-                        build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
-
-                        # Ke += Bs' * Bu * w
-                        mul!(Ke, transpose(Bs), Bu, w, 1.0)
                     end
+
 
                     # scatter Ke(s,u) -> global IJV
                     @inbounds for a_loc in 1:ndofs_s_loc
@@ -862,20 +840,20 @@ function assemble_operator(
                         comp_a = mod(a_loc - 1, Ps.pdim) + 1
                         Ia_node = nnet[e, node_a]
                         Ia = (Ia_node - 1) * Ps.pdim + comp_a
-
+                
                         @inbounds for b_loc in 1:ndofs_u_loc
                             node_b = div(b_loc - 1, Pu.pdim) + 1
                             comp_b = mod(b_loc - 1, Pu.pdim) + 1
                             Jb_node = nnet[e, node_b]
                             Jb = (Jb_node - 1) * Pu.pdim + comp_b
-
+                
                             if pos > length(I)
-                                newlen = Int(ceil(1.5length(I))) + 1000
+                                newlen = Int(ceil(1.5*length(I))) + 1000
                                 resize!(I, newlen)
                                 resize!(J, newlen)
                                 resize!(V, newlen)
                             end
-
+                
                             I[pos] = Ia
                             J[pos] = Jb
                             V[pos] = Ke[a_loc, b_loc]
@@ -894,6 +872,7 @@ function assemble_operator(
     dropzeros!(K)
     return SystemMatrix(K, Pu, Ps)
 end
+
 
 """
     compliance9_iso(E, nu; penalty=1e8)
@@ -1532,8 +1511,8 @@ function _assemble(term::WeakTerm, dom, weight=nothing)
         term.term.a.op,
         term.term.b.P,
         term.term.b.op,
-        coefficient=coef isa AbstractMatrix ? 1.0 : coef,
-        weight=coef isa AbstractMatrix ? coef : nothing,
+        coefficient=coef, #isa AbstractMatrix ? 1.0 : coef,
+        weight=nothing, #coef isa AbstractMatrix ? coef : nothing,
         domain=dom
     )
 
@@ -1636,7 +1615,7 @@ function ∫(t::BilinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
         _check_domain_dim(Pu, dom)
     end
     return assemble_operator(t.a.P, t.a.op, t.b.P, t.b.op;
-        coefficient=coef, domain=dom, weight=weight)
+        coefficient=t.coef, domain=dom, weight=nothing)
 end
 
 function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
@@ -1647,7 +1626,7 @@ function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weigh
         _check_domain_dim(Pu, dom)
     end
     return assemble_operator(a.P, a.op, b.P, b.op;
-        coefficient=coef, domain=dom, weight=weight)
+        coefficient=coef, domain=dom, weight=nothing)
 end
 
 """
