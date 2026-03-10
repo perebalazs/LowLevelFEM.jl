@@ -557,15 +557,15 @@ function _prepare_coefficient(C)
     # scalar constant
     if C isa Number
         return Float64(C)
-    end
+    #end
 
     # scalar field
-    if C isa ScalarField
+    elseif C isa ScalarField
         return _build_elemwise_coeff_dict(C)
-    end
+    #end
 
     # tensor coefficient
-    if C isa AbstractMatrix
+    elseif C isa AbstractMatrix
 
         W = Matrix{Any}(undef, size(C)...)
 
@@ -586,6 +586,11 @@ function _prepare_coefficient(C)
         end
 
         return W
+    #end
+
+    elseif C isa AbstractVector
+        mats = [_prepare_coefficient(M) for M in C]
+        return mats
     end
 
     error("Unsupported coefficient type $(typeof(C))")
@@ -762,7 +767,7 @@ Sparse matrix representing the discretized bilinear form.
 function assemble_operator(
     Pu::Problem, op_u::AbstractOp,
     Ps::Problem, op_s::AbstractOp;
-    coefficient::Union{Number,ScalarField,AbstractMatrix}=1.0,
+    coefficient::Union{Number,ScalarField,AbstractMatrix,AbstractVector}=1.0,
     weight=nothing,
     domain=nothing)
 
@@ -895,8 +900,15 @@ function assemble_operator(
 
                     # integrate
                     @inbounds for k in 1:numIntPoints
-                        #Cgp = _eval_tensor_at_gp(coefficient, pa, elem, view(h, :, k))
-                        Cgp = _eval_coefficient_at_gp(Cprep, elem, view(h, :, k))
+                        if Cprep isa AbstractVector
+                            mats = [_eval_coefficient_at_gp(M, elem, view(h, :, k)) for M in Cprep]
+                            Cgp = mats[1]
+                            for i in 2:length(mats)
+                                Cgp = matmul_sf(Cgp, mats[i])
+                            end
+                        else
+                            Cgp = _eval_coefficient_at_gp(Cprep, elem, view(h, :, k))
+                        end
                         if Cgp isa Number && weight === nothing
 
                             w = jacDet[k] * intWeights[k] * Cgp
@@ -961,6 +973,40 @@ function assemble_operator(
     return SystemMatrix(K, Pu, Ps)
 end
 
+function matmul_sf(A, B)
+
+    m,k = size(A)
+    k2,n = size(B)
+
+    @assert k==k2
+
+    C = Matrix{Any}(undef,m,n)
+
+    for i in 1:m, j in 1:n
+
+        s = nothing
+
+        for p in 1:k
+
+            a = A[i,p]
+            b = B[p,j]
+
+            term = a*b
+
+            if s === nothing
+                s = term
+            else
+                s += term
+            end
+
+        end
+
+        C[i,j] = s
+
+    end
+
+    return C
+end
 
 """
     compliance9_iso(E, nu; penalty=1e8)
@@ -1351,7 +1397,7 @@ function _check_scalarfields(expr)
 
     if expr isa WeakTerm
 
-        c = expr.coef
+        c = expr.term.coef
 
         if c isa ScalarField
             _check_scalarfield(c)
@@ -1379,7 +1425,7 @@ end
 
 struct BilinearTerm
     a::OpApplied
-    coef::Union{Number,ScalarField,AbstractMatrix}
+    coef
     b::OpApplied
 end
 
@@ -1409,20 +1455,26 @@ end
         BilinearTerm(a, C, b)
     end
 
-struct TensorMiddle
+struct MatrixChain
     a::OpApplied
-    C
+    mats::Vector{Any}
 end
 
-⋅(a::OpApplied,
-   C::AbstractMatrix) =
-    begin
-        _check_coeff_matrix(C)
-        TensorMiddle(a, C)
-    end
+function ⋅(a::OpApplied,
+    C::AbstractMatrix)
+    _check_coeff_matrix(C)
+    return MatrixChain(a, [C])
+end
 
-⋅(t::TensorMiddle, b::OpApplied) =
-    BilinearTerm(t.a, t.C, b)
+function ⋅(t::MatrixChain, C::AbstractMatrix)
+    _check_coeff_matrix(C)
+    push!(t.mats, C)
+    return t
+end
+
+function ⋅(t::MatrixChain, b::OpApplied)
+    return BilinearTerm(t.a, t.mats, b)
+end
 
 ⋅(a::OpApplied, P::Problem) =
     BilinearTerm(a, 1.0, Id(P))
