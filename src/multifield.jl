@@ -541,8 +541,66 @@ end
     return Dict(zip(p.numElem, p.A))  # elemTag => coeff nodal vector(s)
 end
 
-@inline function _coeff_at_gp(pa::Dict{<:Integer,<:AbstractMatrix}, elem::Integer, hcol::AbstractVector)
-    return dot(view(pa[elem], :, 1), hcol)
+"""
+    _prepare_coefficient(C)
+
+Prepare coefficient for assembly.
+
+Returns one of:
+
+Float64
+Dict(elem => nodal array)
+Matrix{Any} with entries Float64 or Dict(elem => nodal array)
+"""
+function _prepare_coefficient(C)
+
+    # scalar constant
+    if C isa Number
+        return Float64(C)
+    end
+
+    # scalar field
+    if C isa ScalarField
+        return _build_elemwise_coeff_dict(C)
+    end
+
+    # tensor coefficient
+    if C isa AbstractMatrix
+
+        W = Matrix{Any}(undef, size(C)...)
+
+        for I in CartesianIndices(C)
+
+            cij = C[I]
+
+            if cij isa Number
+                W[I] = Float64(cij)
+
+            elseif cij isa ScalarField
+                W[I] = _build_elemwise_coeff_dict(cij)
+
+            else
+                error("Matrix coefficient entries must be Number or ScalarField, got $(typeof(cij))")
+            end
+
+        end
+
+        return W
+    end
+
+    error("Unsupported coefficient type $(typeof(C))")
+end
+
+#@inline function _coeff_at_gp(pa::Dict{<:Integer,<:AbstractMatrix}, elem::Integer, hcol::AbstractVector)
+#    return dot(view(pa[elem], :, 1), hcol)
+#end
+
+@inline function _coeff_at_gp(
+    pa::Dict{<:Integer,<:AbstractMatrix},
+    elem::Integer,
+    hcol::AbstractVector)
+
+    return dot(view(pa[Int(elem)], :, 1), hcol)
 end
 
 """
@@ -590,6 +648,52 @@ function _eval_tensor_at_gp(C, pa, elem, hgp)
 
     error("Unsupported coefficient type $(typeof(C))")
 
+end
+
+"""
+    _eval_coefficient_at_gp(Cprep, elem, hgp)
+
+Evaluate prepared coefficient at Gauss point.
+
+Supports:
+Float64
+Dict(elem => nodal array)
+Matrix{Any} with entries Float64 or Dict(elem => nodal array)
+"""
+function _eval_coefficient_at_gp(Cprep, elem, hgp)
+
+    # scalar constant
+    if Cprep isa Number
+        return Cprep
+    end
+
+    # scalar field
+    if Cprep isa Dict
+        return _coeff_at_gp(Cprep, elem, hgp)
+    end
+
+    # tensor coefficient
+    if Cprep isa AbstractMatrix
+
+        m, n = size(Cprep)
+        W = Matrix{Float64}(undef, m, n)
+
+        for I in CartesianIndices(Cprep)
+
+            cij = Cprep[I]
+
+            if cij isa Number
+                W[I] = cij
+            else
+                W[I] = _coeff_at_gp(cij, elem, hgp)
+            end
+
+        end
+
+        return W
+    end
+
+    error("Unsupported prepared coefficient type $(typeof(Cprep))")
 end
 
 """
@@ -681,28 +785,11 @@ function assemble_operator(
         end
     end
 
-    # coefficient prep
-    pconst = 1.0
-    pa = Dict{Int,Any}()
-    if coefficient isa Number
-        pconst = Float64(coefficient)
+    # ------------------------------------------------------------
+    # prepare coefficient
+    # ------------------------------------------------------------
 
-    elseif coefficient isa ScalarField
-        pa = _build_elemwise_coeff_dict(coefficient)
-
-    elseif coefficient isa AbstractMatrix
-        # build dictionaries for all ScalarFields inside matrix
-        for c in coefficient
-            if c isa ScalarField
-                merge!(pa, _build_elemwise_coeff_dict(c))
-            end
-        end
-    end
-    #if coefficient isa Number
-    #    pconst = Float64(coefficient)
-    #else
-    #    pa = _build_elemwise_coeff_dict(coefficient)
-    #end
+    Cprep = _prepare_coefficient(coefficient)
 
     # estimate IJV length: crude but OK for notebook prototype
     lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(Pu) * max(1, Ps.pdim) * max(1, Pu.pdim)
@@ -808,7 +895,8 @@ function assemble_operator(
 
                     # integrate
                     @inbounds for k in 1:numIntPoints
-                        Cgp = _eval_tensor_at_gp(coefficient, pa, elem, view(h, :, k))
+                        #Cgp = _eval_tensor_at_gp(coefficient, pa, elem, view(h, :, k))
+                        Cgp = _eval_coefficient_at_gp(Cprep, elem, view(h, :, k))
                         if Cgp isa Number && weight === nothing
 
                             w = jacDet[k] * intWeights[k] * Cgp
@@ -1291,14 +1379,21 @@ end
 
 struct BilinearTerm
     a::OpApplied
-    coef::Union{
-        Number,
-        ScalarField,
-        AbstractMatrix{<:Union{Number,ScalarField}}
-    }
+    coef::Union{Number,ScalarField,AbstractMatrix}
     b::OpApplied
 end
 
+# check
+
+@inline function _check_coeff_matrix(C)
+
+    for x in C
+        if !(x isa Number || x isa ScalarField)
+            error("Matrix coefficient entries must be Number or ScalarField, got $(typeof(x))")
+        end
+    end
+
+end
 
 # ------------------------------------------------------------
 # Operator combination
@@ -1307,9 +1402,12 @@ end
 ⋅(a::OpApplied, b::OpApplied) = BilinearTerm(a, 1.0, b)
 
 ⋅(a::OpApplied,
-    C::AbstractMatrix{<:Union{Number,ScalarField}},
-    b::OpApplied) =
-    BilinearTerm(a, C, b)
+   C::AbstractMatrix,
+   b::OpApplied) =
+    begin
+        _check_coeff_matrix(C)
+        BilinearTerm(a, C, b)
+    end
 
 struct TensorMiddle
     a::OpApplied
@@ -1317,8 +1415,11 @@ struct TensorMiddle
 end
 
 ⋅(a::OpApplied,
-    C::AbstractMatrix{<:Union{Number,ScalarField}}) =
-    TensorMiddle(a, C)
+   C::AbstractMatrix) =
+    begin
+        _check_coeff_matrix(C)
+        TensorMiddle(a, C)
+    end
 
 ⋅(t::TensorMiddle, b::OpApplied) =
     BilinearTerm(t.a, t.C, b)
