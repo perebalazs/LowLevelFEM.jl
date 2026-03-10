@@ -5686,7 +5686,7 @@ end
 Loads nodal results into a View in Gmsh. `q` is the field to show, `comp` is
 the component of the field (:vector, :uvec, :ux, :uy, :uz, :vvec, :vx, :vy, :vz,
 :qvec, :qx, :qy, :qz, :T, :p, :qn, :s, :sx, :sy, :sz, :sxy, :syx, :syz,
-:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :seqv, :scalar, :tensor),
+:szy, :szx, :sxz, :e, :ex, :ey, :ez, :exy, :eyx, :eyz, :ezy, :ezx, :exz, :x, :y, :z, :xy, :yz, :zx, :yx, :zy, :xz, :seqv, :scalar, :tensor),
 `name` is a title to display and `visible` is a Boolean to toggle the initial visibility in Gmsh on or off.
 If `q` has more columns, then a sequence of results will be shown (e.g., as an animation).
 `factor` multiplies the DoF result to increase for better visibility.
@@ -5753,7 +5753,7 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     if size(q.a, 2) != length(t)
         error("showDoFResults: number of time steps missmatch ($(size(q.a,2)) <==> $(length(t))).")
     end
-    if comp == :s || comp == :e
+    if comp == :s || comp == :e || q isa TensorField
         pdim = 9
     end
     for j in 1:length(t)
@@ -5782,23 +5782,23 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
             end
         else
             nc = 1
-            if comp == :ux || comp == :vx || comp == :p || comp == :T || comp == :qx  || comp == :qn || comp == :sx || comp == :ex || comp == :scalar
+            if comp == :ux || comp == :vx || comp == :p || comp == :T || comp == :qx  || comp == :qn || comp == :sx || comp == :ex || comp == :scalar || (comp == :x && q isa VectorField) || ((comp == :x || comp == :xx) && q isa TensorField)
                 k = 1
-            elseif comp == :uy || comp == :vy || comp == :qy || comp == :syx || comp == :eyx
+            elseif comp == :uy || comp == :vy || comp == :qy || comp == :syx || comp == :eyx || (comp == :y && q isa VectorField) || (comp == :yx && q isa TensorField)
                 k = 2
-            elseif comp == :uz || comp == :vz || comp == :qz || comp == :szx || comp == :ezx
+            elseif comp == :uz || comp == :vz || comp == :qz || comp == :szx || comp == :ezx || (comp == :z && q isa VectorField) || (comp == :zx && q isa TensorField)
                 k = 3
-            elseif comp == :sxy || comp == :exy
+            elseif comp == :sxy || comp == :exy || (comp == :xy && q isa TensorField)
                 k = 4
-            elseif comp == :sy || comp == :ey
+            elseif comp == :sy || comp == :ey || ((comp == :y || comp == :yy) && q isa TensorField)
                 k = 5
-            elseif comp == :szy || comp == :ezy
+            elseif comp == :szy || comp == :ezy || (comp == :zy && q isa TensorField)
                 k = 6
-            elseif comp == :sxz || comp == :exz
+            elseif comp == :sxz || comp == :exz || (comp == :xz && q isa TensorField)
                 k = 7
-            elseif comp == :syz || comp == :eyz
+            elseif comp == :syz || comp == :eyz || (comp == :yz && q isa TensorField)
                 k = 8
-            elseif comp == :sz || comp == :ez
+            elseif comp == :sz || comp == :ez || ((comp == :z || comp == :zz) && q isa TensorField)
                 k = 9
             elseif comp == :seqv
                 k = 10
@@ -5896,7 +5896,7 @@ end
                       name=comp, visible=false, smooth=true)
 
 Loads strain results into a View in Gmsh. `E` is a strain field to show, `comp` is
-the component of the field (:e, :ex, :ey, :ez, :exy, :eyz, :ezx),
+the component of the field (:e, :ex, :ey, :ez, :exy, :eyz, :ezx, :x, :y, :z, :xy, :yz, :zx, :yx, :zy, :xz),
 `name` is a title to display, `visible` is a Boolean to toggle the initial visibility in Gmsh on or
 off and `smooth` is a Boolean to toggle
 smoothing the stress field on or off. If `E` contains more than one time steps, then a 
@@ -5940,23 +5940,23 @@ function showStrainResults(E0, comp; name=comp, visible=false, smooth=true)
             nc = 9
         else
             nc = 1
-            if comp == :ex
+            if comp == :ex || ((comp == :x || comp == :xx) && E isa TensorField)
                 k = 8
-            elseif comp == :ey
+            elseif comp == :ey || ((comp == :y || comp == :yy) && E isa TensorField)
                 k = 4
-            elseif comp == :ez
+            elseif comp == :ez || ((comp == :z || comp == :zz) && E isa TensorField)
                 k = 0
-            elseif comp == :exy
+            elseif comp == :exy || comp == :xy
                 k = 5
-            elseif comp == :eyz
+            elseif comp == :eyz || comp == :yz
                 k = 1
-            elseif comp == :ezx
+            elseif comp == :ezx || comp == :zx
                 k = 6
-            elseif comp == :eyx
+            elseif comp == :eyx || comp == :yx
                 k = 7
-            elseif comp == :ezy
+            elseif comp == :ezy || comp == :zy
                 k = 3
-            elseif comp == :exz
+            elseif comp == :exz || comp == :xz
                 k = 2
             else
                 error("ShowStrainResults: component is $comp ????")
@@ -6068,7 +6068,7 @@ end
                       name=comp, visible=false, smooth=false)
 
 Loads stress results into a View in Gmsh. `S` is a stress field to show, `comp` is
-the component of the field (:s, :sx, :sy, :sz, :sxy, :syz, :szx, :seqv),
+the component of the field (:s, :sx, :sy, :sz, :sxy, :syz, :szx, :seqv, :x, :y, :z, :xy, :yz, :zx, :yx, :zy, :xz),
 `name` is a title to display, `visible` is a Boolean to toggle the initial visibility in Gmsh on or
 off, and `smooth` is a Boolean to toggle smoothing the stress field on or off. If `S` contains more
 than one time step, a sequence of results will be shown (e.g., as an animation). This function returns
@@ -6128,17 +6128,17 @@ function showStressResults(S0::TensorField, comp; name=comp, visible=false, smoo
             end
         else
             nc = 1
-            if comp == :sx
+            if comp == :sx || comp == :x
                 k = 8
-            elseif comp == :sy
+            elseif comp == :sy || comp == :y
                 k = 4
-            elseif comp == :sz
+            elseif comp == :sz || comp == :z
                 k = 0
-            elseif comp == :sxy || comp == :syx
-                k = 7
-            elseif comp == :syz || comp == :szy
-                k = 3
-            elseif comp == :szx || comp == :sxz
+            elseif comp == :sxy || comp == :syx || comp == :xy || comp == :yx
+                k = 7                                                       
+            elseif comp == :syz || comp == :szy || comp == :yz || comp == :zy
+                k = 3                                                       
+            elseif comp == :szx || comp == :sxz || comp == :zx || comp == :xz
                 k = 6
             else
                 error("ShowStressResults: component is $comp ????")
@@ -6180,7 +6180,7 @@ end
                         name=comp, visible=false, smooth=true, factor=0)
 
 Loads heat flux results into a View in Gmsh. `Q` is a heat flux field to show, `comp` is
-the component of the field (:qvec, :qx, :qy, :qz, :q),
+the component of the field (:qvec, :qx, :qy, :qz, :q, :x, :y, :z),
 `name` is a title to display, `visible` is a Boolean to toggle the initial visibility in Gmsh on or
 off, and `smooth` is a Boolean to toggle smoothing on or off. If `Q` contains more than one time step,
 a sequence of results will be shown (e.g., as an animation). This function returns the tag of the View.
@@ -6252,11 +6252,11 @@ function showHeatFluxResults(S0::VectorField, comp; name=comp, visible=false, sm
             end
         else
             nc = 1
-            if comp == :qx
+            if comp == :qx || comp == :x
                 k = 1
-            elseif comp == :qy
+            elseif comp == :qy || comp == :y
                 k = 2
-            elseif comp == :qz && dim == 3
+            elseif comp == :qz || comp == :z && dim == 3
                 k = 3
             else
                 error("ShowHeatFluxResults: component is $comp ????")

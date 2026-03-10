@@ -6,12 +6,12 @@ assemble finite element matrices from weak form expressions.
 
 The file contains three main layers:
 
-1. **Operator kernel**
+1. Operator kernel
 
    Defines differential operators (`GradOp`, `DivOp`, `SymGradOp`, …)
    and constructs element operator matrices through `build_B!`.
 
-2. **Matrix assembly**
+2. Matrix assembly
 
    The function
 
@@ -19,16 +19,29 @@ The file contains three main layers:
 
    performs element integration and builds the global sparse matrix.
 
-3. **Weak-form DSL**
+3. Weak-form DSL
 
-   A lightweight domain-specific language allows the construction of
-   weak forms using mathematical notation:
+   A lightweight domain-specific language allows the construction
+   of weak forms using mathematical notation.
 
-       ∫( Grad(Pu) ⋅ Grad(Pu); Ω="domain")
+Examples
 
-       ∫( SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu); Ω="solid")
+Scalar diffusion
 
-The implementation is designed to be:
+    ∫( Grad(Pu) ⋅ Grad(Pu); Ω="domain")
+
+Linear elasticity
+
+    ∫( SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu); Ω="solid")
+
+Matrix chain coefficients
+
+    ∫( Grad(Pu) ⋅ A ⋅ B ⋅ C ⋅ Grad(Pu); Ω="solid")
+
+where `A,B,C` may be matrices containing `Number` or `ScalarField`
+entries.
+
+The implementation is designed to be
 
 - transparent
 - extensible
@@ -749,10 +762,19 @@ Supported types
     ScalarField
     Matrix{Number}
     Matrix{ScalarField}
+    Vector{Matrix}
+
+The vector form represents a matrix chain
+
+    A ⋅ B ⋅ C
+
+which is evaluated at Gauss points as
+
+    Cgp = A(x_gp) * B(x_gp) * C(x_gp)
 
 `weight`
 
-Optional weighting tensor applied to the operator value.
+Optional weighting tensor applied to the operator value. (Deprecated: kept for backward compatibility.)
 
 `domain`
 
@@ -1445,6 +1467,38 @@ end
 # Operator combination
 # ------------------------------------------------------------
 
+"""
+    ⋅(a,b)
+
+Weak-form inner product operator used in the DSL.
+
+Constructs bilinear forms of the type
+
+    (Op_s v) ⋅ C ⋅ (Op_u u)
+
+Supported forms
+
+Operator pair
+
+    Grad(Pu) ⋅ Grad(Pu)
+
+Operator with tensor coefficient
+
+    SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu)
+
+Matrix chain
+
+    Grad(Pu) ⋅ A ⋅ B ⋅ C ⋅ Grad(Pu)
+
+where matrices may contain
+
+    Number
+    ScalarField
+
+entries.
+
+The matrix chain is evaluated at Gauss points during assembly.
+"""
 ⋅(a::OpApplied, b::OpApplied) = BilinearTerm(a, 1.0, b)
 
 ⋅(a::OpApplied,
@@ -1455,6 +1509,18 @@ end
         BilinearTerm(a, C, b)
     end
 
+"""
+Internal representation of chained tensor coefficients.
+
+Constructed automatically by expressions such as
+
+    Grad(Pu) ⋅ A ⋅ B ⋅ C ⋅ Grad(Pu)
+
+The matrices are stored in `mats` and multiplied during
+assembly at Gauss points.
+
+Users normally never construct this type directly.
+"""
 struct MatrixChain
     a::OpApplied
     mats::Vector{Any}
@@ -1686,7 +1752,9 @@ end
 
 Assemble a finite element operator from a weak-form expression.
 
-Example
+Examples
+
+Diffusion
 
     K = ∫( Grad(Pu) ⋅ Grad(Pu); Ω="domain")
 
@@ -1694,11 +1762,26 @@ Elasticity
 
     K = ∫( SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu); Ω="solid")
 
+Tensor chain
+
+    K = ∫( Grad(Pu) ⋅ F' ⋅ S ⋅ F ⋅ Grad(Pu); Ω="solid")
+
+Elastic support
+
+    K = ∫( Id(Pu) ⋅ [kx 0; 0 ky] ⋅ Id(Pu); Γ="boundary")
+or
+    K = ∫( Pu ⋅ [kx 0; 0 ky] ⋅ Pu; Γ="boundary")
+
+Mixed formulation
+
+    A = ∫( Div(Pu) ⋅ Pp )
+    B = ∫( Pp ⋅ Div(Pu) )
+
 # Arguments
 
 `expr`
 
-Weak-form expression composed of operators.
+Weak-form expression composed of operators and coefficients.
 
 # Keyword arguments
 
