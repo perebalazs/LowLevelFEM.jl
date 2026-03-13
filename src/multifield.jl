@@ -549,13 +549,22 @@ function build_B!(B::AbstractMatrix, op::AdvOp,
     return B
 end
 
-@inline function _build_elemwise_coeff_dict(coef::ScalarField)
-    p = nodesToElements(coef)
+struct DomainSpec
+    kind::Symbol     # :Ω vagy :Γ
+    name::String
+end
+
+Base.show(io::IO, d::DomainSpec) =
+    print(io, "$(d.kind)=\"$(d.name)\"")
+
+@inline function _build_elemwise_coeff_dict(coef::ScalarField, domain::DomainSpec)
+    p = elementsToNodes(coef)
+    p = nodesToElements(p, onPhysicalGroup=domain.name)
     return Dict(zip(p.numElem, p.A))  # elemTag => coeff nodal vector(s)
 end
 
 """
-    _prepare_coefficient(C)
+    _prepare_coefficient(C, domain)
 
 Prepare coefficient for assembly.
 
@@ -565,7 +574,7 @@ Float64
 Dict(elem => nodal array)
 Matrix{Any} with entries Float64 or Dict(elem => nodal array)
 """
-function _prepare_coefficient(C)
+function _prepare_coefficient(C, domain)
 
     # scalar constant
     if C isa Number
@@ -574,7 +583,7 @@ function _prepare_coefficient(C)
 
     # scalar field
     elseif C isa ScalarField
-        return _build_elemwise_coeff_dict(C)
+        return _build_elemwise_coeff_dict(C, domain)
     #end
 
     # tensor coefficient
@@ -590,7 +599,7 @@ function _prepare_coefficient(C)
                 W[I] = Float64(cij)
 
             elseif cij isa ScalarField
-                W[I] = _build_elemwise_coeff_dict(cij)
+                W[I] = _build_elemwise_coeff_dict(cij, domain)
 
             else
                 error("Matrix coefficient entries must be Number or ScalarField, got $(typeof(cij))")
@@ -602,8 +611,22 @@ function _prepare_coefficient(C)
     #end
 
     elseif C isa AbstractVector
-        mats = [_prepare_coefficient(M) for M in C]
+        mats = [_prepare_coefficient(M, domain) for M in C]
         return mats
+
+    #elseif C isa VectorField
+    #    if C.type == :v2D
+    #        nc = 2
+    #    elseif C.type == :v3D
+    #        nc = 3
+    #    else
+    #        error("Unknown VectorField type $(C.type)")
+    #    end
+    #    return [_prepare_coefficient(C[i]) for i in 1:nc]
+    #
+    #elseif C isa TensorField
+    #    return [_prepare_coefficient(C[i]) for i in 1:9]
+
     end
 
     error("Unsupported coefficient type $(typeof(C))")
@@ -614,6 +637,18 @@ end
 #end
 
 @inline function _coeff_at_gp(
+    pa::Dict{<:Integer,<:AbstractMatrix},
+    elem::Integer,
+    hcol::AbstractVector)
+
+    vals = get(pa, Int(elem), nothing)
+
+    vals === nothing && return 0.0
+
+    return dot(view(vals, :, 1), hcol)
+end
+
+@inline function _coeff_at_gp_old(
     pa::Dict{<:Integer,<:AbstractMatrix},
     elem::Integer,
     hcol::AbstractVector)
@@ -704,6 +739,27 @@ function _eval_coefficient_at_gp(Cprep, elem, hgp)
                 W[I] = cij
             else
                 W[I] = _coeff_at_gp(cij, elem, hgp)
+            end
+
+        end
+
+        return W
+    end
+
+    # vector coefficient
+    if Cprep isa AbstractVector
+
+        n = length(Cprep)
+        W = Vector{Float64}(undef, n)
+
+        for i in 1:n
+        
+            cij = Cprep[i]
+
+            if cij isa Number
+                W[i] = cij
+            else
+                W[i] = _coeff_at_gp(cij, elem, hgp)
             end
 
         end
@@ -816,7 +872,7 @@ function assemble_operator(
     # prepare coefficient
     # ------------------------------------------------------------
 
-    Cprep = _prepare_coefficient(coefficient)
+    Cprep = _prepare_coefficient(coefficient, domain)
 
     # estimate IJV length: crude but OK for notebook prototype
     lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(Pu) * max(1, Ps.pdim) * max(1, Pu.pdim)
@@ -1028,6 +1084,148 @@ function matmul_sf(A, B)
     end
 
     return C
+end
+
+function _field_pdim(f)
+    if f isa ScalarField
+        return 1
+    elseif f isa VectorField
+        if f.type == :v2D
+            return 2
+        elseif f.type == :v3D
+            return 3
+        else
+            error("Unknown VectorField type $(f.type)")
+        end
+    elseif f isa TensorField
+        return 9
+    elseif f isa Number
+        return 1
+    elseif f isa AbstractVector
+        return length(f)
+    elseif f isa AbstractMatrix
+        return length(f)
+    else
+        error("Unsupported coefficient type $(typeof(f)) in assemble_linear.")
+    end
+end
+
+function assemble_linear(
+    P::Problem,
+    op::AbstractOp,
+    g;
+    weight = nothing,
+    domain = nothing)
+
+    gmsh.model.setCurrent(P.name)
+
+    op isa IdOp || error("assemble_linear currently supports only Id(P) ⋅ g forms.")
+
+    if g isa AbstractVector
+        if length(g) != P.pdim
+            error("assemble_linear: vector coefficient length ($(length(g))) does not match test field pdim ($(P.pdim)).")
+        end
+    else
+        pdim_g = _field_pdim(g)
+        if pdim_g != P.pdim
+            error("assemble_linear: coefficient field dimension ($pdim_g) does not match test field pdim ($(P.pdim)).")
+        end
+    end
+
+    nd = ndofs(P)
+
+    Gprep = _prepare_coefficient(g, domain)
+
+    rhs = zeros(nd)
+
+    phNames = domain === nothing ?
+        [mat.phName for mat in P.material] :
+        [domain.name]
+
+    for phName in phNames
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        for (edim, etag) in dimTags
+
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for itype in eachindex(elemTypes)
+
+                et = elemTypes[itype]
+
+                _,_,order,numNodes,_,_ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                intPoints,intWeights =
+                    gmsh.model.mesh.getIntegrationPoints(
+                        et,"Gauss"*string(2order+1))
+
+                numIntPoints = length(intWeights)
+
+                _,fun,_ =
+                    gmsh.model.mesh.getBasisFunctions(
+                        et,intPoints,"Lagrange")
+
+                h = reshape(fun,:,numIntPoints)
+
+                nel = length(elemTags[itype])
+
+                for e in 1:nel
+
+                    elem = elemTags[itype][e]
+
+                    jac,jacDet,_ =
+                        gmsh.model.mesh.getJacobian(elem,intPoints)
+
+                    for k in 1:numIntPoints
+
+                        w = jacDet[k] * intWeights[k]
+
+                        g_gp = _eval_coefficient_at_gp(
+                            Gprep,
+                            elem,
+                            view(h,:,k)
+                        )
+
+                        for a in 1:numNodes
+
+                            Na = h[a,k]
+
+                            node = elemNodeTags[itype][(e-1)*numNodes+a]
+
+                            for c in 1:P.pdim
+
+                                row = (node-1)*P.pdim + c
+
+                                if g_gp isa Number
+                                    rhs[row] += Na * g_gp * w
+                                else
+                                    rhs[row] += Na * g_gp[c] * w
+                                end
+
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+        if P.pdim == 1
+        return ScalarField([], reshape(rhs, :, 1), [0], [], 1, :scalar, P)
+
+    elseif P.pdim == 2 || P.pdim == 3
+        type = P.pdim == 2 ? :v2D : :v3D
+        return VectorField([], reshape(rhs, :, 1), [0], [], 1, type, P)
+
+    elseif P.pdim == 9
+        return TensorField([], reshape(rhs, :, 1), [0], [], 1, :tensor, P)
+
+    else
+        error("assemble_linear: unsupported pdim $(P.pdim).")
+    end
 end
 
 """
@@ -1263,14 +1461,6 @@ end
 # Applied operator
 # ------------------------------------------------------------
 
-struct DomainSpec
-    kind::Symbol     # :Ω vagy :Γ
-    name::String
-end
-
-Base.show(io::IO, d::DomainSpec) =
-    print(io, "$(d.kind)=\"$(d.name)\"")
-
 struct OpApplied
     P
     op
@@ -1451,6 +1641,23 @@ struct BilinearTerm
     b::OpApplied
 end
 
+"""
+    LinearTerm(chain)
+
+Represents a linear weak-form term where the test-field operator
+appears once and the other factors are known coefficient fields
+or matrices.
+
+Examples
+--------
+    f ⋅ Pu
+    p ⋅ n ⋅ Pu
+    σT ⋅ SymGrad(Pu)
+"""
+struct LinearTerm
+    chain
+end
+
 # check
 
 @inline function _check_coeff_matrix(C)
@@ -1509,6 +1716,21 @@ The matrix chain is evaluated at Gauss points during assembly.
         BilinearTerm(a, C, b)
     end
 
+⋅(P::Problem, g::AbstractVector) = Id(P) ⋅ g
+⋅(g::AbstractVector, P::Problem) = g ⋅ Id(P)
+⋅(a::OpApplied, g::AbstractVector) = LinearTerm(MatrixChain(a, Any[g]))
+⋅(g::AbstractVector, a::OpApplied) = LinearTerm(MatrixChain(a, Any[g]))
+⋅(P::Problem, C::AbstractMatrix) = Id(P) ⋅ C
+⋅(C::AbstractMatrix, P::Problem) = C ⋅ Id(P)
+
+promote_coeffs(c) = 
+
+#⋅(a::OpApplied, c::Union{Number,ScalarField,VectorField,TensorField}) =
+#    LinearTerm((a,c))
+
+#⋅(c::Union{Number,ScalarField,VectorField,TensorField}, a::OpApplied) =
+#    LinearTerm((a,c))
+
 """
 Internal representation of chained tensor coefficients.
 
@@ -1542,6 +1764,18 @@ function ⋅(t::MatrixChain, b::OpApplied)
     return BilinearTerm(t.a, t.mats, b)
 end
 
+⋅(chain::MatrixChain, c::AbstractVector{<:Union{Number,ScalarField}}) =
+    LinearTerm(MatrixChain(chain.a, [chain.mats..., c]))
+
+⋅(c::AbstractVector{<:Union{Number,ScalarField}}, chain::MatrixChain) =
+    LinearTerm(MatrixChain(chain.a, [chain.mats..., c]))
+
+#⋅(P::Problem, c::AbstractVector{<:Union{Number,ScalarField}}) =
+#    LinearTerm((Id(P), c))
+
+⋅(c::AbstractVector{<:Union{Number,ScalarField}}, P::Problem) =
+    LinearTerm((Id(P), c))
+
 ⋅(a::OpApplied, P::Problem) =
     BilinearTerm(a, 1.0, Id(P))
 
@@ -1556,6 +1790,26 @@ end
 
 *(c::Union{Number,ScalarField}, P::Problem) =
     c * Id(P)
+
+⋅(mc::MatrixChain, x) =
+    LinearTerm(MatrixChain(mc.a, [mc.mats..., x]))
+
+⋅(P::Problem, g::AbstractVector{<:Union{Number,ScalarField}}) = Id(P) ⋅ g
+
+⋅(a::OpApplied, g::AbstractVector{<:Union{Number,ScalarField}}) =
+    LinearTerm(MatrixChain(a, [g]))
+
+⋅(g::AbstractVector{<:Union{Number,ScalarField}}, a::OpApplied) =
+    LinearTerm(MatrixChain(a, [g]))
+
+#⋅(a::OpApplied, g::AbstractVector) =
+#    LinearTerm(MatrixChain(a, collect(g)))
+
+#⋅(g::AbstractVector, a::OpApplied) =
+#    LinearTerm(MatrixChain(a, collect(g)))
+
+⋅(P::Problem, g::Union{Number,ScalarField}) =
+    Id(P) ⋅ g
 
 # ------------------------------------------------------------
 # Weak expression tree
@@ -1584,9 +1838,9 @@ Represents
 Terms are automatically constructed when combining
 operators using the DSL.
 """
-struct WeakTerm <: WeakExpr
+struct WeakTerm{T} <: WeakExpr
     coef::Number
-    term::BilinearTerm
+    term::T
 end
 
 """
@@ -1619,7 +1873,9 @@ import Base: +, -, *
 ###############################################################
 
 promote_term(t::BilinearTerm) = WeakTerm(1.0, t)
+promote_term(t::LinearTerm)   = WeakTerm(1.0, t)
 promote_term(t::WeakTerm) = t
+
 
 
 ###############################################################
@@ -1714,7 +1970,7 @@ end
 # Internal assembly
 # ------------------------------------------------------------
 
-function _assemble(term::WeakTerm, dom, weight=nothing)
+function _assemble(term::WeakTerm{BilinearTerm}, dom, weight=nothing)
 
     Pu = term.term.a.P
 
@@ -1740,6 +1996,37 @@ end
 function _assemble(expr::WeakSum, dom, weight)
 
     _assemble(expr.a, dom, weight) + _assemble(expr.b, dom, weight)
+
+end
+
+function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing)
+
+    t = term.term
+    chain = t.chain
+
+    if chain isa MatrixChain
+        op   = chain.a
+        mats = chain.mats
+        g    = mats[end]
+    else
+        op = chain
+        g  = chain
+    end
+
+    P = op.P
+
+    if dom !== nothing
+        gmsh.model.setCurrent(P.name)
+        _check_domain_dim(P, dom)
+    end
+
+    assemble_linear(
+        op.P,
+        op.op,
+        g;
+        weight = weight,
+        domain = dom
+    )
 
 end
 
@@ -1769,7 +2056,9 @@ Tensor chain
 Elastic support
 
     K = ∫( Id(Pu) ⋅ [kx 0; 0 ky] ⋅ Id(Pu); Γ="boundary")
+
 or
+
     K = ∫( Pu ⋅ [kx 0; 0 ky] ⋅ Pu; Γ="boundary")
 
 Mixed formulation
@@ -1807,42 +2096,6 @@ function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing)
 
 end
 
-# ------------------------------------------------------------
-# Fallback forms
-# ------------------------------------------------------------
-
-#function ∫(t::BilinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
-#
-#    dom = _domain_spec(; Ω=Ω, Γ=Γ)
-#
-#    assemble_operator(
-#        t.a.P,
-#        t.a.op,
-#        t.b.P,
-#        t.b.op,
-#        coefficient=coef,
-#        weight=weight,
-#        domain=dom
-#    )
-#
-#end
-
-#function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
-#
-#    dom = _domain_spec(; Ω=Ω, Γ=Γ)
-#
-#    assemble_operator(
-#        a.P,
-#        a.op,
-#        b.P,
-#        b.op,
-#        coefficient=coef,
-#        weight=weight,
-#        domain=dom
-#    )
-#
-#end
-
 function ∫(t::BilinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
     Pu = t.a.P
@@ -1863,6 +2116,14 @@ function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weigh
     end
     return assemble_operator(a.P, a.op, b.P, b.op;
         coefficient=coef, domain=dom, weight=nothing)
+end
+
+function ∫(term::LinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
+
+    dom = _domain_spec(; Ω=Ω, Γ=Γ)
+
+    return _assemble(WeakTerm(coef, term), dom, weight)
+
 end
 
 """

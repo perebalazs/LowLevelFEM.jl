@@ -2726,19 +2726,20 @@ Raises an error for any non-scalar indexing:
 Only single-component extraction `v[k]` is allowed.
 """
 function Base.getindex(v::VectorField, k::Int)
+    pdim = v.model.pdim
     @assert 1 ≤ k ≤ 3 "VectorField has exactly 3 components. Use v[1], v[2], v[3]."
 
     # ha elementwise mező
     if v.A != []
         numElem = length(v.A)
-        numNodes = size(v.A[1], 1) ÷ 3   # 3 komponens miatt
+        numNodes = size(v.A[1], 1) ÷ pdim   # 3 komponens miatt
         nsteps = v.nsteps
 
         Aout = Vector{Matrix{Float64}}(undef, numElem)
 
         @inbounds for i in 1:numElem
             Ai = v.A[i]
-            rows = k:3:3*numNodes
+            rows = k:pdim:pdim*numNodes
             Aout[i] = Ai[rows, :]
         end
 
@@ -2747,8 +2748,8 @@ function Base.getindex(v::VectorField, k::Int)
 
     # ha nodal mező
     if v.a != [;;]
-        numNodes = size(v.a, 1) ÷ 3
-        rows = k:3:3*numNodes
+        numNodes = size(v.a, 1) ÷ pdim
+        rows = k:pdim:pdim*numNodes
         aout = v.a[rows, :]
 
         return ScalarField([], aout, v.t, v.numElem, v.nsteps, :scalar, v.model)
@@ -6852,7 +6853,8 @@ testing and educational examples in LowLevelFEM workflows.
 function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1)
 
     gmsh.option.setNumber("General.Verbosity", 0)
-
+    gmsh.clear()
+    gmsh.model.add("structured_rect")
     # --------------------------------------------------
     # Geometry
     # --------------------------------------------------
@@ -6957,6 +6959,8 @@ testing and educational examples in LowLevelFEM workflows.
 function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1)
 
     gmsh.option.setNumber("General.Verbosity", 0)
+    gmsh.clear()
+    gmsh.model.add("structured_box")
 
     # --------------------------------------------------
     # Geometry
