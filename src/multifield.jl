@@ -355,7 +355,7 @@ Number of nodes per element.
 This function is called inside the element integration
 loop of `assemble_operator`.
 """
-function build_B!(B::AbstractMatrix, ::IdOp, P::Problem, k::Int, h, ∂h, numNodes::Int)
+function build_B!(B::AbstractMatrix, ::IdOp, P::Problem, k::Int, h, ∂h, numNodes::Integer)
     fill!(B, 0.0)
     pdim = P.pdim
     @inbounds for a in 1:numNodes
@@ -369,7 +369,7 @@ function build_B!(B::AbstractMatrix, ::IdOp, P::Problem, k::Int, h, ∂h, numNod
     return B
 end
 
-function build_B!(B::AbstractMatrix, ::GradOp, P::Problem, k::Int, h, ∂h, numNodes::Int)
+function build_B!(B::AbstractMatrix, ::GradOp, P::Problem, k::Int, h, ∂h, numNodes::Integer)
     fill!(B, 0.0)
     pdim = P.pdim
     dim = P.dim
@@ -399,7 +399,7 @@ function build_B!(B::AbstractMatrix, ::GradOp, P::Problem, k::Int, h, ∂h, numN
     return B
 end
 
-function build_B!(B::AbstractMatrix, ::DivOp, P::Problem, k::Int, h, ∂h, numNodes::Int)
+function build_B!(B::AbstractMatrix, ::DivOp, P::Problem, k::Int, h, ∂h, numNodes::Integer)
     fill!(B, 0.0)
     pdim = P.pdim
     dim = P.dim
@@ -417,7 +417,7 @@ function build_B!(B::AbstractMatrix, ::DivOp, P::Problem, k::Int, h, ∂h, numNo
 end
 
 function build_B!(B::AbstractMatrix, ::CurlOp,
-    P::Problem, k::Int, h, ∂h, numNodes::Int)
+    P::Problem, k::Int, h, ∂h, numNodes::Integer)
     fill!(B, 0.0)
     dim = P.dim
     pdim = P.pdim
@@ -463,7 +463,7 @@ function build_B!(B::AbstractMatrix, ::CurlOp,
 end
 
 function build_B!(B::AbstractMatrix, ::SymGradOp,
-    P::Problem, k::Int, h, ∂h, numNodes::Int)
+    P::Problem, k::Int, h, ∂h, numNodes::Integer)
     fill!(B, 0.0)
     dim = P.dim
     pdim = P.pdim
@@ -512,7 +512,7 @@ function build_B!(B::AbstractMatrix, ::SymGradOp,
 end
 
 function build_B!(B::AbstractMatrix, ::TensorDivOp,
-    P::Problem, k::Int, h, ∂h, numNodes::Int)
+    P::Problem, k::Int, h, ∂h, numNodes::Integer)
     fill!(B, 0.0)
     dim = P.dim
     pdim = P.pdim  # dim^2
@@ -532,7 +532,7 @@ function build_B!(B::AbstractMatrix, ::TensorDivOp,
 end
 
 function build_B!(B::AbstractMatrix, op::AdvOp,
-    P::Problem, k::Int, h, ∂h, numNodes::Int)
+    P::Problem, k::Int, h, ∂h, numNodes::Integer)
 
     fill!(B, 0.0)
     b = op.b
@@ -1119,23 +1119,28 @@ function assemble_linear(
 
     gmsh.model.setCurrent(P.name)
 
-    op isa IdOp || error("assemble_linear currently supports only Id(P) ⋅ g forms.")
+    outdim = op_outdim(op, P)
 
+    # allow matrix coefficient for tensor operators
+    if g isa AbstractMatrix
+        if length(g) != outdim
+            error("matrix coefficient size $(size(g)) incompatible with operator output dimension $outdim")
+        end
+        g = vec(g)
+    end
     if g isa AbstractVector
-        if length(g) != P.pdim
-            error("assemble_linear: vector coefficient length ($(length(g))) does not match test field pdim ($(P.pdim)).")
+        if length(g) != outdim
+            error("assemble_linear: vector coefficient length ($(length(g))) does not match operator output dimension ($outdim).")
         end
     else
         pdim_g = _field_pdim(g)
-        if pdim_g != P.pdim
-            error("assemble_linear: coefficient field dimension ($pdim_g) does not match test field pdim ($(P.pdim)).")
+        if pdim_g != outdim
+            error("assemble_linear: coefficient field dimension ($pdim_g) does not match operator output dimension ($outdim).")
         end
     end
 
     nd = ndofs(P)
-
     Gprep = _prepare_coefficient(g, domain)
-
     rhs = zeros(nd)
 
     phNames = domain === nothing ?
@@ -1155,65 +1160,92 @@ function assemble_linear(
 
                 et = elemTypes[itype]
 
-                _,_,order,numNodes,_,_ =
+                _, _, order, numNodes, _, _ =
                     gmsh.model.mesh.getElementProperties(et)
 
-                intPoints,intWeights =
+                intPoints, intWeights =
                     gmsh.model.mesh.getIntegrationPoints(
-                        et,"Gauss"*string(2order+1))
+                        et, "Gauss" * string(2order + 1)
+                    )
 
                 numIntPoints = length(intWeights)
 
-                _,fun,_ =
+                _, fun, _ =
                     gmsh.model.mesh.getBasisFunctions(
-                        et,intPoints,"Lagrange")
+                        et, intPoints, "Lagrange"
+                    )
 
-                h = reshape(fun,:,numIntPoints)
+                h = reshape(fun, :, numIntPoints)
+
+                _, dfun, _ =
+                    gmsh.model.mesh.getBasisFunctions(
+                        et, intPoints, "GradLagrange"
+                    )
+
+                ∇h = reshape(dfun, :, numIntPoints)
+
+                ndofs_loc = P.pdim * numNodes
+                B = zeros(outdim, ndofs_loc)
+                fe = zeros(ndofs_loc)
 
                 nel = length(elemTags[itype])
 
                 for e in 1:nel
+                    fill!(fe, 0.0)
 
                     elem = elemTags[itype][e]
 
-                    jac,jacDet,_ =
-                        gmsh.model.mesh.getJacobian(elem,intPoints)
+                    jac, jacDet, _ =
+                        gmsh.model.mesh.getJacobian(elem, intPoints)
+
+                    Jac = reshape(jac, 3, :)
+                    invJac = zeros(3, 3 * numIntPoints)
+                    ∂h = zeros(P.dim, numNodes * numIntPoints)
+
+                    @inbounds for k in 1:numIntPoints
+                        invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
+                    end
+
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numIntPoints, a in 1:numNodes
+                        invJk = invJac[1:P.dim, 3k-2:3k-(3-P.dim)]
+                        gha = ∇h[a*3-2:a*3-(3-P.dim), k]
+                        ∂h[1:P.dim, (k-1)*numNodes+a] .= invJk * gha
+                    end
 
                     for k in 1:numIntPoints
 
                         w = jacDet[k] * intWeights[k]
 
+                        build_B!(B, op, P, k, h, ∂h, numNodes)
+
                         g_gp = _eval_coefficient_at_gp(
                             Gprep,
                             elem,
-                            view(h,:,k)
+                            view(h, :, k)
                         )
 
-                        for a in 1:numNodes
+                        gvec = g_gp isa Number ? [g_gp] : g_gp
 
-                            Na = h[a,k]
+                        fe .+= (transpose(B) * gvec) * w
+                    end
 
-                            node = elemNodeTags[itype][(e-1)*numNodes+a]
+                    # scatter local element vector -> global rhs
+                    for a_loc in 1:ndofs_loc
+                        node = div(a_loc - 1, P.pdim) + 1
+                        comp = mod(a_loc - 1, P.pdim) + 1
 
-                            for c in 1:P.pdim
+                        gnode = elemNodeTags[itype][(e-1)*numNodes + node]
+                        row = (gnode - 1) * P.pdim + comp
 
-                                row = (node-1)*P.pdim + c
-
-                                if g_gp isa Number
-                                    rhs[row] += Na * g_gp * w
-                                else
-                                    rhs[row] += Na * g_gp[c] * w
-                                end
-
-                            end
-                        end
+                        rhs[row] += fe[a_loc]
                     end
                 end
             end
         end
     end
 
-        if P.pdim == 1
+    if P.pdim == 1
         return ScalarField([], reshape(rhs, :, 1), [0], [], 1, :scalar, P)
 
     elseif P.pdim == 2 || P.pdim == 3
@@ -1791,8 +1823,8 @@ end
 *(c::Union{Number,ScalarField}, P::Problem) =
     c * Id(P)
 
-⋅(mc::MatrixChain, x) =
-    LinearTerm(MatrixChain(mc.a, [mc.mats..., x]))
+#⋅(mc::MatrixChain, x) =
+#    LinearTerm(MatrixChain(mc.a, [mc.mats..., x]))
 
 ⋅(P::Problem, g::AbstractVector{<:Union{Number,ScalarField}}) = Id(P) ⋅ g
 
@@ -1810,6 +1842,55 @@ end
 
 ⋅(P::Problem, g::Union{Number,ScalarField}) =
     Id(P) ⋅ g
+
+⋅(op::OpApplied, c) = MatrixChain(op, [c])
+⋅(c, op::OpApplied) = MatrixChain([c], op)
+
+import LinearAlgebra: dot
+
+⋅(op::OpApplied, c) = MatrixChain(op, [c])
+⋅(c, op::OpApplied) = MatrixChain(op, [c])
+
+⋅(mc::MatrixChain, c) = MatrixChain(mc.a, [mc.mats..., c])
+⋅(c, mc::MatrixChain) = MatrixChain(mc.a, [c, mc.mats...])
+
+⋅(op::Problem, v::VectorField) = Id(op) ⋅ v
+
+⋅(op::OpApplied, v::VectorField) =
+    MatrixChain(op, [v[i] for i in 1:v.model.pdim])
+
+#⋅(op::OpApplied, T::TensorField) =
+#    MatrixChain(op, [T[i] for i in 1:(T.model.dim^2)])
+
+function ⋅(op::OpApplied, T::TensorField)
+    dim = T.model.dim
+
+    if dim == 2
+        return MatrixChain(op, [T[1], T[2], T[4], T[5]])
+    else
+        return MatrixChain(op, [T[i] for i in 1:9])
+    end
+end
+
+#⋅(mc::MatrixChain, v::VectorField) = 
+
+⋅(mc::MatrixChain, v::VectorField) =
+    MatrixChain(mc.a, [mc.mats..., [v[i] for i in 1:v.model.pdim]])
+
+#⋅(mc::MatrixChain, T::TensorField) =
+#    MatrixChain(mc.a, [mc.mats..., [T[i] for i in 1:(T.model.dim^2)]])
+
+function ⋅(mc::MatrixChain, T::TensorField)
+    dim = T.model.dim
+
+    mats = if dim == 2
+        [T[1], T[2], T[4], T[5]]
+    else
+        [T[i] for i in 1:9]
+    end
+
+    MatrixChain(mc.a, [mc.mats..., mats])
+end
 
 # ------------------------------------------------------------
 # Weak expression tree
@@ -2125,6 +2206,9 @@ function ∫(term::LinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
     return _assemble(WeakTerm(coef, term), dom, weight)
 
 end
+
+∫(mc::MatrixChain; Γ=nothing, Ω=nothing, weight=nothing) =
+    ∫(LinearTerm(mc); Γ=Γ, Ω=Ω, weight=weight)
 
 """
     ∫Ω(name, expr)
