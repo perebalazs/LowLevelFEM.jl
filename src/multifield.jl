@@ -1140,14 +1140,16 @@ function assemble_linear(
     end
 
     nd = ndofs(P)
-    Gprep = _prepare_coefficient(g, domain)
     rhs = zeros(nd)
 
     phNames = domain === nothing ?
         [mat.phName for mat in P.material] :
         [domain.name]
-
+    
     for phName in phNames
+        Gprep = domain === nothing ?
+            _prepare_coefficient(g, DomainSpec(:Ω, phName)) :
+            _prepare_coefficient(g, domain)
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
@@ -1706,6 +1708,33 @@ end
 # Operator combination
 # ------------------------------------------------------------
 
+function _matvec_sf(A, v)
+    m, n = size(A)
+    @assert n == length(v)
+
+    w = Vector{Any}(undef, m)
+
+    for i in 1:m
+        s = nothing
+        for j in 1:n
+            term = A[i,j] * v[j]
+            s = s === nothing ? term : s + term
+        end
+        w[i] = s
+    end
+
+    return w
+end
+
+
+function collapse_chain(mats, v)
+    w = v
+    for i in length(mats):-1:1
+        w = _matvec_sf(mats[i], w)
+    end
+    return w
+end
+
 """
     ⋅(a,b)
 
@@ -1755,7 +1784,7 @@ The matrix chain is evaluated at Gauss points during assembly.
 ⋅(P::Problem, C::AbstractMatrix) = Id(P) ⋅ C
 ⋅(C::AbstractMatrix, P::Problem) = C ⋅ Id(P)
 
-promote_coeffs(c) = 
+#promote_coeffs(c) = 
 
 #⋅(a::OpApplied, c::Union{Number,ScalarField,VectorField,TensorField}) =
 #    LinearTerm((a,c))
@@ -1796,14 +1825,8 @@ function ⋅(t::MatrixChain, b::OpApplied)
     return BilinearTerm(t.a, t.mats, b)
 end
 
-⋅(chain::MatrixChain, c::AbstractVector{<:Union{Number,ScalarField}}) =
-    LinearTerm(MatrixChain(chain.a, [chain.mats..., c]))
-
 ⋅(c::AbstractVector{<:Union{Number,ScalarField}}, chain::MatrixChain) =
     LinearTerm(MatrixChain(chain.a, [chain.mats..., c]))
-
-#⋅(P::Problem, c::AbstractVector{<:Union{Number,ScalarField}}) =
-#    LinearTerm((Id(P), c))
 
 ⋅(c::AbstractVector{<:Union{Number,ScalarField}}, P::Problem) =
     LinearTerm((Id(P), c))
@@ -1823,9 +1846,6 @@ end
 *(c::Union{Number,ScalarField}, P::Problem) =
     c * Id(P)
 
-#⋅(mc::MatrixChain, x) =
-#    LinearTerm(MatrixChain(mc.a, [mc.mats..., x]))
-
 ⋅(P::Problem, g::AbstractVector{<:Union{Number,ScalarField}}) = Id(P) ⋅ g
 
 ⋅(a::OpApplied, g::AbstractVector{<:Union{Number,ScalarField}}) =
@@ -1834,62 +1854,36 @@ end
 ⋅(g::AbstractVector{<:Union{Number,ScalarField}}, a::OpApplied) =
     LinearTerm(MatrixChain(a, [g]))
 
-#⋅(a::OpApplied, g::AbstractVector) =
-#    LinearTerm(MatrixChain(a, collect(g)))
-
-#⋅(g::AbstractVector, a::OpApplied) =
-#    LinearTerm(MatrixChain(a, collect(g)))
-
 ⋅(P::Problem, g::Union{Number,ScalarField}) =
     Id(P) ⋅ g
 
-⋅(op::OpApplied, c) = MatrixChain(op, [c])
-⋅(c, op::OpApplied) = MatrixChain([c], op)
-
-import LinearAlgebra: dot
-
-⋅(op::OpApplied, c) = MatrixChain(op, [c])
-⋅(c, op::OpApplied) = MatrixChain(op, [c])
-
-⋅(mc::MatrixChain, c) = MatrixChain(mc.a, [mc.mats..., c])
-⋅(c, mc::MatrixChain) = MatrixChain(mc.a, [c, mc.mats...])
-
 ⋅(op::Problem, v::VectorField) = Id(op) ⋅ v
 
-⋅(op::OpApplied, v::VectorField) =
-    MatrixChain(op, [v[i] for i in 1:v.model.pdim])
+⋅(op::Problem, T::TensorField) = Id(op) ⋅ T
 
-#⋅(op::OpApplied, T::TensorField) =
-#    MatrixChain(op, [T[i] for i in 1:(T.model.dim^2)])
+⋅(op::OpApplied, v::VectorField) = op ⋅ [v[i] for i in 1:v.model.pdim]
 
-function ⋅(op::OpApplied, T::TensorField)
-    dim = T.model.dim
+⋅(op::OpApplied, T::TensorField) =
+    op ⋅ (T.model.dim == 2 ? [T[1], T[2], T[4], T[5]] : [T[i] for i in 1:9])
 
-    if dim == 2
-        return MatrixChain(op, [T[1], T[2], T[4], T[5]])
-    else
-        return MatrixChain(op, [T[i] for i in 1:9])
-    end
+function ⋅(chain::MatrixChain, c::AbstractVector{<:Union{Number,ScalarField}})
+    g = collapse_chain(chain.mats, collect(c))
+    return LinearTerm(MatrixChain(chain.a, Any[g]))
 end
 
-#⋅(mc::MatrixChain, v::VectorField) = 
-
-⋅(mc::MatrixChain, v::VectorField) =
-    MatrixChain(mc.a, [mc.mats..., [v[i] for i in 1:v.model.pdim]])
-
-#⋅(mc::MatrixChain, T::TensorField) =
-#    MatrixChain(mc.a, [mc.mats..., [T[i] for i in 1:(T.model.dim^2)]])
+function ⋅(mc::MatrixChain, v::VectorField)
+    comps = [v[i] for i in 1:v.model.pdim]
+    g = collapse_chain(mc.mats, comps)
+    return LinearTerm(MatrixChain(mc.a, Any[g]))
+end
 
 function ⋅(mc::MatrixChain, T::TensorField)
-    dim = T.model.dim
-
-    mats = if dim == 2
-        [T[1], T[2], T[4], T[5]]
-    else
+    comps = T.model.dim == 2 ?
+        [T[1], T[2], T[4], T[5]] :
         [T[i] for i in 1:9]
-    end
 
-    MatrixChain(mc.a, [mc.mats..., mats])
+    g = collapse_chain(mc.mats, comps)
+    return LinearTerm(MatrixChain(mc.a, Any[g]))
 end
 
 # ------------------------------------------------------------
@@ -2089,6 +2083,8 @@ function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing)
         op   = chain.a
         mats = chain.mats
         g    = mats[end]
+    elseif chain isa Tuple && length(chain) == 2
+        op, g = chain
     else
         op = chain
         g  = chain

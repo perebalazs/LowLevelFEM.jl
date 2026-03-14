@@ -2866,6 +2866,30 @@ function Base.getindex(T::TensorField, ::Colon, j::Int)
 end
 
 """
+    Base.getindex(T::TensorField, k::Int)
+
+T[k] -> ScalarField
+
+Return the k-th component of the tensor in column-major order:
+
+    [T11, T21, T31, T12, T22, T32, T13, T23, T33]
+
+# Arguments
+- `k::Int`: component index (1 ≤ k ≤ 9)
+
+# Returns
+ScalarField
+"""
+function Base.getindex(T::TensorField, k::Int)
+    @assert 1 ≤ k ≤ 9 "TensorField index must be 1..9"
+
+    i = mod1(k, 3)
+    j = (k-1) ÷ 3 + 1
+
+    return T[i,j]
+end
+
+"""
     Base.getindex(T::TensorField, I...)
 
 Invalid index pattern for `TensorField`.
@@ -3094,6 +3118,26 @@ function Base.setindex!(T::TensorField, v::VectorField, i::Int, ::Colon)
     for j in 1:3
         T[i, j] = v[j]   # reuses ScalarField setter
     end
+
+    return T
+end
+
+"""
+    Base.setindex!(T::TensorField, s::ScalarField, k::Int)
+
+T[k] = s
+
+Assign the k-th tensor component in column-major order:
+
+    [T11, T21, T31, T12, T22, T32, T13, T23, T33]
+"""
+function Base.setindex!(T::TensorField, s::ScalarField, k::Int)
+    @assert 1 ≤ k ≤ 9 "TensorField index must be 1..9."
+
+    i = mod1(k, 3)
+    j = (k-1) ÷ 3 + 1
+
+    T[i,j] = s   # reuse existing setter
 
     return T
 end
