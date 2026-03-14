@@ -6895,7 +6895,9 @@ Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
 function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1)
-
+    if !gmsh.isInitialized()
+        gmsh.initialize()
+    end
     gmsh.option.setNumber("General.Verbosity", 0)
     gmsh.clear()
     gmsh.model.add("structured_rect")
@@ -7001,7 +7003,9 @@ Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
 function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1)
-
+    if !gmsh.isInitialized()
+        gmsh.initialize()
+    end
     gmsh.option.setNumber("General.Verbosity", 0)
     gmsh.clear()
     gmsh.model.add("structured_box")

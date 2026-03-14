@@ -209,14 +209,14 @@ function +(A::ScalarField, B::ScalarField)
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
-    elseif length(A.a) != 0 && length(B.a) != 0
+    elseif isNodal(A) && isNodal(B)
         if A.type == B.type
             return ScalarField([], A.a + B.a, A.t, [], A.nsteps, A.type, A.model)
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end
     else
-        error("+(ScalarField, ScalarField): internal error")
+        error("+(ScalarField, ScalarField): nodal + elementwise")
     end
 end
 

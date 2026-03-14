@@ -1861,10 +1861,10 @@ end
 
 ⋅(op::Problem, T::TensorField) = Id(op) ⋅ T
 
-⋅(op::OpApplied, v::VectorField) = op ⋅ [v[i] for i in 1:v.model.pdim]
+⋅(op::OpApplied, v::VectorField) = op ⋅ [v[i] for i in 1:v.model.pdim] # nodesToElements: ⋅(op::OpApplied, v::VectorField; V=nodesToElements(v))
 
 ⋅(op::OpApplied, T::TensorField) =
-    op ⋅ (T.model.dim == 2 ? [T[1], T[2], T[4], T[5]] : [T[i] for i in 1:9])
+    op ⋅ (T.model.dim == 2 ? [T[1], T[2], T[4], T[5]] : [T[i] for i in 1:9]) # nodesToElements
 
 function ⋅(chain::MatrixChain, c::AbstractVector{<:Union{Number,ScalarField}})
     g = collapse_chain(chain.mats, collect(c))
