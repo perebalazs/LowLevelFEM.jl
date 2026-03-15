@@ -16,7 +16,7 @@ export openPreProcessor, openPostProcessor, setParameter, setParameters, getPara
 export probe
 export saveField, loadField, isSaved
 export ∂x, ∂y, ∂z, ∂t
-export structured_rect_mesh, structured_box_mesh
+export structured_rect_mesh, structured_box_mesh, openGeometry
 
 """
     Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
@@ -6895,7 +6895,7 @@ Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
 function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1)
-    if !gmsh.isInitialized()
+    if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
     gmsh.option.setNumber("General.Verbosity", 0)
@@ -7003,7 +7003,7 @@ Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
 function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1)
-    if !gmsh.isInitialized()
+    if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
     gmsh.option.setNumber("General.Verbosity", 0)
@@ -7089,3 +7089,83 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
 
     return nothing
 end
+
+"""
+    openGeometry(name::String)
+
+Open a geometry or mesh file in the current Gmsh session.
+
+If Gmsh is not yet initialized, the function calls `gmsh.initialize()`.
+If the file `name` does not exist and has extension `.geo`, a new geometry
+file is created and initialized with a minimal header. Otherwise an error
+is thrown.
+
+Before opening the file the current Gmsh model is cleared with `gmsh.clear()`,
+so any previously loaded geometry or mesh is removed.
+
+# Arguments
+- `name::String`: Path to a geometry (`.geo`) or mesh file (`.msh`, `.step`,
+  `.brep`, etc.) that should be opened in Gmsh.
+
+# Behavior
+- Existing files are opened directly.
+- Missing `.geo` files are automatically created.
+- Missing files with other extensions result in an error.
+
+# Notes
+This function only loads the geometry into Gmsh. The model name used later
+by `Problem` is obtained from `gmsh.model.getCurrent()`.
+
+# Examples
+```julia
+openGeometry("beam.geo")     # create if missing and open
+openGeometry("mesh.msh")     # open existing mesh
+```
+"""
+function openGeometry(name::String)
+
+    if gmsh.isInitialized() == 0
+        gmsh.initialize()
+    end
+
+    if !isfile(name)
+        ext = lowercase(splitext(name)[2])
+
+        if ext == ".geo"
+            open(name, "w") do io
+                println(io, "//+ LowLevelFEM")
+            end
+        else
+            error("File $name does not exist")
+        end
+    end
+
+    gmsh.clear()
+    gmsh.open(name)
+
+end
+
+"""
+    functionName(arg1, arg2; kw1=..., kw2=...)
+
+Short one-sentence description of what the function does.
+
+# Arguments
+- `arg1::Type`: description
+- `arg2::Type`: description
+
+# Keyword arguments
+- `kw1`: description
+- `kw2`: description
+
+# Returns
+Description of the returned object.
+
+# Notes
+Optional implementation notes or behavior details.
+
+# Examples
+```julia
+example code
+```
+"""

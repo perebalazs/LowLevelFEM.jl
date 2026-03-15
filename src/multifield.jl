@@ -1051,6 +1051,19 @@ function assemble_operator(
     return SystemMatrix(K, Pu, Ps)
 end
 
+"""
+    matmul_sf(A, B)
+
+Matrix–matrix or matrix–field multiplication used internally
+when collapsing operator chains.
+
+Supports combinations of:
+- matrices
+- scalar/vector/tensor fields
+- numeric arrays
+
+Returns the resulting matrix or field.
+"""
 function matmul_sf(A, B)
 
     m,k = size(A)
@@ -1110,6 +1123,27 @@ function _field_pdim(f)
     end
 end
 
+"""
+    assemble_linear(P::Problem, op, rhs; weight=nothing, domain)
+
+Assemble a linear finite element operator of the form
+
+    ∫ v ⋅ op ⋅ rhs
+
+where `v` is the test field associated with problem `P`.
+
+Arguments
+---------
+- `P::Problem` : finite element problem definition
+- `op` : operator or matrix chain acting on the right-hand side
+- `rhs` : scalar, vector, tensor field, or numeric vector
+- `weight` : optional quadrature weight or coefficient
+- `domain` : domain specification (`Ω` or `Γ`)
+
+Returns
+-------
+Global right-hand side vector.
+"""
 function assemble_linear(
     P::Problem,
     op::AbstractOp,
@@ -1676,7 +1710,7 @@ struct BilinearTerm
 end
 
 """
-    LinearTerm(chain)
+    LinearTerm(chain::MatrixChain)
 
 Represents a linear weak-form term where the test-field operator
 appears once and the other factors are known coefficient fields
@@ -1687,6 +1721,9 @@ Examples
     f ⋅ Pu
     p ⋅ n ⋅ Pu
     σT ⋅ SymGrad(Pu)
+    Pu ⋅ A ⋅ g
+
+Used internally by the `∫` assembler.
 """
 struct LinearTerm
     chain
@@ -1708,7 +1745,8 @@ end
 # Operator combination
 # ------------------------------------------------------------
 
-function _matvec_sf(A, v)
+function _matvec_sf(A, v::AbstractVector)
+
     m, n = size(A)
     @assert n == length(v)
 
@@ -1726,82 +1764,48 @@ function _matvec_sf(A, v)
     return w
 end
 
+_to_components(v::Number) = [v]
 
+_to_components(v::AbstractVector) = v
+
+_to_components(v::ScalarField) = [v]
+
+_to_components(v::VectorField) = [v[i] for i in 1:v.model.pdim]
+
+function _to_components(T::TensorField)
+    if T.model.dim == 2
+        return [T[1], T[2], T[4], T[5]]   # 2×2 → 4 komponens
+    else
+        return [T[i] for i in 1:9]        # 3×3 → 9 komponens
+    end
+end
+
+# Collapse operator chain A⋅B⋅C⋅v → A(B(C(v)))
 function collapse_chain(mats, v)
-    w = v
+
+    w = _to_components(v)
+
     for i in length(mats):-1:1
         w = _matvec_sf(mats[i], w)
     end
+
     return w
 end
 
 """
-    ⋅(a,b)
+    MatrixChain
 
-Weak-form inner product operator used in the DSL.
-
-Constructs bilinear forms of the type
-
-    (Op_s v) ⋅ C ⋅ (Op_u u)
-
-Supported forms
-
-Operator pair
-
-    Grad(Pu) ⋅ Grad(Pu)
-
-Operator with tensor coefficient
-
-    SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu)
-
-Matrix chain
-
-    Grad(Pu) ⋅ A ⋅ B ⋅ C ⋅ Grad(Pu)
-
-where matrices may contain
-
-    Number
-    ScalarField
-
-entries.
-
-The matrix chain is evaluated at Gauss points during assembly.
-"""
-⋅(a::OpApplied, b::OpApplied) = BilinearTerm(a, 1.0, b)
-
-⋅(a::OpApplied,
-   C::AbstractMatrix,
-   b::OpApplied) =
-    begin
-        _check_coeff_matrix(C)
-        BilinearTerm(a, C, b)
-    end
-
-⋅(P::Problem, g::AbstractVector) = Id(P) ⋅ g
-⋅(g::AbstractVector, P::Problem) = g ⋅ Id(P)
-⋅(a::OpApplied, g::AbstractVector) = LinearTerm(MatrixChain(a, Any[g]))
-⋅(g::AbstractVector, a::OpApplied) = LinearTerm(MatrixChain(a, Any[g]))
-⋅(P::Problem, C::AbstractMatrix) = Id(P) ⋅ C
-⋅(C::AbstractMatrix, P::Problem) = C ⋅ Id(P)
-
-#promote_coeffs(c) = 
-
-#⋅(a::OpApplied, c::Union{Number,ScalarField,VectorField,TensorField}) =
-#    LinearTerm((a,c))
-
-#⋅(c::Union{Number,ScalarField,VectorField,TensorField}, a::OpApplied) =
-#    LinearTerm((a,c))
-
-"""
 Internal representation of chained tensor coefficients.
 
 Constructed automatically by expressions such as
 
     Grad(Pu) ⋅ A ⋅ B ⋅ C ⋅ Grad(Pu)
+    Pu ⋅ A ⋅ B ⋅ g
 
 The matrices are stored in `mats` and multiplied during
 assembly at Gauss points.
 
+The chain is later collapsed during assembly.
 Users normally never construct this type directly.
 """
 struct MatrixChain
@@ -1809,82 +1813,106 @@ struct MatrixChain
     mats::Vector{Any}
 end
 
-function ⋅(a::OpApplied,
-    C::AbstractMatrix)
+###################################################################
+# Weak-form dot operator
+###################################################################
+
+"""
+Weak-form inner product operator used in the DSL.
+
+General pattern
+
+    P1 ⋅ M1 ⋅ M2 ⋅ ... ⋅ Mn ⋅ P2
+
+where
+
+    P1,P2 : OpApplied
+    Mi    : matrices or scalar coefficients
+
+If the chain ends with an operator → BilinearTerm
+
+    Grad(Pu) ⋅ C ⋅ Grad(Pu)
+
+If the chain ends with a field → LinearTerm
+
+    Pu ⋅ g
+"""
+###################################################################
+# Operator – Operator  → bilinear
+###################################################################
+
+⋅(a::OpApplied, b::OpApplied) =
+    BilinearTerm(a, 1.0, b)
+
+
+###################################################################
+# Operator – Matrix  → start matrix chain
+###################################################################
+
+function ⋅(a::OpApplied, C::AbstractMatrix)
     _check_coeff_matrix(C)
-    return MatrixChain(a, [C])
+    return MatrixChain(a, Any[C])
 end
 
-function ⋅(t::MatrixChain, C::AbstractMatrix)
+
+###################################################################
+# Operator – scalar coefficient
+###################################################################
+
+⋅(a::OpApplied, c::Union{Number,ScalarField}) =
+    MatrixChain(a, Any[c])
+
+
+###################################################################
+# Continue matrix chain
+###################################################################
+
+function ⋅(mc::MatrixChain, C::AbstractMatrix)
     _check_coeff_matrix(C)
-    push!(t.mats, C)
-    return t
+    push!(mc.mats, C)
+    return mc
 end
 
-function ⋅(t::MatrixChain, b::OpApplied)
-    return BilinearTerm(t.a, t.mats, b)
+
+###################################################################
+# Continue scalar coefficient chain
+###################################################################
+
+function ⋅(mc::MatrixChain, c::Union{Number,ScalarField})
+    push!(mc.mats, c)
+    return mc
 end
 
-⋅(c::AbstractVector{<:Union{Number,ScalarField}}, chain::MatrixChain) =
-    LinearTerm(MatrixChain(chain.a, [chain.mats..., c]))
 
-⋅(c::AbstractVector{<:Union{Number,ScalarField}}, P::Problem) =
-    LinearTerm((Id(P), c))
+###################################################################
+# Chain closes with operator → bilinear
+###################################################################
 
-⋅(a::OpApplied, P::Problem) =
-    BilinearTerm(a, 1.0, Id(P))
+⋅(mc::MatrixChain, b::OpApplied) =
+    BilinearTerm(mc.a, mc.mats, b)
 
-⋅(P::Problem, b::OpApplied) =
-    BilinearTerm(Id(P), 1.0, b)
 
-⋅(a::OpApplied, C::Union{Number,ScalarField}, P::Problem) =
-    BilinearTerm(a, C, Id(P))
+###################################################################
+# Chain closes with field → linear
+###################################################################
 
-⋅(P::Problem, C::Union{Number,ScalarField}, b::OpApplied) =
-    BilinearTerm(Id(P), C, b)
+⋅(mc::MatrixChain, g::Union{
+        Number,
+        ScalarField,
+        VectorField,
+        TensorField,
+        AbstractVector
+    }) =
+    LinearTerm(MatrixChain(mc.a, Any[mc.mats..., g]))
 
-*(c::Union{Number,ScalarField}, P::Problem) =
-    c * Id(P)
 
-⋅(P::Problem, g::AbstractVector{<:Union{Number,ScalarField}}) = Id(P) ⋅ g
+###################################################################
+# DSL sugar
+###################################################################
 
-⋅(a::OpApplied, g::AbstractVector{<:Union{Number,ScalarField}}) =
-    LinearTerm(MatrixChain(a, [g]))
-
-⋅(g::AbstractVector{<:Union{Number,ScalarField}}, a::OpApplied) =
-    LinearTerm(MatrixChain(a, [g]))
-
-⋅(P::Problem, g::Union{Number,ScalarField}) =
-    Id(P) ⋅ g
-
-⋅(op::Problem, v::VectorField) = Id(op) ⋅ v
-
-⋅(op::Problem, T::TensorField) = Id(op) ⋅ T
-
-⋅(op::OpApplied, v::VectorField) = op ⋅ [v[i] for i in 1:v.model.pdim] # nodesToElements: ⋅(op::OpApplied, v::VectorField; V=nodesToElements(v))
-
-⋅(op::OpApplied, T::TensorField) =
-    op ⋅ (T.model.dim == 2 ? [T[1], T[2], T[4], T[5]] : [T[i] for i in 1:9]) # nodesToElements
-
-function ⋅(chain::MatrixChain, c::AbstractVector{<:Union{Number,ScalarField}})
-    g = collapse_chain(chain.mats, collect(c))
-    return LinearTerm(MatrixChain(chain.a, Any[g]))
-end
-
-function ⋅(mc::MatrixChain, v::VectorField)
-    comps = [v[i] for i in 1:v.model.pdim]
-    g = collapse_chain(mc.mats, comps)
-    return LinearTerm(MatrixChain(mc.a, Any[g]))
-end
-
-function ⋅(mc::MatrixChain, T::TensorField)
-    comps = T.model.dim == 2 ?
-        [T[1], T[2], T[4], T[5]] :
-        [T[i] for i in 1:9]
-
-    g = collapse_chain(mc.mats, comps)
-    return LinearTerm(MatrixChain(mc.a, Any[g]))
-end
+⋅(P::Problem, x) = Id(P) ⋅ x
+⋅(x, P::Problem) = x ⋅ Id(P)
+⋅(P1::Problem, P2::Problem) = Id(P1) ⋅ Id(P2)
 
 # ------------------------------------------------------------
 # Weak expression tree
@@ -1964,9 +1992,11 @@ promote_term(t::WeakTerm) = t
 *(t::BilinearTerm, c::Union{Number,ScalarField}) =
     BilinearTerm(t.a, c, t.b)
 
-*(c::Number, t::WeakTerm) = WeakTerm(c * t.coef, t.term)
-*(t::WeakTerm, c::Number) = WeakTerm(c * t.coef, t.term)
+*(op::OpApplied, c::Union{Number,ScalarField}) =
+    MatrixChain(op, Any[c])
 
+*(c::Union{Number,ScalarField}, op::OpApplied) =
+    MatrixChain(op, Any[c])
 
 ###############################################################
 # Addition
@@ -2117,6 +2147,7 @@ end
 Assemble a finite element operator from a weak-form expression.
 
 Examples
+--------
 
 Diffusion
 
@@ -2143,6 +2174,18 @@ Mixed formulation
     A = ∫( Div(Pu) ⋅ Pp )
     B = ∫( Pp ⋅ Div(Pu) )
 
+Linear form
+
+    f = ∫(Pu ⋅ g)
+
+With operator chain
+
+    f = ∫(Pu ⋅ A ⋅ g)
+
+With coefficient
+
+    f = ∫(PT ⋅ PT * h, Γ="right")
+
 # Arguments
 
 `expr`
@@ -2161,7 +2204,7 @@ Boundary physical group name.
 
 # Returns
 
-`SystemMatrix`
+`SystemMatrix` or `ScalarField`, `VectorField`, `TensorField`
 """
 function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing)
 
@@ -2173,38 +2216,89 @@ function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing)
 
 end
 
-function ∫(t::BilinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing)
+
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
+
     Pu = t.a.P
+
     if dom !== nothing
         gmsh.model.setCurrent(Pu.name)
         _check_domain_dim(Pu, dom)
     end
-    return assemble_operator(t.a.P, t.a.op, t.b.P, t.b.op;
-        coefficient=t.coef, domain=dom, weight=nothing)
+
+    return assemble_operator(
+        t.a.P,
+        t.a.op,
+        t.b.P,
+        t.b.op;
+        coefficient = t.coef,
+        domain = dom,
+        weight = weight
+    )
+
 end
 
-function ∫(a::OpApplied, b::OpApplied; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing)
+
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
+
     Pu = a.P
+
     if dom !== nothing
         gmsh.model.setCurrent(Pu.name)
         _check_domain_dim(Pu, dom)
     end
-    return assemble_operator(a.P, a.op, b.P, b.op;
-        coefficient=coef, domain=dom, weight=nothing)
+
+    return assemble_operator(
+        a.P,
+        a.op,
+        b.P,
+        b.op;
+        coefficient = 1.0,
+        domain = dom,
+        weight = weight
+    )
+
 end
 
-function ∫(term::LinearTerm; coef=1.0, Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
-    return _assemble(WeakTerm(coef, term), dom, weight)
+    mc = t.chain
+    a  = mc.a
+
+    mats = mc.mats
+
+    rhs = mats[end]
+    coeffs = mats[1:end-1]
+
+    rhs = collapse_chain(coeffs, rhs)
+
+    P  = a.P
+    op = a.op
+
+    if dom !== nothing
+        gmsh.model.setCurrent(P.name)
+        _check_domain_dim(P, dom)
+    end
+
+    return assemble_linear(
+        P,
+        op,
+        rhs;
+        domain = dom,
+        weight = weight
+    )
 
 end
 
-∫(mc::MatrixChain; Γ=nothing, Ω=nothing, weight=nothing) =
-    ∫(LinearTerm(mc); Γ=Γ, Ω=Ω, weight=weight)
+function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing)
+
+    return ∫(LinearTerm(mc); Ω=Ω, Γ=Γ, weight=weight)
+
+end
 
 """
     ∫Ω(name, expr)
