@@ -854,9 +854,47 @@ function assemble_operator(
     gmsh.model.setCurrent(Pu.name)
 
     # output dims must match for the dot-product integrand
+    #out_u = op_outdim(op_u, Pu)
+    #out_s = op_outdim(op_s, Ps)
+    #@assert out_u == out_s "Operator output dims mismatch: $out_u vs $out_s."
+    
+    # operator output dimensions
     out_u = op_outdim(op_u, Pu)
     out_s = op_outdim(op_s, Ps)
-    @assert out_u == out_s "Operator output dims mismatch: $out_u vs $out_s."
+    
+    if coefficient isa Number || coefficient isa ScalarField
+        @assert out_u == out_s
+    
+    elseif coefficient isa AbstractMatrix
+        @assert size(coefficient,1) == out_u
+        @assert size(coefficient,2) == out_s
+    
+    elseif coefficient isa AbstractVector
+        if length(coefficient) == 1 &&
+           (coefficient[1] isa Number || coefficient[1] isa ScalarField)
+    
+            @assert out_u == out_s
+    
+        else
+            A1 = coefficient[1]
+            An = coefficient[end]
+    
+            @assert A1 isa AbstractMatrix
+            @assert An isa AbstractMatrix
+    
+            @assert size(A1,1) == out_u
+            @assert size(An,2) == out_s
+    
+            for i in 1:length(coefficient)-1
+                Ai = coefficient[i]
+                Aj = coefficient[i+1]
+    
+                @assert Ai isa AbstractMatrix
+                @assert Aj isa AbstractMatrix
+                @assert size(Ai,2) == size(Aj,1)
+            end
+        end
+    end
 
     # ------------------------------------------------------------
     # weight dimension check
@@ -950,6 +988,7 @@ function assemble_operator(
                 Bu = zeros(out_u, ndofs_u_loc)
                 Bs = zeros(out_s, ndofs_s_loc)
                 Ke = zeros(ndofs_s_loc, ndofs_u_loc)
+                tmp = zeros(size(Bs,2), size(Bu,1))
 
                 # connectivity table
                 @inbounds for e in 1:nel
@@ -1008,8 +1047,15 @@ function assemble_operator(
                             build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
                             build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
 
-                            mul!(tmpBu, Cgp, Bu)
-                            mul!(Ke, transpose(Bs), tmpBu, w, 1.0)
+                            #@disp size(Bu)
+                            #@disp size(Cgp)
+                            #@disp size(Bs)
+                            #tmp = similar(Bu, size(Cgp,1), size(Bu,2))
+                            #tmp = zeros(size(Bs,2), size(Cgp,1))
+                            #mul!(tmpBu, Cgp, Bu)
+                            #mul!(Ke, transpose(Bs), tmpBu, w, 1.0)
+                            mul!(tmp, transpose(Bs), transpose(Cgp))
+                            mul!(Ke, tmp, Bu, w, 1.0)
 
                         else
                             error("assemble_operator error")
@@ -1818,6 +1864,14 @@ function collapse_chain(mats, v)
     end
 
     return w
+end
+
+function chain_dims(mats)
+    M = mats[1]
+    for i in 2:length(mats)
+        M = M * mats[i]
+    end
+    return size(M)
 end
 
 """

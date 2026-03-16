@@ -2319,10 +2319,10 @@ end
 Scalar multiplication of a system matrix.
 """
 function *(A::SystemMatrix, b::Number)
-    SystemMatrix(A.A * b, A.model)
+    SystemMatrix(A.A * b, A.model, A.test_model, A.problems, A.offsets)
 end
 function *(b::Number, A::SystemMatrix)
-    SystemMatrix(A.A * b, A.model)
+    SystemMatrix(A.A * b, A.model, A.test_model, A.problems, A.offsets)
 end
 
 
