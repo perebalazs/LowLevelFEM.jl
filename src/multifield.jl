@@ -872,8 +872,6 @@ function assemble_operator(
     # prepare coefficient
     # ------------------------------------------------------------
 
-    Cprep = _prepare_coefficient(coefficient, domain)
-
     # estimate IJV length: crude but OK for notebook prototype
     lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(Pu) * max(1, Ps.pdim) * max(1, Pu.pdim)
     I = Vector{Int}(undef, lengthOfIJV)
@@ -905,6 +903,13 @@ function assemble_operator(
 
     # loop physical groups
     for phName in phNames
+        dom_here =
+            domain === nothing ? DomainSpec(:Ω, phName) :
+            domain isa DomainSpec ? domain :
+            DomainSpec(:Ω, String(phName))
+
+        Cprep = _prepare_coefficient(coefficient, dom_here)
+
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
         isempty(dimTags) && error("assemble_operator: physical group \"$phName\" not found.")
@@ -1780,6 +1785,29 @@ function _to_components(T::TensorField)
     end
 end
 
+"""
+    tensorfield_to_matrix(F::TensorField)
+
+Convert a TensorField to a matrix of ScalarField components.
+"""
+function tensorfield_to_matrix(F::TensorField)
+
+    dim = F.model.pdim
+
+    if dim == 2
+        return [
+            F[1,1]  F[1,2]
+            F[2,1]  F[2,2]
+        ]
+    elseif dim == 3
+        return [
+            F[1,1]  F[1,2]  F[1,3]
+            F[2,1]  F[2,2]  F[2,3]
+            F[3,1]  F[3,2]  F[3,3]
+        ]
+    end
+end
+
 # Collapse operator chain A⋅B⋅C⋅v → A(B(C(v)))
 function collapse_chain(mats, v)
 
@@ -1854,6 +1882,11 @@ function ⋅(a::OpApplied, C::AbstractMatrix)
     return MatrixChain(a, Any[C])
 end
 
+⋅(a::OpApplied, F::TensorField) =
+    MatrixChain(a, Any[tensorfield_to_matrix(F)])
+
+⋅(mc::MatrixChain, F::TensorField) =
+    MatrixChain(mc.a, Any[mc.mats..., tensorfield_to_matrix(F)])
 
 ###################################################################
 # Operator – scalar coefficient
