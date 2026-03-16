@@ -12,6 +12,7 @@ import Base.log
 import Base.sqrt
 import Base.cbrt
 import Base.abs
+import Base.adjoint
 export mapScalarField
 using StaticArrays
 
@@ -583,6 +584,8 @@ operations such as `abs`, `+`, `-`, `log`, `sqrt`, etc.
     end
     return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
+
+adjoint(f::ScalarField) = f
 
 #=
 function /(AA::ScalarField, b::Number)
