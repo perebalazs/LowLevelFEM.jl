@@ -1905,6 +1905,14 @@ end
     }) =
     LinearTerm(MatrixChain(mc.a, Any[mc.mats..., g]))
 
+⋅(a::OpApplied, g::Union{
+        Number,
+        ScalarField,
+        VectorField,
+        TensorField,
+        AbstractVector
+    }) =
+    LinearTerm(MatrixChain(a, [g])) #maybe Any[g]
 
 ###################################################################
 # DSL sugar
