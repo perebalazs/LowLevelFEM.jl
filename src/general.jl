@@ -5779,6 +5779,7 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     for ipg in 1:length(problem.material)
         phName = problem.material[ipg].phName
         tag = getTagForPhysicalName(phName)
+        edim = getDimForPhysicalName(phName)
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
         append!(nodeTags, nT)
     end
@@ -5786,7 +5787,8 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
         if problem.geometry.nameVolume ≠ ""
             phName = problem.geometry.nameVolume
             tag = getTagForPhysicalName(phName)
-            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim + 1, tag)
+            edim = getDimForPhysicalName(phName)
+            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
             append!(nodeTags, nT)
         end
     end
@@ -6428,7 +6430,7 @@ Types:
 - `tag`: Integer
 - `xy`: Tuples{Vector{Float64},Vector{Float64}}
 """
-function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
+function plotOnPath(pathName, field; points=100, step=nothing, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
     #gmsh.model.setCurrent(problem.name)
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
     if points < 2
@@ -6452,7 +6454,7 @@ function plotOnPath(pathName, field; points=100, step=1im, plot=false, name="fie
         if ii == 1
             pt0 = gmsh.model.getValue(1, path, [bound1])
         end
-        if step == 1im
+        if step === nothing
             stepRange = 1:nbstep
         else
             stepRange = step >= nbstep ? nbstep : step + 1
