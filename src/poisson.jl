@@ -1355,7 +1355,7 @@ end
 
 """
     solveField(K::SystemMatrix, 
-               f::Union{ScalarField,VectorField}; 
+               f::Union{ScalarField,VectorField,TensorField}; 
                support::Vector{BoundaryCondition}=BoundaryCondition[], 
                iterative=false, 
                reltol::Real = sqrt(eps()), 
@@ -1429,7 +1429,7 @@ uniformly for `ScalarField` and `VectorField` unknowns.
 - When `iterative = true`, the system is solved using conjugate gradient on
   the reduced matrix `K_ff`.
 """
-function solveField(K::SystemMatrix, f::Union{ScalarField,VectorField}; 
+function solveField(K::SystemMatrix, f::Union{ScalarField,VectorField,TensorField}; 
                            support::Vector{BoundaryCondition}=BoundaryCondition[], 
                            iterative=false,
                            reltol::Real = sqrt(eps()),

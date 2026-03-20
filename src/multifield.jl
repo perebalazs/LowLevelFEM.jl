@@ -1414,7 +1414,7 @@ end
 single field version:
 
     solveField(K::SystemMatrix, 
-               f::Union{ScalarField,VectorField}; 
+               f::Union{ScalarField,VectorField,TensorField}; 
                support::Vector{BoundaryCondition}=BoundaryCondition[], 
                iterative=false, 
                reltol::Real = sqrt(eps()), 
@@ -1819,9 +1819,11 @@ _to_components(v::Number) = [v]
 
 _to_components(v::AbstractVector) = v
 
+_to_components(v::AbstractMatrix) = v
+
 _to_components(v::ScalarField) = [v]
 
-_to_components(v::VectorField) = [v[i] for i in 1:v.model.pdim]
+_to_components(v::VectorField) = [v[i] for i in 1:(v.type == :v2D ? 2 : v.type == :v3D ? 3 : error("_to_components: wrong vector type: $(v.type)"))]
 
 function _to_components(T::TensorField)
     if T.model.dim == 2

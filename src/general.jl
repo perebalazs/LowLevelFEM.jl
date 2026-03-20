@@ -2727,7 +2727,11 @@ Only single-component extraction `v[k]` is allowed.
 """
 function Base.getindex(v::VectorField, k::Int)
     pdim = v.model.pdim
-    @assert 1 ≤ k ≤ 3 "VectorField has exactly 3 components. Use v[1], v[2], v[3]."
+    pdim =
+        v.type == :v2D ? 2 :
+        v.type == :v3D ? 3 :
+        error("Unknown VectorField type $(v.type)")
+    @assert 1 ≤ k ≤ pdim "VectorField has exactly $pdim components."
 
     # ha elementwise mező
     if v.A != []
@@ -4567,7 +4571,8 @@ function component_index(problem::Problem, suffix::String)
         tensor_map = Dict(
             "xx"=>1, "yx"=>2, "zx"=>3,
             "xy"=>4, "yy"=>5, "zy"=>6,
-            "xz"=>7, "yz"=>8, "zz"=>9
+            "xz"=>7, "yz"=>8, "zz"=>9,
+            "x"=>1, "y"=>5, "z"=>9
         )
 
         if haskey(tensor_map, suffix)

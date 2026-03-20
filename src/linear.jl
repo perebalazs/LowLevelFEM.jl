@@ -3470,7 +3470,8 @@ function _bc_component_map(problem::Problem)
         return Dict(
             "xx"=>1, "yx"=>2, "zx"=>3,
             "xy"=>4, "yy"=>5, "zy"=>6,
-            "xz"=>7, "yz"=>8, "zz"=>9
+            "xz"=>7, "yz"=>8, "zz"=>9,
+            "x"=>1, "y"=>5, "z"=>9
         )
     else
         error("Unsupported pdim $(problem.pdim)")
