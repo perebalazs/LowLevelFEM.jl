@@ -19,33 +19,80 @@ export ∂x, ∂y, ∂z, ∂t
 export structured_rect_mesh, structured_box_mesh, openGeometry
 
 """
-    Material(phName, type, E, ν, ρ, k, c, α, λ, μ, κ)
+    Material(phName; kwargs...)
 
-Structure containing the material type and constants.
-- type: constitutive law (`:Hooke`, `:StVenantKirchhoff`, `:NeoHookeCompressible`)
-- E: elastic modulus
-- ν: Poisson's ratio
-- ρ: mass density
-- k: thermal conductivity
-- c: specific heat
-- α: thermal expansion coefficient
-- λ: Lamé parameter
-- μ: Lamé parameter
-- κ: bulk modulus
-`phName` is the name of the physical group where the material is used.
+Material parameters assigned to a physical group.
 
-Types:
-- `phName`: String
-- `type`: Symbol
-- `E`: Float64
-- `ν`: Float64
-- `ρ`: Float64
-- `k`: Float64
-- `c`: Float64
-- `α`: Float64
-- `λ`: Float64
-- `μ`: Float64
-- `κ`: Float64
+This structure stores mechanical, thermal and fluid-related material
+properties used during assembly. The material is associated with a
+Gmsh physical group via `phName`.
+
+# Arguments
+
+- `phName::String`  
+  Name of the physical group where the material is applied.
+
+# Keyword Arguments
+
+## Elastic properties
+At least one valid combination of elastic constants must be provided.
+Missing parameters are automatically completed.
+
+- `E::Float64`  
+  Young's modulus
+- `ν::Float64`  
+  Poisson's ratio
+- `λ::Float64`  
+  First Lamé parameter
+- `μ::Float64`  
+  Second Lamé parameter (shear modulus)
+- `κ::Float64`  
+  Bulk modulus
+
+## Density
+- `ρ::Float64`  
+  Mass density
+
+## Thermal properties
+- `k::Float64`  
+  Thermal conductivity
+- `c::Float64`  
+  Specific heat capacity
+- `α::Float64`  
+  Thermal expansion coefficient
+
+## Fluid / tribology-related properties
+- `η::Float64`  
+  Dynamic viscosity
+- `p₀::Float64`  
+  Cavitation pressure
+
+## Structural property
+- `A::Float64`  
+  Cross-sectional area (used e.g. in truss elements)
+
+# Notes
+
+- Elastic constants are internally completed to a consistent set
+  using `elastic_constants`.
+- Default values are provided for all optional parameters.
+- The material definition is independent of the field type
+  (scalar, vector, tensor) and can be used in multifield problems.
+
+# Examples
+
+```julia
+mat = Material("solid", E=210e3, ν=0.3)
+
+mat = Material("fluid",
+    η=1e-6,
+    p₀=0.1
+)
+
+mat = Material("truss",
+    E=210e3,
+    A=1.0
+)
 """
 struct Material
     phName::String
@@ -213,33 +260,112 @@ mutable struct Geometry
 end
 
 """
-    Problem(materials; thickness=..., type=..., bandwidth=..., dim=..., fdim=...)
+    Problem(materials; kwargs...)
 
-Structure containing key data for a problem.
-- Parts of the model with their material constants. Multiple materials can be provided (see `material`).
-- Problem type: `:Solid`, `:PlaneStrain`, `:PlaneStress`, `:AxiSymmetric`, `:HeatConduction`, `:PlaneHeatConduction`, 
-`:AxiSymmetricHeatConduction`, `:Truss`, `:General`.
-  For `:AxiSymmetric`, the symmetry axis is `y`, and the geometry must be drawn in the positive `x` half-plane.
-- Bandwidth optimization using Gmsh's built-in reordering. Options: `:RCMK`, `:Hilbert`, `:Metis`, or `:none` (default).
-- Dimension of the problem, determined by `type`.
-- Material constants (vector of `Material`; see the `Material` struct).
-- Plate thickness (for 2D plate problems).
-- Number of nodes (`non`).
-- Geometry dimension.
-- Problem dimension (e.g., a 3D heat conduction problem is a 1D problem).
-- In case of 2D truss displacements have to be fixed in the third direction.
-- `dim` is number of dimensions in space (in case of :General)
-- `fdim` is the number of unknown fields (eg. scalar->1, 2D vector->2, 3D vector->3 or more) (in case of :General)
+Defines a finite element problem on the current Gmsh model.
 
-Types:
-- `materials`: Material
-- `type`: Symbol
-- `bandwidth`: Symbol
-- `dim`: Integer
-- `thickness`: Float64
-- `non`: Integer
-- `dim`: Integer
-- `pdim`: Integer
+The `Problem` structure collects all information required for assembly,
+including geometry, discretization, unknown field structure and associated
+materials. It serves as the central object for operator-based formulations.
+
+# Arguments
+
+- `materials::Vector{Material}`  
+  List of materials assigned to physical groups in the mesh.
+
+# Keyword Arguments
+
+## Geometry and discretization
+
+- `dim::Int`  
+  Spatial dimension of the problem (1, 2 or 3).
+- `thickness::Float64`  
+  Thickness parameter for 2D formulations.
+
+## Field definition
+
+- `field::Symbol`  
+  Name of the unknown field (e.g. `:u`, `:T`, `:p`).
+- `rhs_field::Symbol`  
+  Name of the right-hand side field.
+
+## Problem configuration
+
+- `type::Symbol`  
+  Predefined problem setup. Supported values:
+
+  - `:Solid`  
+  - `:PlaneStress`  
+  - `:PlaneStrain`  
+  - `:AxiSymmetric`  
+  - `:HeatConduction`  
+  - `:PlaneHeatConduction`  
+  - `:AxiSymmetricHeatConduction`  
+  - `:Truss`  
+  - `:ScalarField`  
+  - `:VectorField`  
+  - `:TensorField`  
+  - `:Reynolds`
+
+  These presets define default values for:
+  - spatial dimension (`dim`)
+  - number of unknown components (`pdim`)
+  - field naming (`field`, `rhs_field`)
+
+- `bandwidth::Symbol`  
+  Optional node renumbering strategy for bandwidth reduction.  
+  Options: `:RCMK`, `:Hilbert`, `:Metis`, `:none` (default).
+
+## Geometry names (used in special cases)
+
+- `nameTopSurface::String`  
+  Name of the top surface (used e.g. in Reynolds-type problems)
+- `nameVolume::String`  
+  Name of the volume region
+
+# Internal Fields
+
+- `dim::Int`  
+  Spatial dimension of the mesh
+- `pdim::Int`  
+  Number of unknown components per node  
+  (e.g. 1 = scalar, 2/3 = vector, 9 = tensor)
+- `non::Int`  
+  Number of mesh nodes
+- `geometry::Geometry`  
+  Geometry information extracted from Gmsh
+- `material::Vector{Material}`  
+  Material definitions assigned to physical groups
+
+# Notes
+
+- The problem is defined on the currently active Gmsh model.
+- The total number of degrees of freedom is `non * pdim`.
+- The structure is compatible with scalar, vector and tensor fields,
+  and supports multifield formulations.
+
+# Examples
+
+```julia
+# 3D elasticity
+mat = Material("solid", E=210e3, ν=0.3)
+P = Problem([mat], type=:Solid)
+
+# Scalar field in 2D
+P = Problem([mat], type=:ScalarField, dim=2)
+
+# Vector field in 3D
+P = Problem([mat], type=:VectorField, dim=3)
+
+# Tensor field
+P = Problem([mat], type=:TensorField, dim=3)
+
+# Reynolds-type problem
+P = Problem([mat],
+    type=:Reynolds,
+    nameTopSurface="top",
+    nameVolume="fluid"
+)
 """
 struct Problem
     name::String
