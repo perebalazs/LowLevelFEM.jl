@@ -5605,7 +5605,8 @@ Types:
 - `support`: Vector{BoundaryCondition}
 - `λₘₐₓ`: Float64 
 """
-function smallestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
+
+function smallestEigenValue_old(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
     free = freeDoFs(K.model, support)
     K0 = K[free,free]
     C0 = C[free,free]
@@ -5637,7 +5638,8 @@ Types:
 - `support`: Vector{BoundaryCondition}
 - `λₘᵢₙ`: Float64 
 """
-function largestEigenValue(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
+
+function largestEigenValue_old(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
     free = freeDoFs(K.model, support)
     K0 = K[free,free]
     C0 = C[free,free]

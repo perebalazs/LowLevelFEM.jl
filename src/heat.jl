@@ -1362,9 +1362,9 @@ end
 """
     FDM(K::SystemMatrix, 
         C::SystemMatrix, 
-        q::Union{ScalarField,VectorField}, 
+        q::Union{ScalarField,VectorField,SystemVector}, 
         bc::Vector{BoundaryCondition}, 
-        T0::Union{ScalarField,VectorField}, 
+        T0::Union{ScalarField,VectorField,SystemVector}, 
         n::Int, 
         Δt::Float64; 
         ϑ=0.5)

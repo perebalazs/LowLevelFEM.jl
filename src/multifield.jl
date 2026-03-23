@@ -2436,3 +2436,592 @@ KΓ = ∫Γ("loaded_boundary", Id(Pu) ⋅ Id(Pu))
 ∫Γ(name, expr) = ∫(expr; Γ=name)
 
 const ε = SymGrad
+
+ndofs(P) = P.non * P.pdim
+
+"""
+    multifield_bc_data(K::SystemMatrix,
+                       bc::Vector{BoundaryCondition};
+                       nsteps::Int=1)
+
+Compute global constrained and free DOFs together with the prescribed
+Dirichlet values for a multifield block system.
+
+Returns
+- `free  :: Vector{Int}`
+- `fixed :: Vector{Int}`
+- `xD    :: Matrix{Float64}` of size `(ndof, nsteps)`
+
+Notes
+- This function requires `K` to be a block `SystemMatrix`, i.e.
+  `K.problems !== nothing` and `K.offsets !== nothing`.
+- In multifield problems every `BoundaryCondition` must explicitly
+  refer to a `problem`.
+- Prescribed values are assembled from `applyBoundaryConditions(problem, [bc]; steps=nsteps)`.
+"""
+function multifield_bc_data(
+    K::SystemMatrix,
+    bc::Vector{BoundaryCondition};
+    nsteps::Int=1
+)
+    K.problems === nothing &&
+        error("multifield_bc_data: K is not a block SystemMatrix (K.problems === nothing).")
+
+    K.offsets === nothing &&
+        error("multifield_bc_data: K is not a block SystemMatrix (K.offsets === nothing).")
+
+    problems = K.problems
+    offsets = K.offsets
+
+    length(problems) == length(offsets) ||
+        error("multifield_bc_data: inconsistent metadata in K (length(problems) != length(offsets)).")
+
+    ndof = size(K.A, 1)
+    size(K.A, 1) == size(K.A, 2) ||
+        error("multifield_bc_data: K must be square.")
+
+    fixed = Int[]
+    xD = zeros(ndof, nsteps)
+
+    for bci in bc
+        bci.problem === nothing &&
+            error("multifield_bc_data: in multifield systems every BoundaryCondition must have an explicit `problem`.")
+
+        idx = findfirst(P -> P === bci.problem, problems)
+        idx === nothing &&
+            error("multifield_bc_data: BC refers to a Problem that is not present in K.problems.")
+
+        P = problems[idx]
+        off = offsets[idx]
+
+        local_fixed = constrainedDoFs(P, [bci])
+        isempty(local_fixed) && continue
+
+        global_fixed = off .+ local_fixed
+        append!(fixed, global_fixed)
+
+        field_bc = applyBoundaryConditions(P, [bci]; steps=nsteps)
+
+        # safety checks
+        size(field_bc.a, 1) == ndofs(P) ||
+            error("multifield_bc_data: applyBoundaryConditions returned incompatible field size for problem $(P.field).")
+
+        if field_bc.nsteps == 1
+            @inbounds for it in 1:nsteps
+                xD[global_fixed, it] .= field_bc.a[local_fixed, 1]
+            end
+        else
+            field_bc.nsteps == nsteps ||
+                error("multifield_bc_data: BC field nsteps = $(field_bc.nsteps), expected 1 or $nsteps.")
+            xD[global_fixed, :] .= field_bc.a[local_fixed, 1:nsteps]
+        end
+    end
+
+    fixed = unique(fixed)
+    sort!(fixed)
+
+    free = setdiff(collect(1:ndof), fixed)
+
+    return free, fixed, xD
+end
+
+
+"""
+    multifield_constrainedDoFs(K::SystemMatrix,
+                               bc::Vector{BoundaryCondition})
+
+Return global constrained DOFs for a multifield block system.
+"""
+function multifield_constrainedDoFs(
+    K::SystemMatrix,
+    bc::Vector{BoundaryCondition}
+)
+    _, fixed, _ = multifield_bc_data(K, bc; nsteps=1)
+    return fixed
+end
+
+
+"""
+    multifield_freeDoFs(K::SystemMatrix,
+                        bc::Vector{BoundaryCondition})
+
+Return global free DOFs for a multifield block system.
+"""
+function multifield_freeDoFs(
+    K::SystemMatrix,
+    bc::Vector{BoundaryCondition}
+)
+    free, _, _ = multifield_bc_data(K, bc; nsteps=1)
+    return free
+end
+
+"""
+    check_multifield_system_compatibility(K::SystemMatrix,
+                                          C::SystemMatrix)
+
+Validate that two block system matrices are compatible for multifield
+time integration.
+"""
+function check_multifield_system_compatibility(
+    K::SystemMatrix,
+    C::SystemMatrix
+)
+    K.problems === nothing &&
+        error("check_multifield_system_compatibility: K is not a block SystemMatrix.")
+
+    C.problems === nothing &&
+        error("check_multifield_system_compatibility: C is not a block SystemMatrix.")
+
+    K.offsets === nothing &&
+        error("check_multifield_system_compatibility: K.offsets === nothing.")
+
+    C.offsets === nothing &&
+        error("check_multifield_system_compatibility: C.offsets === nothing.")
+
+    K.problems == C.problems ||
+        error("check_multifield_system_compatibility: K.problems and C.problems differ.")
+
+    K.offsets == C.offsets ||
+        error("check_multifield_system_compatibility: K.offsets and C.offsets differ.")
+
+    size(K.A) == size(C.A) ||
+        error("check_multifield_system_compatibility: matrix sizes differ: size(K.A)=$(size(K.A)) vs size(C.A)=$(size(C.A)).")
+
+    size(K.A, 1) == size(K.A, 2) ||
+        error("check_multifield_system_compatibility: K must be square.")
+
+    size(C.A, 1) == size(C.A, 2) ||
+        error("check_multifield_system_compatibility: C must be square.")
+
+    return nothing
+end
+
+"""
+    split_multifield_solution(X::AbstractMatrix,
+                              problems::Vector{Problem},
+                              offsets::Vector{Int},
+                              t::AbstractVector)
+
+Split a global multifield solution matrix into field objects and return
+them as a tuple in block order.
+"""
+function split_multifield_solution(
+    X::AbstractMatrix,
+    problems::Vector{Problem},
+    offsets::Vector{Int},
+    t::AbstractVector
+)
+    nsteps = size(X, 2)
+    results = Vector{Any}(undef, length(problems))
+
+    for (i, P) in enumerate(problems)
+        off = offsets[i]
+        nloc = P.non * P.pdim #ndofs(P)
+        Xloc = X[off+1:off+nloc, :]
+
+        if P.pdim == 1
+            results[i] = ScalarField([], Matrix(Xloc), collect(t), [], nsteps, :scalar, P)
+        elseif P.pdim == 2
+            results[i] = VectorField([], Matrix(Xloc), collect(t), [], nsteps, :v2D, P)
+        elseif P.pdim == 3
+            results[i] = VectorField([], Matrix(Xloc), collect(t), [], nsteps, :v3D, P)
+        elseif P.pdim == 9
+            results[i] = TensorField([], Matrix(Xloc), collect(t), [], nsteps, :tensor, P)
+        else
+            error("split_multifield_solution: unsupported pdim $(P.pdim).")
+        end
+    end
+
+    return tuple(results...)
+end
+
+"""
+    FDM(K::SystemMatrix,
+        C::SystemMatrix,
+        q::SystemVector,
+        bc::Vector{BoundaryCondition},
+        X0::SystemVector,
+        n::Int,
+        Δt::Float64;
+        ϑ=0.5)
+
+Alias: FDM(K, C, q, X0, n, Δt; ϑ=0.5, support=Vector{BoundaryCondition}())
+
+Time integration for a multifield first-order system
+
+    C * ẋ + K * x = q
+
+using the theta-method.
+
+Arguments
+- `K`: system matrix
+- `C`: capacity / mass-like matrix
+- `q`: global RHS vector as `SystemVector`
+- `bc`: Dirichlet boundary conditions
+- `X0`: initial state as `SystemVector`
+- `n`: number of stored time steps
+- `Δt`: time step size
+
+Keyword arguments
+- `ϑ`: theta parameter
+    - `0.0` explicit Euler
+    - `0.5` Crank-Nicolson
+    - `1.0` implicit Euler
+
+Returns
+Tuple of fields in the block order of `K.problems`.
+"""
+function FDM(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    q::SystemVector,
+    bc::Vector{BoundaryCondition},
+    X0::SystemVector,
+    n::Int,
+    Δt::Float64;
+    ϑ=0.5
+)
+    # ------------------------------------------------------------------
+    # 1) Compatibility checks
+    # ------------------------------------------------------------------
+    check_multifield_system_compatibility(K, C)
+
+    q.problems === nothing &&
+        error("FDM: q must be a block SystemVector.")
+
+    X0.problems === nothing &&
+        error("FDM: X0 must be a block SystemVector.")
+
+    K.problems == q.problems ||
+        error("FDM: Problem ordering mismatch between K and q.")
+
+    K.problems == X0.problems ||
+        error("FDM: Problem ordering mismatch between K and X0.")
+
+    K.offsets == q.offsets ||
+        error("FDM: Offset mismatch between K and q.")
+
+    K.offsets == X0.offsets ||
+        error("FDM: Offset mismatch between K and X0.")
+
+    ndof = size(K.A, 1)
+    length(q.a) == ndof ||
+        error("FDM: length(q.a) = $(length(q.a)) does not match ndof = $ndof.")
+
+    length(X0.a) == ndof ||
+        error("FDM: length(X0.a) = $(length(X0.a)) does not match ndof = $ndof.")
+
+    n >= 1 || error("FDM: n must be at least 1.")
+    Δt > 0 || error("FDM: Δt must be positive.")
+
+    # ------------------------------------------------------------------
+    # 2) BC data
+    # ------------------------------------------------------------------
+    free, fix, xD = multifield_bc_data(K, bc; nsteps=n)
+
+    # ------------------------------------------------------------------
+    # 3) Allocate history
+    # ------------------------------------------------------------------
+    X = zeros(ndof, n)
+    t = zeros(n)
+
+    # initial condition
+    X[:, 1] .= X0.a
+    if !isempty(fix)
+        X[fix, 1] .= xD[fix, 1]
+    end
+
+    # ------------------------------------------------------------------
+    # 4) Reduced matrices
+    # ------------------------------------------------------------------
+    K0 = K.A
+    C0 = C.A
+
+    Kff = K0[free, free]
+    Cff = C0[free, free]
+
+    if !isempty(fix)
+        Kfc = K0[free, fix]
+        Cfc = C0[free, fix]
+    else
+        Kfc = zeros(length(free), 0)
+        Cfc = zeros(length(free), 0)
+    end
+
+    # explicit shortcut only if Cff is diagonal and theta = 0
+    is_diag_Cff = nnz(Cff) == length(diag(Cff))
+
+    # ------------------------------------------------------------------
+    # 5) Time stepping
+    # ------------------------------------------------------------------
+    if ϑ == 0 && is_diag_Cff
+        invCff = spdiagm(1.0 ./ diag(Cff))
+
+        for i in 2:n
+            qn = q.a
+
+            xc_n = isempty(fix) ? zeros(0) : xD[fix, i-1]
+            xc_np1 = isempty(fix) ? zeros(0) : xD[fix, i]
+
+            xfree_n = @view X[free, i-1]
+
+            rhs =
+                qn[free] -
+                Kff * xfree_n -
+                Kfc * xc_n -
+                Cfc * ((xc_np1 - xc_n) ./ Δt)
+
+            xfree_np1 = xfree_n + Δt .* (invCff * rhs)
+
+            X[free, i] .= xfree_np1
+            if !isempty(fix)
+                X[fix, i] .= xc_np1
+            end
+
+            t[i] = t[i-1] + Δt
+        end
+
+    else
+        A = Cff + ϑ * Δt * Kff
+        B = Cff - (1 - ϑ) * Δt * Kff
+        luA = lu(A)
+
+        for i in 2:n
+            qn = q.a
+            qnp1 = q.a
+            qth = (1 - ϑ) .* qn[free] .+ ϑ .* qnp1[free]
+
+            xc_n = isempty(fix) ? zeros(0) : xD[fix, i-1]
+            xc_np1 = isempty(fix) ? zeros(0) : xD[fix, i]
+
+            rhs =
+                B * (@view X[free, i-1]) +
+                Δt .* qth
+
+            if !isempty(fix)
+                rhs .-= (Cfc + ϑ * Δt * Kfc) * xc_np1
+                rhs .+= (Cfc - (1 - ϑ) * Δt * Kfc) * xc_n
+            end
+
+            X[free, i] .= luA \ rhs
+            if !isempty(fix)
+                X[fix, i] .= xc_np1
+            end
+
+            t[i] = t[i-1] + Δt
+        end
+    end
+
+    return split_multifield_solution(X, K.problems, K.offsets, t)
+end
+
+FDM(K::SystemMatrix, C::SystemMatrix, q::SystemVector, X0::SystemVector, n::Int, Δt::Float64; ϑ=0.5, support=Vector{BoundaryCondition}()) =
+    FDM(K, C, q, support, X0, n, Δt, ϑ=ϑ)
+
+"""
+    constrainedDoFs(K::SystemMatrix, 
+                    support::Vector{BoundaryCondition})
+
+Return global constrained DOFs for single- or multi-field systems.
+"""
+function constrainedDoFs(
+    K::SystemMatrix,
+    support::Vector{BoundaryCondition}
+)
+    if K.problems === nothing
+        return constrainedDoFs(K.model, support)
+    else
+        _, fixed, _ = multifield_bc_data(K, support; nsteps=1)
+        return fixed
+    end
+end
+
+"""
+    freeDoFs(K::SystemMatrix, 
+              support::Vector{BoundaryCondition})
+
+Return global free DOFs for single- or multi-field systems.
+"""
+function freeDoFs(
+    K::SystemMatrix,
+    support::Vector{BoundaryCondition}
+)
+    if K.problems === nothing
+        return freeDoFs(K.model, support)
+    else
+        free, _, _ = multifield_bc_data(K, support; nsteps=1)
+        return free
+    end
+end
+
+"""
+    smallestEigenValue(K::SystemMatrix, 
+                       C::SystemMatrix; 
+                       support=Vector{BoundaryCondition}())
+
+Compute the smallest eigenvalue λₘᵢₙ of the generalized eigenproblem
+
+    K * ϕ = λ * C * ϕ
+
+after applying Dirichlet boundary conditions.
+
+Return: `λₘᵢₙ`
+
+Types:
+- `K`: SystemMatrix
+- `C`: SystemMatrix
+- `support`: Vector{BoundaryCondition}
+- `λₘᵢₙ`: Float64
+"""
+function smallestEigenValue(
+    K::SystemMatrix,
+    C::SystemMatrix;
+    support=Vector{BoundaryCondition}()
+)
+    # ----------------------------------------------------------
+    # 1) Compatibility checks
+    # ----------------------------------------------------------
+    size(K.A) == size(C.A) ||
+        error("smallestEigenValue: K and C must have the same size.")
+
+    size(K.A, 1) == size(K.A, 2) ||
+        error("smallestEigenValue: K must be square.")
+
+    size(C.A, 1) == size(C.A, 2) ||
+        error("smallestEigenValue: C must be square.")
+
+    # ----------------------------------------------------------
+    # 2) Free DOFs (single + multifield)
+    # ----------------------------------------------------------
+    free = nothing
+    if K.problems === nothing
+        free = freeDoFs(K.model, support)
+    else
+        free, _, _ = multifield_bc_data(K, support; nsteps=1)
+    end
+
+    # ----------------------------------------------------------
+    # 3) Reduced matrices
+    # ----------------------------------------------------------
+    K0 = K.A[free, free]
+    C0 = C.A[free, free]
+
+    # ----------------------------------------------------------
+    # 4) Eigen solve (shift-invert near zero)
+    # ----------------------------------------------------------
+    ϕ = nothing
+    λ = nothing
+    try
+        λ, ϕ = Arpack.eigs(
+            K0, C0,
+            nev=1,
+            which=:LR,
+            sigma=1e-8,
+            maxiter=10000
+        )
+    catch
+        # fallback (ha shift-invert nem konvergál)
+        λ, ϕ = Arpack.eigs(
+            K0, C0,
+            nev=1,
+            which=:SM,
+            maxiter=10000
+        )
+    end
+
+    # ----------------------------------------------------------
+    # 5) Error estimate
+    # ----------------------------------------------------------
+    r = K0 * ϕ[:, 1] - λ[1] * C0 * ϕ[:, 1]
+    err = norm(r) / norm(K0 * ϕ[:, 1])
+
+    if err > 1e-3
+        @warn("smallestEigenValue: relative residual too large: $err")
+    end
+
+    # ----------------------------------------------------------
+    # 6) Return
+    # ----------------------------------------------------------
+    λmin = abs(real(λ[1]))
+
+    return λmin
+end
+
+"""
+    largestEigenValue(K::SystemMatrix, 
+                      C::SystemMatrix; 
+                      support=Vector{BoundaryCondition}())
+
+Compute the largest eigenvalue λₘₐₓ of the generalized eigenproblem
+
+    K * ϕ = λ * C * ϕ
+
+after applying Dirichlet boundary conditions.
+
+This value is critical for stability analysis of explicit time integration schemes.
+
+Return: `λₘₐₓ`
+
+Types:
+- `K`: SystemMatrix
+- `C`: SystemMatrix
+- `support`: Vector{BoundaryCondition}
+- `λₘₐₓ`: Float64
+"""
+function largestEigenValue(
+    K::SystemMatrix,
+    C::SystemMatrix;
+    support=Vector{BoundaryCondition}()
+)
+    # ----------------------------------------------------------
+    # 1) Compatibility checks
+    # ----------------------------------------------------------
+    size(K.A) == size(C.A) ||
+        error("largestEigenValue: K and C must have the same size.")
+
+    size(K.A, 1) == size(K.A, 2) ||
+        error("largestEigenValue: K must be square.")
+
+    size(C.A, 1) == size(C.A, 2) ||
+        error("largestEigenValue: C must be square.")
+
+    # ----------------------------------------------------------
+    # 2) Free DOFs (single + multifield)
+    # ----------------------------------------------------------
+    free = nothing
+    if K.problems === nothing
+        free = freeDoFs(K.model, support)
+    else
+        # multifield
+        free, _, _ = multifield_bc_data(K, support; nsteps=1)
+    end
+
+    # ----------------------------------------------------------
+    # 3) Reduced matrices
+    # ----------------------------------------------------------
+    K0 = K.A[free, free]
+    C0 = C.A[free, free]
+
+    # ----------------------------------------------------------
+    # 4) Eigen solve
+    # ----------------------------------------------------------
+    λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LM)
+
+    # ----------------------------------------------------------
+    # 5) Error estimate
+    # ----------------------------------------------------------
+    r = K0 * ϕ[:, 1] - λ[1] * C0 * ϕ[:, 1]
+    err = norm(r) / norm(K0 * ϕ[:, 1])
+
+    if err > 1e-3
+        @warn("largestEigenValue: relative residual too large: $err")
+    end
+
+    # ----------------------------------------------------------
+    # 6) Return
+    # ----------------------------------------------------------
+    λmax = abs(real(λ[1]))
+
+    return λmax
+end
+
