@@ -59,6 +59,8 @@ export SymGrad
 export Id
 export TensorDiv
 export Adv
+export AxialGrad
+export TangentialGrad
 
 export ∫
 export ∫Ω
@@ -69,6 +71,8 @@ export solveField
 export ε
 
 export ⋅
+
+export solveEigenFields
 
 
 """
@@ -245,12 +249,57 @@ struct AdvOp <: AbstractOp
     b::NTuple{3,Float64}
 end
 
-#"""
-#    ndofs(problem::Problem)
-#
-#Return total number of dofs for a single-field problem.
-#"""
-#ndofs(P::Problem) = P.non * P.pdim
+"""
+    AxialGradOp()
+
+Axial (directional) gradient operator.
+
+For vector fields:
+    AxialGrad(u) = t ⋅ ∇u
+
+Returns a scalar field representing the derivative along the element axis.
+"""
+struct AxialGradOp <: AbstractOp end
+
+#AxialGrad(P) = AxialGradOp()
+
+"""
+    TangentialGrad(P)
+
+Create a weak-form DSL tangential gradient operator applied to `P`.
+
+# Description
+The tangential gradient operator computes the projection of the gradient of a vector field
+onto the element axis:
+
+    TangentialGrad(u) = (∇u) ⋅ t
+
+where `t` is the tangent vector of the element in the physical domain.
+
+For vector fields `u ∈ ℝᵈ`, the result is a vector field of dimension `d`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object representing `(∇u) ⋅ t`.
+
+# Example
+```julia
+Kg = ∫(TangentialGrad(Pu) ⋅ N0 ⋅ TangentialGrad(Pu); Ω="truss")
+```
+
+# Notes
+
+- Unlike `AxialGrad`, which produces a scalar strain measure `t ⋅ ∇u ⋅ t`,  
+  `TangentialGrad` returns a vector quantity.
+
+- This operator is useful for constructing geometric stiffness matrices  
+  (initial stress effects) in truss and structural stability problems.  
+"""
+struct TangentialGradOp <: AbstractOp end
+
+TangentialGrad(P) = OpApplied(P, TangentialGradOp())
 
 """
     op_outdim(::IdOp, P::Problem)
@@ -308,6 +357,14 @@ end
 function op_outdim(op::AdvOp, P::Problem)
     @assert P.pdim == 1  # scalar field
     return 1
+end
+
+function op_outdim(::AxialGradOp, P::Problem)
+    return 1
+end
+
+function op_outdim(::TangentialGradOp, P::Problem)
+    return P.dim
 end
 
 """
@@ -544,6 +601,74 @@ function build_B!(B::AbstractMatrix, op::AdvOp,
             val += b[d] * ∂h[d, (k-1)*numNodes+a]
         end
         B[1, a] = val
+    end
+
+    return B
+end
+
+function get_tangent(P::Problem, k::Int)
+    if P.dim == 2
+        return (1.0, 0.0)
+    elseif P.dim == 3
+        return (1.0, 0.0, 0.0)
+    else
+        return (1.0,)
+    end
+end
+
+function compute_tangent(Jk, dim)
+    t = Jk[1:dim,1]
+    return t / norm(t)
+end
+
+function build_B!(B::AbstractMatrix, ::AxialGradOp,
+                  P::Problem, k::Int, h, ∂h, numNodes::Integer, t)
+
+    fill!(B, 0.0)
+
+    pdim = P.pdim   # 2
+    dim  = P.dim    # 2
+
+    @inbounds for a in 1:numNodes
+        for c in 1:pdim
+            col = (a - 1)*pdim + c
+
+            val = 0.0
+
+            @inbounds for d in 1:dim
+                # 🔥 EZ A HIÁNYZÓ RÉSZ
+                val += t[c] * t[d] * ∂h[d, (k-1)*numNodes + a]
+            end
+
+            B[1, col] = val
+        end
+    end
+
+    return B
+end
+
+function build_B!(B::AbstractMatrix, ::TangentialGradOp,
+                  P::Problem, k::Int, h, ∂h, numNodes::Integer, t)
+
+    fill!(B, 0.0)
+
+    pdim = P.pdim   # = dim
+    dim  = P.dim
+
+    # rows = dim
+    # cols = pdim*numNodes
+
+    @inbounds for a in 1:numNodes
+        for c in 1:pdim
+            col = (a - 1)*pdim + c
+
+            @inbounds for i in 1:dim
+                row = i
+
+                # (∇u)t komponens i-re
+                B[row, col] = ∂h[i, (k-1)*numNodes + a] * t[c]
+            end
+        end
     end
 
     return B
@@ -1035,8 +1160,24 @@ function assemble_operator(
 
                             w = jacDet[k] * intWeights[k] * Cgp
 
-                            build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
-                            build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+                            if op_u isa AxialGradOp || op_u isa TangentialGradOp
+                                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
+                                Jk = inv(invJk')
+                                t = Jk[:,1]
+                                t = t / norm(t)
+                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                            else
+                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
+                            end
+                            if op_s isa AxialGradOp || op_s isa TangentialGradOp
+                                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
+                                Jk = inv(invJk')
+                                t = Jk[:,1]
+                                t = t / norm(t)
+                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                            else
+                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+                            end
 
                             mul!(Ke, transpose(Bs), Bu, w, 1.0)
 
@@ -1044,8 +1185,24 @@ function assemble_operator(
 
                             w = jacDet[k] * intWeights[k]
 
-                            build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
-                            build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+                            if op_u isa AxialGradOp
+                                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
+                                Jk = inv(invJk')
+                                t = Jk[:,1]
+                                t = t / norm(t)
+                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                            else
+                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
+                            end
+                            if op_s isa AxialGradOp
+                                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
+                                Jk = inv(invJk')
+                                t = Jk[:,1]
+                                t = t / norm(t)
+                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                            else
+                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+                            end
 
                             #@disp size(Bu)
                             #@disp size(Cgp)
@@ -1723,6 +1880,23 @@ function _check_scalarfield(sf::ScalarField)
     end
 
 end
+
+"""
+    AxialGrad(P)
+
+Create a weak-form DSL axial gradient operator applied to `P`.
+
+# Arguments
+- `P`: Field descriptor (`Problem`) used in the weak form.
+
+# Returns
+- `OpApplied`: Operator application object representing `t ⋅ ∇u`.
+
+# Example
+```julia
+K = ∫(AxialGrad(Pu) ⋅ (E*A) ⋅ AxialGrad(Pu); Ω="truss")
+"""
+AxialGrad(P) = OpApplied(P, AxialGradOp())
 
 function _check_scalarfields(expr)
 
@@ -2437,8 +2611,6 @@ KΓ = ∫Γ("loaded_boundary", Id(Pu) ⋅ Id(Pu))
 
 const ε = SymGrad
 
-ndofs(P) = P.non * P.pdim
-
 """
     multifield_bc_data(K::SystemMatrix,
                        bc::Vector{BoundaryCondition};
@@ -3023,5 +3195,79 @@ function largestEigenValue(
     λmax = abs(real(λ[1]))
 
     return λmax
+end
+
+"""
+    solveEigenFields(K::SystemMatrix, M::SystemMatrix; n=6, fmin=0.0)
+
+Solve eigenproblem for multifield system and return field-wise Eigen objects.
+
+Usage:
+    u_modes, p_modes = solveEigenFields(K, M)
+"""
+function solveEigenFields(
+    K::SystemMatrix,
+    M::SystemMatrix;
+    n = 6,
+    fmin = 0.0
+)
+
+    # ----------------------------------------------------------
+    # 1) Check multifield
+    # ----------------------------------------------------------
+    K.problems === nothing &&
+        error("solveEigenFields: use solveEigenModes for single-field problems.")
+
+    K.problems == M.problems ||
+        error("solveEigenFields: K and M must have same block structure.")
+
+    # ----------------------------------------------------------
+    # 2) Eigen solve (GLOBAL!)
+    # ----------------------------------------------------------
+    ω2min = (2π * fmin)^2
+
+    λ, ϕ = Arpack.eigs(
+        K.A,
+        M.A,
+        nev = n,
+        which = :LR,
+        sigma = ω2min,
+        maxiter = 10000
+    )
+
+    f = sqrt.(abs.(real(λ))) ./ (2π)
+    ϕ = real(ϕ)
+
+    # ----------------------------------------------------------
+    # 3) Pack global Eigen
+    # ----------------------------------------------------------
+    eig_global = Eigen(f, ϕ, nothing, K.problems, K.offsets)
+
+    # ----------------------------------------------------------
+    # 4) Split → Eigen-ek mezőnként
+    # ----------------------------------------------------------
+    return splitEigenToEigen(eig_global)
+end
+
+function splitEigenToEigen(eig::Eigen)
+
+    problems = eig.problems
+    offsets  = eig.offsets
+    ϕ        = eig.ϕ
+    f        = eig.f
+
+    results = Vector{Eigen}(undef, length(problems))
+
+    for (i, P) in enumerate(problems)
+
+        off = offsets[i]
+        nd  = P.non * P.pdim
+
+        ϕloc = ϕ[off+1:off+nd, :]
+
+        results[i] = Eigen(f, ϕloc, P, nothing, nothing)
+    end
+
+    return tuple(results...)
 end
 

@@ -12,6 +12,7 @@ SymGrad
 Id
 TensorDiv
 Adv
+AxialGrad
 ε
 ```
 
@@ -27,4 +28,5 @@ Adv
 
 ```@docs
 solveField
+solveEigenFields
 ```

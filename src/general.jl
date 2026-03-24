@@ -662,6 +662,11 @@ end
 Return total number of dofs for a single-field problem.
 """
 
+"""
+    ndofs(problem::Problem)
+
+Return total number of dofs for a single-field problem.
+"""
 ndofs(P::Problem) = P.non * P.pdim
 
 """
@@ -3382,10 +3387,12 @@ Types:
 - `ϕ`: Vector{Float64}
 - `model`: Problem
 """
-struct Eigen
-    f::Vector{Float64}
-    ϕ::Matrix{Float64}
-    model::Problem
+struct Eigen{T}
+    f::Vector{T}
+    ϕ::Matrix{T}
+    model::Union{Problem,Nothing}
+    problems::Union{Vector{Problem},Nothing}
+    offsets::Union{Vector{Int},Nothing}
 end
 
 """
@@ -7051,7 +7058,7 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     gmsh.model.addPhysicalGroup(1, [3], -1, "top")
     gmsh.model.addPhysicalGroup(1, [4], -1, "left")
 
-    gmsh.model.addPhysicalGroup(2, [1], -1, "surface")
+    gmsh.model.addPhysicalGroup(2, [1], -1, "body")
 
     gmsh.model.addPhysicalGroup(0, [1], -1, "leftbottom")
     gmsh.model.addPhysicalGroup(0, [2], -1, "rightbottom")
@@ -7162,7 +7169,7 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
     gmsh.model.addPhysicalGroup(2, [3], -1, "bottom")
     gmsh.model.addPhysicalGroup(2, [4], -1, "top")
 
-    gmsh.model.addPhysicalGroup(3, [1], -1, "volume")
+    gmsh.model.addPhysicalGroup(3, [1], -1, "body")
 
     # --------------------------------------------------
     # Mesh settings (structured hex mesh)

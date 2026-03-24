@@ -5252,7 +5252,7 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01, directSolver=false)
     #end
     f = sqrt.(abs.(real(ω²))) / 2π
     ϕ1 = real(ϕ)
-    return Eigen(f, ϕ1, problem)
+    return Eigen(f, ϕ1, problem, nothing, nothing)
 end
 
 """
@@ -5285,7 +5285,7 @@ function solveBucklingModes(K, Knl; n=6)
     #end
     f = abs.(real(λ))
     ϕ1 = real(ϕ)
-    return Eigen(f, ϕ1, problem)
+    return Eigen(f, ϕ1, problem, nothing, nothing)
 end
 
 """
@@ -5331,7 +5331,7 @@ function solveModalAnalysis(problem; support=Vector{BoundaryCondition}(), load=V
         M0 = SystemMatrix(M[all,all], M.model)
         mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
         ϕ1[free,:] .= mod.ϕ
-        return Eigen(mod.f, ϕ1, problem)
+        return Eigen(mod.f, ϕ1, problem, nothing, nothing)
     elseif length(load) == 0
         K0 = SystemMatrix(K[free,free], K.model)
         M0 = SystemMatrix(M[free,free], M.model)
@@ -5343,7 +5343,7 @@ function solveModalAnalysis(problem; support=Vector{BoundaryCondition}(), load=V
         ϕ10[free,:] .= mod.ϕ
         ϕ1 = VectorField([], ϕ10, [0.0], [], 1, :v3D, K.model)
         applyBoundaryConditions!(ϕ1, support)
-        return Eigen(mod.f, ϕ1.a, problem)
+        return Eigen(mod.f, ϕ1.a, problem, nothing, nothing)
     else
         ϕ1 = zeros(dof, n)
         f = loadVector(problem, load)
@@ -5369,7 +5369,7 @@ function solveModalAnalysis(problem; support=Vector{BoundaryCondition}(), load=V
         mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
         ϕ1[free,:] .= mod.ϕ
         applyBoundaryConditions!(VectorField([], ϕ1, [i for i in 1:n], [], n, q.type, q.model), support)
-        return Eigen(mod.f, ϕ1, problem)
+        return Eigen(mod.f, ϕ1, problem, nothing, nothing)
     end
 end
 
@@ -5420,7 +5420,7 @@ function solveBuckling(problem; load=Vector{BoundaryCondition}(), support=Vector
     bm = solveBucklingModes(K0, Knl0, n=n)
     ϕ[free,:] = bm.ϕ
     applyBoundaryConditions!(VectorField([], ϕ, [i for i in 1:n], [], n, q.type, q.model), support)
-    return Eigen(bm.f, ϕ, problem)
+    return Eigen(bm.f, ϕ, problem, nothing, nothing)
 end
 
 """
