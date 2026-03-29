@@ -759,7 +759,7 @@ struct SystemMatrix
     offsets::Union{Vector{Int},Nothing}           # globális kezdő indexek
     SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem) = new(A, model, test_model, nothing, nothing)
     SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem) = new(A, model, model, nothing, nothing)
-    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Problem, test_model::Problem, problems::Union{Vector{Problem},Nothing}, offsets::Union{Vector{Int},Nothing}) = new(A, model, test_model, problems, offsets)
+    SystemMatrix(A::SparseMatrixCSC{Float64}, model::Union{Problem,Nothing}, test_model::Union{Problem,Nothing}, problems::Union{Vector{Problem},Nothing}, offsets::Union{Vector{Int},Nothing}) = new(A, model, test_model, problems, offsets)
     function SystemMatrix(blocks::Matrix{SystemMatrix})
 
         nrows, ncols = size(blocks)
@@ -6771,7 +6771,7 @@ function showOnSurface(field::ScalarField, phName::String; name=phName)
 end
 
 """
-    openPreProcessor(; openGL=false)
+    openPreProcessor(; openGL=true)
 
 Launches the Gmsh preprocessor window with OpenGL disabled by default.
 
@@ -6780,7 +6780,7 @@ Returns: nothing
 Types:
 - `openGL`: Boolean
 """
-function openPreProcessor(; openGL=false)
+function openPreProcessor(; openGL=true)
     if openGL == false
         ENV["LIBGL_ALWAYS_SOFTWARE"] = "true"
     else

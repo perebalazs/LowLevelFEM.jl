@@ -345,9 +345,21 @@ function op_outdim(::CurlOp, P::Problem)
 end
 
 function op_outdim(::SymGradOp, P::Problem)
-    @assert P.pdim == P.dim "SymGradOp requires vector field with pdim == dim."
-    return (P.dim == 2) ? 3 : 6  # engineering strain components
+    @assert P.pdim == P.dim
+
+    if P.dim == 1
+        return 1
+    elseif P.dim == 2
+        return 3
+    else
+        return 6
+    end
 end
+
+#function op_outdim(::SymGradOp, P::Problem)
+#    @assert P.pdim == P.dim "SymGradOp requires vector field with pdim == dim."
+#    return (P.dim == 2) ? 3 : 6  # engineering strain components
+#end
 
 function op_outdim(::TensorDivOp, P::Problem)
     @assert P.pdim == P.dim^2 "TensorDivOp requires pdim == dim^2 (full 2nd-order tensor)."
@@ -526,7 +538,14 @@ function build_B!(B::AbstractMatrix, ::SymGradOp,
     pdim = P.pdim
     @assert pdim == dim
 
-    if dim == 2
+    if dim == 1
+        # ε = du/dx
+        @inbounds for a in 1:numNodes
+            col = a  # scalar field
+            B[1, col] = ∂h[1, (k-1)*numNodes + a]
+        end
+
+    elseif dim == 2
         # rows: [εxx, εyy, γxy]
         @inbounds for a in 1:numNodes
             colx = (a - 1) * pdim + 1
@@ -991,8 +1010,8 @@ function assemble_operator(
         @assert out_u == out_s
     
     elseif coefficient isa AbstractMatrix
-        @assert size(coefficient,1) == out_u
-        @assert size(coefficient,2) == out_s
+        @assert size(coefficient,1) == out_s
+        @assert size(coefficient,2) == out_u
     
     elseif coefficient isa AbstractVector
         if length(coefficient) == 1 &&
@@ -1007,8 +1026,8 @@ function assemble_operator(
             @assert A1 isa AbstractMatrix
             @assert An isa AbstractMatrix
     
-            @assert size(A1,1) == out_u
-            @assert size(An,2) == out_s
+            @assert size(A1,1) == out_s
+            @assert size(An,2) == out_u
     
             for i in 1:length(coefficient)-1
                 Ai = coefficient[i]
@@ -1204,14 +1223,7 @@ function assemble_operator(
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
                             end
 
-                            #@disp size(Bu)
-                            #@disp size(Cgp)
-                            #@disp size(Bs)
-                            #tmp = similar(Bu, size(Cgp,1), size(Bu,2))
-                            #tmp = zeros(size(Bs,2), size(Cgp,1))
-                            #mul!(tmpBu, Cgp, Bu)
-                            #mul!(Ke, transpose(Bs), tmpBu, w, 1.0)
-                            mul!(tmp, transpose(Bs), transpose(Cgp))
+                            mul!(tmp, transpose(Bs), Cgp) # Here Cgp was transposed
                             mul!(Ke, tmp, Bu, w, 1.0)
 
                         else
@@ -1232,8 +1244,11 @@ function assemble_operator(
                             comp_b = mod(b_loc - 1, Pu.pdim) + 1
                             Jb_node = nnet[e, node_b]
                             Jb = (Jb_node - 1) * Pu.pdim + comp_b
-                
-                            if pos > length(I)
+                            
+                            #@assert pos >= 1
+                            #@assert pos - 1 <= length(I)
+                            #@assert all(isfinite, V[1:pos-1])
+                            if pos >= length(I)
                                 newlen = Int(ceil(1.5*length(I))) + 1000
                                 resize!(I, newlen)
                                 resize!(J, newlen)
@@ -1256,6 +1271,12 @@ function assemble_operator(
     resize!(V, pos - 1)
     K = sparse(I, J, V, ndofs(Ps), ndofs(Pu))
     dropzeros!(K)
+    @assert ndofs(Ps) > 0
+    @assert ndofs(Pu) > 0
+    @assert maximum(I[1:pos-1]) <= ndofs(Ps)
+    @assert maximum(J[1:pos-1]) <= ndofs(Pu)
+    @assert minimum(I[1:pos-1]) >= 1
+    @assert minimum(J[1:pos-1]) >= 1
     return SystemMatrix(K, Pu, Ps)
 end
 
@@ -2499,10 +2520,10 @@ function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing)
     end
 
     return assemble_operator(
-        t.a.P,
-        t.a.op,
         t.b.P,
-        t.b.op;
+        t.b.op,
+        t.a.P,
+        t.a.op;
         coefficient = t.coef,
         domain = dom,
         weight = weight
@@ -2522,10 +2543,10 @@ function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing)
     end
 
     return assemble_operator(
-        a.P,
-        a.op,
         b.P,
-        b.op;
+        b.op,
+        a.P,
+        a.op;
         coefficient = 1.0,
         domain = dom,
         weight = weight
@@ -2853,6 +2874,16 @@ function FDM(
     Δt::Float64;
     ϑ=0.5
 )
+
+    @assert size(K.A,1) == size(K.A,2)
+    @assert size(C.A,1) == size(C.A,2)
+    @assert size(K.A) == size(C.A)
+    @assert length(q.a) == size(K.A,1)
+    @assert length(X0.a) == size(K.A,1)
+    @assert all(isfinite, K.A.nzval)
+    @assert all(isfinite, C.A.nzval)
+    @assert all(isfinite, q.a)
+    @assert all(isfinite, X0.a)
     # ------------------------------------------------------------------
     # 1) Compatibility checks
     # ------------------------------------------------------------------
