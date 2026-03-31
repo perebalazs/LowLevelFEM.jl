@@ -2796,7 +2796,6 @@ for each element.
 A new field of the same concrete type as `s` (`ScalarField`, `VectorField`,
 or `TensorField`) containing the time derivative.
 """
-
 function ∂t(s::Union{ScalarField,VectorField,TensorField})
     if s.nsteps == 1
         return 0s

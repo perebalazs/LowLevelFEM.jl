@@ -2445,6 +2445,41 @@ Equivalent to `eltype(K.A)`.
 """
 eltype(K::SystemMatrix) = eltype(K.A)
 
+struct LeftAppliedMatrix{F,M}
+    u::F
+    K::M
+end
+
+#import Base.*
+
+*(u::Union{ScalarField,VectorField,TensorField}, K::SystemMatrix) = LeftAppliedMatrix(u, K)
+
+function *(tmp::LeftAppliedMatrix, v0::Union{ScalarField,VectorField,TensorField})
+    u = elementsToNodes(tmp.u)
+    v = elementsToNodes(v0)
+    K = tmp.K
+    n = size(u.a, 1)
+    m = size(v.a, 1)
+    N = size(K.A, 1)
+    M = size(K.A, 2)
+    ts1 = size(u.a, 2)
+    ts2 = size(v.a, 2)
+    if n != N || M != m || ts1 != ts2
+        error("u' * K * v: size mismatch - ($(ts1)×$(n)) * ($(N)×$(M)) * ($(m)×$(ts2))")
+    end
+    if ts1 == 1
+        return dot(u.a, K.A * v.a)
+    else
+        res = Vector{Float64}(undef, ts1)
+        for i in 1:ts1
+            ui = view(u.a, :, i)
+            vi = view(v.a, :, i)
+            res[i] = dot(ui, K.A * vi)
+        end
+        return res
+    end
+end
+
 ###############################################################################
 #                                                                             #
 #                      Transformation operations                              #

@@ -29,4 +29,5 @@ isElementwise
 
 ```@docs
 ∂x
+∂t
 ```
