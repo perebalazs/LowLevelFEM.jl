@@ -1656,7 +1656,7 @@ function solveField(
     A = K.A
     b = F.a
 
-    ndof = length(b)
+    ndof, nsteps = size(b)
 
     # ----------------------------------------------------------
     # 2) Collect global constrained DOFs
@@ -1691,8 +1691,8 @@ function solveField(
     # 4) Reduced system with non-homogeneous BC
     # ----------------------------------------------------------
 
-    x = zeros(ndof)
-    xD = zeros(ndof)
+    x = zeros(ndof, nsteps)
+    xD = zeros(ndof, 1)
 
     # fill xD
     for bc in support
@@ -1703,7 +1703,7 @@ function solveField(
         x_local = applyBoundaryConditions(P, [bc])
         local_dofs = constrainedDoFs(P, [bc])
 
-        xD[offset.+local_dofs] .= x_local.a[local_dofs, 1]
+        xD[offset.+local_dofs, :] .= x_local.a[local_dofs, :]
     end
 
     fixed = unique(vcat([offsets[findfirst(q -> q === bc.problem, problems)] .+
@@ -1713,9 +1713,11 @@ function solveField(
     free = setdiff(1:ndof, fixed)
 
     A_ff = A[free, free]
-    b_f = b[free] - A[free, fixed] * xD[fixed]
+    for i in 1:nsteps
+        b_f = b[free] - A[free, fixed] * xD[fixed]
 
-    x[free] = A_ff \ b_f
+        x[free, i] = A_ff \ b_f
+    end
     x[fixed] = xD[fixed]
 
     # fixed DOFs remain zero (homogeneous)
@@ -1733,14 +1735,14 @@ function solveField(
         xloc = x[offset+1:offset+nloc]
 
         if P.pdim == 1
-            results[i] = ScalarField([], reshape(xloc, :, 1), [0], [], 1, :scalar, P)
+            results[i] = ScalarField([], reshape(xloc, :, nsteps), [0], [], 1, :scalar, P)
 
         elseif P.pdim == 2 || P.pdim == 3
             type = P.pdim == 2 ? :v2D : :v3D
-            results[i] = VectorField([], reshape(xloc, :, 1), [0], [], 1, type, P)
+            results[i] = VectorField([], reshape(xloc, :, nsteps), [0], [], 1, type, P)
 
         elseif P.pdim == 9
-            results[i] = TensorField([], reshape(xloc, :, 1), [0], [], 1, :tensor, P)
+            results[i] = TensorField([], reshape(xloc, :, nsteps), [0], [], 1, :tensor, P)
 
         else
             error("solveField: unsupported pdim $(P.pdim).")
@@ -2878,8 +2880,8 @@ function FDM(
     @assert size(K.A,1) == size(K.A,2)
     @assert size(C.A,1) == size(C.A,2)
     @assert size(K.A) == size(C.A)
-    @assert length(q.a) == size(K.A,1)
-    @assert length(X0.a) == size(K.A,1)
+    @assert size(q.a,1) == size(K.A,1)
+    @assert size(X0.a,1) == size(K.A,1)
     @assert all(isfinite, K.A.nzval)
     @assert all(isfinite, C.A.nzval)
     @assert all(isfinite, q.a)
@@ -2908,11 +2910,11 @@ function FDM(
         error("FDM: Offset mismatch between K and X0.")
 
     ndof = size(K.A, 1)
-    length(q.a) == ndof ||
-        error("FDM: length(q.a) = $(length(q.a)) does not match ndof = $ndof.")
+    size(q.a,1) == ndof ||
+        error("FDM: size(q.a,1) = $(size(q.a,1)) does not match ndof = $ndof.")
 
-    length(X0.a) == ndof ||
-        error("FDM: length(X0.a) = $(length(X0.a)) does not match ndof = $ndof.")
+    size(X0.a,1) == ndof ||
+        error("FDM: size(X0.a,1) = $(size(X0.a,1)) does not match ndof = $ndof.")
 
     n >= 1 || error("FDM: n must be at least 1.")
     Δt > 0 || error("FDM: Δt must be positive.")
@@ -2929,7 +2931,7 @@ function FDM(
     t = zeros(n)
 
     # initial condition
-    X[:, 1] .= X0.a
+    X .= X0.a
     if !isempty(fix)
         X[fix, 1] .= xD[fix, 1]
     end
@@ -2961,7 +2963,8 @@ function FDM(
         invCff = spdiagm(1.0 ./ diag(Cff))
 
         for i in 2:n
-            qn = q.a
+            qi = size(q.a, 2) == 1 ? 1 : i
+            qn = q.a[:, qi]
 
             xc_n = isempty(fix) ? zeros(0) : xD[fix, i-1]
             xc_np1 = isempty(fix) ? zeros(0) : xD[fix, i]
@@ -2990,9 +2993,11 @@ function FDM(
         luA = lu(A)
 
         for i in 2:n
-            qn = q.a
-            qnp1 = q.a
-            qth = (1 - ϑ) .* qn[free] .+ ϑ .* qnp1[free]
+            qi = size(q.a, 2) == 1 ? 1 : i
+            mi = qi == 1 ? 0 : 1
+            qn = q.a[:, qi-mi]
+            qnp1 = q.a[:, qi]
+            @views qth = (1 - ϑ) .* qn[free] .+ ϑ .* qnp1[free]
 
             xc_n = isempty(fix) ? zeros(0) : xD[fix, i-1]
             xc_np1 = isempty(fix) ? zeros(0) : xD[fix, i]

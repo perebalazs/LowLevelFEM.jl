@@ -3440,7 +3440,7 @@ end
         uux = ux.(xx, yy, zz)
         field.a[nodeTagsX,:] .= uux
     elseif ux isa ScalarField
-        ux.nsteps != field.nsteps && error("applyBoundaryCondition: different number of time steps.")
+        ux.nsteps != field.nsteps && error("applyBoundaryCondition: different number of time steps. u0: $(ux.nsteps), bc: $(field.nsteps)")
         ux = elementsToNodes(ux)
         uux = ux.a[nodeTags,:]
         field.a[nodeTagsX,:] .= uux
@@ -3552,6 +3552,7 @@ function applyBoundaryConditions!(
     return field
 end
 
+#=
 function applyBoundaryConditions!(
     field::Union{ScalarField,VectorField,TensorField},
     supports::AbstractVector)
@@ -3563,6 +3564,7 @@ function applyBoundaryConditions!(
 
     return applyBoundaryConditions!(field, supports::Vector{BoundaryCondition})
 end
+=#
 
 """
     applyBoundaryConditions(problem::Problem, 
@@ -3583,18 +3585,33 @@ function applyBoundaryConditions(problem::Problem,
                                  steps::Int=1)
 
     if problem.pdim == 1
-        field = scalarField(problem, problem.material[1].phName, 0)
+        field = ScalarField(problem, problem.material[1].phName, 0)
+        field = ScalarField(field, steps=steps)
+        field = elementsToNodes(field)
 
     elseif problem.pdim == 2
-        field = vectorField(problem, problem.material[1].phName, [0,0,0])
+        g = ScalarField(problem, problem.material[1].phName, 0)
+        g = ScalarField(g, steps=steps)
+        v = VectorField([g,g,g])
+        v = elementsToNodes(v)
+        v = projectTo2D(v)
+        field = v #ectorField(problem, problem.material[1].phName, v)
 
     elseif problem.pdim == 3
-        field = vectorField(problem, problem.material[1].phName, [0,0,0])
+        g = ScalarField(problem, problem.material[1].phName, 0)
+        g = ScalarField(g, steps=steps)
+        v = VectorField([g,g,g])
+        v = elementsToNodes(v)
+        field = v#ectorField(problem, problem.material[1].phName, v)
 
     elseif problem.pdim == 9
-        field = tensorField(problem,
-                            problem.material[1].phName,
-                            [0 0 0; 0 0 0; 0 0 0])
+        g = ScalarField(problem, problem.material[1].phName, 0)
+        g = ScalarField(g, steps=steps)
+        v = TensorField([g g g; g g g; g g g])
+        v = elementsToNodes(v)
+        field = v#tensorField(problem,
+                  #          problem.material[1].phName,
+                   #         v)
     else
         error("Unsupported pdim $(problem.pdim)")
     end

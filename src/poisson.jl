@@ -1443,14 +1443,13 @@ function solveField(K::SystemMatrix, f::Union{ScalarField,VectorField,TensorFiel
     u = copy(f)
     fill!(u.a, 0.0)
     applyBoundaryConditions!(u, support)
-    f_kin = K.A[:, fixed] * u.a[fixed]
-    #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
+    f_kin = K.A[:, fixed] * u.a[fixed,1]
     if iterative
         u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free], Pl=preconditioner, reltol=reltol, maxiter=maxiter)
     elseif ordering == false
         u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
     else
-        u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
+        u.a[free] = (K.A[free, free]) \ (f.a[free,1] - f_kin[free,1])
     end
     return u
 end

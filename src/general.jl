@@ -1808,7 +1808,7 @@ where each subvector `aᵢ` corresponds to the RHS contribution of the
 `i`-th field (Problem) in the system.
 """
 struct SystemVector
-    a::Vector{Float64}
+    a::AbstractMatrix{Float64}
 
     # ---- Single-field metadata ----
     model::Union{Problem,Nothing}
@@ -1847,7 +1847,7 @@ This constructor assumes that the field contains a single load step.
 function SystemVector(field::Union{ScalarField,VectorField,TensorField})
 
     # assume single load step
-    a = vec(field.a[:, 1])
+    a = field.a
 
     return SystemVector(a, field.model, nothing, nothing)
 end
@@ -1932,7 +1932,12 @@ function SystemVector(fields::Vector)
     end
 
     total_dofs = offsets[end] + ndofs(problems[end])
-    a_global = zeros(total_dofs)
+    nsteps = size((fields[1]).a, 2)
+    for f in fields
+        size(f.a, 2) == nsteps ||
+            error("SystemVector: all fields must have the same number of steps.")
+    end
+    a_global = zeros(total_dofs, nsteps)
 
     # ----------------------------------------------------------
     # 3) Fill global vector
@@ -1944,12 +1949,12 @@ function SystemVector(fields::Vector)
         nloc = ndofs(P)
 
         # single load step assumption
-        a_local = vec(f.a[:, 1])
+        a_local = f.a
 
-        length(a_local) == nloc ||
+        size(a_local, 1) == nloc ||
             error("SystemVector: local RHS size mismatch for problem $(P.name).")
 
-        a_global[offset+1:offset+nloc] .= a_local
+        a_global[offset+1:offset+nloc, :] .= a_local
     end
 
     return SystemVector(a_global, nothing, problems, offsets)
