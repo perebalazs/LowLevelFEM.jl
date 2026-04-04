@@ -3440,10 +3440,19 @@ end
         uux = ux.(xx, yy, zz)
         field.a[nodeTagsX,:] .= uux
     elseif ux isa ScalarField
-        ux.nsteps != field.nsteps && error("applyBoundaryCondition: different number of time steps. u0: $(ux.nsteps), bc: $(field.nsteps)")
+        ux.nsteps != field.nsteps && ux.nsteps != 1 &&
+            error("applyBoundaryCondition: different number of time steps. bc has: $(ux.nsteps) steps, field-to-modify has: $(field.nsteps) steps")
         ux = elementsToNodes(ux)
-        uux = ux.a[nodeTags,:]
-        field.a[nodeTagsX,:] .= uux
+        if ux.nsteps == 1
+            n = field.nsteps
+            uux = ux.a[nodeTags,1]
+            for i in 1:n
+                field.a[nodeTagsX,i] .= uux
+            end
+        else
+            uux = ux.a[nodeTags,:]
+            field.a[nodeTagsX,:] .= uux
+        end
     else
         field.a[nodeTagsX,:] .= ux
     end

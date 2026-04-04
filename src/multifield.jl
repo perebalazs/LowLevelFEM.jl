@@ -1749,7 +1749,11 @@ function solveField(
         end
     end
 
-    return tuple(results...)
+    if length(results) == 1
+        return results[1]
+    else
+        return tuple(results...)
+    end
 end
 
 ###############################################################
@@ -2657,8 +2661,8 @@ Notes
 function multifield_bc_data(
     K::SystemMatrix,
     bc::Vector{BoundaryCondition};
-    nsteps::Int=1
-)
+    nsteps::Int=1)
+
     K.problems === nothing &&
         error("multifield_bc_data: K is not a block SystemMatrix (K.problems === nothing).")
 
@@ -2827,7 +2831,11 @@ function split_multifield_solution(
         end
     end
 
-    return tuple(results...)
+    if length(results) == 1
+        return results[1]
+    else
+        return tuple(results...)
+    end
 end
 
 """
@@ -2874,8 +2882,7 @@ function FDM(
     X0::SystemVector,
     n::Int,
     Δt::Float64;
-    ϑ=0.5
-)
+    ϑ=0.5)
 
     @assert size(K.A,1) == size(K.A,2)
     @assert size(C.A,1) == size(C.A,2)

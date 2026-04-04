@@ -1449,7 +1449,7 @@ For `ϑ = 0` and diagonal `C`, a fully explicit update is used.
 function FDM(
     K::SystemMatrix,
     C::SystemMatrix,
-    q::Union{ScalarField,VectorField},
+    q::Union{ScalarField,VectorField,TensorField},
     bc::Vector{BoundaryCondition},
     TT0::Union{ScalarField,VectorField},
     n::Int,
@@ -1476,10 +1476,12 @@ function FDM(
     ts = [i for i in 0:n-1]
 
     # --- build temperature container and apply BC for ALL steps --------------
-    TT = TYPE([], zeros(ndof, n), ts, [], n, :scalar, K.model)
+    TT = TYPE([], zeros(ndof, n), ts, [], n, q.type, K.model)
 
     if TT0.nsteps == 1
-        TT.a[:, :] .= TT0.a[:, 1]
+        for i in 1:n
+            TT.a[:, i] .= TT0.a[:, 1]
+        end
     else
         TT.a[:, :] .= TT0.a[:, 1:n]
     end
