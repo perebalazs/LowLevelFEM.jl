@@ -1468,7 +1468,7 @@ function FDM(
     C::SystemMatrix,
     q::Union{ScalarField,VectorField,TensorField},
     bc::Vector{BoundaryCondition},
-    TT0::Union{ScalarField,VectorField},
+    TT0::Union{ScalarField,VectorField,TensorField},
     n::Int,
     Δt::Float64;
     ϑ = 0.5)
@@ -1490,7 +1490,8 @@ function FDM(
     TT0 = elementsToNodes(TT0)
 
     ndof = size(C.A, 1)
-    ts = [i for i in 0:n-1]
+    #ts = [i for i in 0:n-1]
+    ts = collect(0:Δt:(n-1)*Δt)
 
     # --- build temperature container and apply BC for ALL steps --------------
     TT = TYPE([], zeros(ndof, n), ts, [], n, q.type, K.model)
@@ -1515,8 +1516,8 @@ function FDM(
     Cfc = C.A[free, fix]
 
     # time
-    t = zeros(n)
-    t[1] = 0.0
+    t = ts
+    #t[1] = 0.0
 
     # initial free temperature
     T0 = copy(TT.a[free, 1])
@@ -1538,19 +1539,22 @@ function FDM(
     end
 
     # explicit theta=0 diagonal-C shortcut (kept, but now uses q^n)
-    is_diag = nnz(C.A) == length(diag(C.A))
+    is_diag = isdiag(Cff)
     if ϑ == 0 && is_diag
-        invC = spdiagm(1.0 ./ diag(Cff))
+        d = diag(Cff)
+        all(abs.(d) .> 0) || error("FDM: zero diagonal entry detected in Cff on free DOFs.")
+        invC = spdiagm(1.0 ./ d)
+        #invC = spdiagm(1.0 ./ diag(Cff))
 
         for i in 2:n
             Tc_n   = TT.a[fix, i-1]
             Tc_np1 = TT.a[fix, i]
             qn = q_free(i-1)
 
-            T1 = T0 - Δt * (invC * (Kff * T0 + Kfc * Tc_n)) + Δt * (invC * qn) - (invC * (Cfc * (Tc_np1 - Tc_n)))
+            T1 = T0 - Δt * (invC * (Kff * T0 + Kfc * Tc_n)) + Δt * (invC * qn) - (invC * (Cfc * ((Tc_np1 - Tc_n) ./ Δt)))
 
             TT.a[free, i] .= T1
-            t[i] = t[i-1] + Δt
+            #t[i] = t[i-1] + Δt
             T0 = T1
         end
 
@@ -1576,17 +1580,18 @@ function FDM(
             T1 = luA \ rhs
 
             TT.a[free, i] .= T1
-            t[i] = t[i-1] + Δt
+            #t[i] = t[i-1] + Δt
             T0 = T1
         end
     end
 
-    return TYPE([], TT.a, t, [], length(t), :scalar, K.model)
+    return TYPE([], TT.a, t, [], length(t), q.type, K.model)
 end
 
 FDM( K::SystemMatrix, C::SystemMatrix, q::Union{ScalarField,VectorField}, TT0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; ϑ = 0.5, support=Vector{BoundaryCondition}()) = 
     FDM(K, C, q, support, TT0, n, Δt, ϑ=ϑ)
 
+    #=
 function FDM_old(K::SystemMatrix, C::SystemMatrix, q::ScalarField, 
     bc::Vector{BoundaryCondition}, TT0::ScalarField, 
     n::Int, Δt::Float64; ϑ=0.5)
@@ -1634,8 +1639,9 @@ function FDM_old(K::SystemMatrix, C::SystemMatrix, q::ScalarField,
         end
     end
 
-    return ScalarField([], T, t, [], length(t), :scalar, q.model)
+    return ScalarField([], T, t, [], length(t), q.type, q.model)
 end
+=#
 
 """
     FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type=:SR, n=100, ϑ=0.5)

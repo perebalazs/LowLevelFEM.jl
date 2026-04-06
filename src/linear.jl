@@ -2820,7 +2820,8 @@ function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐ�
     end
     dof, dof = size(M.A)
     dof2, dof2 = size(K.A)
-    if dof != nnz(M.A)
+    #if dof != nnz(M.A)
+    if !isdiag(M.A)
         error("dampingMatrix: M is not lumped!")
     end
     if dof != dof2
@@ -5826,7 +5827,7 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
     vv = copy(uu)
     applyBoundaryConditions!(uu, bc)
     for i in 1:n-1
-        vv.a[fix,i] = (uu.a[fix,i+1] - uu.a[fix,i]) / Δt
+        vv.a[fix,i] .= (uu.a[fix,i+1] .- uu.a[fix,i]) ./ Δt
     end
     if n >= 3
         vv.a[fix,end] .= 2.0 .* vv.a[fix,end-1] .- vv.a[fix,end-2]
@@ -5837,8 +5838,8 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
     uu.a[free, 1] .= DoFs(U0)[free, 1]
     vv.a[free, 1] .= DoFs(V0)[free, 1]
 
-    isdiag = size(M.A, 1) == nnz(M.A) ? true : false
-    if !isdiag
+    #isdiag = size(M.A, 1) == nnz(M.A) ? true : false
+    if !isdiag(M.A)
         error("CDM: only lumped M is supported.")
     end
 
@@ -5853,7 +5854,10 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
 
     ff = f.a[free, :]
 
-    invMff = spdiagm(1.0 ./ diag(Mff))
+    d = diag(Mff)
+    all(abs.(d) .> 0) || error("CDM: zero diagonal entry detected in Mff on free DOFs.")
+    invMff = spdiagm(1.0 ./ d)
+    #invMff = spdiagm(1.0 ./ diag(Mff))
 
     nsteps = n
     
@@ -5861,12 +5865,27 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
     v = vv.a
     t = ts
     
-    a0 = M.A \ (f.a[:,1] - K.A * u[:,1] - C.A * v[:,1])
-    u00 = u[:,1] - v[:,1] * Δt + a0 * Δt^2 / 2
-    u00[fix] .= 2.0 .* u[fix,1] .- u[fix,2]
+    u00 = zeros(eltype(u), size(u,1))
+
+    a0 = Mff \ (
+        f.a[free,1] .-
+        Kff * u[free,1] .-
+        Kfc * u[fix,1] .-
+        Cff * v[free,1] .-
+        Cfc * v[fix,1])
+
+    u00[free] .= u[free,1] .- v[free,1] .* Δt .+ 0.5 .* a0 .* Δt^2
+    u00[fix]  .= 2.0 .* u[fix,1] .- u[fix,2]
+
+    #a0 = M.A \ (f.a[:,1] - K.A * u[:,1] - C.A * v[:,1])
+    #u00 = u[:,1] - v[:,1] * Δt + a0 * Δt^2 / 2
+    #a0 = M.A[free,free] \ (f.a[free,1] - K.A[free,free] * u[free,1] - C.A[free,free] * v[free,1])
+    #u00[free] = u[free,1] - v[free,1] * Δt + a0 * Δt^2 / 2
+    #u00[fix] .= 2.0 .* u[fix,1] .- u[fix,2]
     
     #t[1] = 0
-    u0 = DoFs(uu)[:, 1]
+    #u0 = DoFs(uu)[:, 1]
+    u0 = copy(u[:,1])
     ΔtΔt = Δt * Δt
 
     for i in 2:nsteps
@@ -6023,10 +6042,10 @@ Earthquake Engineering & Structural Dynamics, 5(3), 283–292, 1977.
 function HHT(
     K::SystemMatrix,
     M::SystemMatrix,
-    f::VectorField,
+    f::Union{ScalarField,VectorField},
     bc::Vector{BoundaryCondition},
-    U0::VectorField,
-    V0::VectorField,
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
     n::Int,
     Δt::Float64;
     α = 0.0,
@@ -6040,15 +6059,27 @@ function HHT(
     if f.nsteps != 1 && f.nsteps != n
         error("HHT: number of time steps in load vector is not equal to the time steps given in HHT.")
     end
+    
+    if f.type != U0.type || f.type != V0.type
+        error("HHT: f, u0 and v0 must be the same type.")
+    end
+
+    TYPE = typeof(f)
+
+    Δt > 0 || error("HHT: Δt must be positive.")
+    n > 0 || error("HHT: n must be non-negative and non-zero.")
+    n > 1 || error("HHT: n must be greater than one.")
 
     f  = elementsToNodes(f)
     U0 = elementsToNodes(U0)
     V0 = elementsToNodes(V0)
 
-    ts = [i for i in 0:n-1]
+    #ts = [i for i in 0:n-1]
+    ts = collect(0:Δt:(n-1)*Δt)
 
     # Allocate displacement container and pre-fill prescribed displacements for all steps (CDM-style)
-    uu = VectorField([], zeros(size(f.a, 1), n), ts, [], n, U0.type, K.model)
+    uu = TYPE([], zeros(size(f.a, 1), n), ts, [], n, U0.type, K.model)
+    uu = elementsToNodes(uu)
     applyBoundaryConditions!(uu, bc)
 
     free = freeDoFs(K.model, bc)
@@ -6057,7 +6088,7 @@ function HHT(
     ndof = size(K.A, 1)
     u = uu.a
     v = zeros(ndof, n)
-    t = zeros(n)
+    t = ts
 
     dt   = Δt
     dtdt = dt * dt
@@ -6071,12 +6102,19 @@ function HHT(
 
     # Initial conditions: set free parts from U0, keep fix parts from prescribed BC in uu
     u[free, 1] .= DoFs(U0)[free, 1]
-    v[:, 1]    .= DoFs(V0)[:, 1]
-    t[1] = 0.0
+    v[free,1] .= DoFs(V0)[free,1]
+    v[fix,1]  .= (u[fix,2] .- u[fix,1]) ./ Δt
+    #v[:, 1]    .= DoFs(V0)[:, 1]
+    #t[1] = 0.0
 
     # Initial acceleration a0 from equilibrium at step 1 (full vector)
     a = zeros(ndof)
-    a[free] = M.A[free,free] \ (DoFs(f)[free,1] - K.A[free,free] * u[free,1])
+    a[free] = M.A[free,free] \ (
+        f.a[free,1] .-
+        K.A[free,free] * u[free,1] .-
+        K.A[free,fix]  * u[fix,1])
+    #a = zeros(ndof)
+    #a[free] = M.A[free,free] \ (DoFs(f)[free,1] - K.A[free,free] * u[free,1])
 
     # Effective stiffness blocks (constant here)
     A   = (1 + α) * K.A + c0 * M.A
@@ -6120,14 +6158,14 @@ function HHT(
         v[:, i] .= v_np1
         a .= a_np1  # store as "current" for next loop
 
-        t[i] = t[i-1] + dt
+        #t[i] = t[i-1] + dt
     end
 
-    return VectorField([], u, t, [], length(t), U0.type, K.model),
-           VectorField([], v, t, [], length(t), V0.type, K.model)
+    return TYPE([], u, t, [], length(t), U0.type, K.model),
+           TYPE([], v, t, [], length(t), V0.type, K.model)
 end
 
-HHT(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; support=BoundaryCondition[], α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
+HHT(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=BoundaryCondition[], α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
     HHT(K, M, f, support, uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
 
     #=

@@ -6,6 +6,7 @@ boundary/load declarations, and mesh-related helpers.
 ## Mesh and Geometry Setup
 
 ```@docs
+line_mesh
 structured_rect_mesh
 structured_box_mesh
 projectTo2D

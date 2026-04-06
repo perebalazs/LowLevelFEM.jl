@@ -16,7 +16,7 @@ export openPreProcessor, openPostProcessor, setParameter, setParameters, getPara
 export probe
 export saveField, loadField, isSaved
 export ∂x, ∂y, ∂z, ∂t
-export structured_rect_mesh, structured_box_mesh, openGeometry
+export structured_rect_mesh, structured_box_mesh, line_mesh, openGeometry
 
 """
     Material(phName; kwargs...)
@@ -7000,6 +7000,79 @@ Types:
 """
 function isSaved(fileName::String)
     return isfile(fileName * "-LLF-Data.jld2")
+end
+
+"""
+    line_mesh(; lx=1.0,
+                n=10,
+                dx=lx/n,
+                order=1)
+
+Create a structured 1D mesh of a line domain using Gmsh.
+
+The domain is defined on the interval `[0, lx]`. A transfinite structured
+mesh is generated along the line.
+
+# Keyword Arguments
+- `lx`: Length of the domain.
+- `n`: Default subdivision parameter (used to define `dx`).
+- `dx`: Target element size along the line.
+- `order`: Polynomial order of the finite elements.
+
+# Physical Groups
+The following physical groups are created:
+- 0D boundary points: `"left"`, `"right"`
+- 1D domain: `"body"`
+
+# Notes
+- A transfinite structured mesh is enforced.
+- The number of nodes is determined from `ceil(lx/dx) + 1`.
+- The mesh is generated but not written to file.
+- The function assumes that Gmsh is already initialized.
+
+Returns `nothing`.
+
+Note: These helper functions are primarily intended for rapid prototyping,
+testing and educational examples in LowLevelFEM workflows.
+"""
+function line_mesh(; lx=1.0, n=10, dx=lx/n, order=1)
+    if gmsh.isInitialized() == 0
+        gmsh.initialize()
+    end
+    gmsh.option.setNumber("General.Verbosity", 0)
+    gmsh.clear()
+    gmsh.model.add("line_mesh")
+    #gmsh.option.setNumber("General.Terminal", 1)
+
+    #gmsh.model.add("line")
+
+    # --- geometry ---
+    p1 = gmsh.model.occ.addPoint(0.0, 0.0, 0.0)
+    p2 = gmsh.model.occ.addPoint(lx, 0.0, 0.0)
+
+    l = gmsh.model.occ.addLine(p1, p2)
+
+    gmsh.model.occ.synchronize()
+
+    # --- transfinite (structured mesh) ---
+    gmsh.model.mesh.setTransfiniteCurve(l, ceil(lx / dx) + 1)
+
+    # --- physical groups ---
+    gmsh.model.addPhysicalGroup(0, [p1], 1)  # left
+    gmsh.model.setPhysicalName(0, 1, "left")
+
+    gmsh.model.addPhysicalGroup(0, [p2], 2)  # right
+    gmsh.model.setPhysicalName(0, 2, "right")
+
+    gmsh.model.addPhysicalGroup(1, [l], 3)   # domain
+    gmsh.model.setPhysicalName(1, 3, "body")
+
+    # --- mesh ---
+    gmsh.option.setNumber("Mesh.ElementOrder", order)
+
+    gmsh.model.mesh.generate(1)
+
+    return nothing
 end
 
 """

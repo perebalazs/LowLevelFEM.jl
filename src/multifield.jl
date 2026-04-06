@@ -3030,7 +3030,7 @@ function FDM(
     end
 
     # explicit shortcut only if Cff is diagonal and theta = 0
-    is_diag_Cff = nnz(Cff) == length(diag(Cff))
+    is_diag_Cff = isdiag(Cff)
 
     # ------------------------------------------------------------------
     # 5) Time stepping
