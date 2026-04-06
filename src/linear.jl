@@ -5783,6 +5783,9 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
         error("CDM: number of time steps in load vector is not equal to the time steps given in CDM.")
     end
 
+    n > 0 || error("CDM: n must be non-negative and non-zero.")
+    n > 1 || error("CDM: n must be greater than one.")
+
     f = elementsToNodes(f)
     U0 = elementsToNodes(U0)
     V0 = elementsToNodes(V0)
@@ -5798,23 +5801,42 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
     for i in 1:n-1
         vv.a[fix,i] = (uu.a[fix,i+1] - uu.a[fix,i]) / Δt
     end
-    vv.a[fix,end] = 2 * vv.a[fix,end-1] - vv.a[fix,end-2]
+    if n >= 3
+        vv.a[fix,end] .= 2.0 .* vv.a[fix,end-1] .- vv.a[fix,end-2]
+    elseif n == 2
+        vv.a[fix,end] .= vv.a[fix,end-1]
+    end
 
     uu.a[free, 1] .= DoFs(U0)[free, 1]
     vv.a[free, 1] .= DoFs(V0)[free, 1]
 
-    invM = spdiagm(1 ./ diag(M.A))
-    MK = (invM * K.A)[free,:]
-    MC = (invM * C.A)[free,:]
-    Mf = (invM * f.a)[free,:]
+    isdiag = size(M.A, 1) == nnz(M.A) ? true : false
+    if !isdiag
+        error("CDM: only lumped M is supported.")
+    end
+
+    Kff = K.A[free, free]
+    Kfc = K.A[free, fix]
+
+    Cff = C.A[free, free]
+    Cfc = C.A[free, fix]
+
+    Mff = M.A[free, free]   # diagonális
+    Mfc = M.A[free, fix]
+
+    ff = f.a[free, :]
+
+    invMff = spdiagm(1.0 ./ diag(Mff))
+
     nsteps = n
     
     u = uu.a
     v = vv.a
     t = zeros(nsteps)
     
-    a0 = M.A \ (DoFs(f)[:,1] - K.A * DoFs(uu)[:,1] - C.A * DoFs(vv)[:,1])
-    u00 = DoFs(uu)[:,1] - DoFs(vv)[:,1] * Δt + a0 * Δt^2 / 2
+    a0 = M.A \ (f.a[:,1] - K.A * u[:,1] - C.A * v[:,1])
+    u00 = u[:,1] - v[:,1] * Δt + a0 * Δt^2 / 2
+    u00[fix] .= 2.0 .* u[fix,1] .- u[fix,2]
     
     t[1] = 0
     u0 = DoFs(uu)[:, 1]
@@ -5822,9 +5844,18 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
 
     for i in 2:nsteps
         ii = f.nsteps == 1 ? 1 : i
-        u1 = 2.0 * u0[free] - u00[free] - Δt * MC * (u0 - u00) - ΔtΔt * MK * u0 + ΔtΔt * Mf[:,ii]
+        uc = u[fix, i]
+        vc = v[fix, i]
+        #ac = (uc - 2uc_prev + uc_prev2) / Δt^2
+
+        rhs = ff[:,ii] - Kfc * uc - Cfc * vc # - Mfc * ac # prescibed displacement
+        u1 = 2.0 .* u0[free] .- u00[free] .-
+            Δt .* (invMff * (Cff * (u0[free] .- u00[free]))) .-
+            ΔtΔt .* (invMff * (Kff * u0[free])) .+
+            ΔtΔt .* (invMff * rhs)
+
         u[free, i] .= u1
-        v1 = (u1 - u0[free]) / Δt
+        v1 = (u1 .- u0[free]) ./ Δt
         v[free, i] .= v1
         t[i] = t[i-1] + Δt
         u00 = u0
