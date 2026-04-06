@@ -6023,7 +6023,8 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     elseif ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
-    elseif factor != 0
+    end
+    if factor != 0
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
         gmsh.view.option.setNumber(uvec, "DisplacementFactor", factor)
     end

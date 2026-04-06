@@ -5683,96 +5683,116 @@ end
     CDM(K::SystemMatrix, 
         M::SystemMatrix, 
         C::SystemMatrix, 
-        f::VectorField, 
+        f::Union{ScalarField,VectorField}, 
         bc::Vector{BoundaryCondition}, 
-        u0::VectorField, 
-        v0::VectorField, 
+        u0::Union{ScalarField,VectorField}, 
+        v0::Union{ScalarField,VectorField}, 
         n::Int, 
         Δt::Float64)
+
 aliases:
 
-    CDM(K, M, f, bc, u0, v0, n, Δt)
+    CDM(K, M, C, f, bc, u0, v0, n, Δt)
     CDM(K, M, C, f, u0, v0, n, Δt; support=BoundaryCondition[])
-    CDM(K, M, f, u0, v0, n, Δt; support=BoundaryCondition[])
 
-Solves a transient structural dynamic problem using the **central difference method (CDM)**,
-an explicit time integration scheme. (support ≡ bc)
+Solves a transient problem using an **explicit central difference–type scheme (CDM)**.
 
 The semi-discrete system
-```
 
+```
 M * ü(t) + C * u̇(t) + K * u(t) = f(t)
-
 ```
-is advanced in time using central finite differences.
-The method supports:
+
+is advanced in time using finite differences with a **lumped (diagonal) mass matrix**.
+
+The implementation supports:
+
 - time-independent or time-dependent load vectors `f`
 - time-independent or time-dependent displacement boundary conditions
-- consistent treatment of constraint-induced inertia and damping terms
-- vector-valued unknowns (`VectorField`)
+- scalar and vector unknowns (`ScalarField`, `VectorField`)
+- consistent incorporation of prescribed displacements into the right-hand side
 
 Boundary conditions are applied *solver-side*:
-on constrained DOFs the prescribed displacements override the initial conditions,
-while on free DOFs the initial displacement `u0` and velocity `v0` are used.
-Velocities on constrained DOFs are derived from the prescribed displacements.
 
-If `f.nsteps == 1`, the load is treated as time-independent.
-If `f.nsteps == n`, the load is applied time step–by–time step.
+- constrained DOFs are prescribed directly from `bc`
+- free DOFs evolve according to the dynamic equation
+- velocities on constrained DOFs are computed from the prescribed displacement history
+
+The effect of prescribed displacements is included through
+
+```
+- K_fc * u_c - C_fc * u̇_c
+```
+
+terms in the right-hand side.
+
+If `f.nsteps == 1`, the load is treated as time-independent.  
+If `f.nsteps == n`, the load is applied step-by-step.
 
 ---
 
 ### Arguments
+
 - `K::SystemMatrix`  
   Global stiffness matrix.
 - `M::SystemMatrix`  
-  Global mass matrix (assumed diagonal or lumped for efficiency).
+  Global mass matrix (must be diagonal / lumped).
 - `C::SystemMatrix`  
-  Global damping matrix. If omitted, zero damping is assumed.
-- `f::VectorField`  
+  Global damping matrix.
+- `f::Union{ScalarField,VectorField}`  
   External load vector (time-independent or time-dependent).
 - `bc::Vector{BoundaryCondition}`  
-  Displacement-type boundary conditions (possibly time-dependent).
-- `u0::VectorField`  
-  Initial displacement field. Overridden on constrained DOFs.
-- `v0::VectorField`  
-  Initial velocity field. Overridden on constrained DOFs.
+  Displacement boundary conditions (possibly time-dependent).
+- `u0::Union{ScalarField,VectorField}`  
+  Initial displacement field (overridden on constrained DOFs).
+- `v0::Union{ScalarField,VectorField}`  
+  Initial velocity field (overridden on constrained DOFs).
 - `n::Int`  
-  Number of time steps.
+  Number of time steps (`n ≥ 2`).
 - `Δt::Float64`  
-  Time step size.
+  Time step size (`Δt > 0`).
 
 ---
 
 ### Returns
-- `u::VectorField`  
-  Displacement field at all time steps (`ndof × nsteps`).
-- `v::VectorField`  
-  Velocity field at all time steps (`ndof × nsteps`).
 
-The associated time vector is
+- `u::Union{ScalarField,VectorField}`  
+  Displacement field for all time steps (`ndof × nsteps`).
+- `v::Union{ScalarField,VectorField}`  
+  Velocity field for all time steps (`ndof × nsteps`).
+
+The time vector is:
+
 ```
-
 t = 0 : Δt : (n-1)Δt
-
 ```
 
 ---
 
 ### Notes
-- The method is conditionally stable.
-  The critical time step is governed by the highest eigenfrequency and damping:
+
+- The scheme is **explicit** and requires a **diagonal (lumped) mass matrix**.
+- The damping term is evaluated using a **first-order velocity approximation**
+  
+  ```
+  
+  ```
+
+u̇ ≈ (uⁱ - uⁱ⁻¹) / Δt
+
+```
+which keeps the left-hand side diagonal.
+- The method is conditionally stable. The critical time step depends on the highest eigenfrequency and damping:
 ```
 
 Δt_max = T_min / π * (√(1 + ξ_max^2) - ξ_max)
 
 ```
-where `T_min` is the smallest modal period and `ξ_max` is the largest modal damping ratio.
-- The algorithm itself is agnostic to the physical meaning of the displacement field;
-it operates purely on the algebraic system defined by `M`, `C`, and `K`.
+- The algorithm is purely algebraic and independent of the underlying physics of the field.
 
 """
-function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, 
-    bc::Vector{BoundaryCondition}, U0::VectorField, V0::VectorField, 
+function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarField,VectorField}, 
+    bc::Vector{BoundaryCondition}, U0::Union{ScalarField,VectorField}, V0::Union{ScalarField,VectorField}, 
     n::Int, Δt::Float64)
     
     if K.model != M.model || M.model != C.model || C.model != f.model
@@ -5783,6 +5803,13 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
         error("CDM: number of time steps in load vector is not equal to the time steps given in CDM.")
     end
 
+    if f.type != U0.type || f.type != V0.type
+        error("CDM: f, u0 and v0 must be the same type.")
+    end
+
+    TYPE = typeof(f)
+
+    Δt > 0 || error("CDM: Δt must be positive.")
     n > 0 || error("CDM: n must be non-negative and non-zero.")
     n > 1 || error("CDM: n must be greater than one.")
 
@@ -5793,8 +5820,8 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
     free = freeDoFs(K.model, bc)
     fix = constrainedDoFs(K.model, bc)
 
-    ts = [i for i in 0:n-1]
-    uu = VectorField([], zeros(size(f.a,1), n), ts, [], n, f.type, f.model)
+    ts = collect(0:Δt:(n-1)*Δt)
+    uu = TYPE([], zeros(size(f.a,1), n), ts, [], n, f.type, f.model)
     uu = elementsToNodes(uu)
     vv = copy(uu)
     applyBoundaryConditions!(uu, bc)
@@ -5832,13 +5859,13 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
     
     u = uu.a
     v = vv.a
-    t = zeros(nsteps)
+    t = ts
     
     a0 = M.A \ (f.a[:,1] - K.A * u[:,1] - C.A * v[:,1])
     u00 = u[:,1] - v[:,1] * Δt + a0 * Δt^2 / 2
     u00[fix] .= 2.0 .* u[fix,1] .- u[fix,2]
     
-    t[1] = 0
+    #t[1] = 0
     u0 = DoFs(uu)[:, 1]
     ΔtΔt = Δt * Δt
 
@@ -5857,26 +5884,26 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField,
         u[free, i] .= u1
         v1 = (u1 .- u0[free]) ./ Δt
         v[free, i] .= v1
-        t[i] = t[i-1] + Δt
+        #t[i] = t[i-1] + Δt
         u00 = u0
         u0 = u[:, i]
     end
-    return VectorField([], u, t, [], length(t), U0.type, f.model), VectorField([], v, t, [], length(t), V0.type, f.model)
+    return TYPE([], u, t, [], length(t), U0.type, f.model), TYPE([], v, t, [], length(t), V0.type, f.model)
 end
 
-function CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, u0::VectorField, v0::VectorField, n::Int, Δt::Float64)
+function CDM(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, bc::Vector{BoundaryCondition}, u0::Union{ScalarField,VectorField}, v0::Union{ScalarField,VectorField}, n::Int, Δt::Float64)
     C = K * 0.0
     dropzeros!(C.A)
     return CDM(K, M, C, f, bc, u0, v0, n, Δt)
 end
 
-CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
     CDM(K, M, C, f, support,  uu0, vv0, n, Δt)
 
-CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::VectorField, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+CDM(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
     CDM(K, M, f, support,  uu0, vv0, n, Δt)
 
-"""
+    """
     HHT(K::SystemMatrix, 
         M::SystemMatrix, 
         f::VectorField, 
@@ -5892,10 +5919,10 @@ CDM(K::SystemMatrix, M::SystemMatrix, f::VectorField, uu0::VectorField, vv0::Vec
 
 alias:
 
-    HHT(K, M, f, u0, v0, n, Δt; α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2)
+    HHT(K, M, f, u0, v0, n, Δt; α=..., δ=..., γ=..., β=...)
 
 Solves a transient structural dynamic problem using the **Hilber–Hughes–Taylor
-(HHT-α) method**[^1], an implicit time integration scheme with controllable numerical
+(HHT-α) method**, an implicit time integration scheme with controllable numerical
 dissipation.
 
 The semi-discrete system
@@ -5904,22 +5931,34 @@ The semi-discrete system
 M * ü(t) + K * u(t) = f(t)
 
 ```
-is integrated in time using the generalized Newmark formulation with the HHT-α
-modification. The method supports:
+is integrated using a generalized Newmark formulation with HHT-α modification.
+
+The discrete equilibrium at step `n+1` is:
+```
+
+M a_{n+1} + (1+α) K u_{n+1} - α K u_n = f_{n+1}
+
+```
+
+The method supports:
 - time-independent or time-dependent load vectors `f`
 - time-independent or time-dependent displacement boundary conditions
 - solver-side enforcement of Dirichlet constraints
-- consistent treatment of constraint-induced inertia forces
 - vector-valued unknowns (`VectorField`)
 
 Boundary conditions are applied *solver-side*:
-on constrained DOFs the prescribed displacements override the initial conditions,
-while on free DOFs the initial displacement `u0` and velocity `v0` are used.
-Prescribed displacements are inserted at every time step, and the corresponding
-inertial contributions are accounted for automatically through the global system.
+- prescribed displacements are written into the solution at every time step
+- free DOFs are solved from the reduced system
+- constraint effects enter via
+```
 
-If `f.nsteps == 1`, the load is treated as time-independent.
-If `f.nsteps == n`, the load is applied time step–by–time step.
+A_fc * u_c^{n+1}
+
+```
+terms in the reduced system
+
+If `f.nsteps == 1`, the load is treated as time-independent.  
+If `f.nsteps == n`, the load is applied step-by-step.
 
 The parameters `α`, `β`, and `γ` control numerical dissipation and stability.
 If `δ` is given, the standard relations
@@ -5939,13 +5978,13 @@ are used.
 - `M::SystemMatrix`  
   Global mass matrix.
 - `f::VectorField`  
-  External load vector (time-independent or time-dependent).
+  External load vector.
 - `bc::Vector{BoundaryCondition}`  
-  Displacement-type boundary conditions (possibly time-dependent).
+  Displacement boundary conditions.
 - `u0::VectorField`  
-  Initial displacement field. Overridden on constrained DOFs.
+  Initial displacement field.
 - `v0::VectorField`  
-  Initial velocity field. Overridden on constrained DOFs.
+  Initial velocity field.
 - `n::Int`  
   Number of time steps.
 - `Δt::Float64`  
@@ -5955,11 +5994,11 @@ are used.
 
 ### Returns
 - `u::VectorField`  
-  Displacement field at all time steps (`ndof × nsteps`).
+  Displacement field (`ndof × nsteps`)
 - `v::VectorField`  
-  Velocity field at all time steps (`ndof × nsteps`).
+  Velocity field (`ndof × nsteps`)
 
-The associated time vector is
+Time vector:
 ```
 
 t = 0 : Δt : (n-1)Δt
@@ -5969,13 +6008,10 @@ t = 0 : Δt : (n-1)Δt
 ---
 
 ### Notes
-- The HHT-α method is unconditionally stable for appropriate parameter choices
-  and introduces numerical dissipation primarily in the high-frequency range.
-- The algorithm itself is independent of the physical interpretation of the
-  displacement field and operates purely on the algebraic system defined by
-  `M`, `K`, and `f`.
-- Damping matrices are not included explicitly; numerical dissipation is
-  controlled via the HHT-α parameters.
+- The method is unconditionally stable for appropriate parameter choices.
+- Parameter `α < 0` introduces high-frequency numerical damping.
+- The formulation is implicit and requires solving a linear system at each step.
+- The algorithm is algebraic and independent of the physical interpretation of the field.
 
 ---
 
@@ -5983,10 +6019,6 @@ t = 0 : Δt : (n-1)Δt
 Hilber, H. M., Hughes, T. J. R., Taylor, R. L.  
 *Improved numerical dissipation for time integration algorithms in structural dynamics*,  
 Earthquake Engineering & Structural Dynamics, 5(3), 283–292, 1977.
-
-[^1]: Hilber, Hans M., Thomas JR Hughes, and Robert L. Taylor. *Improved 
-    numerical dissipation for time integration algorithms in structural 
-    dynamics*. Earthquake Engineering & Structural Dynamics 5.3 (1977): 283-292.
 """
 function HHT(
     K::SystemMatrix,
