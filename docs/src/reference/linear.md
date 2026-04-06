@@ -9,6 +9,7 @@ stiffnessMatrix
 nonLinearStiffnessMatrix
 massMatrix
 dampingMatrix
+consistentToLumped
 elasticSupportMatrix
 loadVector
 applyBoundaryConditions

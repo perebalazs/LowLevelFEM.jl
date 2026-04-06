@@ -1362,16 +1362,16 @@ end
 """
     FDM(K::SystemMatrix, 
         C::SystemMatrix, 
-        q::Union{ScalarField,VectorField,SystemVector}, 
+        q::Union{ScalarField,VectorField,TensorField,SystemVector}, 
         bc::Vector{BoundaryCondition}, 
-        T0::Union{ScalarField,VectorField,SystemVector}, 
+        X0::Union{ScalarField,VectorField,TensorField,SystemVector}, 
         n::Int, 
         Δt::Float64; 
         ϑ=0.5)
 
 alias:
 
-    FDM(K, C, q, T0, n, Δt; ϑ=0.5, support=bc)
+    FDM(K, C, q, X0, n, Δt; ϑ=0.5, support=bc)
 
 Solves a transient diffusion-type problem (e.g. heat conduction) using the
 finite difference method in time (ϑ-method).
@@ -1391,15 +1391,21 @@ is integrated in time using the ϑ-scheme:
 The method supports:
 - time-independent or time-dependent load vectors `q`
 - time-independent or time-dependent Dirichlet boundary conditions
-- `ScalarField` and `VectorField` unknowns
-- consistent treatment of constraint-induced volume terms
-  (i.e. contributions of prescribed values appear automatically in the RHS)
+- scalar, vector and tensor unknowns (`ScalarField`, `VectorField`, `TensorField`)
+- multi-field block systems (`SystemVector`)
+- consistent treatment of prescribed DOFs via matrix partitioning
 
 Boundary conditions are applied *solver-side*:
-on constrained DOFs the prescribed values override the initial condition,
-while on free DOFs the initial condition `T0` is used.
+- constrained DOFs are prescribed directly at each time step
+- free DOFs are solved from the reduced system
+- contributions of constrained DOFs enter the RHS through
+```
 
-If `q.nsteps == 1`, the load is treated as time-independent.
+* K_fc X_c - C_fc Ẋ_c
+
+```
+
+If `q.nsteps == 1`, the load is treated as time-independent.  
 If `q.nsteps == n`, a true ϑ-weighted load
 ```
 
@@ -1417,13 +1423,15 @@ For `ϑ = 0` and diagonal `C`, a fully explicit update is used.
   Diffusion (conductivity / stiffness) matrix.
 - `C::SystemMatrix`  
   Capacity (mass / heat capacity) matrix.
-- `q::Union{ScalarField,VectorField}`  
-  Load / source vector. May be time-independent (`nsteps = 1`)
-  or time-dependent (`nsteps = n`).
+- `q`  
+  Load / source vector:
+  - single-field: `ScalarField`, `VectorField`, `TensorField`
+  - multi-field: `SystemVector`
 - `bc::Vector{BoundaryCondition}`  
   Dirichlet boundary conditions (possibly time-dependent).
-- `T0::Union{ScalarField,VectorField}`  
-  Initial condition. On constrained DOFs this is overridden by `bc`.
+- `X0`  
+  Initial condition (same type as `q`).  
+  On constrained DOFs this is overridden by `bc`.
 - `n::Int`  
   Number of time steps.
 - `Δt::Float64`  
@@ -1434,17 +1442,26 @@ For `ϑ = 0` and diagonal `C`, a fully explicit update is used.
 ---
 
 ### Returns
-- `T::Union{ScalarField,VectorField}`  
-  Nodal solution field at all time steps (`ndof × nsteps`),
-  with time vector `t = 0:Δt:(n-1)Δt`.
+
+Single-field:
+- `X::Union{ScalarField,VectorField,TensorField}`  
+
+Multifield:
+- tuple of fields corresponding to each problem
+
+Each result contains:
+- nodal values (`ndof × nsteps`)
+- time vector `t = 0:Δt:(n-1)Δt`
 
 ---
 
 ### Notes
 - Stability depends on `ϑ` and the spectrum of the generalized eigenproblem
   `K x = λ C x`. For `ϑ ≥ 1/2` the method is unconditionally stable.
-- The algorithm itself is agnostic to the physical meaning of the field
-  (scalar, vector, tensor), as long as `K`, `C` and the fields are consistent.
+- The explicit case (`ϑ = 0`) requires a diagonal `C` matrix.
+- For multifield systems, all fields must have the same number of time steps.
+- The algorithm is algebraic and independent of the physical interpretation
+  of the field.
 """
 function FDM(
     K::SystemMatrix,

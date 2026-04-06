@@ -2839,40 +2839,108 @@ function split_multifield_solution(
 end
 
 """
-    FDM(K::SystemMatrix,
-        C::SystemMatrix,
-        q::SystemVector,
-        bc::Vector{BoundaryCondition},
-        X0::SystemVector,
-        n::Int,
-        Δt::Float64;
+    FDM(K::SystemMatrix, 
+        C::SystemMatrix, 
+        q::Union{ScalarField,VectorField,TensorField,SystemVector}, 
+        bc::Vector{BoundaryCondition}, 
+        X0::Union{ScalarField,VectorField,TensorField,SystemVector}, 
+        n::Int, 
+        Δt::Float64; 
         ϑ=0.5)
 
-Alias: FDM(K, C, q, X0, n, Δt; ϑ=0.5, support=Vector{BoundaryCondition}())
+alias:
 
-Time integration for a multifield first-order system
+    FDM(K, C, q, X0, n, Δt; ϑ=0.5, support=bc)
 
-    C * ẋ + K * x = q
+Solves a transient diffusion-type problem (e.g. heat conduction) using the
+finite difference method in time (ϑ-method).
 
-using the theta-method.
+The semi-discrete system
+```
 
-Arguments
-- `K`: system matrix
-- `C`: capacity / mass-like matrix
-- `q`: global RHS vector as `SystemVector`
-- `bc`: Dirichlet boundary conditions
-- `X0`: initial state as `SystemVector`
-- `n`: number of stored time steps
-- `Δt`: time step size
+C * Ẋ(t) + K * X(t) = q(t)
 
-Keyword arguments
-- `ϑ`: theta parameter
-    - `0.0` explicit Euler
-    - `0.5` Crank-Nicolson
-    - `1.0` implicit Euler
+```
+is integrated in time using the ϑ-scheme:
+- ϑ = 0   : Forward Euler (explicit)
+- ϑ = 1/2 : Crank–Nicolson
+- ϑ = 1   : Backward Euler (implicit)
+- 0 < ϑ < 1 : intermediate schemes
 
-Returns
-Tuple of fields in the block order of `K.problems`.
+The method supports:
+- time-independent or time-dependent load vectors `q`
+- time-independent or time-dependent Dirichlet boundary conditions
+- scalar, vector and tensor unknowns (`ScalarField`, `VectorField`, `TensorField`)
+- multi-field block systems (`SystemVector`)
+- consistent treatment of prescribed DOFs via matrix partitioning
+
+Boundary conditions are applied *solver-side*:
+- constrained DOFs are prescribed directly at each time step
+- free DOFs are solved from the reduced system
+- contributions of constrained DOFs enter the RHS through
+```
+
+* K_fc X_c - C_fc Ẋ_c
+
+```
+
+If `q.nsteps == 1`, the load is treated as time-independent.  
+If `q.nsteps == n`, a true ϑ-weighted load
+```
+
+q^{n+ϑ} = (1-ϑ) q^n + ϑ q^{n+1}
+
+```
+is used.
+
+For `ϑ = 0` and diagonal `C`, a fully explicit update is used.
+
+---
+
+### Arguments
+- `K::SystemMatrix`  
+  Diffusion (conductivity / stiffness) matrix.
+- `C::SystemMatrix`  
+  Capacity (mass / heat capacity) matrix.
+- `q`  
+  Load / source vector:
+  - single-field: `ScalarField`, `VectorField`, `TensorField`
+  - multi-field: `SystemVector`
+- `bc::Vector{BoundaryCondition}`  
+  Dirichlet boundary conditions (possibly time-dependent).
+- `X0`  
+  Initial condition (same type as `q`).  
+  On constrained DOFs this is overridden by `bc`.
+- `n::Int`  
+  Number of time steps.
+- `Δt::Float64`  
+  Time step size.
+- `ϑ::Float64` (keyword, default = 0.5)  
+  Parameter of the ϑ-method.
+
+---
+
+### Returns
+
+Single-field:
+- `X::Union{ScalarField,VectorField,TensorField}`  
+
+Multifield:
+- tuple of fields corresponding to each problem
+
+Each result contains:
+- nodal values (`ndof × nsteps`)
+- time vector `t = 0:Δt:(n-1)Δt`
+
+---
+
+### Notes
+- Stability depends on `ϑ` and the spectrum of the generalized eigenproblem
+  `K x = λ C x`. For `ϑ ≥ 1/2` the method is unconditionally stable.
+- The explicit case (`ϑ = 0`) requires a diagonal `C` matrix.
+- For multifield systems, all fields must have the same number of time steps.
+- The algorithm is algebraic and independent of the physical interpretation
+  of the field.
 """
 function FDM(
     K::SystemMatrix,
@@ -3314,3 +3382,59 @@ function splitEigenToEigen(eig::Eigen)
     return tuple(results...)
 end
 
+"""
+    consistentToLumped(M::SystemMatrix) -> SystemMatrix
+
+Converts a **consistent mass (or capacity) matrix** into a **lumped (diagonal) matrix**
+using the row-sum technique.
+
+Each diagonal entry is computed as
+```
+
+M_ii = ∑_j M_ij
+
+```
+
+The resulting matrix is diagonal and preserves the total mass associated with each DOF.
+
+---
+
+### Arguments
+- `M::SystemMatrix`  
+  Consistent mass (or capacity) matrix.
+
+---
+
+### Returns
+- `Ml::SystemMatrix`  
+  Lumped (diagonal) matrix with the same structure (`model`, `test_model`,
+  `problems`, `offsets`) as the input.
+
+---
+
+### Notes
+- This is the standard **row-sum lumping** technique.
+- The method is commonly used for **explicit time integration schemes**
+  (e.g. central difference), where a diagonal mass matrix is required.
+- Off-diagonal entries are discarded, and their contributions are accumulated
+  onto the diagonal.
+- The operation preserves the total mass but modifies the spectral properties
+  of the system.
+
+---
+
+### Performance
+The implementation avoids dense row access and works efficiently with sparse matrices.
+
+"""
+function consistentToLumped(M::SystemMatrix)
+    n = size(M.A, 1)
+
+    # Row sums (efficient for sparse matrices)
+    d = vec(sum(M.A, dims=2))
+
+    # Build diagonal sparse matrix
+    A = spdiagm(d)
+
+    return SystemMatrix(A, M.model, M.test_model, M.problems, M.offsets)
+end
