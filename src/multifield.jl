@@ -73,6 +73,7 @@ export ε
 export ⋅
 
 export solveEigenFields
+export consistentToLumped
 
 
 """
