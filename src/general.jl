@@ -1384,13 +1384,33 @@ struct VectorField <: AbstractField
         return new(A, a, t, numElem, nsteps, type, problem)
     end
     function VectorField(problem::Problem, phName::String, data::Vector)
-        if size(data) == (3,)
-            f = field(phName, fx=data[1], fy=data[2], fz=data[3])
-            return VectorField(problem, [f])
-        else
-            error("VectorField: size of data is $(size(data)).")
+        @assert length(data) == 3 "VectorField must have exactly 3 components."
+
+        comps = Vector{ScalarField}(undef, 3)
+
+        for i in 1:3
+            if data[i] isa ScalarField
+                @assert data[i].model === problem "VectorField: ScalarFields must belong to the same problem."
+                comps[i] = data[i]
+
+            elseif data[i] isa Number || data[i] isa Function
+                comps[i] = ScalarField(problem, phName, data[i])
+
+            else
+                error("Unsupported type in VectorField component: $(typeof(data[i]))")
+            end
         end
+
+        return VectorField(comps)
     end
+    #function VectorField(problem::Problem, phName::String, data::Vector)
+    #    if size(data) == (3,)
+    #        f = field(phName, fx=data[1], fy=data[2], fz=data[3])
+    #        return VectorField(problem, [f])
+    #    else
+    #        error("VectorField: size of data is $(size(data)).")
+    #    end
+    #end
     function VectorField(problem::Problem, phName::String, func::Function)
         gmsh.model.setCurrent(problem.name)
         
@@ -1717,15 +1737,37 @@ struct TensorField <: AbstractField
         return new(A, a, t, numElem, nsteps, type, problem)
     end
     function TensorField(problem::Problem, phName::String, data::Matrix)
-        if size(data) == (3,3)
-            g = [x isa Function ? x : ((_,_,_)->x) for x in data]
-            f = field(phName, fx=g[1], fy=g[5], fz=g[9], fxy=g[4], fyz=g[8], fzx=g[3], fyx=g[2], fzy=g[6], fxz=g[7])
-            #f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
-            return TensorField(problem, [f])
-        else
-            error("TensorField: size of data is $(size(data)).")
+        @assert size(data) == (3,3) "TensorField must be a 3×3 matrix."
+
+        comps = Matrix{ScalarField}(undef, 3, 3)
+
+        for i in 1:3, j in 1:3
+            val = data[i,j]
+
+            if val isa ScalarField
+                @assert val.model === problem "TensorField: ScalarFields must belong to the same problem."
+                comps[i,j] = val
+
+            elseif val isa Number || val isa Function
+                comps[i,j] = ScalarField(problem, phName, val)
+
+            else
+                error("Unsupported type in TensorField component: $(typeof(val))")
+            end
         end
+
+        return TensorField(comps)
     end
+    #function TensorField(problem::Problem, phName::String, data::Matrix)
+    #    if size(data) == (3,3)
+    #        g = [x isa Function ? x : ((_,_,_)->x) for x in data]
+    #        f = field(phName, fx=g[1], fy=g[5], fz=g[9], fxy=g[4], fyz=g[8], fzx=g[3], fyx=g[2], fzy=g[6], fxz=g[7])
+    #        #f = field(phName, fx=data[1], fy=data[5], fz=data[9], fxy=data[2], fyz=data[6], fzx=data[3])
+    #        return TensorField(problem, [f])
+    #    else
+    #        error("TensorField: size of data is $(size(data)).")
+    #    end
+    #end
     function TensorField(comps::Matrix{ScalarField})
         @assert size(comps) == (3,3) "TensorField requires a 3×3 matrix of ScalarFields."
    
