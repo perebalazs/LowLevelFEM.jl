@@ -3376,6 +3376,8 @@ function mergeFields(uu::Vector{<:AbstractField})
     nn = length(uu)
     @assert nn ≥ 1
 
+    isElementwise(uu[1]) && error("mergeFields: vector of fields must contain nodal fields.")
+
     # --- összes időlépés
     n = 0
     for u in uu
