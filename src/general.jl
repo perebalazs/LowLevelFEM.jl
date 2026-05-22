@@ -5043,9 +5043,9 @@ function elementsToNodes(S)
     non = problem.non
     if S isa TensorField
         epn = 9
-    elseif (S.type == :v3D || S.model.dim == 3) && S isa VectorField
+    elseif (S.type == :v3D) && S isa VectorField
         epn = 3
-    elseif (S.type ==:v2D || S.model.dim == 2) && S isa VectorField
+    elseif (S.type ==:v2D) && S isa VectorField
         epn = 2
     elseif S isa ScalarField #type == :scalar
         epn = 1
@@ -5097,7 +5097,8 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
     if r isa ScalarField
         size = 1
     elseif r isa VectorField
-        size = r.model.dim
+        #size = r.model.dim
+        size = r.type == :v2D ? 2 : 3
     elseif r isa TensorField
         size = 9
     end
@@ -5121,28 +5122,7 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
         if onPhysicalGroup == ""
             phName = problem.material[ipg].phName
         end
-        #ν = problem.material[ipg].ν
         dim = problem.dim
-        #=
-        if problem.dim == 3 && problem.type == :Solid
-            dim = 3
-            rowsOfH = 3
-        elseif problem.dim == 3 && problem.type == :Truss
-            dim = 3
-            #rowsOfH = 3
-        elseif problem.dim == 2 # && problem.type == :PlaneStress
-            dim = 2
-            rowsOfH = 2
-        #elseif problem.dim == 2 && problem.type == :PlaneStrain
-        #    dim = 2
-        #    rowsOfH = 2
-        #elseif problem.dim == 2 && problem.type == :AxiSymmetric
-        #    dim = 2
-        #    rowsOfH = 2
-        else
-            error("nodesToElements: dimension is $(problem.dim), problem type is $(problem.type).")
-        end
-        =#
         
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
         for idm in 1:length(dimTags)
@@ -5150,15 +5130,9 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
             edim = dimTag[1]
             etag = dimTag[2]
             elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
-            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
-            #ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
-            #ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
-            #ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
             for i in 1:length(elemTypes)
                 et = elemTypes[i]
                 elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                #e0 = zeros(rowsOfB * numNodes)
                 nodeCoord = zeros(numNodes * 3)
                 for k in 1:dim, j = 1:numNodes
                     nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]

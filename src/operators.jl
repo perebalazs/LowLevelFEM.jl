@@ -54,8 +54,13 @@ function *(A::ScalarField, B::ScalarField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        # kisebbik csomópontszám a biztonság kedvéért
-        n = min(size(AAi, 1), size(BBi, 1))
+        nA = size(AAi, 1)
+        nB = size(BBi, 1)
+        nA == nB || error(
+            "*(ScalarField, ScalarField): incompatible local sizes on element $e: " *
+            "A rows=$nA, B rows=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        n = nA
         @views C[ii] = AAi[1:n, :] .* BBi[1:n, :]
         num[ii] = e
     end
@@ -147,7 +152,13 @@ function /(AA::ScalarField, BB::ScalarField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        n = min(size(AAi, 1), size(BBi, 1))
+        nA = size(AAi, 1)
+        nB = size(BBi, 1)
+        nA == nB || error(
+            "/(ScalarField, ScalarField): incompatible local sizes on element $e: " *
+            "A rows=$nA, B rows=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        n = nA
         @views C[ii] = AAi[1:n, :] ./ BBi[1:n, :]
         num[ii] = e
     end
@@ -736,15 +747,21 @@ function *(AA::ScalarField, BB::VectorField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        n_nodes = min(size(AAi, 1), size(BBi, 1) ÷ 3)
+        nA = size(AAi, 1)
+        nB = fld(size(BBi, 1), 3)
+        nA == nB || error(
+            "*(ScalarField, VectorField): incompatible local block counts on element $e: " *
+            "scalar rows=$nA, vector blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        n_nodes = nA
         rows = 3n_nodes
 
         result = Matrix{Float64}(undef, rows, nsteps)
 
         if n_nodes > 0
             @inbounds @views for j in 1:n_nodes
-                dest = result[3j-2:3j, :]
-                src = BBi[3j-2:3j, :]
+                dest = result[3*j-2:3*j, :]
+                src = BBi[3*j-2:3*j, :]
                 if a_has_single_step
                     dest .= src .* AAi[j, 1]
                 else
@@ -806,15 +823,21 @@ function /(BB::VectorField, AA::ScalarField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        n_nodes = min(size(AAi, 1), size(BBi, 1) ÷ 3)
+        nA = size(AAi, 1)
+        nB = fld(size(BBi, 1), 3)
+        nA == nB || error(
+            "/(VectorField, ScalarField): incompatible local block counts on element $e: " *
+            "scalar rows=$nA, vector blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        n_nodes = nA
         rows = 3n_nodes
 
         result = Matrix{Float64}(undef, rows, nsteps)
 
         if n_nodes > 0
             @inbounds @views for j in 1:n_nodes
-                dest = result[3j-2:3j, :]
-                src = BBi[3j-2:3j, :]
+                dest = result[3*j-2:3*j, :]
+                src = BBi[3*j-2:3*j, :]
                 if a_has_single_step
                     dest .= src ./ AAi[j, 1]
                 else
@@ -997,7 +1020,7 @@ function dot(AA::VectorField, BB::VectorField)
     if A.nsteps != B.nsteps
         error("*(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
     end
-    if A.type != :v3D && B.type != :v3D
+    if A.type != :v3D || B.type != :v3D
         error("*(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
     end
 
@@ -1019,8 +1042,13 @@ function dot(AA::VectorField, BB::VectorField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        rows = min(size(AAi, 1), size(BBi, 1))
-        n_nodes = fld(rows, 3)
+        nA = fld(size(AAi, 1), 3)
+        nB = fld(size(BBi, 1), 3)
+        nA == nB || error(
+            "dot(VectorField, VectorField): incompatible local block counts on element $e: " *
+            "A blocks=$nA, B blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        n_nodes = nA
         used_rows = 3n_nodes
 
         result = Matrix{Float64}(undef, n_nodes, nsteps)
@@ -1030,8 +1058,8 @@ function dot(AA::VectorField, BB::VectorField)
             Bb = view(BBi, 1:used_rows, 1:nsteps)
 
             @inbounds @views for j in 1:n_nodes
-                a_block = Ab[3j-2:3j, :]
-                b_block = Bb[3j-2:3j, :]
+                a_block = Ab[3*j-2:3*j, :]
+                b_block = Bb[3*j-2:3*j, :]
                 row = result[j, :]
                 row .= a_block[1, :] .* b_block[1, :] .+
                         a_block[2, :] .* b_block[2, :] .+
@@ -1104,7 +1132,7 @@ function ∘(AA::VectorField, BB::VectorField)
     if A.nsteps != B.nsteps
         error("∘(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
     end
-    if A.type != :v3D && B.type != :v3D
+    if A.type != :v3D || B.type != :v3D
         error("∘(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
     end
 
@@ -1126,8 +1154,13 @@ function ∘(AA::VectorField, BB::VectorField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        rows = min(size(AAi, 1), size(BBi, 1))
-        n_nodes = fld(rows, 3)
+        nA = fld(size(AAi, 1), 3)
+        nB = fld(size(BBi, 1), 3)
+        nA == nB || error(
+            "∘(VectorField, VectorField): incompatible local block counts on element $e: " *
+            "A blocks=$nA, B blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        n_nodes = nA
         used_rows = 3n_nodes
 
         result = Matrix{Float64}(undef, 9n_nodes, nsteps)
@@ -1137,9 +1170,9 @@ function ∘(AA::VectorField, BB::VectorField)
             Bb = view(BBi, 1:used_rows, 1:nsteps)
 
             @inbounds @views for j in 1:n_nodes
-                dest = result[9j-8:9j, :]
-                a_block = Ab[3j-2:3j, :]
-                b_block = Bb[3j-2:3j, :]
+                dest = result[9*j-8:9*j, :]
+                a_block = Ab[3*j-2:3*j, :]
+                b_block = Bb[3*j-2:3*j, :]
 
                 dest[1, :] .= a_block[1, :] .* b_block[1, :]
                 dest[2, :] .= a_block[2, :] .* b_block[1, :]
@@ -1224,7 +1257,7 @@ function ×(AA::VectorField, BB::VectorField)
     if A.nsteps != B.nsteps
         error("×(VectorField, VectorField): nsteps od A and B are not equal ($(A.nsteps) != $(B.nsteps)")
     end
-    if A.type != :v3D && B.type != :v3D
+    if A.type != :v3D || B.type != :v3D
         error("×(AA::VectorField, BB::VectorField): AA and BB must be 3D vectors.")
     end
 
@@ -1246,8 +1279,13 @@ function ×(AA::VectorField, BB::VectorField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        rows = min(size(AAi, 1), size(BBi, 1))
-        n_nodes = fld(rows, 3)
+        nA = fld(size(AAi, 1), 3)
+        nB = fld(size(BBi, 1), 3)
+        nA == nB || error(
+            "×(VectorField, VectorField): incompatible local block counts on element $e: " *
+            "A blocks=$nA, B blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        n_nodes = nA
         used_rows = 3n_nodes
 
         result = Matrix{Float64}(undef, used_rows, nsteps)
@@ -1257,9 +1295,9 @@ function ×(AA::VectorField, BB::VectorField)
             Bb = view(BBi, 1:used_rows, 1:nsteps)
 
             @inbounds @views for j in 1:n_nodes
-                dest = result[3j-2:3j, :]
-                a_block = Ab[3j-2:3j, :]
-                b_block = Bb[3j-2:3j, :]
+                dest = result[3*j-2:3*j, :]
+                a_block = Ab[3*j-2:3*j, :]
+                b_block = Bb[3*j-2:3*j, :]
                 dest[1, :] .= a_block[2, :] .* b_block[3, :] .- a_block[3, :] .* b_block[2, :]
                 dest[2, :] .= a_block[3, :] .* b_block[1, :] .- a_block[1, :] .* b_block[3, :]
                 dest[3, :] .= a_block[1, :] .* b_block[2, :] .- a_block[2, :] .* b_block[1, :]
@@ -1298,7 +1336,7 @@ function norm(AA::VectorField)
         if n_nodes > 0
             Ab = view(Ai, 1:used_rows, 1:nsteps)
             @inbounds @views for j in 1:n_nodes
-                block = Ab[3j-2:3j, :]
+                block = Ab[3*j-2:3*j, :]
                 result[j, :] .= sqrt.(block[1, :].^2 .+ block[2, :].^2 .+ block[3, :].^2)
             end
         end
@@ -1335,8 +1373,8 @@ function diagm(AA::VectorField)
             if n_nodes > 0
                 Ab = view(Ai, 1:used_rows, 1:nsteps)
                 @inbounds @views for j in 1:n_nodes
-                    dest = result[9j-8:9j, :]
-                    block = Ab[3j-2:3j, :]
+                    dest = result[9*j-8:9*j, :]
+                    block = Ab[3*j-2:3*j, :]
                     dest .= 0.0
                     dest[1, :] .= block[1, :]
                     dest[5, :] .= block[2, :]
@@ -1403,20 +1441,25 @@ function *(AA::TensorField, BB::TensorField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        rows = min(size(AAi, 1), size(BBi, 1))
-        nblocks = fld(rows, 9)
+        nA = fld(size(AAi, 1), 9)
+        nB = fld(size(BBi, 1), 9)
+        nA == nB || error(
+            "*(TensorField, TensorField): incompatible local block counts on element $e: " *
+            "A blocks=$nA, B blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        nblocks = nA
         used_rows = 9nblocks
 
         result = Matrix{Float64}(undef, used_rows, nsteps)
 
         if nblocks > 0
             @inbounds for j in 1:nblocks
-                Ab = AAi[9j-8:9j, :]
-                Bb = BBi[9j-8:9j, :]
+                Ab = AAi[(9*j-8):(9*j), :]
+                Bb = BBi[(9*j-8):(9*j), :]
                 for k in 1:nsteps
                     MA = SMatrix{3,3}(reshape(Ab[:, k], 3, 3))
                     MB = SMatrix{3,3}(reshape(Bb[:, k], 3, 3))
-                    dest = view(result, 9j-8:9j, k)
+                    dest = view(result, 9*j-8:9*j, k)
                     dest .= (MA * MB)[:]
                 end
             end
@@ -1461,18 +1504,23 @@ function ⋅(AA::TensorField, BB::TensorField)
         AAi = A.A[ia]
         BBi = B.A[ib]
 
-        rows = min(size(AAi, 1), size(BBi, 1))
-        nblocks = fld(rows, 9)
+        nA = fld(size(AAi, 1), 9)
+        nB = fld(size(BBi, 1), 9)
+        nA == nB || error(
+            "⋅(TensorField, TensorField): incompatible local block counts on element $e: " *
+            "A blocks=$nA, B blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        nblocks = nA
         used_rows = 9nblocks
 
         result = Matrix{Float64}(undef, nblocks, nsteps)
 
         if nblocks > 0
-            Ab = AAi[1:used_rows, 1:nsteps]
-            Bb = BBi[1:used_rows, 1:nsteps]
+            Ab = @view AAi[1:used_rows, 1:nsteps]
+            Bb = @view BBi[1:used_rows, 1:nsteps]
             @inbounds for j in 1:nblocks
-                blockA = Ab[9j-8:9j, :]
-                blockB = Bb[9j-8:9j, :]
+                blockA = @view Ab[(9*j-8):(9*j), :]
+                blockB = @view Bb[(9*j-8):(9*j), :]
                 row = view(result, j, :)
                 row .= 0.0
                 @inbounds for r in 1:9
@@ -1607,7 +1655,16 @@ function *(AA::TensorField, BB::VectorField)
 
         rowsA = size(AAi, 1)
         rowsB = size(BBi, 1)
-        nblocks = min(fld(rowsA, 9), fld(rowsB, 3))
+        nA = fld(rowsA, 9)
+        nB = fld(rowsB, 3)
+
+        nA == nB || error(
+            "*(TensorField, VectorField): incompatible element block sizes: " *
+            "element=$e, tensor blocks=$nA, vector blocks=$nB, " *
+            "size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        nblocks = nA
+
         usedA = 9nblocks
         usedB = 3nblocks
 
@@ -1617,13 +1674,13 @@ function *(AA::TensorField, BB::VectorField)
             Ab = AAi[1:usedA, 1:nsteps]
             Bb = BBi[1:usedB, 1:nsteps]
             @inbounds for j in 1:nblocks
-                blockA = Ab[9j-8:9j, :]
-                blockB = Bb[3j-2:3j, :]
-                dest = view(result, 3j-2:3j, :)
+                blockA = Ab[(9*j-8):(9*j), :]
+                blockB = Bb[(3*j-2):(3*j), :]
+                dest = view(result, (3j-2):(3j), :)
                 for k in 1:nsteps
                     MA = SMatrix{3,3}(reshape(blockA[:, k], 3, 3))
                     v = SVector{3}(blockB[:, k])
-                    dest[:, k] = MA * v
+                    dest[:, k] .= MA * v
                 end
             end
         end
@@ -1662,7 +1719,13 @@ function *(BB::VectorField, AA::TensorField)
 
         rowsA = size(AAi, 1)
         rowsB = size(BBi, 1)
-        nblocks = min(fld(rowsA, 9), fld(rowsB, 3))
+        nA = fld(rowsA, 9)
+        nB = fld(rowsB, 3)
+        nA == nB || error(
+            "*(VectorField, TensorField): incompatible local block counts on element $e: " *
+            "tensor blocks=$nA, vector blocks=$nB, size(A)=$(size(AAi)), size(B)=$(size(BBi))")
+
+        nblocks = nA
         usedA = 9nblocks
         usedB = 3nblocks
 
@@ -1672,13 +1735,13 @@ function *(BB::VectorField, AA::TensorField)
             Ab = AAi[1:usedA, 1:nsteps]
             Bb = BBi[1:usedB, 1:nsteps]
             @inbounds for j in 1:nblocks
-                blockA = Ab[9j-8:9j, :]
-                blockB = Bb[3j-2:3j, :]
-                dest = view(result, 3j-2:3j, :)
+                blockA = Ab[(9*j-8):(9*j), :]
+                blockB = Bb[(3*j-2):(3*j), :]
+                dest = view(result, (3*j-2):(3*j), :)
                 for k in 1:nsteps
                     M = SMatrix{3,3}(reshape(blockA[:, k], 3, 3))
                     v = SVector{3}(blockB[:, k])
-                    dest[:, k] = M' * v
+                    dest[:, k] .= M' * v
                 end
             end
         end
@@ -2557,7 +2620,7 @@ function *(A::Transformation, BB::TensorField)
         I = []
         J = []
         V = Float64[]
-        T1 = zeros(9)
+        #T1 = zeros(9)
         I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
         J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
         if dim == 2
@@ -2614,7 +2677,7 @@ function *(BB::TensorField, A::Transformation)
         I = []
         J = []
         V = Float64[]
-        T1 = zeros(9)
+        #T1 = zeros(9)
         I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
         J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
         if dim == 2
