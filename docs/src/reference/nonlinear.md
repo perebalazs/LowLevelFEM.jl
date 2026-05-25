@@ -8,7 +8,7 @@ Nonlinear mechanics, stress/tangent operators, and follower-load tangents.
 nodePositionVector
 materialTangentMatrix
 initialStressMatrix
-IIPiolaKirchhoff
+IIPiolaKirchhoffStress
 ```
 
 ## Nonlinear Assembly
@@ -22,4 +22,14 @@ internalForceVector
 
 ```@docs
 showDeformationResults
+```
+
+## Hyperelastic stress and tangent matrix for DSL
+
+```@docs
+IIPiolaKirchhoff
+tangentMatrix
+energyMaterial
+tensorToMatrix
+tensorToVector
 ```

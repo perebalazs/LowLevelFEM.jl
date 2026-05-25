@@ -702,11 +702,38 @@ end
 Base.show(io::IO, d::DomainSpec) =
     print(io, "$(d.kind)=\"$(d.name)\"")
 
+function _covers_domain(coef::ScalarField, domain::DomainSpec)
+    dimTags = gmsh.model.getEntitiesForPhysicalName(domain.name)
+    elems = Int[]
+
+    for (edim, etag) in dimTags
+        elemTypes, elemTags, _ = gmsh.model.mesh.getElements(edim, etag)
+        for tags in elemTags
+            append!(elems, Int.(tags))
+        end
+    end
+
+    return all(e -> e in coef.numElem, elems)
+end
+
+@inline function _build_elemwise_coeff_dict(coef::ScalarField, domain::DomainSpec)
+    if isElementwise(coef) && _covers_domain(coef, domain)
+        p = coef
+    else
+        p = elementsToNodes(coef)
+        p = nodesToElements(p, onPhysicalGroup=domain.name)
+    end
+
+    return Dict(zip(p.numElem, p.A))
+end
+
+#=
 @inline function _build_elemwise_coeff_dict(coef::ScalarField, domain::DomainSpec)
     p = elementsToNodes(coef)
     p = nodesToElements(p, onPhysicalGroup=domain.name)
     return Dict(zip(p.numElem, p.A))  # elemTag => coeff nodal vector(s)
 end
+=#
 
 """
     _prepare_coefficient(C, domain)

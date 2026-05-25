@@ -6,7 +6,8 @@ export nodePositionVector, ∇, curl, rot, div, grad
 export showDeformationResults
 export grad_xy
 export materialTangentMatrix, initialStressMatrix, externalTangentFollower, internalForceVector
-export IIPiolaKirchhoff
+export IIPiolaKirchhoffStress
+export energyMaterial, tensorToMatrix, tensorToVector, IIPiolaKirchhoff, tangentMatrix
 
 """
     nodePositionVector(problem)
@@ -3260,7 +3261,7 @@ function externalTangentFollower(
 end
 
 """
-    IIPiolaKirchhoff(energy, C::TensorField, params)
+    IIPiolaKirchhoffStress(energy, C::TensorField, params)
 
 Computes the nodal Second Piola–Kirchhoff (II PK) stress tensor field
 from a given nodal Right Cauchy–Green deformation tensor field.
@@ -3301,7 +3302,7 @@ Notes:
 - For use in weak forms or Newton iterations, Gauss-point evaluation
   should be used instead.
 """
-function IIPiolaKirchhoff(
+function IIPiolaKirchhoffStress(
     energy::Function,
     C::TensorField,
     params::NamedTuple)
@@ -3717,3 +3718,284 @@ function loadVectorNew(problem, loads; F=nothing)
     end
 end
 =#
+
+
+################################################################################
+### hyperelastic tangent matrix and II P-K stress for DSL ######################
+################################################################################
+
+const VOIGT3D = ((1, 1), (2, 2), (3, 3), (1, 2), (2, 3), (3, 1))
+
+@inline function _prepare_energy_params_elementwise(params::NamedTuple, C::TensorField)
+    names = keys(params)
+    vals = values(params)
+
+    newvals = map(vals) do v
+        if v isa Number
+            v
+        elseif v isa ScalarField
+            ve = isElementwise(v) ? v : nodesToElements(v)
+
+            if ve.nsteps != 1 && ve.nsteps != C.nsteps
+                error("energyMaterial: parameter nsteps must be 1 or equal to C.nsteps.")
+            end
+
+            return Dict(zip(ve.numElem, ve.A))
+        else
+            error("energyMaterial: parameters must be Number or ScalarField, got $(typeof(v)).")
+        end
+    end
+
+    return NamedTuple{names}(newvals)
+end
+
+
+@inline _param_value_at_element_node(v::Number, elem::Int, a::Int, it::Int) = v
+
+@inline function _param_value_at_element_node(v::Dict, elem::Int, a::Int, it::Int)
+    A = v[elem]
+    itt = size(A, 2) == 1 ? 1 : it
+    return A[a, itt]
+end
+
+
+@inline function _params_at_element_node(params::NamedTuple, elem::Int, a::Int, it::Int)
+    names = keys(params)
+    vals = values(params)
+
+    newvals = map(vals) do v
+        _param_value_at_element_node(v, elem, a, it)
+    end
+
+    return NamedTuple{names}(newvals)
+end
+
+"""
+    tensorToVector(T::TensorField)
+
+Convert a symmetric tensor field to Voigt vector form.
+
+# Arguments
+- `T`: symmetric tensor field
+
+# Returns
+A vector of `ScalarField`s in the ordering:
+
+    [xx, yy, zz, xy, yz, zx]
+
+# Examples
+```julia
+v = tensorToVector(S)
+```
+"""
+function tensorToVector(T::TensorField)
+    return [T[i, j] for (i, j) in VOIGT3D]
+end
+
+"""
+    tensorToMatrix(T::TensorField)
+
+Convert a tensor field to a matrix of scalar fields.
+
+# Arguments
+- `T`: tensor field
+
+# Returns
+A `3×3` matrix whose entries are `ScalarField`s corresponding to the tensor
+components.
+
+# Examples
+```julia
+M = tensorToMatrix(S)
+```
+The returned matrix can be used directly in DSL matrix-chain expressions.
+"""
+function tensorToMatrix(T::TensorField)
+    return [
+        T[1, 1] T[1, 2] T[1, 3]
+        T[2, 1] T[2, 2] T[2, 3]
+        T[3, 1] T[3, 2] T[3, 3]
+    ]
+end
+
+function _energyMaterial(
+    ψ,
+    C::TensorField;
+    params=NamedTuple(),
+    stress::Bool=true,
+    tangent::Bool=true)
+    !stress && !tangent && error("_energyMaterial: stress or tangent must be true.")
+
+    problem = C.model
+    Ce = isElementwise(C) ? C : nodesToElements(C)
+
+    nsteps = Ce.nsteps
+    nelem = length(Ce.numElem)
+
+    pe = _prepare_energy_params_elementwise(params, Ce)
+
+    S_A = stress ? Vector{Matrix{Float64}}(undef, nelem) : nothing
+    D_A = tangent ? [Vector{Matrix{Float64}}(undef, nelem) for _ in 1:6, _ in 1:6] : nothing
+
+    @inbounds for eidx in 1:nelem
+        elem = Ce.numElem[eidx]
+        CAe = Ce.A[eidx]
+
+        nnloc = size(CAe, 1) ÷ 9
+
+        SAe = stress ? zeros(9nnloc, nsteps) : nothing
+        DAe = tangent ? [zeros(nnloc, nsteps) for _ in 1:6, _ in 1:6] : nothing
+
+        for it in 1:nsteps
+            for a in 1:nnloc
+                base = 9(a - 1)
+
+                Cmat = @SMatrix [
+                    CAe[base+1, it] CAe[base+4, it] CAe[base+7, it]
+                    CAe[base+2, it] CAe[base+5, it] CAe[base+8, it]
+                    CAe[base+3, it] CAe[base+6, it] CAe[base+9, it]
+                ]
+
+                p = _params_at_element_node(pe, elem, a, it)
+
+                if stress
+                    Smat = LowLevelFEM.stress_from_energy(ψ, Cmat, p)
+
+                    SAe[base+1, it] = Smat[1, 1]
+                    SAe[base+2, it] = Smat[2, 1]
+                    SAe[base+3, it] = Smat[3, 1]
+                    SAe[base+4, it] = Smat[1, 2]
+                    SAe[base+5, it] = Smat[2, 2]
+                    SAe[base+6, it] = Smat[3, 2]
+                    SAe[base+7, it] = Smat[1, 3]
+                    SAe[base+8, it] = Smat[2, 3]
+                    SAe[base+9, it] = Smat[3, 3]
+                end
+
+                if tangent
+                    Dmat = LowLevelFEM.tangent_from_energy(ψ, Cmat, p)
+
+                    for i in 1:6, j in 1:6
+                        DAe[i, j][a, it] = Dmat[i, j]
+                    end
+                end
+            end
+        end
+
+        if stress
+            S_A[eidx] = SAe
+        end
+
+        if tangent
+            for i in 1:6, j in 1:6
+                D_A[i, j][eidx] = DAe[i, j]
+            end
+        end
+    end
+
+    S = stress ? TensorField(S_A, [;;], Ce.t, Ce.numElem, nsteps, :tensor, problem) : nothing
+
+    D = if tangent
+        DD = Matrix{ScalarField}(undef, 6, 6)
+        for i in 1:6, j in 1:6
+            DD[i, j] = ScalarField(D_A[i, j], [;;], Ce.t, Ce.numElem, nsteps, :scalar, problem)
+        end
+        DD
+    else
+        nothing
+    end
+
+    return (; S, D)
+end
+
+"""
+    energyMaterial(ψ, C::TensorField; params=NamedTuple())
+
+Compute the constitutive response from a strain energy density function.
+
+The function evaluates the second Piola–Kirchhoff stress tensor and the
+consistent material tangent matrix in a fully elementwise manner.
+
+# Arguments
+- `ψ`: strain energy density function of the form `ψ(C,p)`
+- `C`: right Cauchy–Green tensor field (`TensorField`)
+- `params`: named tuple containing material parameters
+
+Material parameters may be:
+- `Number`
+- `ScalarField`
+
+`ScalarField` parameters are internally converted to elementwise form if needed.
+
+# Returns
+A named tuple:
+
+    (; S, D)
+
+where:
+- `S` is an elementwise `TensorField`
+- `D` is a `6×6` matrix whose entries are elementwise `ScalarField`s
+
+The tangent matrix `D` can be used directly as a DSL coefficient matrix.
+
+# Notes
+Voigt ordering:
+
+    [xx, yy, zz, xy, yz, zx]
+
+This function computes stress and tangent simultaneously for efficiency.
+"""
+function energyMaterial(ψ, C::TensorField; params=NamedTuple())
+    return _energyMaterial(ψ, C; params=params, stress=true, tangent=true)
+end
+
+"""
+    IIPiolaKirchhoff(ψ, C::TensorField; params=NamedTuple())
+
+Compute the second Piola–Kirchhoff stress tensor from a strain energy density
+function.
+
+# Arguments
+- `ψ`: strain energy density function of the form `ψ(C,p)`
+- `C`: right Cauchy–Green tensor field (`TensorField`)
+- `params`: named tuple containing material parameters
+
+# Returns
+An elementwise `TensorField` containing the second Piola–Kirchhoff stress.
+
+# Notes
+This function internally uses the same constitutive kernel as
+`energyMaterial`, but computes only the stress tensor.
+"""
+function IIPiolaKirchhoff(ψ, C::TensorField; params=NamedTuple())
+    return _energyMaterial(ψ, C; params=params, stress=true, tangent=false).S
+end
+
+"""
+    tangentMatrix(ψ, C::TensorField; params=NamedTuple())
+
+Compute the consistent material tangent matrix from a strain energy density
+function.
+
+# Arguments
+- `ψ`: strain energy density function of the form `ψ(C,p)`
+- `C`: right Cauchy–Green tensor field (`TensorField`)
+- `params`: named tuple containing material parameters
+
+# Returns
+A `6×6` matrix whose entries are elementwise `ScalarField`s.
+
+The returned matrix can be used directly as a DSL coefficient matrix.
+
+# Notes
+Voigt ordering:
+
+    [xx, yy, zz, xy, yz, zx]
+
+This function internally uses the same constitutive kernel as
+`energyMaterial`, but computes only the tangent matrix.
+"""
+function tangentMatrix(ψ, C::TensorField; params=NamedTuple())
+    return _energyMaterial(ψ, C; params=params, stress=false, tangent=true).D
+end
+
