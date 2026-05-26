@@ -61,9 +61,6 @@ export TensorDiv
 export Adv
 export AxialGrad
 export TangentialGrad
-export SurfaceGrad
-export SurfaceDiv
-export SurfaceSymGrad
 
 export ∫
 export ∫Ω
@@ -267,8 +264,6 @@ struct AxialGradOp <: AbstractOp end
 
 #AxialGrad(P) = AxialGradOp()
 
-struct TangentialGradOp <: AbstractOp end
-
 """
     TangentialGrad(P)
 
@@ -290,19 +285,6 @@ For vector fields `u ∈ ℝᵈ`, the result is a vector field of dimension `d`.
 # Returns
 - `OpApplied`: Operator application object representing `(∇u) ⋅ t`.
 
-Directional derivative operator along the local element tangent direction.
-
-Computes derivatives projected onto the local tangent vector of the element.
-
-Typical applications include:
-
-- beam and rod formulations,
-- directional gradients,
-- streamline-like operators,
-- embedded directional mechanics.
-
-See also: `AxialGrad`
-
 # Example
 ```julia
 Kg = ∫(TangentialGrad(Pu) ⋅ N0 ⋅ TangentialGrad(Pu); Ω="truss")
@@ -316,30 +298,9 @@ Kg = ∫(TangentialGrad(Pu) ⋅ N0 ⋅ TangentialGrad(Pu); Ω="truss")
 - This operator is useful for constructing geometric stiffness matrices  
   (initial stress effects) in truss and structural stability problems.  
 """
+struct TangentialGradOp <: AbstractOp end
+
 TangentialGrad(P) = OpApplied(P, TangentialGradOp())
-
-"""
-Surface gradient operator.
-
-Computes tangential derivatives on embedded lower-dimensional entities,
-typically a 2D surface embedded in 3D.
-"""
-struct SurfaceGradOp <: AbstractOp end
-
-"""
-Surface divergence operator.
-
-Uses tangential derivatives on embedded lower-dimensional entities.
-"""
-struct SurfaceDivOp <: AbstractOp end
-
-"""
-Surface symmetric gradient operator.
-
-This is the membrane strain operator for a displacement field living on a
-surface embedded in the ambient space.
-"""
-struct SurfaceSymGradOp <: AbstractOp end
 
 """
     op_outdim(::IdOp, P::Problem)
@@ -417,22 +378,6 @@ end
 
 function op_outdim(::TangentialGradOp, P::Problem)
     return P.dim
-end
-
-function op_outdim(::SurfaceGradOp, P::Problem)
-    return op_outdim(GradOp(), P)
-end
-
-function op_outdim(::SurfaceDivOp, P::Problem)
-    return op_outdim(DivOp(), P)
-end
-
-#function op_outdim(::SurfaceSymGradOp, P::Problem)
-#    return op_outdim(SymGradOp(), P)
-#end
-function op_outdim(::SurfaceSymGradOp, P::Problem)
-    @assert P.pdim == 3 "SurfaceSymGradOp currently expects a 3D displacement field."
-    return 3
 end
 
 """
@@ -749,83 +694,6 @@ function build_B!(B::AbstractMatrix, ::TangentialGradOp,
     return B
 end
 
-function build_B!(B::AbstractMatrix, ::SurfaceGradOp,
-    P::Problem, k::Int, h, ∂h, numNodes::Integer)
-
-    return build_B!(B, GradOp(), P, k, h, ∂h, numNodes)
-end
-
-function build_B!(B::AbstractMatrix, ::SurfaceDivOp,
-    P::Problem, k::Int, h, ∂h, numNodes::Integer)
-
-    return build_B!(B, DivOp(), P, k, h, ∂h, numNodes)
-end
-
-function build_B!(B::AbstractMatrix, ::SurfaceSymGradOp,
-    P::Problem, k::Int, h, ∂h, numNodes::Integer)
-
-    fill!(B, 0.0)
-    @assert P.pdim == 3 "SurfaceSymGradOp currently expects a 3D displacement field."
-
-    @inbounds for a in 1:numNodes
-        colx = (a - 1) * 3 + 1
-        coly = (a - 1) * 3 + 2
-        # colz = (a - 1) * 3 + 3
-
-        dNx = ∂h[1, (k-1)*numNodes+a]
-        dNy = ∂h[2, (k-1)*numNodes+a]
-
-        # rows: [εxx, εyy, γxy]
-        B[1, colx] = dNx
-        B[2, coly] = dNy
-        B[3, colx] = dNy
-        B[3, coly] = dNx
-    end
-
-    return B
-end
-
-function build_B!(B::AbstractMatrix, ::SurfaceSymGradOp,
-                  P::Problem, k::Int, h, ∂h, numNodes::Integer, t1, t2)
-
-    fill!(B, 0.0)
-
-    @assert P.dim == 3
-    @assert P.pdim == 3
-
-    @inbounds for a in 1:numNodes
-        g = SVector(
-            ∂h[1, (k-1)*numNodes+a],
-            ∂h[2, (k-1)*numNodes+a],
-            ∂h[3, (k-1)*numNodes+a]
-        )
-
-        dN1 = dot(g, t1)
-        dN2 = dot(g, t2)
-
-        colx = (a - 1)*3 + 1
-        coly = (a - 1)*3 + 2
-        colz = (a - 1)*3 + 3
-
-        # ε11 = ∂(u⋅t1)/∂s1
-        B[1, colx] = dN1 * t1[1]
-        B[1, coly] = dN1 * t1[2]
-        B[1, colz] = dN1 * t1[3]
-
-        # ε22 = ∂(u⋅t2)/∂s2
-        B[2, colx] = dN2 * t2[1]
-        B[2, coly] = dN2 * t2[2]
-        B[2, colz] = dN2 * t2[3]
-
-        # γ12 = ∂(u⋅t1)/∂s2 + ∂(u⋅t2)/∂s1
-        B[3, colx] = dN2 * t1[1] + dN1 * t2[1]
-        B[3, coly] = dN2 * t1[2] + dN1 * t2[2]
-        B[3, colz] = dN2 * t1[3] + dN1 * t2[3]
-    end
-
-    return B
-end
-
 struct DomainSpec
     kind::Symbol     # :Ω vagy :Γ
     name::String
@@ -1074,24 +942,6 @@ function _eval_coefficient_at_gp(Cprep, elem, hgp)
     error("Unsupported prepared coefficient type $(typeof(Cprep))")
 end
 
-@inline function surface_basis_from_J(Jac, k)
-    a1 = SVector(Jac[1,3k-2], Jac[2,3k-2], Jac[3,3k-2])
-    a2 = SVector(Jac[1,3k-1], Jac[2,3k-1], Jac[3,3k-1])
-
-    t1 = a1 / norm(a1)
-
-    a2o = a2 - dot(a2, t1) * t1
-    n2 = norm(a2o)
-
-    if n2 < 1e-12
-        error("surface_basis_from_J: degenerate surface basis.")
-    end
-
-    t2 = a2o / n2
-
-    return t1, t2
-end
-
 """
     assemble_operator(Pu::Problem, 
                       op_u::AbstractOp, 
@@ -1328,45 +1178,17 @@ function assemble_operator(
                     jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
                     Jac = reshape(jac, 3, :)
 
-                    ##############################################################################################################
-                    #@inbounds for k in 1:numIntPoints
-                    #    invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
-                    #end
-
-                    ## physical gradients of basis
-                    #fill!(∂h, 0.0)
-                    #@inbounds for k in 1:numIntPoints, a in 1:numNodes
-                    #    invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
-                    #    gha = ∇h[a*3-2:a*3-(3-dim), k]
-                    #    ∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
-                    #end
-                    ##############################################################################################################
-                    # physical / tangential gradients of basis
-                    fill!(∂h, 0.0)
-
                     @inbounds for k in 1:numIntPoints
-                        Jk = @view Jac[1:dim, 3k-2:3k]
-
-                        if edim == dim
-                            # Standard volume / full-dimensional element
-                            invJkT = inv(Matrix(Jk))'
-                            for a in 1:numNodes
-                                gha = ∇h[a*3-2:a*3-(3-dim), k]
-                                ∂h[1:dim, (k-1)*numNodes+a] .= invJkT * gha
-                            end
-                        else
-                            # Embedded lower-dimensional element:
-                            # e.g. surface element in 3D, line element in 2D/3D.
-                            Jtan = Matrix(Jk[:, 1:edim])
-                            G = Jtan * inv(Jtan' * Jtan)   # maps local derivatives to ambient tangential gradient
-
-                            for a in 1:numNodes
-                                gha = ∇h[a*3-2:a*3-3+edim, k]
-                                ∂h[1:dim, (k-1)*numNodes+a] .= G * gha
-                            end
-                        end
+                        invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
                     end
-                    ##############################################################################################################
+
+                    # physical gradients of basis
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numIntPoints, a in 1:numNodes
+                        invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
+                        gha = ∇h[a*3-2:a*3-(3-dim), k]
+                        ∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
+                    end
 
                     fill!(Ke, 0.0)
 
@@ -1385,10 +1207,7 @@ function assemble_operator(
 
                             w = jacDet[k] * intWeights[k] * Cgp
 
-                            if op_u isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_u isa AxialGradOp || op_u isa TangentialGradOp
+                            if op_u isa AxialGradOp || op_u isa TangentialGradOp
                                 invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
                                 Jk = inv(invJk')
                                 t = Jk[:,1]
@@ -1397,10 +1216,7 @@ function assemble_operator(
                             else
                                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
                             end
-                            if op_s isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_s isa AxialGradOp || op_s isa TangentialGradOp
+                            if op_s isa AxialGradOp || op_s isa TangentialGradOp
                                 invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
                                 Jk = inv(invJk')
                                 t = Jk[:,1]
@@ -1416,10 +1232,7 @@ function assemble_operator(
 
                             w = jacDet[k] * intWeights[k]
 
-                            if op_u isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_u isa AxialGradOp
+                            if op_u isa AxialGradOp
                                 invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
                                 Jk = inv(invJk')
                                 t = Jk[:,1]
@@ -1428,10 +1241,7 @@ function assemble_operator(
                             else
                                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
                             end
-                            if op_s isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_s isa AxialGradOp
+                            if op_s isa AxialGradOp
                                 invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
                                 Jk = inv(invJk')
                                 t = Jk[:,1]
@@ -2137,95 +1947,11 @@ Create a weak-form DSL axial gradient operator applied to `P`.
 # Returns
 - `OpApplied`: Operator application object representing `t ⋅ ∇u`.
 
-Directional derivative operator along a prescribed axial direction.
-
-Computes derivatives projected onto a predefined axis.
-
-Unlike `TangentialGrad`, the axial direction is prescribed explicitly and
-does not depend on the local element geometry.
-
-Typical applications include:
-
-- anisotropic constitutive laws,
-- fiber-reinforced materials,
-- projected strain operators,
-- directional transport problems.
-
-See also: `TangentialGrad`
-
 # Example
 ```julia
 K = ∫(AxialGrad(Pu) ⋅ (E*A) ⋅ AxialGrad(Pu); Ω="truss")
 """
 AxialGrad(P) = OpApplied(P, AxialGradOp())
-
-"""
-    SurfaceGrad(P)
-
-Surface gradient operator for fields defined on embedded surfaces.
-
-Computes tangential derivatives on a 2D manifold embedded in 3D using
-local tangent bases evaluated at Gauss points.
-
-For scalar fields, returns the tangential surface gradient.
-For vector fields, returns the full tangential displacement gradient.
-
-The operator is orientation independent and invariant with respect to the
-global coordinate system.
-
-Typical applications include:
-
-- membrane mechanics,
-- surface PDEs,
-- Laplace–Beltrami operators,
-- surface diffusion.
-
-See also: `SurfaceDiv`, `SurfaceSymGrad`
-"""
-SurfaceGrad(P) = OpApplied(P, SurfaceGradOp())
-
-"""
-    SurfaceDiv(P)
-
-Surface divergence operator.
-
-Computes the tangential divergence of vector fields defined on embedded
-surfaces.
-
-The operator uses local tangent bases evaluated at Gauss points.
-
-See also: `SurfaceGrad`, `SurfaceSymGrad`
-"""
-SurfaceDiv(P) = OpApplied(P, SurfaceDivOp())
-
-"""
-    SurfaceSymGrad(P)
-
-Symmetric tangential gradient operator for membrane mechanics.
-
-Computes the membrane strain vector on a surface embedded in 3D.
-
-The operator evaluates strains in a local tangent coordinate system
-constructed at each Gauss point.
-
-For vector fields, the operator returns:
-
-    [ε11, ε22, γ12]
-
-where `1` and `2` denote the local tangent directions.
-
-Only in-surface membrane strains are included.
-Bending strains are not part of this operator.
-
-Typical usage:
-
-```julia
-K = ∫(SurfaceSymGrad(Pu) ⋅ C ⋅ SurfaceSymGrad(Pu))
-```
-
-See also: SurfaceGrad, SurfaceDiv
-"""
-SurfaceSymGrad(P) = OpApplied(P, SurfaceSymGradOp())
 
 function _check_scalarfields(expr)
 

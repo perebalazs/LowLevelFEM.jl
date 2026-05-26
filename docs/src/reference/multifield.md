@@ -391,6 +391,199 @@ D2 = R' * D * R
 Kmat = ∫(Grad(Pu) ⋅ A2' ⋅ D2 ⋅ A2 ⋅ Grad(Pu); Ω="body")
 ```
 
+# Embedded surface operators
+
+## `SurfaceGrad(P)` for scalar fields
+
+Let
+
+```math
+p = p(x,y,z)
+```
+
+be a scalar field defined on a surface embedded in 3D.
+
+`SurfaceGrad(P)` returns the tangential surface gradient.
+
+### Embedded surface in 3D
+
+| Operator         | Size | Component ordering |
+| ---------------- | ----:| ------------------ |
+| `SurfaceGrad(P)` | `2`  | `[p,1, p,2]`       |
+
+where:
+
+* `1` and `2` denote the local tangent directions
+  `(t₁,t₂)` evaluated at the Gauss point.
+
+Mathematically:
+
+```math
+\nabla_\Gamma p
+=
+\begin{bmatrix}
+\partial p/\partial s_1 \\
+\partial p/\partial s_2
+\end{bmatrix}
+```
+
+---
+
+## `SurfaceGrad(Pu)` for vector fields
+
+For a 3D vector field defined on a surface:
+
+| Operator          | Size | Component ordering                     |
+| ----------------- | ----:| -------------------------------------- |
+| `SurfaceGrad(Pu)` | `6`  | `[ux,1, ux,2, uy,1, uy,2, uz,1, uz,2]` |
+
+Equivalent matrix form:
+
+```math
+\nabla_\Gamma u =
+\begin{bmatrix}
+u_{x,1} & u_{x,2} \\
+u_{y,1} & u_{y,2} \\
+u_{z,1} & u_{z,2}
+\end{bmatrix}
+```
+
+---
+
+## `SurfaceSymGrad(Pu)` for vector fields
+
+`SurfaceSymGrad(Pu)` returns the membrane strain vector
+in the local tangent coordinate system.
+
+| Operator             | Size | Component ordering |
+| -------------------- | ----:| ------------------ |
+| `SurfaceSymGrad(Pu)` | `3`  | `[ε11, ε22, γ12]`  |
+
+Explicitly:
+
+```math
+\operatorname{SurfaceSymGrad}(u)
+=
+\begin{bmatrix}
+u_{1,1} \\
+u_{2,2} \\
+u_{1,2} + u_{2,1}
+\end{bmatrix}
+```
+
+where:
+
+* `1` and `2` are the local tangent directions.
+
+The operator returns membrane strains only.
+No bending terms are included.
+
+---
+
+## `SurfaceDiv(Pu)` for vector fields
+
+| Operator         | Size | Component ordering |
+| ---------------- | ----:| ------------------ |
+| `SurfaceDiv(Pu)` | `1`  | `[ux,1 + uy,2]`    |
+
+or equivalently:
+
+```math
+\nabla_\Gamma \cdot u
+```
+
+---
+
+# Directional / axial operators
+
+## `AxialGrad`
+
+Directional gradient operator along a prescribed axial direction.
+
+This operator computes derivatives projected onto a specified axis.
+
+Mathematically:
+
+```math
+\nabla_a u = a \cdot \nabla u
+```
+
+where:
+
+* (a) is the prescribed axial direction.
+
+Unlike `SurfaceGrad`, the operator does not derive its directions from the local surface geometry.
+
+Typical applications:
+
+* beam/spar-like formulations,
+* fiber-reinforced materials,
+* directional constitutive laws,
+* anisotropic transport,
+* projected strain operators.
+
+---
+
+## `AxialGrad(P)` for scalar fields
+
+| Operator       | Size | Component ordering |
+| -------------- | ----:| ------------------ |
+| `AxialGrad(P)` | `1`  | `[p,a]`            |
+
+Equivalent form:
+
+```math
+\frac{\partial p}{\partial a}
+```
+
+---
+
+## `AxialGrad(Pu)` for vector fields
+
+| Operator        | Size | Component ordering   |
+| --------------- | ----:| -------------------- |
+| `AxialGrad(Pu)` | `3`  | `[ux,a, uy,a, uz,a]` |
+
+Equivalent form:
+
+```math
+\frac{\partial u}{\partial a}
+```
+
+## `TangentialGrad(P)` for scalar fields
+
+Tangential derivative along a 1D embedded manifold.
+
+| Operator            | Size | Component ordering |
+| ------------------- | ----:| ------------------ |
+| `TangentialGrad(P)` | `1`  | `[p,s]`            |
+
+where:
+
+* `s` denotes the local tangent direction.
+
+Mathematically:
+
+```math
+\nabla_t p
+=
+\frac{\partial p}{\partial s}
+```
+
+---
+
+## `TangentialGrad(Pu)` for vector fields
+
+| Operator             | Size | Component ordering   |
+| -------------------- | ----:| -------------------- |
+| `TangentialGrad(Pu)` | `3`  | `[ux,s, uy,s, uz,s]` |
+
+Equivalent form:
+
+```math
+\frac{\partial u}{\partial s}
+```
+
 ## Weak-Form DSL Operators
 
 ```@docs
@@ -398,11 +591,15 @@ Grad
 Div
 Curl
 SymGrad
+ε
 Id
 TensorDiv
 Adv
 AxialGrad
-ε
+TangentialGrad
+SurfaceGrad
+SurfaceDiv
+SurfaceSymGrad
 ```
 
 ## Weak-Form Integration
