@@ -3372,6 +3372,112 @@ This heuristic ensures continuity of the time axis but does NOT represent
 physical time. The resulting time vector should therefore be used only for
 post-processing and visualization, not for time-accurate analysis.
 """
+function mergeFields(uu::Vector{<:LowLevelFEM.AbstractField})
+    nn = length(uu)
+    nn ≥ 1 || error("mergeFields: empty input vector.")
+
+    u0 = uu[1]
+    T = typeof(u0)
+
+    nodal = isNodal(u0)
+    elemwise = isElementwise(u0)
+
+    nodal || elemwise || error("mergeFields: invalid field storage.")
+
+    for u in uu
+        typeof(u) == T ||
+            error("mergeFields: all fields must have the same concrete type.")
+        u.model === u0.model ||
+            error("mergeFields: all fields must belong to the same model.")
+        u.type == u0.type ||
+            error("mergeFields: all fields must have the same field type.")
+        isNodal(u) == nodal ||
+            error("mergeFields: cannot mix nodal and elementwise fields.")
+    end
+
+    n = sum(u.nsteps for u in uu)
+    t = zeros(n)
+
+    function shifted_time!(t, c, ui, prev)
+        ns = ui.nsteps
+
+        if c == 0
+            if ns == 1
+                t[1] = 1.0
+            else
+                t[1:ns] .= ui.t
+            end
+            return
+        end
+
+        dt = prev.nsteps > 1 ? prev.t[end] - prev.t[end-1] : 1.0
+
+        if ns == 1
+            t[c+1] = t[c] + dt
+        else
+            t[c+1:c+ns] .= (ui.t .- ui.t[1]) .+ (t[c] + dt)
+        end
+    end
+
+    if nodal
+        ndofs = size(u0.a, 1)
+        a = zeros(ndofs, n)
+
+        c = 0
+        for i in 1:nn
+            ui = uu[i]
+            size(ui.a, 1) == ndofs ||
+                error("mergeFields: nodal dof mismatch.")
+
+            ns = ui.nsteps
+            a[:, c+1:c+ns] .= ui.a
+            shifted_time!(t, c, ui, i == 1 ? ui : uu[i-1])
+            c += ns
+        end
+
+        return T([], a, t, [], n, u0.type, u0.model)
+
+    else
+        numElem = copy(u0.numElem)
+        ne = length(numElem)
+        A = Vector{Matrix{Float64}}(undef, ne)
+
+        index0 = Dict(e => k for (k, e) in enumerate(numElem))
+
+        for u in uu
+            Set(u.numElem) == Set(numElem) ||
+                error("mergeFields: element sets must be identical.")
+        end
+
+        for (ie, elem) in enumerate(numElem)
+            rows = size(u0.A[ie], 1)
+            A[ie] = zeros(rows, n)
+        end
+
+        c = 0
+        for i in 1:nn
+            ui = uu[i]
+            idx = Dict(e => k for (k, e) in enumerate(ui.numElem))
+
+            ns = ui.nsteps
+            for elem in numElem
+                ie0 = index0[elem]
+                iei = idx[elem]
+
+                size(ui.A[iei], 1) == size(A[ie0], 1) ||
+                    error("mergeFields: element $elem has incompatible local size.")
+
+                A[ie0][:, c+1:c+ns] .= ui.A[iei]
+            end
+
+            shifted_time!(t, c, ui, i == 1 ? ui : uu[i-1])
+            c += ns
+        end
+
+        return T(A, [;;], t, numElem, n, u0.type, u0.model)
+    end
+end
+#=
 function mergeFields(uu::Vector{<:AbstractField})
     nn = length(uu)
     @assert nn ≥ 1
@@ -3421,6 +3527,7 @@ function mergeFields(uu::Vector{<:AbstractField})
     T = typeof(uu[1])
     return T([], a, t, [], n, uu[1].type, uu[1].model)
 end
+=#
 
 """
     Eigen(f, ϕ, model)
@@ -6229,7 +6336,7 @@ function showElementResults(F::Union{ScalarField,VectorField,TensorField}, comp;
     elseif F isa ScalarField && isElementwise(F)
         return showScalarResults(F, name=name, visible=visible, smooth=smooth, factor=factor)
     elseif isNodal(F)
-        return showDoFResults(F, comp, name=name, visible=visible, smooth=smooth, factor=factor)
+        return showDoFResults(F, comp, name=name, visible=visible, factor=factor)
     else
         error("showElementResults: type is '$(F.type)'")
     end
