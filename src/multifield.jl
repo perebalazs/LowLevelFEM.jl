@@ -1328,41 +1328,34 @@ function assemble_operator(
                     jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
                     Jac = reshape(jac, 3, :)
 
-                    ##############################################################################################################
-                    #@inbounds for k in 1:numIntPoints
-                    #    invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
-                    #end
-
-                    ## physical gradients of basis
-                    #fill!(∂h, 0.0)
-                    #@inbounds for k in 1:numIntPoints, a in 1:numNodes
-                    #    invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
-                    #    gha = ∇h[a*3-2:a*3-(3-dim), k]
-                    #    ∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
-                    #end
+                    @inbounds for k in 1:numIntPoints
+                        invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
+                    end
+                    
                     ##############################################################################################################
                     # physical / tangential gradients of basis
                     fill!(∂h, 0.0)
 
                     @inbounds for k in 1:numIntPoints
-                        Jk = @view Jac[1:dim, 3k-2:3k]
-
                         if edim == dim
-                            # Standard volume / full-dimensional element
-                            invJkT = inv(Matrix(Jk))'
+                            # old full-dimensional behaviour
+                            invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
+
                             for a in 1:numNodes
                                 gha = ∇h[a*3-2:a*3-(3-dim), k]
-                                ∂h[1:dim, (k-1)*numNodes+a] .= invJkT * gha
+                                ∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
                             end
+
                         else
-                            # Embedded lower-dimensional element:
-                            # e.g. surface element in 3D, line element in 2D/3D.
+                            # embedded lower-dimensional element:
+                            # surface element in 3D, line element in 2D/3D
+                            Jk = @view Jac[1:dim, 3k-2:3k]
                             Jtan = Matrix(Jk[:, 1:edim])
-                            G = Jtan * inv(Jtan' * Jtan)   # maps local derivatives to ambient tangential gradient
+                            Gtan = Jtan * inv(Jtan' * Jtan)
 
                             for a in 1:numNodes
                                 gha = ∇h[a*3-2:a*3-3+edim, k]
-                                ∂h[1:dim, (k-1)*numNodes+a] .= G * gha
+                                ∂h[1:dim, (k-1)*numNodes+a] .= Gtan * gha
                             end
                         end
                     end
@@ -1388,10 +1381,14 @@ function assemble_operator(
                             if op_u isa SurfaceSymGradOp
                                 t1, t2 = surface_basis_from_J(Jac, k)
                                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_u isa AxialGradOp || op_u isa TangentialGradOp
+                            elseif op_u isa AxialGradOp
                                 invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
                                 Jk = inv(invJk')
                                 t = Jk[:,1]
+                                t = t / norm(t)
+                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                            elseif op_u isa TangentialGradOp
+                                t = Jac[1:Pu.dim, 3k-2]
                                 t = t / norm(t)
                                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
                             else
@@ -1400,10 +1397,14 @@ function assemble_operator(
                             if op_s isa SurfaceSymGradOp
                                 t1, t2 = surface_basis_from_J(Jac, k)
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_s isa AxialGradOp || op_s isa TangentialGradOp
+                            elseif op_s isa AxialGradOp
                                 invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
                                 Jk = inv(invJk')
                                 t = Jk[:,1]
+                                t = t / norm(t)
+                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                            elseif op_s isa TangentialGradOp
+                                t = Jac[1:Ps.dim, 3k-2]
                                 t = t / norm(t)
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
                             else
@@ -1425,6 +1426,10 @@ function assemble_operator(
                                 t = Jk[:,1]
                                 t = t / norm(t)
                                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                            elseif op_u isa TangentialGradOp
+                                t = Jac[1:Pu.dim, 3k-2]
+                                t = t / norm(t)
+                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
                             else
                                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
                             end
@@ -1435,6 +1440,10 @@ function assemble_operator(
                                 invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
                                 Jk = inv(invJk')
                                 t = Jk[:,1]
+                                t = t / norm(t)
+                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                            elseif op_s isa TangentialGradOp
+                                t = Jac[1:Ps.dim, 3k-2]
                                 t = t / norm(t)
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
                             else
