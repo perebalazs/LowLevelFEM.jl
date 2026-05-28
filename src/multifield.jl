@@ -1188,8 +1188,30 @@ function assemble_operator(
         @assert out_u == out_s
     
     elseif coefficient isa AbstractMatrix
-        @assert size(coefficient,1) == out_s
-        @assert size(coefficient,2) == out_u
+        #@assert size(coefficient,1) == out_s
+        #@assert size(coefficient,2) == out_u
+        if size(coefficient,1) != out_s || size(coefficient,2) != out_u
+            error("""
+                Coefficient matrix size mismatch.
+
+                Test operator:
+                    $(typeof(op_s))
+                output dimension = $out_s
+
+                Trial operator:
+                    $(typeof(op_u))
+                output dimension = $out_u
+
+                Expected coefficient size:
+                    ($out_s, $out_u)
+
+                Got:
+                    $(size(coefficient))
+
+                Coefficient type:
+                    $(typeof(coefficient))
+                """)
+        end
     
     elseif coefficient isa AbstractVector
         if length(coefficient) == 1 &&
@@ -1204,8 +1226,32 @@ function assemble_operator(
             @assert A1 isa AbstractMatrix
             @assert An isa AbstractMatrix
     
-            @assert size(A1,1) == out_s
-            @assert size(An,2) == out_u
+            if size(A1,1) != out_s || size(An,2) != out_u
+                error("""
+                Coefficient chain size mismatch.
+
+                    Test operator:
+                        $(typeof(op_s))
+                    output dimension = $out_s
+
+                    Trial operator:
+                        $(typeof(op_u))
+                    output dimension = $out_u
+
+                    Expected:
+                        first matrix rows = $out_s
+                        last matrix cols  = $out_u
+
+                    Got:
+                        size(A1) = $(size(A1))
+                        size(An) = $(size(An))
+
+                    Coefficient chain types:
+                        $(typeof.(coefficient))
+                    """)
+            end
+            #@assert size(A1,1) == out_s
+            #@assert size(An,2) == out_u
     
             for i in 1:length(coefficient)-1
                 Ai = coefficient[i]
