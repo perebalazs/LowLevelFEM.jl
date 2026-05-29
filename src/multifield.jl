@@ -1099,7 +1099,8 @@ end
                       op_s::AbstractOp; 
                       coefficient::Union{Number,ScalarField}=1.0, 
                       weight=nothing, 
-                      domain=nothing)
+                      domain=nothing,
+                      gauss=:full)
 
 Assemble the sparse matrix corresponding to the bilinear form
 
@@ -1158,6 +1159,13 @@ Optional weighting tensor applied to the operator value. (Deprecated: kept for b
 
 Optional domain specification (`Ω` or `Γ`).
 
+`gauss`
+
+Number of integration points.
+    `:full`       2order+1
+    `:reduced`    2order-1
+    Int           2order+1 + Int
+
 # Returns
 
 `SystemMatrix`
@@ -1169,7 +1177,8 @@ function assemble_operator(
     Ps::Problem, op_s::AbstractOp;
     coefficient::Union{Number,ScalarField,AbstractMatrix,AbstractVector}=1.0,
     weight=nothing,
-    domain=nothing)
+    domain=nothing,
+    gauss=:full)
 
     @assert Pu.name == Ps.name "Both problems must refer to the same gmsh model/mesh."
     @assert Pu.dim == Ps.dim "Both problems must have the same spatial dimension."
@@ -1335,7 +1344,13 @@ function assemble_operator(
                 et = elemTypes[itype]
                 _, _, order, numNodes::Int64, _, _ = gmsh.model.mesh.getElementProperties(et)
 
-                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                gorder = gauss == :reduced ? max(1, 2order - 1) :
+                    gauss == :full    ? (2order + 1) :
+                    gauss isa Int     ? max(1, 2order+1 + gauss) :
+                    (2order + 1)
+
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(gorder))
+                #intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
                 numIntPoints = length(intWeights)
 
                 _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
@@ -1641,6 +1656,10 @@ Arguments
 - `rhs` : scalar, vector, tensor field, or numeric vector
 - `weight` : optional quadrature weight or coefficient
 - `domain` : domain specification (`Ω` or `Γ`)
+- `gauss` : Number of integration points.
+        `:full`       2order+1
+        `:reduced`    2order-1
+        Int           2order+1 + Int
 
 Returns
 -------
@@ -1651,7 +1670,8 @@ function assemble_linear(
     op::AbstractOp,
     g;
     weight = nothing,
-    domain = nothing)
+    domain = nothing,
+    gauss = :full)
 
     gmsh.model.setCurrent(P.name)
 
@@ -1701,10 +1721,16 @@ function assemble_linear(
                 _, _, order, numNodes, _, _ =
                     gmsh.model.mesh.getElementProperties(et)
 
-                intPoints, intWeights =
-                    gmsh.model.mesh.getIntegrationPoints(
-                        et, "Gauss" * string(2order + 1)
-                    )
+                gorder = gauss == :reduced ? max(1, 2order - 1) :
+                    gauss == :full    ? (2order + 1) :
+                    gauss isa Int     ? max(1,2order+1 + gauss) :
+                    (2order + 1)
+
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(gorder))
+                #intPoints, intWeights =
+                #    gmsh.model.mesh.getIntegrationPoints(
+                #        et, "Gauss" * string(2order + 1)
+                #    )
 
                 numIntPoints = length(intWeights)
 
@@ -2316,6 +2342,10 @@ struct BilinearTerm
     a::OpApplied
     coef
     b::OpApplied
+    gauss::Any
+    function BilinearTerm(a::OpApplied, coef, b::OpApplied)
+        return new(a, coef, b, :full)
+    end
 end
 
 """
@@ -2861,7 +2891,7 @@ Boundary physical group name.
 
 `SystemMatrix` or `ScalarField`, `VectorField`, `TensorField`
 """
-function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
 
     _check_scalarfields(expr)
 
@@ -2871,7 +2901,7 @@ function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing)
 
 end
 
-function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -2889,12 +2919,13 @@ function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing)
         t.a.op;
         coefficient = t.coef,
         domain = dom,
-        weight = weight
+        weight = weight,
+        gauss = gauss
     )
 
 end
 
-function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -2912,12 +2943,13 @@ function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing)
         a.op;
         coefficient = 1.0,
         domain = dom,
-        weight = weight
+        weight = weight,
+        gauss = gauss
     )
 
 end
 
-function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -2949,7 +2981,7 @@ function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing)
 
 end
 
-function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing)
+function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
 
     return ∫(LinearTerm(mc); Ω=Ω, Γ=Γ, weight=weight)
 
