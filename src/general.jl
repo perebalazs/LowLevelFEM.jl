@@ -1039,6 +1039,12 @@ struct ScalarField <: AbstractField
     function ScalarField(problem::Problem, dataField::Vector; steps=1, tmin=0.0, tmax=tmin+(steps-1))
         gmsh.model.setCurrent(problem.name)
         nodeTags, coords, _ = gmsh.model.mesh.getNodes()
+        ###################################################
+        nodeIndex = Dict{Int,Int}()
+        for (i, tag) in enumerate(nodeTags)
+            nodeIndex[tag] = i
+        end
+        ###################################################
         type = :scalar
         nsteps = steps
         t = range(start=tmin, stop=tmax, length=steps)
@@ -1063,10 +1069,11 @@ struct ScalarField <: AbstractField
                             for it in 1:steps
                                 for k in 1:numNodes
                                     nodeTag = elemNodeTags[i][(j-1)*numNodes + k]
+                                    ii = nodeIndex[nodeTag]
                                     if f isa Function
-                                        x = coords[3*nodeTag - 2]
-                                        y = coords[3*nodeTag - 1]
-                                        z = coords[3*nodeTag]
+                                        x = coords[3*ii - 2]
+                                        y = coords[3*ii - 1]
+                                        z = coords[3*ii]
                                         if applicable(f,1,2,3,4)
                                             sc1[k, it] = f(x, y, z, t[it])
                                         elseif applicable(f,1,2,3)
