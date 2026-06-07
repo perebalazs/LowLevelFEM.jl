@@ -63,7 +63,7 @@ gmsh.initialize()
 gmsh.open("your_model.geo")
 
 mat = Material("body", E=2e5, ν=0.3)
-prob = Problem([mat], type=:PlaneStress)  # :Solid, :PlaneStrain, :AxiSymmetric, :HeatConduction, ...
+prob = Problem([mat], type=:PlaneStrain)  # :Solid, :PlaneStress, :AxiSymmetric, :HeatConduction, ...
 
 bc    = displacementConstraint("supp", ux=0, uy=0)
 force = load("load", fy=-1)
@@ -91,6 +91,8 @@ u = solveDisplacement(K, f, support=[bc])
 
 E = mat.E
 ν = mat.ν
+
+u = expandTo3D(u)
 
 A = (u ∘ ∇ + ∇ ∘ u) / 2
 I = TensorField(prob, "body", [1 0 0; 0 1 0; 0 0 1])
