@@ -186,14 +186,31 @@ function +(A::ScalarField, B::ScalarField)
             a_index = Dict(e => i for (i, e) in enumerate(A.numElem))
             b_index = Dict(e => i for (i, e) in enumerate(B.numElem))
 
-            sec = intersect(A.numElem, B.numElem)
-            dif1 = setdiff(A.numElem, B.numElem)
-            dif2 = setdiff(B.numElem, A.numElem)
+            #sec = intersect(A.numElem, B.numElem)
+            #dif1 = setdiff(A.numElem, B.numElem)
+            #dif2 = setdiff(B.numElem, A.numElem)
+            nums = vcat(A.numElem, setdiff(B.numElem, A.numElem))
 
-            total = length(sec) + length(dif1) + length(dif2)
-            C = Vector{Matrix{Float64}}(undef, total)
-            num = Vector{Int}(undef, total)
+            #total = length(sec) + length(dif1) + length(dif2)
+            #C = Vector{Matrix{Float64}}(undef, total)
+            C = Vector{Matrix{Float64}}(undef, length(nums))
+            #num = Vector{Int}(undef, total)
 
+            for (pos, e) in enumerate(nums)
+                ia = get(a_index, e, nothing)
+                ib = get(b_index, e, nothing)
+
+                if ia !== nothing && ib !== nothing
+                    C[pos] = A.A[ia] .+ B.A[ib]
+                elseif ia !== nothing
+                    C[pos] = copy(A.A[ia])
+                else
+                    C[pos] = copy(B.A[ib])
+                end
+            end
+
+            return ScalarField(C, [;;], A.t, nums, A.nsteps, A.type, A.model)
+            #=
             pos = 1
 
             @inbounds for e in sec
@@ -219,6 +236,7 @@ function +(A::ScalarField, B::ScalarField)
             end
 
             return ScalarField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
+            =#
         else
             error("+(A::ScalarField, B::ScalarField): ScalarField type ($(A.type) and $(B.type)) is not yet implemented.")
         end

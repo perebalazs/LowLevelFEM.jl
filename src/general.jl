@@ -501,12 +501,10 @@ struct Problem
                 error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
             end
 
-            #method = bandwidth == :none ? :RCMK : bandwidth
-            oldTags, newTags = gmsh.model.mesh.computeRenumbering(bandwidth, elemTags)
-            #permOldTags = sortperm(oldTags)
-            #sortNewTags = 1:length(oldTags)
-            #newTags[permOldTags] = sortNewTags
-            gmsh.model.mesh.renumberNodes(oldTags, newTags)
+            if bandwidth != :none
+                oldTags, newTags = gmsh.model.mesh.computeRenumbering(bandwidth, elemTags)
+                gmsh.model.mesh.renumberNodes(oldTags, newTags)
+            end
         end
 
         nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes()
@@ -6643,11 +6641,14 @@ function showScalarResults(S0; name="ScalarField", visible=false, smooth=false, 
         σcomp = []
         sizehint!(σcomp, length(numElem))
         for i in 1:length(S.numElem)
+            #=
             sc = zeros(div(size(σ[i], 1), dim))
             for j in 1:(div(size(σ[i], 1), dim))
                 sc[j] = σ[i][j, jj]
             end
             push!(σcomp, sc)
+            =#
+            push!(σcomp, σ[i][:, jj])
         end
         gmsh.view.addModelData(SS, jj-1, problem.name, "ElementNodeData", numElem, σcomp, t[jj], nc)
     end
