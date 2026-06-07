@@ -3,7 +3,7 @@ name: Bug report
 about: Report a reproducible problem in LowLevelFEM.jl
 title: "[Bug]: "
 labels: bug
-assignees: ""
+assignees: ''
 
 ---
 
