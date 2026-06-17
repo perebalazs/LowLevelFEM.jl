@@ -93,6 +93,7 @@ end
 #end
 
 function initialize(problem::Problem)
+    problem.geometry.h !== nothing && return
     h0 = ScalarField(problem, problem.geometry.nameGap, (x, y, z) -> z)
     h0 = elementsToNodes(h0)
     h = projectScalarField(h0, from=problem.geometry.nameGap, to=problem.material[1].phName, gap=true)
