@@ -104,6 +104,20 @@ function initialize(problem::Problem)
     problem.geometry.dhdx = dhdx
 end
 
+function initialize(geo::Geometry, mat, non::Int, field, rhs_field)
+    mname = gmsh.model.getCurrent()
+    nameTopSurface = geo.nameGap
+    nameVolume = geo.nameVolume
+    prob = Problem(mname, :ScalarField, 2, 1, mat, 1.0, non, geo, field, rhs_field)
+    h0 = ScalarField(prob, nameTopSurface, (x, y, z) -> z)
+    h0 = elementsToNodes(h0)
+    h = projectScalarField(h0, from=nameTopSurface, to=nameVolume, gap=true)
+    h0 = nodesToElements(h, onPhysicalGroup=nameVolume)
+    dhdx = elementsToNodes(∂x(h0))
+    geo.h = h
+    geo.dhdx = dhdx
+end
+
 """
     projectScalarField(pp::Union{ScalarField,Vector{ScalarField}}; from="", to="", gap=false, binSize=0.7)
 

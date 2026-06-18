@@ -384,7 +384,7 @@ struct Problem
     Problem(name, type, dim, pdim, material, thickness, non, geometry) =
         new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none,
-        nameTopSurface="", nameVolume="", dim::Int=3,
+        nameTopSurface=nothing, nameVolume=nothing, dim::Int=3,
         field::Symbol=:unknown, rhs_field::Symbol=:rhs)
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field)
@@ -442,6 +442,10 @@ struct Problem
             dim0 > 3 && error("Problem: dimension of a :ScalarField problem must be equal or less than three.")
             dim = dim0
             pdim = 1
+            if nameTopSurface !== nothing && nameVolume !== nothing
+                geometry = Geometry(nameTopSurface, nameVolume)
+                dim = geometry.dim
+            end
         elseif type == :VectorField
             dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
             dim0 == 1 && error("Problem: dimension of a :VectorField problem must be greater than one.")
@@ -509,6 +513,9 @@ struct Problem
 
         nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes()
         non = length(nodeTags)
+        if nameTopSurface !== nothing && nameVolume !== nothing
+            initialize(geometry, mat, non, field, rhs_field)
+        end
         return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field)
     end
 end
@@ -6055,14 +6062,12 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
         nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
         append!(nodeTags, nT)
     end
-    if problem.type == :Reynolds
-        if problem.geometry.nameVolume ≠ ""
-            phName = problem.geometry.nameVolume
-            tag = getTagForPhysicalName(phName)
-            edim = getDimForPhysicalName(phName)
-            nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
-            append!(nodeTags, nT)
-        end
+    if problem.geometry.nameVolume ≠ "" && problem.geometry.nameGap ≠ ""
+        phName = problem.geometry.nameVolume
+        tag = getTagForPhysicalName(phName)
+        edim = getDimForPhysicalName(phName)
+        nT, coords = gmsh.model.mesh.getNodesForPhysicalGroup(edim, tag)
+        append!(nodeTags, nT)
     end
     #end #########################################################################
     
