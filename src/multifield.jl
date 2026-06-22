@@ -1074,6 +1074,60 @@ function _eval_coefficient_at_gp(Cprep, elem, hgp)
     error("Unsupported prepared coefficient type $(typeof(Cprep))")
 end
 
+function sparse_like_mul(A, B)
+    C = zeros(promote_type(eltype(A), eltype(B)), size(A,1), size(B,2))
+
+    @inbounds for i in axes(A,1), k in axes(A,2)
+        Aik = A[i,k]
+        iszero(Aik) && continue
+
+        for j in axes(B,2)
+            Bkj = B[k,j]
+            iszero(Bkj) && continue
+            C[i,j] += Aik * Bkj
+        end
+    end
+
+    return C
+end
+
+function _small_matmul(A, B)
+    if A isa Number || B isa Number
+        return A * B
+    end
+
+    nzA = count(!iszero, A)
+    nzB = count(!iszero, B)
+
+    if nzA * nzB < length(A) * length(B) ÷ 2
+        return sparse_like_mul(A, B)
+    else
+        return A * B
+    end
+end
+
+function _eval_coefficient_chain_at_gp(Cprep::AbstractVector, elem, hgp)
+    Cgp = _eval_coefficient_at_gp(Cprep[1], elem, hgp)
+
+    @inbounds for i in 2:length(Cprep)
+        Mi = _eval_coefficient_at_gp(Cprep[i], elem, hgp)
+
+        Cgp = Cgp * Mi
+
+        #if Cgp isa Number
+        #    Cgp = Cgp * Mi
+        #elseif Mi isa Number
+        #    Cgp = Cgp * Mi
+        #else
+        #    Cgp = Cgp * Mi
+        #end
+        
+        #Cgp = _small_matmul(Cgp, Mi)
+    end
+
+    return Cgp
+end
+
 @inline function surface_basis_from_J(Jac, k)
     a1 = SVector(Jac[1,3k-2], Jac[2,3k-2], Jac[3,3k-2])
     a2 = SVector(Jac[1,3k-1], Jac[2,3k-1], Jac[3,3k-1])
@@ -1277,10 +1331,9 @@ function assemble_operator(
     # weight dimension check
     # ------------------------------------------------------------
     if weight !== nothing
-        w1, w2 = size(weight)
-        if w1 != out_u || w2 != out_u
-            error("Weight dimension mismatch: expected $(out_u)×$(out_u) but got $(w1)×$(w2)")
-        end
+        # optional: csak Number vagy ScalarField legyen
+        (weight isa Number || weight isa ScalarField) ||
+        error("weight must be Number or ScalarField")
     end
 
     # ------------------------------------------------------------
@@ -1324,6 +1377,7 @@ function assemble_operator(
             DomainSpec(:Ω, String(phName))
 
         Cprep = _prepare_coefficient(coefficient, dom_here)
+        Wprep = weight === nothing ? nothing : _prepare_coefficient(weight, dom_here)
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
@@ -1427,17 +1481,21 @@ function assemble_operator(
                     # integrate
                     @inbounds for k in 1:numIntPoints
                         if Cprep isa AbstractVector
+                            #=
                             mats = [_eval_coefficient_at_gp(M, elem, view(h, :, k)) for M in Cprep]
                             Cgp = mats[1]
                             for i in 2:length(mats)
                                 Cgp = matmul_sf(Cgp, mats[i])
                             end
+                            =#
+                            Cgp = _eval_coefficient_chain_at_gp(Cprep, elem, view(h, :, k))
                         else
                             Cgp = _eval_coefficient_at_gp(Cprep, elem, view(h, :, k))
                         end
-                        if Cgp isa Number && weight === nothing
+                        wcoef = Wprep === nothing ? 1.0 : _eval_coefficient_at_gp(Wprep, elem, view(h, :, k))
+                        if Cgp isa Number #&& weight === nothing
 
-                            w = jacDet[k] * intWeights[k] * Cgp
+                            w = jacDet[k] * intWeights[k] * Cgp * wcoef
 
                             if op_u isa SurfaceSymGradOp
                                 t1, t2 = surface_basis_from_J(Jac, k)
@@ -1474,9 +1532,9 @@ function assemble_operator(
 
                             mul!(Ke, transpose(Bs), Bu, w, 1.0)
 
-                        elseif Cgp isa AbstractMatrix && weight === nothing
+                        elseif Cgp isa AbstractMatrix #&& weight === nothing
 
-                            w = jacDet[k] * intWeights[k]
+                            w = jacDet[k] * intWeights[k] * wcoef
 
                             if op_u isa SurfaceSymGradOp
                                 t1, t2 = surface_basis_from_J(Jac, k)
