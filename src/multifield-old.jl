@@ -1074,257 +1074,36 @@ function _eval_coefficient_at_gp(Cprep, elem, hgp)
     error("Unsupported prepared coefficient type $(typeof(Cprep))")
 end
 
-
-# ---------------------------------------------------------------------------
-# Small local matrix multiplication with optional structural sparsity
-# ---------------------------------------------------------------------------
-#
-# This layer is intentionally hidden below the weak-form DSL.  The user can keep
-# writing paper-like expressions such as
-#
-#     ∫( SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu) )
-#
-# while the local Gauss-point products try to avoid multiplications by known
-# zero entries.  If a factor is not sparse enough, the code falls back to dense
-# BLAS-backed mul!.
-
-struct MatrixPattern
-    rows::Vector{Int}
-    cols::Vector{Int}
-    nnz::Int
-    m::Int
-    n::Int
-end
-
-MatrixPattern(m::Integer, n::Integer) = MatrixPattern(Int[], Int[], 0, Int(m), Int(n))
-
-@inline density(p::MatrixPattern) = p.nnz / (p.m * p.n)
-
-"""
-    detect_pattern(M; tol=0.0)
-
-Detect the nonzero pattern of a small local matrix.
-
-The default `tol=0.0` is deliberately strict: entries that are exactly zero are
-treated as structural zeros, but accidentally small nonzero entries are kept.
-For finite element operator matrices this is usually the safe choice.
-"""
-function detect_pattern(M::AbstractMatrix; tol::Real=0.0)
-    m, n = size(M)
-    rows = Int[]
-    cols = Int[]
-    sizehint!(rows, length(M))
-    sizehint!(cols, length(M))
-
-    @inbounds for j in 1:n
-        for i in 1:m
-            mij = M[i, j]
-            if tol == 0
-                if !iszero(mij)
-                    push!(rows, i)
-                    push!(cols, j)
-                end
-            else
-                if abs(mij) > tol
-                    push!(rows, i)
-                    push!(cols, j)
-                end
-            end
-        end
-    end
-
-    return MatrixPattern(rows, cols, length(rows), m, n)
-end
-
-@inline function sparse_enough(
-    p::MatrixPattern;
-    density_limit::Real = 0.40,
-    min_saved_entries::Integer = 2
-)
-    total = p.m * p.n
-    return (total - p.nnz) >= min_saved_entries && density(p) <= density_limit
-end
-
-@inline function _scale_or_zero!(R, beta)
-    if beta == 0
-        fill!(R, 0.0)
-    elseif beta != 1
-        R .*= beta
-    end
-    return R
-end
-
-"""
-    mul_dense_sparse!(R, A, B, patB, alpha=1.0, beta=0.0)
-
-Compute `R = alpha*A*B + beta*R`, using only the nonzero entries of `B`.
-"""
-function mul_dense_sparse!(
-    R::AbstractMatrix,
-    A::AbstractMatrix,
-    B::AbstractMatrix,
-    patB::MatrixPattern,
-    alpha::Number = 1.0,
-    beta::Number = 0.0
-)
-    _scale_or_zero!(R, beta)
-
-    @inbounds for q in 1:patB.nnz
-        k = patB.rows[q]
-        j = patB.cols[q]
-        bkj = B[k, j]
-        iszero(bkj) && continue
-
-        αb = alpha * bkj
-        for i in axes(A, 1)
-            R[i, j] += A[i, k] * αb
-        end
-    end
-
-    return R
-end
-
-"""
-    mul_sparse_dense!(R, A, B, patA, alpha=1.0, beta=0.0)
-
-Compute `R = alpha*A*B + beta*R`, using only the nonzero entries of `A`.
-"""
-function mul_sparse_dense!(
-    R::AbstractMatrix,
-    A::AbstractMatrix,
-    B::AbstractMatrix,
-    patA::MatrixPattern,
-    alpha::Number = 1.0,
-    beta::Number = 0.0
-)
-    _scale_or_zero!(R, beta)
-
-    @inbounds for q in 1:patA.nnz
-        i = patA.rows[q]
-        k = patA.cols[q]
-        aik = A[i, k]
-        iszero(aik) && continue
-
-        αa = alpha * aik
-        for j in axes(B, 2)
-            R[i, j] += αa * B[k, j]
-        end
-    end
-
-    return R
-end
-
-"""
-    mul_sparse_sparse!(R, A, B, patA, patB, alpha=1.0, beta=0.0)
-
-Compute `R = alpha*A*B + beta*R`, using the nonzero entries of both factors.
-
-This is fully general and does not assume symmetry.  The matrices are expected
-to be small local FE matrices, so a simple pattern loop is often adequate.
-"""
-function mul_sparse_sparse!(
-    R::AbstractMatrix,
-    A::AbstractMatrix,
-    B::AbstractMatrix,
-    patA::MatrixPattern,
-    patB::MatrixPattern,
-    alpha::Number = 1.0,
-    beta::Number = 0.0
-)
-    _scale_or_zero!(R, beta)
-
-    @inbounds for qa in 1:patA.nnz
-        i = patA.rows[qa]
-        k = patA.cols[qa]
-        aik = A[i, k]
-        iszero(aik) && continue
-
-        αa = alpha * aik
-
-        for qb in 1:patB.nnz
-            kb = patB.rows[qb]
-            kb == k || continue
-
-            j = patB.cols[qb]
-            bkj = B[kb, j]
-            iszero(bkj) && continue
-
-            R[i, j] += αa * bkj
-        end
-    end
-
-    return R
-end
-
-"""
-    mul_opt!(R, A, B; patA=nothing, patB=nothing, alpha=1.0, beta=0.0, ...)
-
-General local matrix product with sparse-pattern acceleration and dense fallback.
-
-No symmetry is assumed.  If neither side is sparse enough according to the
-detected/provided pattern, this falls back to `mul!(R, A, B, alpha, beta)`.
-"""
-function mul_opt!(
-    R::AbstractMatrix,
-    A::AbstractMatrix,
-    B::AbstractMatrix;
-    patA::Union{MatrixPattern,Nothing}=nothing,
-    patB::Union{MatrixPattern,Nothing}=nothing,
-    alpha::Number = 1.0,
-    beta::Number = 0.0,
-    density_limit::Real = 0.40,
-    tol::Real = 0.0
-)
-    patA === nothing && (patA = detect_pattern(A; tol=tol))
-    patB === nothing && (patB = detect_pattern(B; tol=tol))
-
-    sparseA = sparse_enough(patA; density_limit=density_limit)
-    sparseB = sparse_enough(patB; density_limit=density_limit)
-
-    if sparseA && sparseB
-        return mul_sparse_sparse!(R, A, B, patA, patB, alpha, beta)
-    elseif sparseA
-        return mul_sparse_dense!(R, A, B, patA, alpha, beta)
-    elseif sparseB
-        return mul_dense_sparse!(R, A, B, patB, alpha, beta)
-    else
-        return mul!(R, A, B, alpha, beta)
-    end
-end
-
-# Convenience allocation wrapper used in coefficient chains.
-function mul_opt(
-    A::AbstractMatrix,
-    B::AbstractMatrix;
-    patA::Union{MatrixPattern,Nothing}=nothing,
-    patB::Union{MatrixPattern,Nothing}=nothing,
-    density_limit::Real = 0.40,
-    tol::Real = 0.0
-)
-    R = Matrix{promote_type(eltype(A), eltype(B))}(undef, size(A, 1), size(B, 2))
-    return mul_opt!(R, A, B;
-        patA=patA,
-        patB=patB,
-        alpha=1.0,
-        beta=0.0,
-        density_limit=density_limit,
-        tol=tol
-    )
-end
-
-# Backward-compatible helper names kept for experiments/notebooks.
 function sparse_like_mul(A, B)
-    patA = detect_pattern(A)
-    patB = detect_pattern(B)
     C = zeros(promote_type(eltype(A), eltype(B)), size(A,1), size(B,2))
-    return mul_sparse_sparse!(C, A, B, patA, patB)
+
+    @inbounds for i in axes(A,1), k in axes(A,2)
+        Aik = A[i,k]
+        iszero(Aik) && continue
+
+        for j in axes(B,2)
+            Bkj = B[k,j]
+            iszero(Bkj) && continue
+            C[i,j] += Aik * Bkj
+        end
+    end
+
+    return C
 end
 
 function _small_matmul(A, B)
     if A isa Number || B isa Number
         return A * B
     end
-    return mul_opt(A, B)
+
+    nzA = count(!iszero, A)
+    nzB = count(!iszero, B)
+
+    if nzA * nzB < length(A) * length(B) ÷ 2
+        return sparse_like_mul(A, B)
+    else
+        return A * B
+    end
 end
 
 function _eval_coefficient_chain_at_gp(Cprep::AbstractVector, elem, hgp)
@@ -1333,11 +1112,17 @@ function _eval_coefficient_chain_at_gp(Cprep::AbstractVector, elem, hgp)
     @inbounds for i in 2:length(Cprep)
         Mi = _eval_coefficient_at_gp(Cprep[i], elem, hgp)
 
-        if Cgp isa Number || Mi isa Number
-            Cgp = Cgp * Mi
-        else
-            Cgp = mul_opt(Cgp, Mi)
-        end
+        Cgp = Cgp * Mi
+
+        #if Cgp isa Number
+        #    Cgp = Cgp * Mi
+        #elseif Mi isa Number
+        #    Cgp = Cgp * Mi
+        #else
+        #    Cgp = Cgp * Mi
+        #end
+        
+        #Cgp = _small_matmul(Cgp, Mi)
     end
 
     return Cgp
@@ -1649,11 +1434,7 @@ function assemble_operator(
                     end
                 end
 
-                #tmpBu = similar(Bu)
-    
-                patBu = nothing
-                patBsT = nothing
-                #patCgp = nothing
+                tmpBu = similar(Bu)
 
                 # element loop
                 @inbounds for e in 1:nel
@@ -1749,18 +1530,7 @@ function assemble_operator(
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
                             end
 
-                            if patBu === nothing
-                                patBu = detect_pattern(Bu)
-                            end
-                            if patBsT === nothing
-                                patBsT = detect_pattern(transpose(Bs))
-                            end
-                            mul_opt!(Ke, transpose(Bs), Bu;
-                                patA=patBsT,
-                                patB=patBu,
-                                alpha=w,
-                                beta=1.0
-                            )
+                            mul!(Ke, transpose(Bs), Bu, w, 1.0)
 
                         elseif Cgp isa AbstractMatrix #&& weight === nothing
 
@@ -1799,30 +1569,8 @@ function assemble_operator(
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
                             end
 
-                            if patBu === nothing
-                                patBu = detect_pattern(Bu)
-                            end
-                            if patBsT === nothing
-                                patBsT = detect_pattern(transpose(Bs))
-                            end
-                            patCgp = detect_pattern(Cgp)
-
-                            # tmp = Bs' * Cgp
-                            mul_opt!(tmp, transpose(Bs), Cgp;
-                                patA=patBsT,
-                                patB=patCgp,
-                                alpha=1.0,
-                                beta=0.0
-                            )
-
-                            # Ke += w * tmp * Bu
-                            #patTmp = detect_pattern(tmp)
-                            mul_opt!(Ke, tmp, Bu;
-                                patA=nothing,
-                                patB=patBu,
-                                alpha=w,
-                                beta=1.0
-                            )
+                            mul!(tmp, transpose(Bs), Cgp) # Here Cgp was transposed
+                            mul!(Ke, tmp, Bu, w, 1.0)
 
                         else
                             error("assemble_operator error")
