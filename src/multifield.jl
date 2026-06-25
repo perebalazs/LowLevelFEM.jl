@@ -41,6 +41,17 @@ Matrix chain coefficients
 where `A,B,C` may be matrices containing `Number` or `ScalarField`
 entries.
 
+Compound operator sums
+
+    B = A ⋅ Grad(Pu) + G ⋅ Pu
+    K = ∫(B' ⋅ D ⋅ B; Ω="body", weight=2π*r)
+or
+    K = ∫(B' ⋅ D ⋅ B * (2π*r); Ω="body")
+
+The sum is expanded into ordinary bilinear terms and assembled using the
+standard bilinear assembler. Each term may carry its own quadrature rule via
+`full(...)` and `reduced(...)`.
+
 The implementation is designed to be
 
 - transparent
@@ -64,6 +75,7 @@ export TangentialGrad
 export SurfaceGrad
 export SurfaceDiv
 export SurfaceSymGrad
+export full, reduced
 
 export ∫
 export ∫Ω
@@ -1422,7 +1434,15 @@ which is evaluated at Gauss points as
 
 `weight`
 
-Optional weighting tensor applied to the operator value. (Deprecated: kept for backward compatibility.)
+Optional scalar quadrature weight multiplying the integrand at each Gauss
+point. It may be a `Number` or a `ScalarField`.
+
+This is useful for geometry-related weights such as the axisymmetric factor
+`2πr`:
+
+    ∫(B' ⋅ D ⋅ B; Ω="body", weight=2π*r)
+
+The weight is not treated as a matrix coefficient.
 
 `domain`
 
@@ -2647,7 +2667,19 @@ end
 # ------------------------------------------------------------
 # Bilinear term
 # ------------------------------------------------------------
+"""
+    BilinearTerm(a, coef, b)
 
+Internal representation of a bilinear weak-form term.
+
+Represents
+
+    ∫ (a(v))' * coef * b(u)
+
+where `a` is the test-side operator and `b` is the trial-side operator.
+`coef` may be a scalar, a matrix, or a matrix chain containing `Number`
+and `ScalarField` entries.
+"""
 struct BilinearTerm
     a::OpApplied
     coef
@@ -2960,7 +2992,7 @@ end
 # Expression building
 # ------------------------------------------------------------
 
-import Base: +, -, *
+import Base: +, -, *, adjoint, transpose
 
 +(a::WeakExpr, b::WeakExpr) = WeakSum(a, b)
 
@@ -3336,6 +3368,334 @@ KΓ = ∫Γ("loaded_boundary", Id(Pu) ⋅ Id(Pu))
 ∫Γ(name, expr) = ∫(expr; Γ=name)
 
 const ε = SymGrad
+
+###############################################################
+# Compound operators ##########################################
+###############################################################
+
+"""
+    ChainSumTerm(chain, gauss)
+
+Internal storage for one term of a compound operator expression.
+
+`chain` is usually an `OpApplied` or a `MatrixChain`.
+`gauss` stores the preferred integration rule for this term.
+"""
+struct ChainSumTerm
+    chain::Any
+    gauss::Any
+end
+
+"""
+    ChainSum(terms)
+
+Symbolic sum of operator chains.
+
+Example:
+
+```julia
+B = Grad(Pu) ⋅ A + Pu ⋅ G
+```
+
+stores two terms without assembling anything.
+"""
+struct ChainSum
+    terms::Vector{ChainSumTerm}
+end
+
+"""
+TransposedChain(chain)
+
+Symbolic transpose marker for compound expressions.
+
+This does not assemble or numerically transpose anything immediately.
+It is interpreted during expansion of the bilinear form.
+"""
+struct TransposedChain
+    chain::Any
+end
+
+"""
+CompoundChain(left, mats)
+
+Temporary object representing
+
+```
+left ⋅ M1 ⋅ M2 ⋯
+```
+
+before the right-hand side is supplied.
+"""
+struct CompoundChain
+    left::Any
+    mats::Vector{Any}
+end
+
+"""
+CompoundBilinear(left, mats, right)
+
+Temporary object representing
+
+```
+left ⋅ M1 ⋅ M2 ⋯ ⋅ right
+```
+
+where `left` and/or `right` may be `ChainSum`.
+"""
+struct CompoundBilinear
+    left::Any
+    mats::Vector{Any}
+    right::Any
+end
+
+struct CompoundBilinearWeight
+    CB::CompoundBilinear
+    weight::Any
+end
+
+*(A::CompoundBilinear, B) = CompoundBilinearWeight(A, B)
+
+withgauss(chain, gauss) = ChainSumTerm(chain, gauss)
+
+"""
+    full(chain)
+    reduced(chain)
+
+Attach a preferred quadrature rule to one term of a compound operator sum.
+
+Example:
+
+    B = full(A ⋅ Grad(Pu)) + reduced(G ⋅ Pu)
+    K = ∫(B' ⋅ D ⋅ B; Ω="body", gauss=:auto)
+
+With `gauss=:auto`, equal-rule products keep their rule; mixed products
+default to `:full`.
+"""
+full(chain) = withgauss(chain, :full)
+reduced(chain) = withgauss(chain, :reduced)
+
+_as_sumterm(t::ChainSumTerm) = t
+_as_sumterm(x) = ChainSumTerm(x, :full)
+
+_chain_sum(xs...) = ChainSum([_as_sumterm(x) for x in xs])
+
+_is_chain_object(x) =
+    x isa OpApplied ||
+    x isa MatrixChain ||
+    x isa ChainSum ||
+    x isa ChainSumTerm ||
+    x isa TransposedChain
+
+function _coeff_mats(c)
+    if c isa AbstractMatrix
+        _check_coeff_matrix(c)
+        return Any[c]
+    elseif c isa TensorField
+        return Any[tensorfield_to_matrix(c)]
+    elseif c isa Number || c isa ScalarField
+        return Any[c]
+    else
+        error("Compound operator: invalid coefficient type $(typeof(c)).")
+    end
+end
+
+function _op_and_mats(x)
+    if x isa OpApplied
+        return x, Any[]
+    elseif x isa MatrixChain
+        return x.a, copy(x.mats)
+    else
+        error("Compound operator term must be OpApplied or MatrixChain, got $(typeof(x)).")
+    end
+end
+
+struct _SideTerm
+    chain::Any
+    transposed::Bool
+    gauss::Any
+end
+
+function _side_terms(x; transposed=false)
+    if x isa TransposedChain
+        return _side_terms(x.chain; transposed=(!transposed))
+    elseif x isa ChainSum
+        return [_SideTerm(t.chain, transposed, t.gauss) for t in x.terms]
+
+    elseif x isa ChainSumTerm
+        return [_SideTerm(x.chain, transposed, x.gauss)]
+
+    elseif x isa OpApplied || x isa MatrixChain
+        return [_SideTerm(x, transposed, :full)]
+
+    else
+        error("Compound operator: invalid side type $(typeof(x)).")
+    end
+end
+
+function _maybe_transpose_mats(mats, transposed::Bool)
+    if transposed
+        return Any[adjoint(M) for M in reverse(mats)]
+    else
+        return copy(mats)
+    end
+end
+
+function _select_gauss(left::_SideTerm, right::_SideTerm, gauss)
+    gauss !== :auto && return gauss
+    if left.gauss == right.gauss
+        return left.gauss
+    end
+
+    return :full
+end
+
+function _compress_mats(mats)
+    isempty(mats) && return 1.0
+
+    C = mats[1]
+    for i in 2:length(mats)
+        C = C * mats[i]
+    end
+
+    return C
+end
+
+function _make_bilinear_term(left::_SideTerm, middle::Vector{Any}, right::_SideTerm)
+    left_op, left_mats = _op_and_mats(left.chain)
+    right_op, right_mats = _op_and_mats(right.chain)
+    mats = Any[
+        #_maybe_transpose_mats(left_mats, left.transposed)...,
+        left_mats...,
+        middle...,
+        #_maybe_transpose_mats(right_mats, right.transposed)...
+        adjoint.(reverse(right_mats))...
+    ]
+
+    coef = isempty(mats) ? 1.0 : mats
+
+    #coef = _compress_mats(mats)
+
+    return BilinearTerm(left_op, coef, right_op)
+end
+
+#function _coeff_mats(c)
+#    if c isa AbstractMatrix
+#        return Any[c]
+#    elseif c isa Number || c isa ScalarField || c isa TensorField
+#        return Any[c]
+#    else
+#        error("Compound operator: invalid coefficient type $(typeof(c)).")
+#    end
+#end
+
+# ---------------------------------------------------------------------------
+
+# Addition: build ChainSum
+
+# ---------------------------------------------------------------------------
+
++(a::ChainSum, b::ChainSum) =
+    ChainSum([a.terms...; b.terms...])
+
++(a::ChainSum, b::Union{OpApplied,MatrixChain,ChainSumTerm,TransposedChain}) =
+    ChainSum([a.terms...; _as_sumterm(b)])
+
++(a::Union{OpApplied,MatrixChain,ChainSumTerm,TransposedChain}, b::ChainSum) =
+    ChainSum([_as_sumterm(a); b.terms...])
+
++(a::Union{OpApplied,MatrixChain,ChainSumTerm,TransposedChain},
+    b::Union{OpApplied,MatrixChain,ChainSumTerm,TransposedChain}) =
+    _chain_sum(a, b)
+
+# ---------------------------------------------------------------------------
+
+# Symbolic transpose
+
+# ---------------------------------------------------------------------------
+
+adjoint(x::Union{ChainSum,ChainSumTerm,MatrixChain,OpApplied}) =
+    TransposedChain(x)
+
+transpose(x::Union{ChainSum,ChainSumTerm,MatrixChain,OpApplied}) =
+    TransposedChain(x)
+
+# ---------------------------------------------------------------------------
+
+# Dot products involving ChainSum / TransposedChain
+
+# ---------------------------------------------------------------------------
+
+function ⋅(left::Union{ChainSum,TransposedChain,ChainSumTerm}, c)
+    return CompoundChain(left, _coeff_mats(c))
+end
+
+function ⋅(cc::CompoundChain, c)
+    append!(cc.mats, _coeff_mats(c))
+    return cc
+end
+
+function ⋅(cc::CompoundChain, right::Union{ChainSum,TransposedChain,ChainSumTerm,OpApplied,MatrixChain})
+    return CompoundBilinear(cc.left, cc.mats, right)
+end
+
+function ⋅(left::Union{ChainSum,TransposedChain,ChainSumTerm},
+    right::Union{ChainSum,TransposedChain,ChainSumTerm,OpApplied,MatrixChain})
+    return CompoundBilinear(left, Any[], right)
+end
+
+function ⋅(left::Union{OpApplied,MatrixChain},
+    right::Union{ChainSum,TransposedChain,ChainSumTerm})
+    return CompoundBilinear(left, Any[], right)
+end
+
+function ⋅(A::AbstractMatrix, op::OpApplied)
+    return op ⋅ adjoint(A)
+end
+
+function ⋅(A::AbstractMatrix, ch::MatrixChain)
+    return ch ⋅ adjoint(A)
+end
+
+function ⋅(A::Union{Number,ScalarField}, op::OpApplied)
+    return op ⋅ A
+end
+
+# ---------------------------------------------------------------------------
+
+# Integral wrapper
+
+# ---------------------------------------------------------------------------
+
+function ∫(expr::CompoundBilinear;
+    Ω=nothing, Γ=nothing, weight=nothing,
+    gauss=:auto)
+    #@show typeof(expr.left)
+    #@show typeof(expr.right)
+
+    left_terms = _side_terms(expr.left)
+    right_terms = _side_terms(expr.right)
+    #@show left_terms
+    #@show right_terms
+
+    K = nothing
+
+    for LL in left_terms
+        for R in right_terms
+            bt = _make_bilinear_term(LL, expr.mats, R)
+            #@show bt
+            g = _select_gauss(LL, R, gauss)
+
+            Ki = ∫(bt; Ω=Ω, Γ=Γ, weight=weight, gauss=g)
+            K = K === nothing ? Ki : K + Ki
+        end
+    end
+
+    return K
+end
+
+∫(expr::CompoundBilinearWeight; Ω=nothing, Γ=nothing, gauss=:auto) = ∫(expr.CB; Ω=Ω, Γ=Γ, weight=expr.weight, gauss=gauss)
+
+########################################################################
 
 """
     multifield_bc_data(K::SystemMatrix,
