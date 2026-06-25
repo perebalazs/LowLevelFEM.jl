@@ -3023,12 +3023,13 @@ promote_term(t::WeakTerm) = t
 # Scalar multiplication
 ###############################################################
 
-
+#=
 *(c::Union{Number,ScalarField}, t::BilinearTerm) =
     BilinearTerm(t.a, c, t.b)
 
 *(t::BilinearTerm, c::Union{Number,ScalarField}) =
     BilinearTerm(t.a, c, t.b)
+=#
 
 *(op::OpApplied, c::Union{Number,ScalarField}) =
     MatrixChain(op, Any[c])
@@ -3460,12 +3461,37 @@ struct CompoundBilinear
     right::Any
 end
 
+#=
 struct CompoundBilinearWeight
     CB::CompoundBilinear
     weight::Any
 end
 
 *(A::CompoundBilinear, B) = CompoundBilinearWeight(A, B)
+
+struct LinearTermWeight
+    CB::LinearTerm
+    weight::Any
+end
+
+*(A::LinearTerm, B) = LinearTermWeight(A, B)
+=#
+
+struct WeightedTerm
+    term::Any
+    weight::Any
+end
+
+Base.:*(t::Union{BilinearTerm,LinearTerm,CompoundBilinear}, w::Union{Number,ScalarField}) =
+    WeightedTerm(t, w)
+
+Base.:*(w::Union{Number,ScalarField}, t::Union{BilinearTerm,LinearTerm,CompoundBilinear}) =
+    WeightedTerm(t, w)
+
+function ∫(wt::WeightedTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
+    weight === nothing || error("Weight specified both as `* weight` and keyword `weight=...`.")
+    return ∫(wt.term; Ω=Ω, Γ=Γ, weight=wt.weight, gauss=gauss)
+end
 
 withgauss(chain, gauss) = ChainSumTerm(chain, gauss)
 
@@ -3705,7 +3731,8 @@ function ∫(expr::CompoundBilinear;
     return K
 end
 
-∫(expr::CompoundBilinearWeight; Ω=nothing, Γ=nothing, gauss=:auto) = ∫(expr.CB; Ω=Ω, Γ=Γ, weight=expr.weight, gauss=gauss)
+#∫(expr::CompoundBilinearWeight; Ω=nothing, Γ=nothing, gauss=:auto) = ∫(expr.CB; Ω=Ω, Γ=Γ, weight=expr.weight, gauss=gauss)
+#∫(expr::LinearTermWeight; Ω=nothing, Γ=nothing, gauss=:auto) = ∫(expr.CB; Ω=Ω, Γ=Γ, weight=expr.weight, gauss=gauss)
 
 ########################################################################
 
