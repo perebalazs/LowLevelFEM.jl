@@ -2036,6 +2036,10 @@ function assemble_linear(
         Gprep = domain === nothing ?
             _prepare_coefficient(g, DomainSpec(:Ω, phName)) :
             _prepare_coefficient(g, domain)
+        Wprep = weight === nothing ? nothing :
+            domain === nothing ?
+            _prepare_coefficient(weight, DomainSpec(:Ω, phName)) :
+            _prepare_coefficient(weight, domain)
 
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
 
@@ -2109,7 +2113,14 @@ function assemble_linear(
 
                     for k in 1:numIntPoints
 
-                        w = jacDet[k] * intWeights[k]
+                        wcoef = 1.0
+
+                        if Wprep !== nothing
+                            wcoef = _eval_coefficient_at_gp(Wprep, elem, view(h, :, k))
+                            wcoef isa Number || error("assemble_linear: weight must evaluate to a scalar.")
+                        end
+
+                        w = jacDet[k] * intWeights[k] * wcoef
 
                         build_B!(B, op, P, k, h, ∂h, numNodes)
 
@@ -3318,7 +3329,8 @@ function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
         op,
         rhs;
         domain = dom,
-        weight = weight
+        weight = weight,
+        gauss = gauss
     )
 
 end
