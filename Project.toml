@@ -1,6 +1,6 @@
 name = "LowLevelFEM"
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
-version = "1.13.18"
+version = "1.13.19"
 authors = ["Balázs Pere"]
 documentation = "https://perebalazs.github.io/LowLevelFEM.jl/stable/"
 homepage = "https://github.com/perebalazs/LowLevelFEM.jl"

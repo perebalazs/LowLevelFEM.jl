@@ -3482,6 +3482,24 @@ struct WeightedTerm
     weight::Any
 end
 
+promote_term(t::WeightedTerm) = WeakTerm(t.weight, t.term)
+
+Base.:+(a::WeightedTerm, b::WeightedTerm) =
+    WeakSum(promote_term(a), promote_term(b))
+
+Base.:+(a::WeightedTerm, b::BilinearTerm) =
+    WeakSum(promote_term(a), promote_term(b))
+
+Base.:+(a::BilinearTerm, b::WeightedTerm) =
+    WeakSum(promote_term(a), promote_term(b))
+
+Base.:-(t::WeightedTerm) =
+    WeakTerm(-t.weight, t.term)
+
+Base.:-(a::WeightedTerm, b::WeightedTerm) = a + (-b)
+Base.:-(a::WeightedTerm, b::BilinearTerm) = a + (-b)
+Base.:-(a::BilinearTerm, b::WeightedTerm) = a + (-b)
+
 Base.:*(t::Union{BilinearTerm,LinearTerm,CompoundBilinear}, w::Union{Number,ScalarField}) =
     WeightedTerm(t, w)
 
