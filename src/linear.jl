@@ -2888,8 +2888,8 @@ function elasticSupportMatrix(problem, elSupports)
         kx = kx !== nothing ? kx : 0
         ky = ky !== nothing ? ky : 0
         kz = kz !== nothing ? kz : 0
-        h = get(vals, :h, nothing)
-        hc = h !== nothing ? h : 0
+        hh = get(vals, :h, nothing)
+        hc = hh !== nothing ? hh : 0
         if problem.pdim == 3
             f = [0, 0, 0]
         elseif problem.pdim == 2
@@ -2949,10 +2949,10 @@ function elasticSupportMatrix(problem, elSupports)
                             y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
                             z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
                         end
-                        if h !== nothing && problem.pdim == 1
+                        if hh !== nothing && problem.pdim == 1
                             f[1] = hc
                         end
-                        if kx !== nothing
+                        if hh === nothing
                             f[1] = isa(kx, Function) ? kx(x, y, z) : kx
                         end
                         if problem.pdim > 1

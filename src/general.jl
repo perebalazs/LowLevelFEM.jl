@@ -4028,7 +4028,7 @@ Types:
 function heatConvection(name; h=nothing, T∞=nothing)
     h === nothing || T∞ === nothing &&
         error("heatSource: h and T∞ must be specified.")
-    return BoundaryCondition(name, h=h, T=T∞)
+    return BoundaryCondition(name, h=h, T∞=T∞)
 end
 
 """
@@ -6380,7 +6380,7 @@ function showStrainResults(q::TensorField; name="StrainField", visible=false, ff
     end
 end
 
-function showHeatFluxResults(q::VectorField; name="VectorField", visible=false, ff = 0, factor=0)
+function showHeatFluxResults(q::VectorField; name="VectorField", visible=false, smooth=false, ff = 0, factor=0)
     if q isa VectorField
         showHeatFluxResults(q, :vector, name=name, visible=visible, smooth=smooth)
     else
