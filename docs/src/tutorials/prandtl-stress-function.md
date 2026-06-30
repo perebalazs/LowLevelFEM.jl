@@ -1,11 +1,12 @@
-# Linear Elasticity (2D)
+# Prandtl Torsion
 
-This tutorial will contain a full 2D cantilever workflow with mesh setup,
-material definition, constraints, loading, solving, and stress postprocessing.
+This tutorial demonstrates the finite element solution of the Prandtl stress function for the torsion of prismatic bars. The Prandtl formulation transforms the torsion problem into a scalar Poisson equation, making it an elegant example of the close relationship between elasticity and potential problems.
 
-## Status
+The tutorial covers the complete workflow, including mesh generation, material properties, boundary conditions, solution of the Prandtl stress function, and visualization of the resulting shear stress distribution. 
 
-Placeholder page. Detailed step-by-step content can be migrated from existing example notebooks.
+## Example
+
+[twist-Prandtl.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/twist-Prandtl.ipynb)
 
 ## Related
 

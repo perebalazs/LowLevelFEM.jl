@@ -17,11 +17,12 @@ const DOC_PAGES = [
     "Tutorials" => [
         "Overview" => "tutorials/index.md",
         "Linear Elasticity (2D)" => "tutorials/linear-elasticity-2d.md",
-        "Heat Conduction (Transient)" => "tutorials/heat-conduction-transient.md",
-        "Modal and Buckling" => "tutorials/modal-and-buckling.md",
-        "Nonlinear Large Deformation" => "tutorials/nonlinear-large-deformation.md",
-        "Multifield Weak-Form DSL" => "tutorials/multifield-weak-form-dsl.md",
-        "Poisson and Custom Operators" => "tutorials/poisson-and-custom-operators.md",
+        "Linear Elasticity (2D axisymmetric)" => "tutorials/linear-elasticity-2d-axi.md",
+        "Transient Elasticity (2D)" => "tutorials/transient-elasticity-2d.md",
+        "Heat Conduction" => "tutorials/heat-conduction.md",
+        "Multifield Weak-Form DSL - Navier-Stokes" => "tutorials/multifield-weak-form-dsl.md",
+        "Displacement Recovery from Strain" => "tutorials/strain-displacement-relation.md",
+        "Torsion of a prismatic bar using the Prandtl stress function" => "tutorials/prandtl-stress-function.md",
         "Legacy Example Gallery" => "tutorials/legacy-examples.md",
     ],
     "Manual" => [

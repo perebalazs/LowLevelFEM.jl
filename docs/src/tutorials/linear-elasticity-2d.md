@@ -5,7 +5,7 @@ An interactive Jupyter notebook with all source code and explanations is availab
 
 ## Example
 
-[]()
+[lin_elast_2D_static.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/lin_elast_2D_static.ipynb)
 
 ## Related
 

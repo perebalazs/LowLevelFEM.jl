@@ -1,11 +1,12 @@
-# Linear Elasticity (2D)
+# Displacement Reconstruction from Strain
 
-This tutorial will contain a full 2D cantilever workflow with mesh setup,
-material definition, constraints, loading, solving, and stress postprocessing.
+This tutorial demonstrates how a displacement field can be reconstructed from a prescribed strain field. Such inverse problems arise in experimental mechanics, digital image correlation (DIC), and strain-based measurement techniques, where strains are available but displacements are not directly measured.
 
-## Status
+The example illustrates how the displacement field can be recovered by solving the corresponding weak form, followed by visualization and validation of the reconstructed results.
 
-Placeholder page. Detailed step-by-step content can be migrated from existing example notebooks.
+## Example
+
+[strain-to-displacement.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/strain-to-displacement.ipynb)
 
 ## Related
 

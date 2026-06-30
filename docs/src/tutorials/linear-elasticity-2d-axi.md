@@ -1,11 +1,17 @@
-# Linear Elasticity (2D)
+# Axisymmetric Linear Elasticity (2D)
 
-This tutorial will contain a full 2D cantilever workflow with mesh setup,
-material definition, constraints, loading, solving, and stress postprocessing.
+This example demonstrates the solution of a two-dimensional axisymmetric linear elasticity problem using LowLevelFEM.
 
-## Status
+The problem is solved in two different ways:
 
-Placeholder page. Detailed step-by-step content can be migrated from existing example notebooks.
+1. using the built-in axisymmetric elasticity solver,
+2. using the weak-form DSL.
+
+The two solutions are then compared to verify the correctness of the DSL implementation.
+
+## Example
+
+[lin_elast_2D_axisymm.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/lin_elast_2D_axisymm.ipynb)
 
 ## Related
 

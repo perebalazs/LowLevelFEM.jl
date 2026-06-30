@@ -1,11 +1,12 @@
-# Heat Conduction (Transient)
+# Steady-State Heat Conduction with Convection
 
-This tutorial will cover transient heat conduction setup with capacity and boundary convection,
-including initial temperature and time integration.
+This tutorial demonstrates the steady-state thermal analysis of a two-dimensional domain with heat conduction and convective boundary conditions. The temperature distribution is obtained by solving the heat conduction equation under prescribed thermal loads and heat exchange with the surrounding environment.
 
-## Status
+The example introduces the complete workflow, including mesh generation, material properties, thermal boundary conditions, convection, solving the system, and visualization of the resulting temperature field.
 
-Placeholder page.
+## Example
+
+[heat_convection_2D_stat.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/heat_convection_2D_stat.ipynb)
 
 ## Related
 
