@@ -19,11 +19,11 @@ bibliography: paper.bib
 
 # Summary
 
-LowLevelFEM.jl is a finite element method (FEM) [@zienkiewicz2005] toolbox written entirely in the Julia programming language [@bezanson2017]. Its design philosophy emphasizes **simplicity, transparency, and performance**, making it suitable for both educational and research purposes in mechanics and engineering. Unlike large frameworks that rely on domain-specific languages or compiled backends, LowLevelFEM provides users with direct access to FEM building blocks in Julia, enabling full control over discretization, assembly, and solution steps.
+LowLevelFEM.jl is a finite element method (FEM) [@zienkiewicz2005] toolbox written entirely in the Julia programming language [@bezanson2017]. Its design philosophy emphasizes **simplicity, transparency, and operator-based weak-form prototyping**, making it suitable for both educational and research purposes in mechanics and engineering. Unlike frameworks that primarily rely on high-level domain-specific languages, LowLevelFEM provides direct access to the underlying FEM building blocks in Julia, enabling full control over discretization, assembly, and solution steps, while also supporting an operator-based DSL for expressing custom weak-form formulations.
 
 The package currently supports two- and three-dimensional solid mechanics problems including plane stress, plane strain, axisymmetric, and 3D solid analyses. Its minimalistic design lowers the entry barrier for students while still offering enough flexibility for advanced users to **inspect and control algorithms step by step, process intermediate results during the solution procedure, and perform operations with scalar, vector, and tensor fields**. LowLevelFEM uses **Gmsh** [@geuzaine2009] as its pre- and post-processor, ensuring compatibility with a widely adopted meshing and visualization tool. The toolbox also supports geometrically nonlinear formulations based on a Total Lagrangian framework and energy-driven constitutive modeling, enabling research-level investigations beyond linear elasticity.
 
-Thanks to Julia’s just-in-time compilation and multiple dispatch, the code remains concise while achieving performance comparable to traditional FEM codes in C/C++ or Fortran. LowLevelFEM is released under the MIT license and distributed via the Julia General registry. Documentation, tutorials, and examples are available at [https://juliahub.com/ui/Packages/General/LowLevelFEM](https://juliahub.com/ui/Packages/General/LowLevelFEM) or [https://perebalazs.github.io/LowLevelFEM.jl/stable/](https://perebalazs.github.io/LowLevelFEM.jl/stable/).
+Thanks to Julia’s just-in-time compilation and multiple dispatch, the implementation remains concise while providing good computational performance for educational and research applications. LowLevelFEM is released under the MIT license and distributed via the Julia General registry. Documentation, including a growing collection of executable Jupyter notebook tutorials, is available at [https://juliahub.com/ui/Packages/General/LowLevelFEM](https://juliahub.com/ui/Packages/General/LowLevelFEM) or [https://perebalazs.github.io/LowLevelFEM.jl/stable/](https://perebalazs.github.io/LowLevelFEM.jl/stable/).
 
 ## Example
 
@@ -32,12 +32,10 @@ Below is a simple example illustrating a typical LowLevelFEM workflow using Gmsh
 ```julia
 using LowLevelFEM
 
-# `gmsh` is exported by LowLevelFEM
-gmsh.initialize()
-gmsh.open("model.geo")
+openGeometry("model.geo")
 
 mat  = Material("body", E=2e5, ν=0.3)
-prob = Problem([mat], type=:PlaneStress)  # :Solid, :PlaneStrain, :AxiSymmetric, :HeatConduction, ...
+prob = Problem([mat], type=:PlaneStrain)  # :Solid, :PlaneStress, :AxiSymmetric, :HeatConduction, ...
 
 bc    = displacementConstraint("supp", ux=0, uy=0)
 force = load("load", fy=-1)
@@ -51,7 +49,6 @@ showStressResults(S)
 showStressResults(S, :sxy, name="Shear stress")
 
 openPostProcessor()
-gmsh.finalize()
 ```
 
 Note: physical group names in the geometry (created in Gmsh) must match the strings used above (e.g., "body", "supp", "load").
@@ -66,10 +63,14 @@ u = solveDisplacement(K, f, support=[bc])
 # Simple Hooke's law stress computation
 E = mat.E
 ν = mat.ν
+# Expand the 2D displacement field for tensor-based stress computation
+u = expandTo3D(u)
 A = (u ∘ ∇ + ∇ ∘ u) / 2
 I = TensorField(prob, "body", [1 0 0; 0 1 0; 0 0 1])
 S = E / (1 + ν) * (A + ν / (1 - 2ν) * trace(A) * I)
 ```
+
+The project repository includes a growing collection of executable Jupyter notebook tutorials that demonstrate both standard workflows and custom weak-form formulations.
 
 # Statement of need
 
@@ -81,9 +82,9 @@ Finite element simulations are essential in many fields of engineering, especial
 LowLevelFEM addresses these challenges by offering a **lightweight Julia-only implementation** that exposes all the core FEM routines directly in the high-level language. This makes the package particularly well-suited for:
 
 * Teaching FEM concepts in undergraduate and graduate courses.
-* Rapid prototyping of new FEM formulations and **non-standard algorithms**.
+* Rapid prototyping of custom finite element formulations, weak-form operators, and **non-standard algorithms**.
 * Research projects where step-by-step inspection of the solution process and manipulation of intermediate fields is required.
-* Demonstrations of Julia’s potential as a performant and expressive language for numerical mechanics [@bezanson2017].
+* Development, testing, and validation of novel finite element formulations.
 
 By combining transparent algorithms with Julia’s scientific ecosystem (e.g. LinearAlgebra.jl, Plots.jl) and by relying on **Gmsh** [@geuzaine2009] for pre- and post-processing, LowLevelFEM serves as a bridge between pedagogy and advanced research workflows. It also complements existing Julia FEM frameworks such as Gridap.jl [@badia2020] and interfaces naturally with linear algebra tools like Arpack.jl [@knyazev2017].
 
@@ -104,17 +105,17 @@ The package separates:
 * solution procedures,  
 * post-processing of scalar, vector, and tensor fields.  
 
-This modular structure allows users to either follow a high-level workflow (`solveDisplacement`, `solveStress`) or construct custom pipelines at a lower level. The implementation leverages Julia’s multiple dispatch and just-in-time compilation to maintain readable code while achieving competitive performance.
+This modular structure allows users to either follow a high-level workflow (`solveDisplacement`, `solveStress`) or construct custom pipelines at a lower level. The implementation leverages Julia’s multiple dispatch and just-in-time compilation to maintain readable code while providing efficient execution for educational and research applications.
 
 In addition to linear formulations, the software includes a Total Lagrangian nonlinear pipeline based on strain energy functions. Constitutive models can be defined through free energy densities, from which stress measures and corresponding tangent operators are automatically derived. This operator-oriented design makes it possible to experiment with alternative bilinear and nonlinear forms without modifying compiled backends.  
 
-The package provides algebraic and differential operations on scalar, vector, and tensor fields, allowing users to compose continuum-mechanics expressions directly in Julia syntax, including, for example, gradient, divergence, tensor contraction, and trace operations defined at the discrete level. This feature is particularly valuable for educational demonstrations and rapid prototyping of new formulations.
+The package provides algebraic and differential operations on scalar, vector, and tensor fields, allowing users to compose continuum-mechanics expressions directly in Julia syntax, including, for example, gradient, divergence, tensor contraction, and trace operations defined at the discrete level. These operators can also be composed to express weak-form formulations directly in Julia, reducing the gap between mathematical notation and executable code. This feature is particularly valuable for educational demonstrations and rapid prototyping of new formulations.
 
 ---
 
 # Research impact statement
 
-LowLevelFEM supports both educational and research activities in computational mechanics. In teaching, it enables students to inspect finite element algorithms step by step without switching languages or interacting with opaque compiled backends. In research, it facilitates rapid prototyping of new constitutive models, nonlinear formulations, and custom operators.  
+LowLevelFEM supports both educational and research activities in computational mechanics. In teaching, it enables students to inspect finite element algorithms step by step without switching languages or interacting with opaque compiled backends. In research, it facilitates rapid prototyping of constitutive models, custom operators, and weak-form formulations, allowing new finite element methods to be expressed in a notation close to their mathematical representation.
 
 The package has been used in undergraduate and graduate mechanics courses and serves as a foundation for ongoing developments in nonlinear and multi-field finite element formulations. Its open-source MIT license and integration with the Julia ecosystem promote reproducible research and extensibility. Ongoing developments aim to extend the framework toward multi-field finite element formulations while preserving the same transparent operator-level philosophy.
 
