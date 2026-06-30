@@ -1,11 +1,11 @@
 # Linear Elasticity (2D)
 
-This tutorial will contain a full 2D cantilever workflow with mesh setup,
-material definition, constraints, loading, solving, and stress postprocessing.
+This tutorial introduces a complete 2D linear elasticity workflow.  
+An interactive Jupyter notebook with all source code and explanations is available below.
 
-## Status
+## Example
 
-Placeholder page. Detailed step-by-step content can be migrated from existing example notebooks.
+[]()
 
 ## Related
 
