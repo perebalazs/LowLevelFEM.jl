@@ -5701,9 +5701,12 @@ Iz = integrate(prob, "body", f)
 function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=0)
     gmsh.model.setCurrent(problem.name)
     f2 = 0
-    if f isa ScalarField
-        f2 = elementsToNodes(f)
-    end
+    #if f isa ScalarField
+    #    f2 = elementsToNodes(f)
+    #end
+    is_elementwise = f isa ScalarField && f.a == [;;]
+    elemToField = is_elementwise ? Dict(f.numElem[i] => i for i in eachindex(f.numElem)) : Dict{Int,Int}()
+    f2 = f isa ScalarField && !is_elementwise ? f : nothing
     DIM = problem.dim
     b = problem.thickness
     ncoord2 = zeros(3 * problem.non)
@@ -5742,6 +5745,11 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                 nodes = elemNodeTags[ii]
                 offset = (l - 1) * numNodes
                 nodeids = nodes[offset + 1 : offset + numNodes]
+                fieldIdx = 0
+                if f isa ScalarField && is_elementwise
+                    fieldIdx = get(elemToField, elem, 0)
+                    fieldIdx == 0 && continue
+                end
                 jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                 Jac = reshape(jac, 3, :)
                 s1 = 0
@@ -5761,6 +5769,8 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                     ff = 0
                     if f isa Function
                         ff = f(x, y, z)
+                    elseif f isa ScalarField && is_elementwise
+                        ff = h[:, j]' * f.A[fieldIdx][:, step]
                     elseif f isa ScalarField
                         #ff = h[:, j]' * f2.a[nnet[l, :]]
                         ff = h[:, j]' * f2.a[nodeids, step]

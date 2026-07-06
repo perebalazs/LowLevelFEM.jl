@@ -196,8 +196,13 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
         else
             error("∇: dimension is $(problem.dim), problem type is $(problem.type).")
         end
+        r.type == :v2D && error("∇: VectorField must be :v3D")
 
+        #@disp phName
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        #@disp dimTags
+        #dimTags = filter(dt -> dt[1] == local_dim, dimTags)
+        #@disp dimTags
 
         @inbounds for idm in 1:length(dimTags)
             edim, etag = dimTags[idm]
@@ -243,18 +248,12 @@ function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
                         dim_et = 3
                         dimJ = dim_et
 
-                        # Jk = 3 × dimJ mátrix
-                        #Jk = @view Jac[1:3, (k-1)*dimJ+1 : k*dimJ]
-                        Jk = @view Jac[1:dimJ, (k-1)*3+1 : k*3]
+                        Jk = @view Jac[1:3, (k-1)*dimJ+1 : k*dimJ]
 
-                        # inv(Jk) = dimJ × 3 (transzponált mapping)
                         invJk = pinv(Matrix(Jk'))        # stabil Moore–Penrose inverz
 
                         # 3×3 blokkba másolás (extra oszlopok nullák)
                         fill!(@view(invJac[1:3, 3*k-2:3*k]), 0.0)
-                        #@views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk'
-                        #@disp (size(invJac[1:3, 3*k-2 : 3*k-3+dimJ]))
-                        #@disp (size(invJk))
                         @views invJac[1:3, 3*k-2 : 3*k-3+dimJ] .= invJk
                         ####################################################################
 
