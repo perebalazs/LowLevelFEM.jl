@@ -5236,6 +5236,12 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
         nom = 1
         phName = onPhysicalGroup
     end
+
+    nodeTags, _, _ = gmsh.model.mesh.getNodes()
+    nodeIndex = Dict{Int,Int}()
+    for (i, tag) in enumerate(nodeTags)
+        nodeIndex[tag] = i
+    end
     
     for ipg in 1:nom
         if onPhysicalGroup == ""
@@ -5272,9 +5278,15 @@ function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysic
                         nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
                     end
                     push!(numElem, elem)
-                    for k in 1:size
-                        nn2[k:size:size*numNodes] = size * nnet[j, 1:numNodes] .- (size - k)
+                    for l in 1:numNodes
+                        idx = nodeIndex[nnet[j, l]]
+                        for k in 1:size
+                            nn2[(l-1)*size + k] = size * idx - (size - k)
+                        end
                     end
+                    #for k in 1:size
+                    #    nn2[k:size:size*numNodes] = size * nnet[j, 1:numNodes] .- (size - k)
+                    #end
                     e = zeros(size*numNodes, nsteps)
                     for k in 1:numNodes
                         H1 = H[k*size-(size-1):k*size, 1:size*numNodes]
