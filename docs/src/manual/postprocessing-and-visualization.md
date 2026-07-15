@@ -20,6 +20,7 @@ The most commonly used visualization functions are:
 - `showStressResults` – stress components and equivalent stress
 - `showStrainResults` – strain components
 - `showHeatFluxResults` – heat flux fields
+- `showElementResults` – element-wise results (e.g. stress, strain, heat flux), which may be discontinuous across element boundaries
 - `plotOnPath` – evaluate and plot results along a user-defined path
 - `probe` – evaluate field values at arbitrary locations
 
