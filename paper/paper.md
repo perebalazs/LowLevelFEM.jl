@@ -119,6 +119,8 @@ LowLevelFEM supports both educational and research activities in computational m
 
 The package has been used in undergraduate and graduate mechanics courses and serves as a foundation for ongoing developments in nonlinear and multi-field finite element formulations. Its open-source MIT license and integration with the Julia ecosystem promote reproducible research and extensibility. Ongoing developments aim to extend the framework toward multi-field finite element formulations while preserving the same transparent operator-level philosophy.
 
+Unlike many FEM frameworks that emphasize high-level abstractions, LowLevelFEM is designed to expose finite element algorithms rather than hide them behind domain-specific interfaces. This enables researchers to prototype, validate, and compare new finite element formulations, constitutive models, and weak-form operators directly in Julia without modifying compiled backends. By keeping matrices, fields, and differential operators explicit and user-accessible, the package provides a transparent environment for algorithm development while remaining suitable for classroom demonstrations and reproducible research.
+
 # AI usage disclosure
 
 Generative AI tools were used for minor language editing and documentation refinement. All scientific concepts, algorithms, and software implementations were designed, developed, and verified by the author.

@@ -1,8 +1,12 @@
 # Performance and Parallel
 
-This section will collect guidance for matrix assembly performance, solver performance,
-and practical parallel execution considerations.
+Performance optimization is currently under active development.
 
-## Status
+Current topics include:
 
-Placeholder page.
+- multithreaded matrix assembly
+- iterative solvers
+- sparse linear algebra
+- benchmarking
+
+This section will grow together with these features.
