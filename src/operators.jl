@@ -8,6 +8,7 @@ import Base.*
 import Base./
 import Base.+
 import Base.-
+import Base.^
 import Base.log
 import Base.sqrt
 import Base.cbrt
@@ -563,7 +564,7 @@ function +(b::Number, AA::ScalarField)
     n = length(A.A)
     C = Vector{Matrix{Float64}}(undef, n)
     @inbounds for i in 1:n
-        C[i] = A.A[i] .+ b
+        C[i] = b .+ A.A[i]
     end
     return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
@@ -586,7 +587,7 @@ function -(b::Number, AA::ScalarField)
     n = length(A.A)
     C = Vector{Matrix{Float64}}(undef, n)
     @inbounds for i in 1:n
-        C[i] = A.A[i] .- b
+        C[i] = b .- A.A[i]
     end
     return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
@@ -618,6 +619,10 @@ end
 adjoint(f::ScalarField) = f
 
 zero(a::ScalarField) = mapScalarField(x->0, a)
+
+function ^(a::ScalarField, b::Number)
+    return mapScalarField((x)->x^b, a)
+end
 
 #=
 function /(AA::ScalarField, b::Number)
