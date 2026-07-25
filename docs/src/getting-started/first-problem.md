@@ -5,8 +5,7 @@ This is the shortest end-to-end linear elasticity workflow.
 ```julia
 using LowLevelFEM
 
-gmsh.initialize()
-gmsh.open("your_model.geo")
+structured_rect_mesh() # uses Gmsh to create mesh
 
 mat = Material("body", E=2e5, ν=0.3)
 prob = Problem([mat], type=:PlaneStress)
@@ -20,7 +19,7 @@ S = solveStress(u)
 showDoFResults(u, :ux)
 showStressResults(S, :s)
 
-gmsh.finalize()
+openPostProcessor()
 ```
 
 ## Next Steps
