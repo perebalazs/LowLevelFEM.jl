@@ -35,7 +35,9 @@ using LowLevelFEM
 openGeometry("model.geo")
 
 mat  = Material("body", E=2e5, ν=0.3)
-prob = Problem([mat], type=:PlaneStrain)  # :Solid, :PlaneStress, :AxiSymmetric, :HeatConduction, ...
+prob = Problem([mat], type=:PlaneStrain)
+# Other problem types: :Solid, :PlaneStress, :AxiSymmetric,
+# :HeatConduction, :PlaneHeatConduction, etc.
 
 bc    = displacementConstraint("supp", ux=0, uy=0)
 force = load("load", fy=-1)
