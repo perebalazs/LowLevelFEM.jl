@@ -2,6 +2,8 @@
 [![](https://img.shields.io/badge/docs-dev-blue.svg)](https://perebalazs.github.io/LowLevelFEM.jl/dev)
 [![](https://img.shields.io/badge/docs-stable-blue.svg)](https://perebalazs.github.io/LowLevelFEM.jl/stable)
 [![codecov](https://codecov.io/gh/perebalazs/LowLevelFEM.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/perebalazs/LowLevelFEM.jl)
+[![status](https://joss.theoj.org/papers/b3ca075c57757edaacbfdf748e1cc6ee/status.svg)](https://joss.theoj.org/papers/b3ca075c57757edaacbfdf748e1cc6ee)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17073982.svg)](https://doi.org/10.5281/zenodo.17073982)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 <!-- [![DOI](https://joss.theoj.org/papers/10.21105/joss.XXXXX/status.svg)](https://doi.org/10.21105/joss.XXXXX) -->
