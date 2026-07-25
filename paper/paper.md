@@ -88,7 +88,7 @@ LowLevelFEM addresses these challenges by offering a lightweight implementation 
 * Research projects where step-by-step inspection of the solution process and manipulation of intermediate fields is required.
 * Development, testing, and validation of novel finite element formulations.
 
-By combining transparent algorithms with Julia’s scientific ecosystem (e.g., LinearAlgebra.jl, Plots.jl) and by relying on **Gmsh** [@geuzaine2009] for pre- and post-processing, LowLevelFEM serves as a bridge between pedagogy and advanced research workflows. It also complements existing Julia FEM frameworks such as Gridap.jl [@badia2020] and interfaces naturally with Arpack.jl [@knyazev2017] for sparse eigenvalue problems, enabling modal analysis and linear buckling calculations.
+By combining transparent algorithms with Julia’s scientific ecosystem (e.g., LinearAlgebra.jl, Plots.jl) and by relying on **Gmsh** [@geuzaine2009] for pre- and post-processing, LowLevelFEM serves as a bridge between pedagogy and advanced research workflows. It also complements existing Julia FEM frameworks such as Gridap.jl [@badia2020] and interfaces naturally with Arpack.jl [@arpackjl] for sparse eigenvalue problems, enabling modal analysis and linear buckling calculations.
 
 # State of the field
 
