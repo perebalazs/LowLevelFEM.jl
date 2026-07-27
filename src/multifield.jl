@@ -1673,7 +1673,8 @@ function assemble_operator(
     
                 patBu = nothing
                 patBsT = nothing
-                #patCgp = nothing
+                patCgp = nothing
+                patTmp = nothing
 
                 # element loop
                 @inbounds for e in 1:nel
@@ -1683,7 +1684,7 @@ function assemble_operator(
                     Jac = reshape(jac, 3, :)
 
                     @inbounds for k in 1:numIntPoints
-                        invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
+                        @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
                     end
                     
                     ##############################################################################################################
@@ -1692,12 +1693,16 @@ function assemble_operator(
 
                     @inbounds for k in 1:numIntPoints
                         if edim == dim
-                            # old full-dimensional behaviour
-                            invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
-
-                            for a in 1:numNodes
-                                gha = ∇h[a*3-2:a*3-(3-dim), k]
-                                ∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
+                            @views begin
+                                # old full-dimensional behaviour
+                                invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
+                        
+                                for a in 1:numNodes
+                                    gha = ∇h[a*3-2:a*3-(3-dim), k]
+                                    dha = ∂h[1:dim, (k-1)*numNodes+a]
+                                    mul!(dha, invJk, gha)
+                                    #∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
+                                end
                             end
 
                         else
@@ -1825,7 +1830,11 @@ function assemble_operator(
                             if patBsT === nothing
                                 patBsT = detect_pattern(transpose(Bs))
                             end
-                            patCgp = detect_pattern(Cgp)
+                            #patCgp = detect_pattern(Cgp)
+
+                            if patCgp === nothing
+                                patCgp = detect_pattern(Cgp)
+                            end
 
                             # tmp = Bs' * Cgp
                             mul_opt!(tmp, transpose(Bs), Cgp;
@@ -1835,10 +1844,14 @@ function assemble_operator(
                                 beta=0.0
                             )
 
+                            if patTmp === nothing
+                                patTmp = detect_pattern(tmp)
+                            end
+
                             # Ke += w * tmp * Bu
                             #patTmp = detect_pattern(tmp)
                             mul_opt!(Ke, tmp, Bu;
-                                patA=nothing,
+                                patA=patTmp,
                                 patB=patBu,
                                 alpha=w,
                                 beta=1.0
@@ -2101,14 +2114,18 @@ function assemble_linear(
                     ∂h = zeros(P.dim, numNodes * numIntPoints)
 
                     @inbounds for k in 1:numIntPoints
-                        invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
+                        @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
                     end
 
                     fill!(∂h, 0.0)
                     @inbounds for k in 1:numIntPoints, a in 1:numNodes
-                        invJk = invJac[1:P.dim, 3k-2:3k-(3-P.dim)]
-                        gha = ∇h[a*3-2:a*3-(3-P.dim), k]
-                        ∂h[1:P.dim, (k-1)*numNodes+a] .= invJk * gha
+                        @views begin
+                            invJk = invJac[1:P.dim, 3k-2:3k-(3-P.dim)]
+                            gha = ∇h[a*3-2:a*3-(3-P.dim), k]
+                            dha = ∂h[1:P.dim, (k-1)*numNodes+a]
+                            mul!(dha, invJk, gha)
+                            #∂h[1:P.dim, (k-1)*numNodes+a] .= invJk * gha
+                        end
                     end
 
                     for k in 1:numIntPoints
