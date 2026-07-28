@@ -1648,6 +1648,23 @@ function assemble_operator(
                 _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
                 ∇h = reshape(dfun, :, numIntPoints)
 
+                # Batched Jacobian retrieval
+                elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+                jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+
+                numElementsGlobal = length(elemTags_global)
+                nip = length(det_all) ÷ numElementsGlobal
+
+                @assert nip == numIntPoints
+
+                TagType = eltype(elemTags_global)
+                idxmap = Dict{TagType,Int}()
+                sizehint!(idxmap, numElementsGlobal)
+
+                @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                    idxmap[gtag] = gi - 1
+                end
+
                 # buffers
                 nel = length(elemTags[itype])
                 nnet = zeros(Int, nel, numNodes)
@@ -1680,8 +1697,16 @@ function assemble_operator(
                 @inbounds for e in 1:nel
                     elem = elemTags[itype][e]
 
-                    jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
-                    Jac = reshape(jac, 3, :)
+                    gidx = idxmap[elem]
+
+                    jac_slice = @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
+
+                    jacDet = @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
+
+                    Jac = reshape(jac_slice, 3, :)
+
+                    #jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    #Jac = reshape(jac, 3, :)
 
                     @inbounds for k in 1:numIntPoints
                         @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
@@ -2095,23 +2120,52 @@ function assemble_linear(
 
                 ∇h = reshape(dfun, :, numIntPoints)
 
+                # Get Jacobians for all elements of this type
+                elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+
+                jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+
+                numElementsGlobal = length(elemTags_global)
+                nip = length(det_all) ÷ numElementsGlobal
+
+                @assert nip == numIntPoints
+
+                # Map element tag to its position in jac_all and det_all
+                idxmap = Dict{eltype(elemTags_global),Int}()
+                sizehint!(idxmap, numElementsGlobal)
+
+                @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                    idxmap[gtag] = gi - 1
+                end
+
                 ndofs_loc = P.pdim * numNodes
                 B = zeros(outdim, ndofs_loc)
                 fe = zeros(ndofs_loc)
 
                 nel = length(elemTags[itype])
 
+                invJac = zeros(3, 3 * numIntPoints)
+                ∂h = zeros(P.dim, numNodes * numIntPoints)
+
                 for e in 1:nel
                     fill!(fe, 0.0)
 
                     elem = elemTags[itype][e]
 
-                    jac, jacDet, _ =
-                        gmsh.model.mesh.getJacobian(elem, intPoints)
+                    gidx = idxmap[elem]
 
-                    Jac = reshape(jac, 3, :)
-                    invJac = zeros(3, 3 * numIntPoints)
-                    ∂h = zeros(P.dim, numNodes * numIntPoints)
+                    jac_slice = @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
+
+                    jacDet = @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
+
+                    Jac = reshape(jac_slice, 3, :)
+
+                    #elem = elemTags[itype][e]
+
+                    #jac, jacDet, _ =
+                    #    gmsh.model.mesh.getJacobian(elem, intPoints)
+
+                    #Jac = reshape(jac, 3, :)
 
                     @inbounds for k in 1:numIntPoints
                         @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
@@ -2147,9 +2201,18 @@ function assemble_linear(
                             view(h, :, k)
                         )
 
-                        gvec = g_gp isa Number ? [g_gp] : g_gp
+                        #gvec = g_gp isa Number ? [g_gp] : g_gp
 
-                        fe .+= (transpose(B) * gvec) * w
+                        #fe .+= (transpose(B) * gvec) * w
+                        
+                        if g_gp isa Number
+                            @assert outdim == 1
+                            @inbounds for i in 1:ndofs_loc
+                                fe[i] += B[1, i] * g_gp * w
+                            end
+                        else
+                            mul!(fe, transpose(B), g_gp, w, 1.0)
+                        end
                     end
 
                     # scatter local element vector -> global rhs
