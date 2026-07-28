@@ -26,6 +26,14 @@ which are assembled into bilinear forms and global system matrices.
 - Julia 1.x
 - Gmsh C API is bundled via `gmsh_jll` and re-exported as `gmsh` from this package; no separate Gmsh.jl installation is required.
 
+## Citation
+
+If you use LowLevelFEM.jl in academic work, please cite the accompanying JOSS paper:
+
+**Balázs Pere (2026).** *LowLevelFEM.jl: A lightweight finite element toolbox in Julia*. Journal of Open Source Software. https://doi.org/10.21105/joss.10096
+
+A BibTeX entry is provided in `CITATION.cff`.
+
 ## Capabilities
 
 - Geometry and meshing: integrates with `gmsh` for 2D/3D geometry, meshing, and physical groups.

@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+title: "LowLevelFEM.jl"
+message: "If you use this software, please cite the accompanying JOSS paper."
+type: software
+
+authors:
+  - family-names: "Pere"
+    given-names: "Balázs"
+    orcid: "https://orcid.org/0000-0002-1161-4206"
+
+version: "1.13.25"
+
+doi: "10.21105/joss.10096"
+
+repository-code: "https://github.com/perebalazs/LowLevelFEM.jl"
+
+license: "MIT"
+
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Pere"
+      given-names: "Balázs"
+      orcid: "https://orcid.org/0000-0002-1161-4206"
+
+  title: "LowLevelFEM.jl: A lightweight finite element toolbox in Julia"
+
+  journal: "Journal of Open Source Software"
+
+  year: 2026
+
+  volume: 11
+
+  issue: 123
+
+  start: 10096
+
+  doi: "10.21105/joss.10096"

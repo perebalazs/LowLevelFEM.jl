@@ -6,10 +6,6 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17073982.svg)](https://doi.org/10.5281/zenodo.17073982)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-<!-- [![DOI](https://joss.theoj.org/papers/10.21105/joss.XXXXX/status.svg)](https://doi.org/10.21105/joss.XXXXX) -->
-
-<!-- [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.YYYYYYY.svg)](https://doi.org/10.5281/zenodo.YYYYYYY) -->
-
 # LowLevelFEM
 
 LowLevelFEM is a Julia package for finite element analysis with an engineering-first workflow,
@@ -22,6 +18,14 @@ The package is suitable not only for classical structural mechanics problems, bu
 
 - Julia 1.x
 - Gmsh C API is bundled via `gmsh_jll` and re-exported as `gmsh` from this package; no separate Gmsh.jl installation is required.
+
+## Citation
+
+If you use LowLevelFEM.jl in academic work, please cite the accompanying JOSS paper:
+
+**Balázs Pere (2026).** *LowLevelFEM.jl: A lightweight finite element toolbox in Julia*. Journal of Open Source Software. https://doi.org/10.21105/joss.10096
+
+A BibTeX entry is provided in `CITATION.cff`.
 
 ## Capabilities
 
