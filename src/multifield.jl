@@ -1467,8 +1467,21 @@ function assemble_operator(
     coefficient::Union{Number,ScalarField,AbstractMatrix,AbstractVector}=1.0,
     weight=nothing,
     domain=nothing,
-    gauss=:full)
+    gauss=:full,
+    assembly::Symbol=:matrix,
+    I=nothing,
+    J=nothing,
+    V=nothing)
 
+    assembly ∈ (:matrix, :triplets, :add) ||
+    error("""
+    assemble_operator: invalid assembly mode $assembly.
+
+    Valid modes are:
+        :matrix
+        :triplets
+        :add
+    """)
     @assert Pu.name == Ps.name "Both problems must refer to the same gmsh model/mesh."
     @assert Pu.dim == Ps.dim "Both problems must have the same spatial dimension."
     gmsh.model.setCurrent(Pu.name)
@@ -1576,10 +1589,50 @@ function assemble_operator(
     # ------------------------------------------------------------
 
     # estimate IJV length: crude but OK for notebook prototype
-    lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(Pu) * max(1, Ps.pdim) * max(1, Pu.pdim)
-    I = Vector{Int}(undef, lengthOfIJV)
-    J = Vector{Int}(undef, lengthOfIJV)
-    V = Vector{Float64}(undef, lengthOfIJV)
+    #lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(Pu) * max(1, Ps.pdim) * max(1, Pu.pdim)
+    #I = Vector{Int}(undef, lengthOfIJV)
+    #J = Vector{Int}(undef, lengthOfIJV)
+    #V = Vector{Float64}(undef, lengthOfIJV)
+    #pos = 1
+    # ------------------------------------------------------------
+    # Assembly storage
+    # ------------------------------------------------------------
+
+    build_pattern = assembly !== :add
+
+    if build_pattern
+        I === nothing ||
+            error("assemble_operator: I must be nothing for assembly=$assembly.")
+
+        J === nothing ||
+            error("assemble_operator: J must be nothing for assembly=$assembly.")
+
+        V === nothing ||
+            error("assemble_operator: V must be nothing for assembly=$assembly.")
+
+        lengthOfIJV =
+            LowLevelFEM.estimateLengthOfIJV(Pu) *
+            max(1, Ps.pdim) *
+            max(1, Pu.pdim)
+
+        I = Vector{Int}(undef, lengthOfIJV)
+        J = Vector{Int}(undef, lengthOfIJV)
+        V = Vector{Float64}(undef, lengthOfIJV)
+
+    else
+        I === nothing ||
+            error("assemble_operator: I must be nothing for assembly=:add.")
+
+        J === nothing ||
+            error("assemble_operator: J must be nothing for assembly=:add.")
+
+        V isa Vector{Float64} ||
+            error(
+                "assemble_operator: assembly=:add requires " *
+                "V::Vector{Float64}; got $(typeof(V))."
+            )
+    end
+
     pos = 1
 
     dim = Pu.dim
@@ -1904,16 +1957,53 @@ function assemble_operator(
                             #@assert pos >= 1
                             #@assert pos - 1 <= length(I)
                             #@assert all(isfinite, V[1:pos-1])
-                            if pos >= length(I)
-                                newlen = Int(ceil(1.5*length(I))) + 1000
-                                resize!(I, newlen)
-                                resize!(J, newlen)
-                                resize!(V, newlen)
-                            end
+                            
+                            #if pos >= length(I)
+                            #    newlen = Int(ceil(1.5*length(I))) + 1000
+                            #    resize!(I, newlen)
+                            #    resize!(J, newlen)
+                            #    resize!(V, newlen)
+                            #end
                 
-                            I[pos] = Ia
-                            J[pos] = Jb
-                            V[pos] = Ke[a_loc, b_loc]
+                            #I[pos] = Ia
+                            #J[pos] = Jb
+                            #V[pos] = Ke[a_loc, b_loc]
+                            #pos += 1
+
+                            if build_pattern
+                                if pos > length(V)
+                                    newlen = max(
+                                        pos,
+                                        Int(ceil(1.5 * length(V))) + 1000
+                                    )
+
+                                    resize!(I, newlen)
+                                    resize!(J, newlen)
+                                    resize!(V, newlen)
+                                end
+
+                                I[pos] = Ia
+                                J[pos] = Jb
+                                V[pos] = Ke[a_loc, b_loc]
+
+                            else
+                                pos <= length(V) ||
+                                    error("""
+                                    assemble_operator: assembly pattern mismatch.
+
+                                    The current operator generated more entries than
+                                    the existing V vector contains.
+
+                                    Current position:
+                                        $pos
+
+                                    Length of V:
+                                        $(length(V))
+                                    """)
+
+                                V[pos] += Ke[a_loc, b_loc]
+                            end
+
                             pos += 1
                         end
                     end
@@ -1922,17 +2012,61 @@ function assemble_operator(
         end
     end
 
-    resize!(I, pos - 1)
-    resize!(J, pos - 1)
-    resize!(V, pos - 1)
-    K = sparse(I, J, V, ndofs(Ps), ndofs(Pu))
+    #resize!(I, pos - 1)
+    #resize!(J, pos - 1)
+    #resize!(V, pos - 1)
+    #K = sparse(I, J, V, ndofs(Ps), ndofs(Pu))
+    #dropzeros!(K)
+    #@assert ndofs(Ps) > 0
+    #@assert ndofs(Pu) > 0
+    #@assert maximum(I[1:pos-1]) <= ndofs(Ps)
+    #@assert maximum(J[1:pos-1]) <= ndofs(Pu)
+    #@assert minimum(I[1:pos-1]) >= 1
+    #@assert minimum(J[1:pos-1]) >= 1
+    #return SystemMatrix(K, Pu, Ps)
+    nentries = pos - 1
+    nrows = ndofs(Ps)
+    ncols = ndofs(Pu)
+    
+    @assert nrows > 0
+    @assert ncols > 0
+    
+    if assembly === :add
+        nentries == length(V) ||
+            error("""
+                assemble_operator: assembly pattern mismatch.
+    
+            The existing V vector contains:
+                $(length(V)) entries
+    
+            The current operator generated:
+                $nentries entries
+    
+            All compound terms must traverse exactly the same
+            elements and local matrix entries in the same order.
+            """)
+    
+        return V
+    end
+    
+    resize!(I, nentries)
+    resize!(J, nentries)
+    resize!(V, nentries)
+    
+    if nentries > 0
+        @assert maximum(I) <= nrows
+        @assert maximum(J) <= ncols
+        @assert minimum(I) >= 1
+        @assert minimum(J) >= 1
+    end
+    
+    if assembly === :triplets
+        return I, J, V, nrows, ncols
+    end
+    
+    K = sparse(I, J, V, nrows, ncols)
     dropzeros!(K)
-    @assert ndofs(Ps) > 0
-    @assert ndofs(Pu) > 0
-    @assert maximum(I[1:pos-1]) <= ndofs(Ps)
-    @assert maximum(J[1:pos-1]) <= ndofs(Pu)
-    @assert minimum(I[1:pos-1]) >= 1
-    @assert minimum(J[1:pos-1]) >= 1
+
     return SystemMatrix(K, Pu, Ps)
 end
 
@@ -3813,20 +3947,80 @@ function ∫(expr::CompoundBilinear;
     #@show left_terms
     #@show right_terms
 
-    K = nothing
+    #K = nothing
+
+    #for LL in left_terms
+    #    for R in right_terms
+    #        bt = _make_bilinear_term(LL, expr.mats, R)
+    #        #@show bt
+    #        g = _select_gauss(LL, R, gauss)
+
+    #        Ki = ∫(bt; Ω=Ω, Γ=Γ, weight=weight, gauss=g)
+    #        K = K === nothing ? Ki : K + Ki
+    #    end
+    #end
+
+    first = true
+
+    I = nothing
+    J = nothing
+    V = nothing
+    nr = 0
+    nc = 0
+
+    Pu = nothing
+    Ps = nothing
+
+    dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
     for LL in left_terms
         for R in right_terms
+
             bt = _make_bilinear_term(LL, expr.mats, R)
-            #@show bt
             g = _select_gauss(LL, R, gauss)
 
-            Ki = ∫(bt; Ω=Ω, Γ=Γ, weight=weight, gauss=g)
-            K = K === nothing ? Ki : K + Ki
+            if first
+
+                Pu = bt.b.P
+                Ps = bt.a.P
+
+                I, J, V, nr, nc = assemble_operator(
+                    bt.b.P,
+                    bt.b.op,
+                    bt.a.P,
+                    bt.a.op;
+                    coefficient = bt.coef,
+                    domain = dom,
+                    weight = weight,
+                    gauss = g,
+                    assembly = :triplets
+                )
+
+                first = false
+            else
+                assemble_operator(
+                    bt.b.P,
+                    bt.b.op,
+                    bt.a.P,
+                    bt.a.op;
+                    coefficient = bt.coef,
+                    domain = dom,
+                    weight = weight,
+                    gauss = g,
+                    assembly = :add,
+                    V = V
+                )
+
+            end
         end
     end
 
-    return K
+    K = sparse(I,J,V,nr,nc)
+    dropzeros!(K)
+
+    return SystemMatrix(K, Pu, Ps)
+
+    #return K
 end
 
 #∫(expr::CompoundBilinearWeight; Ω=nothing, Γ=nothing, gauss=:auto) = ∫(expr.CB; Ω=Ω, Γ=Γ, weight=expr.weight, gauss=gauss)
