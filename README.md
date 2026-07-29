@@ -98,6 +98,42 @@ I = TensorField(prob, "body", [1 0 0; 0 1 0; 0 0 1])
 S = E / (1 + ν) * (A + ν / (1 - 2ν) * trace(A) * I)
 ```
 
+### Operator-level weak-form assembly
+
+For custom PDEs and multifield formulations, the finite element operator can
+also be assembled directly from its weak form. Differential operators and
+coefficient matrices remain explicit, allowing the formulation to be inspected,
+modified and combined without implementing a dedicated solver.
+
+```Julia
+Pu = Problem([mat], type=:VectorField, dim=2, field=:u)
+
+E = mat.E
+ν = mat.ν
+
+C = E / ((1 + ν) * (1 - 2ν)) * [
+    1-ν  ν    0
+    ν    1-ν  0
+    0    0    (1-2ν)/2
+]
+
+K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu), Ω="body")
+f = ∫(Pu ⋅ [0, -1], Γ="right")
+bc = BoundaryCondition("left", ux=0, uy=0)
+
+u = solveField(K, f, support=[bc])
+```
+
+The three examples above solve the same class of problem at different levels of
+abstraction:
+
+1. predefined engineering solver,
+2. explicit matrices and finite element fields,
+3. direct weak-form operator assembly.
+
+The higher-level functions are convenience wrappers; the underlying matrices,
+fields and operators remain accessible throughout the workflow.
+
 ### For interactive work with custom geometries
 
 Gmsh can be launched directly from Julia.
