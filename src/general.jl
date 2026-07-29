@@ -5721,71 +5721,107 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
     f2 = f isa ScalarField && !is_elementwise ? f : nothing
     DIM = problem.dim
     b = problem.thickness
-    ncoord2 = zeros(3 * problem.non)
-    sum0 = 0
+    #ncoord2 = zeros(3 * problem.non)
+    sum0 = 0.0
     dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
     for i ∈ 1:length(dimTags)
         dimTag = dimTags[i]
         dim = dimTag[1]
         tag = dimTag[2]
         elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
-        nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+        #nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
         #ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
         #ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
         #ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
-        @inbounds for (local_idx, nd) in enumerate(nodeTags)
-            ci = 3*(nd-1)
-            cn = 3*(local_idx-1)
-            ncoord2[ci+1] = ncoord[cn+1]
-            ncoord2[ci+2] = ncoord[cn+2]
-            ncoord2[ci+3] = ncoord[cn+3]
-        end
+        #@inbounds for (local_idx, nd) in enumerate(nodeTags)
+        #    ci = 3*(nd-1)
+        #    cn = 3*(local_idx-1)
+        #    ncoord2[ci+1] = ncoord[cn+1]
+        #    ncoord2[ci+2] = ncoord[cn+2]
+        #    ncoord2[ci+3] = ncoord[cn+3]
+        #end
 
         for ii in 1:length(elementTypes)
+            et = elementTypes[ii]
             elementName, dim, order1, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
             qorder = order <= 0 ? order1 : order
-            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(qorder))
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(qorder))
             numIntPoints = length(intWeights)
-            comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+            comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
             h = reshape(fun, :, numIntPoints)
-            nnet = zeros(Int, length(elementTags[ii]), numNodes)
+            #nnet = zeros(Int, length(elementTags[ii]), numNodes)
+            # Batched geometric data for all elements of this type
+            elemTagsGlobal, _ = gmsh.model.mesh.getElementsByType(et)
+
+            jacAll, detAll, coordAll = gmsh.model.mesh.getJacobians(et, intPoints)
+
+            numElementsGlobal = length(elemTagsGlobal)
+            nip = length(detAll) ÷ numElementsGlobal
+
+            @assert nip == numIntPoints
+
+            idxmap = Dict{eltype(elemTagsGlobal),Int}()
+            sizehint!(idxmap, numElementsGlobal)
+
+            @inbounds for (gi, elemTag) in enumerate(elemTagsGlobal)
+                idxmap[elemTag] = gi - 1
+            end
+
+            nodes = elemNodeTags[ii]
             @inbounds for l in 1:length(elementTags[ii])
                 elem = elementTags[ii][l]
                 #for k in 1:numNodes
                 #    nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
                 #end
-                nodes = elemNodeTags[ii]
                 offset = (l - 1) * numNodes
-                nodeids = nodes[offset + 1 : offset + numNodes]
+                nodeids = @view nodes[offset + 1 : offset + numNodes]
                 fieldIdx = 0
                 if f isa ScalarField && is_elementwise
                     fieldIdx = get(elemToField, elem, 0)
                     fieldIdx == 0 && continue
                 end
-                jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
-                Jac = reshape(jac, 3, :)
-                s1 = 0
-                first = (l - 1) * numNodes + 1
+
+                gidx = idxmap[elem]
+
+                jacOffset = gidx * 9 * nip
+                detOffset = gidx * nip
+                coordOffset = gidx * 3 * nip
+
+                Jac = reshape(@view(jacAll[jacOffset + 1 : jacOffset + 9 * nip]), 3, :)
+
+                jacDet = @view detAll[detOffset + 1 : detOffset + nip]
+
+                coord = @view coordAll[coordOffset + 1 : coordOffset + 3 * nip]
+
+                #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                #Jac = reshape(jac, 3, :)
+                s1 = 0.0
+                #first = (l - 1) * numNodes + 1
                 @inbounds for j in 1:numIntPoints
-                    x = 0.0
-                    y = 0.0
-                    z = 0.0
-                    @inbounds for nk in 1:numNodes
-                        nd    = nodes[first + nk - 1]      # globális csomópont index
-                        baseg = 3 * (nd - 1)
-                        hk    = h[nk, j]
-                        x += hk * ncoord2[baseg + 1]
-                        y += hk * ncoord2[baseg + 2]
-                        z += hk * ncoord2[baseg + 3]
-                    end
-                    ff = 0
+                    x = coord[3j - 2]
+                    y = coord[3j - 1]
+                    z = coord[3j]
+                    #x = 0.0
+                    #y = 0.0
+                    #z = 0.0
+                    #@inbounds for nk in 1:numNodes
+                    #    nd    = nodes[first + nk - 1]      # globális csomópont index
+                    #    baseg = 3 * (nd - 1)
+                    #    hk    = h[nk, j]
+                    #    x += hk * ncoord2[baseg + 1]
+                    #    y += hk * ncoord2[baseg + 2]
+                    #    z += hk * ncoord2[baseg + 3]
+                    #end
+                    ff = 0.0
                     if f isa Function
                         ff = f(x, y, z)
                     elseif f isa ScalarField && is_elementwise
-                        ff = h[:, j]' * f.A[fieldIdx][:, step]
+                        ff = dot(view(h, :, j), view(f.A[fieldIdx], :, step))
+                        #ff = h[:, j]' * f.A[fieldIdx][:, step]
                     elseif f isa ScalarField
+                        ff = dot(view(h, :, j), view(f2.a, nodeids, step))
                         #ff = h[:, j]' * f2.a[nnet[l, :]]
-                        ff = h[:, j]' * f2.a[nodeids, step]
+                        #ff = h[:, j]' * f2.a[nodeids, step]
                     else
                         error("integrate: 3rd argument must be a Function or a ScalarField")
                     end
