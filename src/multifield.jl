@@ -1741,10 +1741,10 @@ function assemble_operator(
 
                 #tmpBu = similar(Bu)
     
-                patBu = nothing
-                patBsT = nothing
-                patCgp = nothing
-                patTmp = nothing
+                #patBu = nothing
+                #patBsT = nothing
+                #patCgp = nothing
+                #patTmp = nothing
 
                 # element loop
                 @inbounds for e in 1:nel
@@ -1852,15 +1852,15 @@ function assemble_operator(
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
                             end
 
-                            if patBu === nothing
-                                patBu = detect_pattern(Bu)
-                            end
-                            if patBsT === nothing
-                                patBsT = detect_pattern(transpose(Bs))
-                            end
+                            #if patBu === nothing
+                            #    patBu = detect_pattern(Bu)
+                            #end
+                            #if patBsT === nothing
+                            #    patBsT = detect_pattern(transpose(Bs))
+                            #end
                             mul_opt!(Ke, transpose(Bs), Bu;
-                                patA=patBsT,
-                                patB=patBu,
+                                #patA=patBsT,
+                                #patB=patBu,
                                 alpha=w,
                                 beta=1.0
                             )
@@ -1902,35 +1902,35 @@ function assemble_operator(
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
                             end
 
-                            if patBu === nothing
-                                patBu = detect_pattern(Bu)
-                            end
-                            if patBsT === nothing
-                                patBsT = detect_pattern(transpose(Bs))
-                            end
-                            #patCgp = detect_pattern(Cgp)
+                            #if patBu === nothing
+                            #    patBu = detect_pattern(Bu)
+                            #end
+                            #if patBsT === nothing
+                            #    patBsT = detect_pattern(transpose(Bs))
+                            #end
+                            ##patCgp = detect_pattern(Cgp)
 
-                            if patCgp === nothing
-                                patCgp = detect_pattern(Cgp)
-                            end
+                            #if patCgp === nothing
+                            #    patCgp = detect_pattern(Cgp)
+                            #end
 
                             # tmp = Bs' * Cgp
                             mul_opt!(tmp, transpose(Bs), Cgp;
-                                patA=patBsT,
-                                patB=patCgp,
+                                #patA=patBsT,
+                                #patB=patCgp,
                                 alpha=1.0,
                                 beta=0.0
                             )
 
-                            if patTmp === nothing
-                                patTmp = detect_pattern(tmp)
-                            end
+                            #if patTmp === nothing
+                            #    patTmp = detect_pattern(tmp)
+                            #end
 
                             # Ke += w * tmp * Bu
                             #patTmp = detect_pattern(tmp)
                             mul_opt!(Ke, tmp, Bu;
-                                patA=patTmp,
-                                patB=patBu,
+                                #patA=patTmp,
+                                #patB=patBu,
                                 alpha=w,
                                 beta=1.0
                             )
