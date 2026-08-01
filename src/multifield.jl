@@ -1100,7 +1100,7 @@ end
 # zero entries.  If a factor is not sparse enough, the code falls back to dense
 # BLAS-backed mul!.
 
-struct MatrixPattern
+mutable struct MatrixPattern
     rows::Vector{Int}
     cols::Vector{Int}
     nnz::Int
@@ -1146,6 +1146,48 @@ function detect_pattern(M::AbstractMatrix; tol::Real=0.0)
     end
 
     return MatrixPattern(rows, cols, length(rows), m, n)
+end
+
+"""
+    detect_pattern!(pattern, M; tol=0.0)
+
+Update a reusable matrix pattern from the current numerical values of `M`.
+"""
+function detect_pattern!(
+    pattern::MatrixPattern,
+    M::AbstractMatrix;
+    tol::Real = 0.0
+)
+    m, n = size(M)
+
+    pattern.m == m && pattern.n == n ||
+        error(
+            "detect_pattern!: matrix size changed from " *
+            "($(pattern.m), $(pattern.n)) to ($m, $n)."
+        )
+
+    empty!(pattern.rows)
+    empty!(pattern.cols)
+
+    @inbounds for j in 1:n
+        for i in 1:m
+            mij = M[i, j]
+
+            if tol == 0
+                if !iszero(mij)
+                    push!(pattern.rows, i)
+                    push!(pattern.cols, j)
+                end
+            elseif abs(mij) > tol
+                push!(pattern.rows, i)
+                push!(pattern.cols, j)
+            end
+        end
+    end
+
+    pattern.nnz = length(pattern.rows)
+
+    return pattern
 end
 
 @inline function sparse_enough(
@@ -1745,6 +1787,21 @@ function assemble_operator(
                 #patBsT = nothing
                 #patCgp = nothing
                 #patTmp = nothing
+                patBu  = MatrixPattern(size(Bu, 1), size(Bu, 2))
+                patBsT = MatrixPattern(size(Bs, 2), size(Bs, 1))
+
+                sizehint!(patBu.rows, length(Bu))
+                sizehint!(patBu.cols, length(Bu))
+
+                sizehint!(patBsT.rows, length(Bs))
+                sizehint!(patBsT.cols, length(Bs))
+
+                patTmp = MatrixPattern(size(tmp, 1), size(tmp, 2))
+
+                sizehint!(patTmp.rows, length(tmp))
+                sizehint!(patTmp.cols, length(tmp))
+
+                patCgp = nothing
 
                 # element loop
                 @inbounds for e in 1:nel
@@ -1852,17 +1909,29 @@ function assemble_operator(
                                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
                             end
 
-                            #if patBu === nothing
-                            #    patBu = detect_pattern(Bu)
-                            #end
-                            #if patBsT === nothing
-                            #    patBsT = detect_pattern(transpose(Bs))
-                            #end
-                            mul_opt!(Ke, transpose(Bs), Bu;
-                                #patA=patBsT,
-                                #patB=patBu,
-                                alpha=w,
-                                beta=1.0
+                            ##if patBu === nothing
+                            ##    patBu = detect_pattern(Bu)
+                            ##end
+                            ##if patBsT === nothing
+                            ##    patBsT = detect_pattern(transpose(Bs))
+                            ##end
+                            #mul_opt!(Ke, transpose(Bs), Bu;
+                            #    #patA=patBsT,
+                            #    #patB=patBu,
+                            #    alpha=w,
+                            #    beta=1.0
+                            #)
+                            detect_pattern!(patBsT, transpose(Bs))
+                            detect_pattern!(patBu, Bu)
+
+                            mul_opt!(
+                                Ke,
+                                transpose(Bs),
+                                Bu;
+                                patA = patBsT,
+                                patB = patBu,
+                                alpha = w,
+                                beta = 1.0
                             )
 
                         elseif Cgp isa AbstractMatrix #&& weight === nothing
@@ -1915,24 +1984,56 @@ function assemble_operator(
                             #end
 
                             # tmp = Bs' * Cgp
-                            mul_opt!(tmp, transpose(Bs), Cgp;
-                                #patA=patBsT,
-                                #patB=patCgp,
-                                alpha=1.0,
-                                beta=0.0
+                            #mul_opt!(tmp, transpose(Bs), Cgp;
+                            #    #patA=patBsT,
+                            #    #patB=patCgp,
+                            #    alpha=1.0,
+                            #    beta=0.0
+                            #)
+
+                            ##if patTmp === nothing
+                            ##    patTmp = detect_pattern(tmp)
+                            ##end
+
+                            ## Ke += w * tmp * Bu
+                            ##patTmp = detect_pattern(tmp)
+                            #mul_opt!(Ke, tmp, Bu;
+                            #    #patA=patTmp,
+                            #    #patB=patBu,
+                            #    alpha=w,
+                            #    beta=1.0
+                            #)
+                            if patCgp === nothing
+                                patCgp = MatrixPattern(size(Cgp, 1), size(Cgp, 2))
+
+                                sizehint!(patCgp.rows, length(Cgp))
+                                sizehint!(patCgp.cols, length(Cgp))
+                            end
+
+                            detect_pattern!(patBsT, transpose(Bs))
+                            detect_pattern!(patCgp, Cgp)
+
+                            mul_opt!(
+                            tmp,
+                            transpose(Bs),
+                            Cgp;
+                            patA = patBsT,
+                            patB = patCgp,
+                            alpha = 1.0,
+                            beta = 0.0
                             )
 
-                            #if patTmp === nothing
-                            #    patTmp = detect_pattern(tmp)
-                            #end
+                            detect_pattern!(patTmp, tmp)
+                            detect_pattern!(patBu, Bu)
 
-                            # Ke += w * tmp * Bu
-                            #patTmp = detect_pattern(tmp)
-                            mul_opt!(Ke, tmp, Bu;
-                                #patA=patTmp,
-                                #patB=patBu,
-                                alpha=w,
-                                beta=1.0
+                            mul_opt!(
+                            Ke,
+                            tmp,
+                            Bu;
+                            patA = patTmp,
+                            patB = patBu,
+                            alpha = w,
+                            beta = 1.0
                             )
 
                         else
