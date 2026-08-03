@@ -30,7 +30,7 @@ which are assembled into bilinear forms and global system matrices.
 
 If you use LowLevelFEM.jl in academic work, please cite the accompanying JOSS paper:
 
-**Balázs Pere (2026).** *LowLevelFEM.jl: A lightweight finite element toolbox in Julia*. Journal of Open Source Software. https://doi.org/10.21105/joss.10096
+**Balázs Pere (2026).** *LowLevelFEM.jl: A lightweight finite element toolbox in Julia*, Journal of Open Source Software, 11(123), 10096, https://doi.org/10.21105/joss.10096
 
 A BibTeX entry is provided in `CITATION.cff`.
 
