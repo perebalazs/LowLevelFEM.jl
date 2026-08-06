@@ -1415,6 +1415,73 @@ end
     return t1, t2
 end
 
+mutable struct OperatorWorkspace
+    invJac::Matrix{Float64}
+    ∂h::Matrix{Float64}
+    Bu::Matrix{Float64}
+    Bs::Matrix{Float64}
+    Ke::Matrix{Float64}
+    tmp::Matrix{Float64}
+
+    patBu::MatrixPattern
+    patBsT::MatrixPattern
+    patTmp::MatrixPattern
+    patCgp::Union{Nothing,MatrixPattern}
+end
+
+"""
+    OperatorWorkspace(
+        dim,
+        num_nodes,
+        num_integration_points,
+        out_u,
+        out_s,
+        ndofs_u,
+        ndofs_s
+    )
+
+Allocate reusable element-level work arrays for operator assembly.
+"""
+function OperatorWorkspace(
+    dim::Int,
+    num_nodes::Int,
+    num_integration_points::Int,
+    out_u::Int,
+    out_s::Int,
+    ndofs_u::Int,
+    ndofs_s::Int
+)
+    Bu = zeros(out_u, ndofs_u)
+    Bs = zeros(out_s, ndofs_s)
+    tmp = zeros(ndofs_s, out_u)
+
+    patBu  = MatrixPattern(out_u, ndofs_u)
+    patBsT = MatrixPattern(ndofs_s, out_s)
+    patTmp = MatrixPattern(ndofs_s, out_u)
+
+    sizehint!(patBu.rows, length(Bu))
+    sizehint!(patBu.cols, length(Bu))
+
+    sizehint!(patBsT.rows, length(Bs))
+    sizehint!(patBsT.cols, length(Bs))
+
+    sizehint!(patTmp.rows, length(tmp))
+    sizehint!(patTmp.cols, length(tmp))
+
+    return OperatorWorkspace(
+        zeros(3, 3 * num_integration_points),
+        zeros(dim, num_nodes * num_integration_points),
+        Bu,
+        Bs,
+        zeros(ndofs_s, ndofs_u),
+        tmp,
+        patBu,
+        patBsT,
+        patTmp,
+        nothing
+    )
+end
+
 """
     assemble_operator(Pu::Problem, 
                       op_u::AbstractOp, 
@@ -1514,6 +1581,8 @@ function assemble_operator(
     I=nothing,
     J=nothing,
     V=nothing)
+
+    LinearAlgebra.BLAS.set_num_threads(1)
 
     assembly ∈ (:matrix, :triplets, :add) ||
     error("""
@@ -1763,16 +1832,9 @@ function assemble_operator(
                 # buffers
                 nel = length(elemTags[itype])
                 nnet = zeros(Int, nel, numNodes)
-                invJac = zeros(3, 3numIntPoints)
-                ∂h = zeros(dim, numNodes * numIntPoints)
 
                 ndofs_u_loc = Pu.pdim * numNodes
                 ndofs_s_loc = Ps.pdim * numNodes
-
-                Bu = zeros(out_u, ndofs_u_loc)
-                Bs = zeros(out_s, ndofs_s_loc)
-                Ke = zeros(ndofs_s_loc, ndofs_u_loc)
-                tmp = zeros(size(Bs,2), size(Bu,1))
 
                 # connectivity table
                 @inbounds for e in 1:nel
@@ -1781,334 +1843,276 @@ function assemble_operator(
                     end
                 end
 
-                #tmpBu = similar(Bu)
-    
-                #patBu = nothing
-                #patBsT = nothing
-                #patCgp = nothing
-                #patTmp = nothing
-                patBu  = MatrixPattern(size(Bu, 1), size(Bu, 2))
-                patBsT = MatrixPattern(size(Bs, 2), size(Bs, 1))
+                entries_per_element = ndofs_s_loc * ndofs_u_loc
+                block_start = pos
+                block_entries = nel * entries_per_element
 
-                sizehint!(patBu.rows, length(Bu))
-                sizehint!(patBu.cols, length(Bu))
+                if build_pattern && block_start + block_entries - 1 > length(V)
+                    newlen = max(
+                        block_start + block_entries - 1,
+                        Int(ceil(1.5 * length(V))) + 1000
+                    )
 
-                sizehint!(patBsT.rows, length(Bs))
-                sizehint!(patBsT.cols, length(Bs))
+                    resize!(I, newlen)
+                    resize!(J, newlen)
+                    resize!(V, newlen)
+                elseif !build_pattern && block_start + block_entries - 1 > length(V)
+                    error("""
+                    assemble_operator: assembly pattern mismatch.
+                
+                    The current element block requires more entries than the existing
+                    V vector contains.
+                    """)
+                end
 
-                patTmp = MatrixPattern(size(tmp, 1), size(tmp, 2))
-
-                sizehint!(patTmp.rows, length(tmp))
-                sizehint!(patTmp.cols, length(tmp))
-
-                patCgp = nothing
+                workspaces = [
+                    OperatorWorkspace(
+                        dim,
+                        numNodes,
+                        numIntPoints,
+                        out_u,
+                        out_s,
+                        ndofs_u_loc,
+                        ndofs_s_loc
+                    )
+                    for _ in 1:Threads.maxthreadid()
+                ]
 
                 # element loop
-                @inbounds for e in 1:nel
-                    elem = elemTags[itype][e]
-
-                    gidx = idxmap[elem]
-
-                    jac_slice = @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
-
-                    jacDet = @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
-
-                    Jac = reshape(jac_slice, 3, :)
-
-                    #jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
-                    #Jac = reshape(jac, 3, :)
-
-                    @inbounds for k in 1:numIntPoints
-                        @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
-                    end
-                    
-                    ##############################################################################################################
-                    # physical / tangential gradients of basis
-                    fill!(∂h, 0.0)
-
-                    @inbounds for k in 1:numIntPoints
-                        if edim == dim
-                            @views begin
-                                # old full-dimensional behaviour
-                                invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
+                Threads.@threads :static for e in 1:nel
+                    let ws = workspaces[Threads.threadid()]
+                
+                        invJac = ws.invJac
+                        ∂h     = ws.∂h
+                        Bu     = ws.Bu
+                        Bs     = ws.Bs
+                        Ke     = ws.Ke
+                        tmp    = ws.tmp
+                
+                        element_start = block_start + (e - 1) * entries_per_element
+                        elem = elemTags[itype][e]
+                
+                        gidx = idxmap[elem]
+                
+                        jac_slice = @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
+                
+                        jacDet = @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
+                
+                        Jac = reshape(jac_slice, 3, :)
+                
+                        #jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
+                        #Jac = reshape(jac, 3, :)
+                
+                        @inbounds for k in 1:numIntPoints
+                            @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
+                        end
                         
+                        ##############################################################################################################
+                        # physical / tangential gradients of basis
+                        fill!(∂h, 0.0)
+                
+                        @inbounds for k in 1:numIntPoints
+                            if edim == dim
+                                @views begin
+                                    # old full-dimensional behaviour
+                                    invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
+                            
+                                    for a in 1:numNodes
+                                        gha = ∇h[a*3-2:a*3-(3-dim), k]
+                                        dha = ∂h[1:dim, (k-1)*numNodes+a]
+                                        mul!(dha, invJk, gha)
+                                        #∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
+                                    end
+                                end
+                
+                            else
+                                # embedded lower-dimensional element:
+                                # surface element in 3D, line element in 2D/3D
+                                Jk = @view Jac[1:dim, 3k-2:3k]
+                                Jtan = Matrix(Jk[:, 1:edim])
+                                Gtan = Jtan * inv(Jtan' * Jtan)
+                
                                 for a in 1:numNodes
-                                    gha = ∇h[a*3-2:a*3-(3-dim), k]
-                                    dha = ∂h[1:dim, (k-1)*numNodes+a]
-                                    mul!(dha, invJk, gha)
-                                    #∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
+                                    gha = ∇h[a*3-2:a*3-3+edim, k]
+                                    ∂h[1:dim, (k-1)*numNodes+a] .= Gtan * gha
                                 end
                             end
-
-                        else
-                            # embedded lower-dimensional element:
-                            # surface element in 3D, line element in 2D/3D
-                            Jk = @view Jac[1:dim, 3k-2:3k]
-                            Jtan = Matrix(Jk[:, 1:edim])
-                            Gtan = Jtan * inv(Jtan' * Jtan)
-
-                            for a in 1:numNodes
-                                gha = ∇h[a*3-2:a*3-3+edim, k]
-                                ∂h[1:dim, (k-1)*numNodes+a] .= Gtan * gha
-                            end
                         end
-                    end
-                    ##############################################################################################################
-
-                    fill!(Ke, 0.0)
-
-                    # integrate
-                    @inbounds for k in 1:numIntPoints
-                        if Cprep isa AbstractVector
-                            #=
-                            mats = [_eval_coefficient_at_gp(M, elem, view(h, :, k)) for M in Cprep]
-                            Cgp = mats[1]
-                            for i in 2:length(mats)
-                                Cgp = matmul_sf(Cgp, mats[i])
-                            end
-                            =#
-                            Cgp = _eval_coefficient_chain_at_gp(Cprep, elem, view(h, :, k))
-                        else
-                            Cgp = _eval_coefficient_at_gp(Cprep, elem, view(h, :, k))
-                        end
-                        wcoef = Wprep === nothing ? 1.0 : _eval_coefficient_at_gp(Wprep, elem, view(h, :, k))
-                        if Cgp isa Number #&& weight === nothing
-
-                            w = jacDet[k] * intWeights[k] * Cgp * wcoef
-
-                            if op_u isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_u isa AxialGradOp
-                                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            elseif op_u isa TangentialGradOp
-                                t = Jac[1:Pu.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
-                            end
-                            if op_s isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_s isa AxialGradOp
-                                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            elseif op_s isa TangentialGradOp
-                                t = Jac[1:Ps.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
-                            end
-
-                            ##if patBu === nothing
-                            ##    patBu = detect_pattern(Bu)
-                            ##end
-                            ##if patBsT === nothing
-                            ##    patBsT = detect_pattern(transpose(Bs))
-                            ##end
-                            #mul_opt!(Ke, transpose(Bs), Bu;
-                            #    #patA=patBsT,
-                            #    #patB=patBu,
-                            #    alpha=w,
-                            #    beta=1.0
-                            #)
-                            detect_pattern!(patBsT, transpose(Bs))
-                            detect_pattern!(patBu, Bu)
-
-                            mul_opt!(
-                                Ke,
-                                transpose(Bs),
-                                Bu;
-                                patA = patBsT,
-                                patB = patBu,
-                                alpha = w,
-                                beta = 1.0
-                            )
-
-                        elseif Cgp isa AbstractMatrix #&& weight === nothing
-
-                            w = jacDet[k] * intWeights[k] * wcoef
-
-                            if op_u isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_u isa AxialGradOp
-                                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            elseif op_u isa TangentialGradOp
-                                t = Jac[1:Pu.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
-                            end
-                            if op_s isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_s isa AxialGradOp
-                                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            elseif op_s isa TangentialGradOp
-                                t = Jac[1:Ps.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
-                            end
-
-                            #if patBu === nothing
-                            #    patBu = detect_pattern(Bu)
-                            #end
-                            #if patBsT === nothing
-                            #    patBsT = detect_pattern(transpose(Bs))
-                            #end
-                            ##patCgp = detect_pattern(Cgp)
-
-                            #if patCgp === nothing
-                            #    patCgp = detect_pattern(Cgp)
-                            #end
-
-                            # tmp = Bs' * Cgp
-                            #mul_opt!(tmp, transpose(Bs), Cgp;
-                            #    #patA=patBsT,
-                            #    #patB=patCgp,
-                            #    alpha=1.0,
-                            #    beta=0.0
-                            #)
-
-                            ##if patTmp === nothing
-                            ##    patTmp = detect_pattern(tmp)
-                            ##end
-
-                            ## Ke += w * tmp * Bu
-                            ##patTmp = detect_pattern(tmp)
-                            #mul_opt!(Ke, tmp, Bu;
-                            #    #patA=patTmp,
-                            #    #patB=patBu,
-                            #    alpha=w,
-                            #    beta=1.0
-                            #)
-                            if patCgp === nothing
-                                patCgp = MatrixPattern(size(Cgp, 1), size(Cgp, 2))
-
-                                sizehint!(patCgp.rows, length(Cgp))
-                                sizehint!(patCgp.cols, length(Cgp))
-                            end
-
-                            detect_pattern!(patBsT, transpose(Bs))
-                            detect_pattern!(patCgp, Cgp)
-
-                            mul_opt!(
-                            tmp,
-                            transpose(Bs),
-                            Cgp;
-                            patA = patBsT,
-                            patB = patCgp,
-                            alpha = 1.0,
-                            beta = 0.0
-                            )
-
-                            detect_pattern!(patTmp, tmp)
-                            detect_pattern!(patBu, Bu)
-
-                            mul_opt!(
-                            Ke,
-                            tmp,
-                            Bu;
-                            patA = patTmp,
-                            patB = patBu,
-                            alpha = w,
-                            beta = 1.0
-                            )
-
-                        else
-                            error("assemble_operator error")
-                        end
-                    end
-
-
-                    # scatter Ke(s,u) -> global IJV
-                    @inbounds for a_loc in 1:ndofs_s_loc
-                        node_a = div(a_loc - 1, Ps.pdim) + 1
-                        comp_a = mod(a_loc - 1, Ps.pdim) + 1
-                        Ia_node = nnet[e, node_a]
-                        Ia = (Ia_node - 1) * Ps.pdim + comp_a
+                        ##############################################################################################################
                 
-                        @inbounds for b_loc in 1:ndofs_u_loc
-                            node_b = div(b_loc - 1, Pu.pdim) + 1
-                            comp_b = mod(b_loc - 1, Pu.pdim) + 1
-                            Jb_node = nnet[e, node_b]
-                            Jb = (Jb_node - 1) * Pu.pdim + comp_b
-                            
-                            #@assert pos >= 1
-                            #@assert pos - 1 <= length(I)
-                            #@assert all(isfinite, V[1:pos-1])
-                            
-                            #if pos >= length(I)
-                            #    newlen = Int(ceil(1.5*length(I))) + 1000
-                            #    resize!(I, newlen)
-                            #    resize!(J, newlen)
-                            #    resize!(V, newlen)
-                            #end
+                        fill!(Ke, 0.0)
                 
-                            #I[pos] = Ia
-                            #J[pos] = Jb
-                            #V[pos] = Ke[a_loc, b_loc]
-                            #pos += 1
-
-                            if build_pattern
-                                if pos > length(V)
-                                    newlen = max(
-                                        pos,
-                                        Int(ceil(1.5 * length(V))) + 1000
-                                    )
-
-                                    resize!(I, newlen)
-                                    resize!(J, newlen)
-                                    resize!(V, newlen)
+                        # integrate
+                        @inbounds for k in 1:numIntPoints
+                            if Cprep isa AbstractVector
+                                #=
+                                mats = [_eval_coefficient_at_gp(M, elem, view(h, :, k)) for M in Cprep]
+                                Cgp = mats[1]
+                                for i in 2:length(mats)
+                                    Cgp = matmul_sf(Cgp, mats[i])
                                 end
-
-                                I[pos] = Ia
-                                J[pos] = Jb
-                                V[pos] = Ke[a_loc, b_loc]
-
+                                =#
+                                Cgp = _eval_coefficient_chain_at_gp(Cprep, elem, view(h, :, k))
                             else
-                                pos <= length(V) ||
-                                    error("""
-                                    assemble_operator: assembly pattern mismatch.
-
-                                    The current operator generated more entries than
-                                    the existing V vector contains.
-
-                                    Current position:
-                                        $pos
-
-                                    Length of V:
-                                        $(length(V))
-                                    """)
-
-                                V[pos] += Ke[a_loc, b_loc]
+                                Cgp = _eval_coefficient_at_gp(Cprep, elem, view(h, :, k))
                             end
-
-                            pos += 1
+                            wcoef = Wprep === nothing ? 1.0 : _eval_coefficient_at_gp(Wprep, elem, view(h, :, k))
+                            if Cgp isa Number #&& weight === nothing
+                
+                                w = jacDet[k] * intWeights[k] * Cgp * wcoef
+                
+                                if op_u isa SurfaceSymGradOp
+                                    t1, t2 = surface_basis_from_J(Jac, k)
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
+                                elseif op_u isa AxialGradOp
+                                    invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
+                                    Jk = inv(invJk')
+                                    t = Jk[:,1]
+                                    t = t / norm(t)
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                                elseif op_u isa TangentialGradOp
+                                    t = Jac[1:Pu.dim, 3k-2]
+                                    t = t / norm(t)
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                                else
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
+                                end
+                                if op_s isa SurfaceSymGradOp
+                                    t1, t2 = surface_basis_from_J(Jac, k)
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
+                                elseif op_s isa AxialGradOp
+                                    invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
+                                    Jk = inv(invJk')
+                                    t = Jk[:,1]
+                                    t = t / norm(t)
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                                elseif op_s isa TangentialGradOp
+                                    t = Jac[1:Ps.dim, 3k-2]
+                                    t = t / norm(t)
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                                else
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+                                end
+                
+                                detect_pattern!(ws.patBsT, transpose(ws.Bs))
+                                detect_pattern!(ws.patBu, ws.Bu)
+                
+                                mul_opt!(
+                                    Ke,
+                                    transpose(Bs),
+                                    Bu;
+                                    patA = ws.patBsT,
+                                    patB = ws.patBu,
+                                    alpha = w,
+                                    beta = 1.0
+                                )
+                
+                            elseif Cgp isa AbstractMatrix #&& weight === nothing
+                
+                                w = jacDet[k] * intWeights[k] * wcoef
+                
+                                if op_u isa SurfaceSymGradOp
+                                    t1, t2 = surface_basis_from_J(Jac, k)
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
+                                elseif op_u isa AxialGradOp
+                                    invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
+                                    Jk = inv(invJk')
+                                    t = Jk[:,1]
+                                    t = t / norm(t)
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                                elseif op_u isa TangentialGradOp
+                                    t = Jac[1:Pu.dim, 3k-2]
+                                    t = t / norm(t)
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+                                else
+                                    build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
+                                end
+                                if op_s isa SurfaceSymGradOp
+                                    t1, t2 = surface_basis_from_J(Jac, k)
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
+                                elseif op_s isa AxialGradOp
+                                    invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
+                                    Jk = inv(invJk')
+                                    t = Jk[:,1]
+                                    t = t / norm(t)
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                                elseif op_s isa TangentialGradOp
+                                    t = Jac[1:Ps.dim, 3k-2]
+                                    t = t / norm(t)
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+                                else
+                                    build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+                                end
+                
+                                if ws.patCgp === nothing
+                                    ws.patCgp = MatrixPattern(size(Cgp, 1), size(Cgp, 2))
+                
+                                    sizehint!(ws.patCgp.rows, length(Cgp))
+                                    sizehint!(ws.patCgp.cols, length(Cgp))
+                                end
+                
+                                detect_pattern!(ws.patBsT, transpose(Bs))
+                                detect_pattern!(ws.patCgp, Cgp)
+                
+                                mul_opt!(
+                                    tmp,
+                                    transpose(Bs),
+                                    Cgp;
+                                    patA = ws.patBsT,
+                                    patB = ws.patCgp,
+                                    alpha = 1.0,
+                                    beta = 0.0
+                                )
+                
+                                detect_pattern!(ws.patTmp, tmp)
+                                detect_pattern!(ws.patBu, Bu)
+                
+                                mul_opt!(
+                                    Ke,
+                                    tmp,
+                                    Bu;
+                                    patA = ws.patTmp,
+                                    patB = ws.patBu,
+                                    alpha = w,
+                                    beta = 1.0
+                                )
+                
+                            else
+                                error("assemble_operator error")
+                            end
+                        end
+                
+                
+                        # scatter Ke(s,u) -> global IJV
+                        @inbounds for a_loc in 1:ndofs_s_loc
+                            node_a = div(a_loc - 1, Ps.pdim) + 1
+                            comp_a = mod(a_loc - 1, Ps.pdim) + 1
+                            Ia_node = nnet[e, node_a]
+                            Ia = (Ia_node - 1) * Ps.pdim + comp_a
+                
+                            row_start =
+                                element_start + (a_loc - 1) * ndofs_u_loc
+                
+                            @inbounds for b_loc in 1:ndofs_u_loc
+                                node_b = div(b_loc - 1, Pu.pdim) + 1
+                                comp_b = mod(b_loc - 1, Pu.pdim) + 1
+                                Jb_node = nnet[e, node_b]
+                                Jb = (Jb_node - 1) * Pu.pdim + comp_b
+                
+                                p = row_start + b_loc - 1
+                
+                                if build_pattern
+                                    I[p] = Ia
+                                    J[p] = Jb
+                                    V[p] = Ke[a_loc, b_loc]
+                                else
+                                    V[p] += Ke[a_loc, b_loc]
+                                end
+                            end
                         end
                     end
                 end
+                pos += block_entries
             end
         end
     end
