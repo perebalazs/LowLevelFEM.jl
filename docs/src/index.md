@@ -54,6 +54,7 @@ A BibTeX entry is provided in `CITATION.cff`.
 - Coordinate systems: rotate nodal DOFs with constant or function-defined local coordinate systems (incl. curvilinear).
 - Truss structures (static, transient, modal analysis)
 - **Nonlinear solid mechanics (Total Lagrangian formulation)** Energy-based hyperelasticity with consistent stress and tangent operators, including geometric stiffness and follower loads for large-deformation problems.
+- Bilinear weak-form assembly is now multithreaded by default and optimized for high-performance shared-memory execution.
 
 ## Installation
 
@@ -167,7 +168,6 @@ and the online [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stabl
 
 * Beam and shell elements (partially implemented using compound operators for weak-form assembly)
 * Contact problems (penalty, Lagrange multiplier)
-* Multithreading (partially implemented)
 
 Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome.
 In case of any issue, please send a [bug report](https://github.com/perebalazs/LowLevelFEM.jl/issues).
