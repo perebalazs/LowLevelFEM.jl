@@ -1415,6 +1415,291 @@ end
     return t1, t2
 end
 
+mutable struct OperatorWorkspace
+    invJac::Matrix{Float64}
+    ∂h::Matrix{Float64}
+    Bu::Matrix{Float64}
+    Bs::Matrix{Float64}
+    Ke::Matrix{Float64}
+    tmp::Matrix{Float64}
+
+    patBu::MatrixPattern
+    patBsT::MatrixPattern
+    patTmp::MatrixPattern
+    patCgp::Union{Nothing,MatrixPattern}
+end
+
+"""
+    OperatorWorkspace(
+        dim,
+        num_nodes,
+        num_integration_points,
+        out_u,
+        out_s,
+        ndofs_u,
+        ndofs_s
+    )
+
+Allocate reusable element-level work arrays for operator assembly.
+"""
+function OperatorWorkspace(
+    dim::Int,
+    num_nodes::Int,
+    num_integration_points::Int,
+    out_u::Int,
+    out_s::Int,
+    ndofs_u::Int,
+    ndofs_s::Int
+)
+    Bu = zeros(out_u, ndofs_u)
+    Bs = zeros(out_s, ndofs_s)
+    tmp = zeros(ndofs_s, out_u)
+
+    patBu  = MatrixPattern(out_u, ndofs_u)
+    patBsT = MatrixPattern(ndofs_s, out_s)
+    patTmp = MatrixPattern(ndofs_s, out_u)
+
+    sizehint!(patBu.rows, length(Bu))
+    sizehint!(patBu.cols, length(Bu))
+
+    sizehint!(patBsT.rows, length(Bs))
+    sizehint!(patBsT.cols, length(Bs))
+
+    sizehint!(patTmp.rows, length(tmp))
+    sizehint!(patTmp.cols, length(tmp))
+
+    return OperatorWorkspace(
+        zeros(3, 3 * num_integration_points),
+        zeros(dim, num_nodes * num_integration_points),
+        Bu,
+        Bs,
+        zeros(ndofs_s, ndofs_u),
+        tmp,
+        patBu,
+        patBsT,
+        patTmp,
+        nothing
+    )
+end
+
+"""
+    assemble_element_matrix!(ws, elem, gidx, ...)
+
+Compute the local element matrix and store it in `ws.Ke`.
+"""
+function assemble_element_matrix!(
+    ws::OperatorWorkspace,
+    elem::Integer,
+    gidx::Integer,
+    jac_all,
+    det_all,
+    nip::Integer,
+    numIntPoints::Integer,
+    dim::Integer,
+    edim::Integer,
+    numNodes::Integer,
+    ∇h,
+    h,
+    intWeights,
+    Cprep,
+    Wprep,
+    op_u::AbstractOp,
+    Pu::Problem,
+    op_s::AbstractOp,
+    Ps::Problem
+)
+    invJac = ws.invJac
+    ∂h     = ws.∂h
+    Bu     = ws.Bu
+    Bs     = ws.Bs
+    Ke     = ws.Ke
+    tmp    = ws.tmp
+
+    jac_slice =
+        @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
+
+    jacDet =
+        @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
+
+    Jac = reshape(jac_slice, 3, :)
+
+    @inbounds for k in 1:numIntPoints
+        @views invJac[1:3, 3k-2:3k] .=
+            inv(Jac[1:3, 3k-2:3k])'
+    end
+
+    # Physical / tangential gradients
+    fill!(∂h, 0.0)
+
+    @inbounds for k in 1:numIntPoints
+        if edim == dim
+            @views begin
+                invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
+
+                for a in 1:numNodes
+                    gha = ∇h[a*3-2:a*3-(3-dim), k]
+                    dha = ∂h[1:dim, (k-1)*numNodes+a]
+                    mul!(dha, invJk, gha)
+                end
+            end
+        else
+            Jk = @view Jac[1:dim, 3k-2:3k]
+            Jtan = Matrix(Jk[:, 1:edim])
+            Gtan = Jtan * inv(Jtan' * Jtan)
+
+            for a in 1:numNodes
+                gha = ∇h[a*3-2:a*3-3+edim, k]
+                ∂h[1:dim, (k-1)*numNodes+a] .= Gtan * gha
+            end
+        end
+    end
+
+    fill!(Ke, 0.0)
+
+    @inbounds for k in 1:numIntPoints
+        if Cprep isa AbstractVector
+            Cgp = _eval_coefficient_chain_at_gp(
+                Cprep, elem, view(h, :, k)
+            )
+        else
+            Cgp = _eval_coefficient_at_gp(
+                Cprep, elem, view(h, :, k)
+            )
+        end
+
+        wcoef =
+            Wprep === nothing ?
+            1.0 :
+            _eval_coefficient_at_gp(Wprep, elem, view(h, :, k))
+
+        if Cgp isa Number
+            w = jacDet[k] * intWeights[k] * Cgp * wcoef
+
+            if op_u isa SurfaceSymGradOp
+                t1, t2 = surface_basis_from_J(Jac, k)
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
+            elseif op_u isa AxialGradOp
+                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
+                Jk = inv(invJk')
+                t = Jk[:, 1]
+                t = t / norm(t)
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+            elseif op_u isa TangentialGradOp
+                t = Jac[1:Pu.dim, 3k-2]
+                t = t / norm(t)
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+            else
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
+            end
+
+            if op_s isa SurfaceSymGradOp
+                t1, t2 = surface_basis_from_J(Jac, k)
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
+            elseif op_s isa AxialGradOp
+                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
+                Jk = inv(invJk')
+                t = Jk[:, 1]
+                t = t / norm(t)
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+            elseif op_s isa TangentialGradOp
+                t = Jac[1:Ps.dim, 3k-2]
+                t = t / norm(t)
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+            else
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+            end
+
+            detect_pattern!(ws.patBsT, transpose(Bs))
+            detect_pattern!(ws.patBu, Bu)
+
+            mul_opt!(
+                Ke,
+                transpose(Bs),
+                Bu;
+                patA = ws.patBsT,
+                patB = ws.patBu,
+                alpha = w,
+                beta = 1.0
+            )
+
+        elseif Cgp isa AbstractMatrix
+            w = jacDet[k] * intWeights[k] * wcoef
+
+            if op_u isa SurfaceSymGradOp
+                t1, t2 = surface_basis_from_J(Jac, k)
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
+            elseif op_u isa AxialGradOp
+                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
+                Jk = inv(invJk')
+                t = Jk[:, 1]
+                t = t / norm(t)
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+            elseif op_u isa TangentialGradOp
+                t = Jac[1:Pu.dim, 3k-2]
+                t = t / norm(t)
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
+            else
+                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
+            end
+
+            if op_s isa SurfaceSymGradOp
+                t1, t2 = surface_basis_from_J(Jac, k)
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
+            elseif op_s isa AxialGradOp
+                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
+                Jk = inv(invJk')
+                t = Jk[:, 1]
+                t = t / norm(t)
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+            elseif op_s isa TangentialGradOp
+                t = Jac[1:Ps.dim, 3k-2]
+                t = t / norm(t)
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
+            else
+                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
+            end
+
+            if ws.patCgp === nothing
+                ws.patCgp =
+                    MatrixPattern(size(Cgp, 1), size(Cgp, 2))
+
+                sizehint!(ws.patCgp.rows, length(Cgp))
+                sizehint!(ws.patCgp.cols, length(Cgp))
+            end
+
+            detect_pattern!(ws.patBsT, transpose(Bs))
+            detect_pattern!(ws.patCgp, Cgp)
+
+            mul_opt!(
+                tmp,
+                transpose(Bs),
+                Cgp;
+                patA = ws.patBsT,
+                patB = ws.patCgp,
+                alpha = 1.0,
+                beta = 0.0
+            )
+
+            detect_pattern!(ws.patTmp, tmp)
+            detect_pattern!(ws.patBu, Bu)
+
+            mul_opt!(
+                Ke,
+                tmp,
+                Bu;
+                patA = ws.patTmp,
+                patB = ws.patBu,
+                alpha = w,
+                beta = 1.0
+            )
+        else
+            error("assemble_element_matrix!: unsupported coefficient type")
+        end
+    end
+
+    return nothing
+end
+
 """
     assemble_operator(Pu::Problem, 
                       op_u::AbstractOp, 
@@ -1511,664 +1796,489 @@ function assemble_operator(
     domain=nothing,
     gauss=:full,
     assembly::Symbol=:matrix,
+    multithread::Bool=true,
     I=nothing,
     J=nothing,
     V=nothing)
 
-    assembly ∈ (:matrix, :triplets, :add) ||
-    error("""
-    assemble_operator: invalid assembly mode $assembly.
+    use_threads = multithread && Threads.nthreads() > 1
 
-    Valid modes are:
-        :matrix
-        :triplets
-        :add
-    """)
-    @assert Pu.name == Ps.name "Both problems must refer to the same gmsh model/mesh."
-    @assert Pu.dim == Ps.dim "Both problems must have the same spatial dimension."
-    gmsh.model.setCurrent(Pu.name)
+    old_blas_threads = LinearAlgebra.BLAS.get_num_threads()
+    if use_threads && old_blas_threads != 1
+        LinearAlgebra.BLAS.set_num_threads(1)
+    end
 
-    # output dims must match for the dot-product integrand
-    #out_u = op_outdim(op_u, Pu)
-    #out_s = op_outdim(op_s, Ps)
-    #@assert out_u == out_s "Operator output dims mismatch: $out_u vs $out_s."
-    
-    # operator output dimensions
-    out_u = op_outdim(op_u, Pu)
-    out_s = op_outdim(op_s, Ps)
-    
-    if coefficient isa Number || coefficient isa ScalarField
-        @assert out_u == out_s
-    
-    elseif coefficient isa AbstractMatrix
-        #@assert size(coefficient,1) == out_s
-        #@assert size(coefficient,2) == out_u
-        if size(coefficient,1) != out_s || size(coefficient,2) != out_u
-            error("""
-                Coefficient matrix size mismatch.
-
-                Test operator:
-                    $(typeof(op_s))
-                output dimension = $out_s
-
-                Trial operator:
-                    $(typeof(op_u))
-                output dimension = $out_u
-
-                Expected coefficient size:
-                    ($out_s, $out_u)
-
-                Got:
-                    $(size(coefficient))
-
-                Coefficient type:
-                    $(typeof(coefficient))
-                """)
-        end
-    
-    elseif coefficient isa AbstractVector
-        if length(coefficient) == 1 &&
-           (coefficient[1] isa Number || coefficient[1] isa ScalarField)
-    
+    try
+        assembly ∈ (:matrix, :triplets, :add) ||
+        error("""
+        assemble_operator: invalid assembly mode $assembly.
+   
+        Valid modes are:
+            :matrix
+            :triplets
+            :add
+        """)
+        @assert Pu.name == Ps.name "Both problems must refer to the same gmsh model/mesh."
+        @assert Pu.dim == Ps.dim "Both problems must have the same spatial dimension."
+        gmsh.model.setCurrent(Pu.name)
+   
+        # operator output dimensions
+        out_u = op_outdim(op_u, Pu)
+        out_s = op_outdim(op_s, Ps)
+        
+        if coefficient isa Number || coefficient isa ScalarField
             @assert out_u == out_s
-    
-        else
-            A1 = coefficient[1]
-            An = coefficient[end]
-    
-            @assert A1 isa AbstractMatrix
-            @assert An isa AbstractMatrix
-    
-            if size(A1,1) != out_s || size(An,2) != out_u
+        
+        elseif coefficient isa AbstractMatrix
+            if size(coefficient,1) != out_s || size(coefficient,2) != out_u
                 error("""
-                Coefficient chain size mismatch.
-
+                    Coefficient matrix size mismatch.
+   
                     Test operator:
                         $(typeof(op_s))
                     output dimension = $out_s
-
+   
                     Trial operator:
                         $(typeof(op_u))
                     output dimension = $out_u
-
-                    Expected:
-                        first matrix rows = $out_s
-                        last matrix cols  = $out_u
-
+   
+                    Expected coefficient size:
+                        ($out_s, $out_u)
+   
                     Got:
-                        size(A1) = $(size(A1))
-                        size(An) = $(size(An))
-
-                    Coefficient chain types:
-                        $(typeof.(coefficient))
+                        $(size(coefficient))
+   
+                    Coefficient type:
+                        $(typeof(coefficient))
                     """)
             end
-            #@assert size(A1,1) == out_s
-            #@assert size(An,2) == out_u
-    
-            for i in 1:length(coefficient)-1
-                Ai = coefficient[i]
-                Aj = coefficient[i+1]
-    
-                @assert Ai isa AbstractMatrix
-                @assert Aj isa AbstractMatrix
-                @assert size(Ai,2) == size(Aj,1)
+        
+        elseif coefficient isa AbstractVector
+            if length(coefficient) == 1 &&
+               (coefficient[1] isa Number || coefficient[1] isa ScalarField)
+        
+                @assert out_u == out_s
+        
+            else
+                A1 = coefficient[1]
+                An = coefficient[end]
+        
+                @assert A1 isa AbstractMatrix
+                @assert An isa AbstractMatrix
+        
+                if size(A1,1) != out_s || size(An,2) != out_u
+                    error("""
+                    Coefficient chain size mismatch.
+   
+                        Test operator:
+                            $(typeof(op_s))
+                        output dimension = $out_s
+   
+                        Trial operator:
+                            $(typeof(op_u))
+                        output dimension = $out_u
+   
+                        Expected:
+                            first matrix rows = $out_s
+                            last matrix cols  = $out_u
+   
+                        Got:
+                            size(A1) = $(size(A1))
+                            size(An) = $(size(An))
+   
+                        Coefficient chain types:
+                            $(typeof.(coefficient))
+                        """)
+                end
+        
+                for i in 1:length(coefficient)-1
+                    Ai = coefficient[i]
+                    Aj = coefficient[i+1]
+        
+                    @assert Ai isa AbstractMatrix
+                    @assert Aj isa AbstractMatrix
+                    @assert size(Ai,2) == size(Aj,1)
+                end
             end
         end
-    end
-
-    # ------------------------------------------------------------
-    # weight dimension check
-    # ------------------------------------------------------------
-    if weight !== nothing
-        # optional: csak Number vagy ScalarField legyen
-        (weight isa Number || weight isa ScalarField) ||
-        error("weight must be Number or ScalarField")
-    end
-
-    # ------------------------------------------------------------
-    # prepare coefficient
-    # ------------------------------------------------------------
-
-    # estimate IJV length: crude but OK for notebook prototype
-    #lengthOfIJV = LowLevelFEM.estimateLengthOfIJV(Pu) * max(1, Ps.pdim) * max(1, Pu.pdim)
-    #I = Vector{Int}(undef, lengthOfIJV)
-    #J = Vector{Int}(undef, lengthOfIJV)
-    #V = Vector{Float64}(undef, lengthOfIJV)
-    #pos = 1
-    # ------------------------------------------------------------
-    # Assembly storage
-    # ------------------------------------------------------------
-
-    build_pattern = assembly !== :add
-
-    if build_pattern
-        I === nothing ||
-            error("assemble_operator: I must be nothing for assembly=$assembly.")
-
-        J === nothing ||
-            error("assemble_operator: J must be nothing for assembly=$assembly.")
-
-        V === nothing ||
-            error("assemble_operator: V must be nothing for assembly=$assembly.")
-
-        lengthOfIJV =
-            LowLevelFEM.estimateLengthOfIJV(Pu) *
-            max(1, Ps.pdim) *
-            max(1, Pu.pdim)
-
-        I = Vector{Int}(undef, lengthOfIJV)
-        J = Vector{Int}(undef, lengthOfIJV)
-        V = Vector{Float64}(undef, lengthOfIJV)
-
-    else
-        I === nothing ||
-            error("assemble_operator: I must be nothing for assembly=:add.")
-
-        J === nothing ||
-            error("assemble_operator: J must be nothing for assembly=:add.")
-
-        V isa Vector{Float64} ||
-            error(
-                "assemble_operator: assembly=:add requires " *
-                "V::Vector{Float64}; got $(typeof(V))."
-            )
-    end
-
-    pos = 1
-
-    dim = Pu.dim
-
-    # ------------------------------------------------------------
-    # Domain/material selection FIX
-    # ------------------------------------------------------------
-    phNames = String[]
-    domkind = nothing
-
-    if domain === nothing
-        # original behavior: loop over all materials (each has phName)
-        phNames = [mat.phName for mat in Pu.material]
-    elseif domain isa DomainSpec
-        phNames = [domain.name]
-        domkind = domain.kind   # :Ω or :Γ
-    elseif domain isa AbstractString
-        # (optional) accept plain String domain too
-        phNames = [String(domain)]
+   
+        # ------------------------------------------------------------
+        # weight dimension check
+        # ------------------------------------------------------------
+        if weight !== nothing
+            # optional: csak Number vagy ScalarField legyen
+            (weight isa Number || weight isa ScalarField) ||
+            error("weight must be Number or ScalarField")
+        end
+   
+        # ------------------------------------------------------------
+        # prepare coefficient
+        # ------------------------------------------------------------
+   
+        # ------------------------------------------------------------
+        # Assembly storage
+        # ------------------------------------------------------------
+   
+        build_pattern = assembly !== :add
+   
+        if build_pattern
+            I === nothing ||
+                error("assemble_operator: I must be nothing for assembly=$assembly.")
+   
+            J === nothing ||
+                error("assemble_operator: J must be nothing for assembly=$assembly.")
+   
+            V === nothing ||
+                error("assemble_operator: V must be nothing for assembly=$assembly.")
+   
+            lengthOfIJV =
+                LowLevelFEM.estimateLengthOfIJV(Pu) *
+                max(1, Ps.pdim) *
+                max(1, Pu.pdim)
+   
+            I = Vector{Int}(undef, lengthOfIJV)
+            J = Vector{Int}(undef, lengthOfIJV)
+            V = Vector{Float64}(undef, lengthOfIJV)
+   
+        else
+            I === nothing ||
+                error("assemble_operator: I must be nothing for assembly=:add.")
+   
+            J === nothing ||
+                error("assemble_operator: J must be nothing for assembly=:add.")
+   
+            V isa Vector{Float64} ||
+                error(
+                    "assemble_operator: assembly=:add requires " *
+                    "V::Vector{Float64}; got $(typeof(V))."
+                )
+        end
+   
+        pos = 1
+   
+        dim = Pu.dim
+   
+        # ------------------------------------------------------------
+        # Domain/material selection FIX
+        # ------------------------------------------------------------
+        phNames = String[]
         domkind = nothing
-    else
-        error("assemble_operator: unsupported domain type $(typeof(domain)). Expected nothing, DomainSpec or String.")
-    end
-
-    # loop physical groups
-    for phName in phNames
-        dom_here =
-            domain === nothing ? DomainSpec(:Ω, phName) :
-            domain isa DomainSpec ? domain :
-            DomainSpec(:Ω, String(phName))
-
-        Cprep = _prepare_coefficient(coefficient, dom_here)
-        Wprep = weight === nothing ? nothing : _prepare_coefficient(weight, dom_here)
-
-        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-
-        isempty(dimTags) && error("assemble_operator: physical group \"$phName\" not found.")
-
-        for (edim, etag) in dimTags
-
-            # optional dimension checks (matches your DSL design)
-            if domkind === :Ω
-                edim == Pu.dim || error("Ω=\"$phName\" has dim=$edim but problem.dim=$(Pu.dim)")
-            elseif domkind === :Γ
-                edim < Pu.dim || error("Γ=\"$phName\" has dim=$edim but expected < $(Pu.dim)")
-            end
-
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-
-            for itype in eachindex(elemTypes)
-                et = elemTypes[itype]
-                _, _, order, numNodes::Int64, _, _ = gmsh.model.mesh.getElementProperties(et)
-
-                gorder = gauss == :reduced ? max(1, 2order - 1) :
-                    gauss == :full    ? (2order + 1) :
-                    gauss isa Int     ? max(1, 2order+1 + gauss) :
-                    (2order + 1)
-
-                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(gorder))
-                #intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
-                numIntPoints = length(intWeights)
-
-                _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
-                h = reshape(fun, :, numIntPoints)
-
-                _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
-                ∇h = reshape(dfun, :, numIntPoints)
-
-                # Batched Jacobian retrieval
-                elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
-                jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
-
-                numElementsGlobal = length(elemTags_global)
-                nip = length(det_all) ÷ numElementsGlobal
-
-                @assert nip == numIntPoints
-
-                TagType = eltype(elemTags_global)
-                idxmap = Dict{TagType,Int}()
-                sizehint!(idxmap, numElementsGlobal)
-
-                @inbounds for (gi, gtag) in enumerate(elemTags_global)
-                    idxmap[gtag] = gi - 1
+   
+        if domain === nothing
+            # original behavior: loop over all materials (each has phName)
+            phNames = [mat.phName for mat in Pu.material]
+        elseif domain isa DomainSpec
+            phNames = [domain.name]
+            domkind = domain.kind   # :Ω or :Γ
+        elseif domain isa AbstractString
+            # (optional) accept plain String domain too
+            phNames = [String(domain)]
+            domkind = nothing
+        else
+            error("assemble_operator: unsupported domain type $(typeof(domain)). Expected nothing, DomainSpec or String.")
+        end
+   
+        # loop physical groups
+        for phName in phNames
+            dom_here =
+                domain === nothing ? DomainSpec(:Ω, phName) :
+                domain isa DomainSpec ? domain :
+                DomainSpec(:Ω, String(phName))
+   
+            Cprep = _prepare_coefficient(coefficient, dom_here)
+            Wprep = weight === nothing ? nothing : _prepare_coefficient(weight, dom_here)
+   
+            dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+   
+            isempty(dimTags) && error("assemble_operator: physical group \"$phName\" not found.")
+   
+            for (edim, etag) in dimTags
+   
+                # optional dimension checks (matches your DSL design)
+                if domkind === :Ω
+                    edim == Pu.dim || error("Ω=\"$phName\" has dim=$edim but problem.dim=$(Pu.dim)")
+                elseif domkind === :Γ
+                    edim < Pu.dim || error("Γ=\"$phName\" has dim=$edim but expected < $(Pu.dim)")
                 end
-
-                # buffers
-                nel = length(elemTags[itype])
-                nnet = zeros(Int, nel, numNodes)
-                invJac = zeros(3, 3numIntPoints)
-                ∂h = zeros(dim, numNodes * numIntPoints)
-
-                ndofs_u_loc = Pu.pdim * numNodes
-                ndofs_s_loc = Ps.pdim * numNodes
-
-                Bu = zeros(out_u, ndofs_u_loc)
-                Bs = zeros(out_s, ndofs_s_loc)
-                Ke = zeros(ndofs_s_loc, ndofs_u_loc)
-                tmp = zeros(size(Bs,2), size(Bu,1))
-
-                # connectivity table
-                @inbounds for e in 1:nel
-                    for a in 1:numNodes
-                        nnet[e, a] = elemNodeTags[itype][(e-1)*numNodes+a]
+   
+                elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+   
+                for itype in eachindex(elemTypes)
+                    et = elemTypes[itype]
+                    _, _, order, numNodes::Int64, _, _ = gmsh.model.mesh.getElementProperties(et)
+   
+                    gorder = gauss == :reduced ? max(1, 2order - 1) :
+                        gauss == :full    ? (2order + 1) :
+                        gauss isa Int     ? max(1, 2order+1 + gauss) :
+                        (2order + 1)
+   
+                    intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(gorder))
+                    #intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                    numIntPoints = length(intWeights)
+   
+                    _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                    h = reshape(fun, :, numIntPoints)
+   
+                    _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                    ∇h = reshape(dfun, :, numIntPoints)
+   
+                    # Batched Jacobian retrieval
+                    elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+                    jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+   
+                    numElementsGlobal = length(elemTags_global)
+                    nip = length(det_all) ÷ numElementsGlobal
+   
+                    @assert nip == numIntPoints
+   
+                    TagType = eltype(elemTags_global)
+                    idxmap = Dict{TagType,Int}()
+                    sizehint!(idxmap, numElementsGlobal)
+   
+                    @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                        idxmap[gtag] = gi - 1
                     end
-                end
-
-                #tmpBu = similar(Bu)
-    
-                #patBu = nothing
-                #patBsT = nothing
-                #patCgp = nothing
-                #patTmp = nothing
-                patBu  = MatrixPattern(size(Bu, 1), size(Bu, 2))
-                patBsT = MatrixPattern(size(Bs, 2), size(Bs, 1))
-
-                sizehint!(patBu.rows, length(Bu))
-                sizehint!(patBu.cols, length(Bu))
-
-                sizehint!(patBsT.rows, length(Bs))
-                sizehint!(patBsT.cols, length(Bs))
-
-                patTmp = MatrixPattern(size(tmp, 1), size(tmp, 2))
-
-                sizehint!(patTmp.rows, length(tmp))
-                sizehint!(patTmp.cols, length(tmp))
-
-                patCgp = nothing
-
-                # element loop
-                @inbounds for e in 1:nel
-                    elem = elemTags[itype][e]
-
-                    gidx = idxmap[elem]
-
-                    jac_slice = @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
-
-                    jacDet = @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
-
-                    Jac = reshape(jac_slice, 3, :)
-
-                    #jac, jacDet, _ = gmsh.model.mesh.getJacobian(elem, intPoints)
-                    #Jac = reshape(jac, 3, :)
-
-                    @inbounds for k in 1:numIntPoints
-                        @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
+   
+                    # buffers
+                    nel = length(elemTags[itype])
+                    nnet = zeros(Int, nel, numNodes)
+   
+                    ndofs_u_loc = Pu.pdim * numNodes
+                    ndofs_s_loc = Ps.pdim * numNodes
+   
+                    # connectivity table
+                    @inbounds for e in 1:nel
+                        for a in 1:numNodes
+                            nnet[e, a] = elemNodeTags[itype][(e-1)*numNodes+a]
+                        end
                     end
+   
+                    entries_per_element = ndofs_s_loc * ndofs_u_loc
+                    block_start = pos
+                    block_entries = nel * entries_per_element
+   
+                    if build_pattern && block_start + block_entries - 1 > length(V)
+                        newlen = max(
+                            block_start + block_entries - 1,
+                            Int(ceil(1.5 * length(V))) + 1000
+                        )
+   
+                        resize!(I, newlen)
+                        resize!(J, newlen)
+                        resize!(V, newlen)
+                    elseif !build_pattern && block_start + block_entries - 1 > length(V)
+                        error("""
+                        assemble_operator: assembly pattern mismatch.
                     
-                    ##############################################################################################################
-                    # physical / tangential gradients of basis
-                    fill!(∂h, 0.0)
+                        The current element block requires more entries than the existing
+                        V vector contains.
+                        """)
+                    end
+   
+                    nworkspaces = use_threads ? Threads.maxthreadid() : 1
 
-                    @inbounds for k in 1:numIntPoints
-                        if edim == dim
-                            @views begin
-                                # old full-dimensional behaviour
-                                invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
-                        
-                                for a in 1:numNodes
-                                    gha = ∇h[a*3-2:a*3-(3-dim), k]
-                                    dha = ∂h[1:dim, (k-1)*numNodes+a]
-                                    mul!(dha, invJk, gha)
-                                    #∂h[1:dim, (k-1)*numNodes+a] .= invJk * gha
+                    workspaces = [
+                        OperatorWorkspace(
+                            dim,
+                            numNodes,
+                            numIntPoints,
+                            out_u,
+                            out_s,
+                            ndofs_u_loc,
+                            ndofs_s_loc
+                        )
+                        for _ in 1:nworkspaces
+                    ]
+                    
+                    Vthread = V::Vector{Float64}
+                    Ithread = build_pattern ? (I::Vector{Int}) : Int[]
+                    Jthread = build_pattern ? (J::Vector{Int}) : Int[]
+   
+                    let Ithread = Ithread,
+                        Jthread = Jthread,
+                        Vthread = Vthread,
+                        build_pattern = build_pattern
+   
+                        # element loop
+                        # TODO: duplicated loop -- separate helper function is needed
+                        if use_threads
+                            Threads.@threads :static for e in 1:nel
+                                ws = workspaces[Threads.threadid()]
+                            
+                                elem = elemTags[itype][e]
+                                gidx = idxmap[elem]
+                    
+                                assemble_element_matrix!(
+                                    ws,
+                                    elem,
+                                    gidx,
+                                    jac_all,
+                                    det_all,
+                                    nip,
+                                    numIntPoints,
+                                    dim,
+                                    edim,
+                                    numNodes,
+                                    ∇h,
+                                    h,
+                                    intWeights,
+                                    Cprep,
+                                    Wprep,
+                                    op_u,
+                                    Pu,
+                                    op_s,
+                                    Ps
+                                )
+                    
+                                Ke = ws.Ke
+                    
+                                element_start = block_start + (e - 1) * entries_per_element
+                            
+                                # scatter Ke(s,u) -> global IJV
+                                @inbounds for a_loc in 1:ndofs_s_loc
+                                    node_a = div(a_loc - 1, Ps.pdim) + 1
+                                    comp_a = mod(a_loc - 1, Ps.pdim) + 1
+                                    Ia_node = nnet[e, node_a]
+                                    Ia = (Ia_node - 1) * Ps.pdim + comp_a
+                            
+                                    row_start =
+                                        element_start + (a_loc - 1) * ndofs_u_loc
+                            
+                                    @inbounds for b_loc in 1:ndofs_u_loc
+                                        node_b = div(b_loc - 1, Pu.pdim) + 1
+                                        comp_b = mod(b_loc - 1, Pu.pdim) + 1
+                                        Jb_node = nnet[e, node_b]
+                                        Jb = (Jb_node - 1) * Pu.pdim + comp_b
+                            
+                                        p = row_start + b_loc - 1
+                            
+                                        if build_pattern
+                                            Ithread[p] = Ia
+                                            Jthread[p] = Jb
+                                            Vthread[p] = Ke[a_loc, b_loc]
+                                        else
+                                            Vthread[p] += Ke[a_loc, b_loc]
+                                        end
+                                    end
                                 end
                             end
-
                         else
-                            # embedded lower-dimensional element:
-                            # surface element in 3D, line element in 2D/3D
-                            Jk = @view Jac[1:dim, 3k-2:3k]
-                            Jtan = Matrix(Jk[:, 1:edim])
-                            Gtan = Jtan * inv(Jtan' * Jtan)
-
-                            for a in 1:numNodes
-                                gha = ∇h[a*3-2:a*3-3+edim, k]
-                                ∂h[1:dim, (k-1)*numNodes+a] .= Gtan * gha
-                            end
-                        end
-                    end
-                    ##############################################################################################################
-
-                    fill!(Ke, 0.0)
-
-                    # integrate
-                    @inbounds for k in 1:numIntPoints
-                        if Cprep isa AbstractVector
-                            #=
-                            mats = [_eval_coefficient_at_gp(M, elem, view(h, :, k)) for M in Cprep]
-                            Cgp = mats[1]
-                            for i in 2:length(mats)
-                                Cgp = matmul_sf(Cgp, mats[i])
-                            end
-                            =#
-                            Cgp = _eval_coefficient_chain_at_gp(Cprep, elem, view(h, :, k))
-                        else
-                            Cgp = _eval_coefficient_at_gp(Cprep, elem, view(h, :, k))
-                        end
-                        wcoef = Wprep === nothing ? 1.0 : _eval_coefficient_at_gp(Wprep, elem, view(h, :, k))
-                        if Cgp isa Number #&& weight === nothing
-
-                            w = jacDet[k] * intWeights[k] * Cgp * wcoef
-
-                            if op_u isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_u isa AxialGradOp
-                                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            elseif op_u isa TangentialGradOp
-                                t = Jac[1:Pu.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
-                            end
-                            if op_s isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_s isa AxialGradOp
-                                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            elseif op_s isa TangentialGradOp
-                                t = Jac[1:Ps.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
-                            end
-
-                            ##if patBu === nothing
-                            ##    patBu = detect_pattern(Bu)
-                            ##end
-                            ##if patBsT === nothing
-                            ##    patBsT = detect_pattern(transpose(Bs))
-                            ##end
-                            #mul_opt!(Ke, transpose(Bs), Bu;
-                            #    #patA=patBsT,
-                            #    #patB=patBu,
-                            #    alpha=w,
-                            #    beta=1.0
-                            #)
-                            detect_pattern!(patBsT, transpose(Bs))
-                            detect_pattern!(patBu, Bu)
-
-                            mul_opt!(
-                                Ke,
-                                transpose(Bs),
-                                Bu;
-                                patA = patBsT,
-                                patB = patBu,
-                                alpha = w,
-                                beta = 1.0
-                            )
-
-                        elseif Cgp isa AbstractMatrix #&& weight === nothing
-
-                            w = jacDet[k] * intWeights[k] * wcoef
-
-                            if op_u isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_u isa AxialGradOp
-                                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            elseif op_u isa TangentialGradOp
-                                t = Jac[1:Pu.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes)
-                            end
-                            if op_s isa SurfaceSymGradOp
-                                t1, t2 = surface_basis_from_J(Jac, k)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
-                            elseif op_s isa AxialGradOp
-                                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
-                                Jk = inv(invJk')
-                                t = Jk[:,1]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            elseif op_s isa TangentialGradOp
-                                t = Jac[1:Ps.dim, 3k-2]
-                                t = t / norm(t)
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
-                            else
-                                build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes)
-                            end
-
-                            #if patBu === nothing
-                            #    patBu = detect_pattern(Bu)
-                            #end
-                            #if patBsT === nothing
-                            #    patBsT = detect_pattern(transpose(Bs))
-                            #end
-                            ##patCgp = detect_pattern(Cgp)
-
-                            #if patCgp === nothing
-                            #    patCgp = detect_pattern(Cgp)
-                            #end
-
-                            # tmp = Bs' * Cgp
-                            #mul_opt!(tmp, transpose(Bs), Cgp;
-                            #    #patA=patBsT,
-                            #    #patB=patCgp,
-                            #    alpha=1.0,
-                            #    beta=0.0
-                            #)
-
-                            ##if patTmp === nothing
-                            ##    patTmp = detect_pattern(tmp)
-                            ##end
-
-                            ## Ke += w * tmp * Bu
-                            ##patTmp = detect_pattern(tmp)
-                            #mul_opt!(Ke, tmp, Bu;
-                            #    #patA=patTmp,
-                            #    #patB=patBu,
-                            #    alpha=w,
-                            #    beta=1.0
-                            #)
-                            if patCgp === nothing
-                                patCgp = MatrixPattern(size(Cgp, 1), size(Cgp, 2))
-
-                                sizehint!(patCgp.rows, length(Cgp))
-                                sizehint!(patCgp.cols, length(Cgp))
-                            end
-
-                            detect_pattern!(patBsT, transpose(Bs))
-                            detect_pattern!(patCgp, Cgp)
-
-                            mul_opt!(
-                            tmp,
-                            transpose(Bs),
-                            Cgp;
-                            patA = patBsT,
-                            patB = patCgp,
-                            alpha = 1.0,
-                            beta = 0.0
-                            )
-
-                            detect_pattern!(patTmp, tmp)
-                            detect_pattern!(patBu, Bu)
-
-                            mul_opt!(
-                            Ke,
-                            tmp,
-                            Bu;
-                            patA = patTmp,
-                            patB = patBu,
-                            alpha = w,
-                            beta = 1.0
-                            )
-
-                        else
-                            error("assemble_operator error")
-                        end
-                    end
-
-
-                    # scatter Ke(s,u) -> global IJV
-                    @inbounds for a_loc in 1:ndofs_s_loc
-                        node_a = div(a_loc - 1, Ps.pdim) + 1
-                        comp_a = mod(a_loc - 1, Ps.pdim) + 1
-                        Ia_node = nnet[e, node_a]
-                        Ia = (Ia_node - 1) * Ps.pdim + comp_a
-                
-                        @inbounds for b_loc in 1:ndofs_u_loc
-                            node_b = div(b_loc - 1, Pu.pdim) + 1
-                            comp_b = mod(b_loc - 1, Pu.pdim) + 1
-                            Jb_node = nnet[e, node_b]
-                            Jb = (Jb_node - 1) * Pu.pdim + comp_b
+                            @inbounds for e in 1:nel
+                                ws = workspaces[1]
                             
-                            #@assert pos >= 1
-                            #@assert pos - 1 <= length(I)
-                            #@assert all(isfinite, V[1:pos-1])
+                                elem = elemTags[itype][e]
+                                gidx = idxmap[elem]
+                    
+                                assemble_element_matrix!(
+                                    ws,
+                                    elem,
+                                    gidx,
+                                    jac_all,
+                                    det_all,
+                                    nip,
+                                    numIntPoints,
+                                    dim,
+                                    edim,
+                                    numNodes,
+                                    ∇h,
+                                    h,
+                                    intWeights,
+                                    Cprep,
+                                    Wprep,
+                                    op_u,
+                                    Pu,
+                                    op_s,
+                                    Ps
+                                )
+                    
+                                Ke = ws.Ke
+                    
+                                element_start = block_start + (e - 1) * entries_per_element
                             
-                            #if pos >= length(I)
-                            #    newlen = Int(ceil(1.5*length(I))) + 1000
-                            #    resize!(I, newlen)
-                            #    resize!(J, newlen)
-                            #    resize!(V, newlen)
-                            #end
-                
-                            #I[pos] = Ia
-                            #J[pos] = Jb
-                            #V[pos] = Ke[a_loc, b_loc]
-                            #pos += 1
-
-                            if build_pattern
-                                if pos > length(V)
-                                    newlen = max(
-                                        pos,
-                                        Int(ceil(1.5 * length(V))) + 1000
-                                    )
-
-                                    resize!(I, newlen)
-                                    resize!(J, newlen)
-                                    resize!(V, newlen)
+                                # scatter Ke(s,u) -> global IJV
+                                @inbounds for a_loc in 1:ndofs_s_loc
+                                    node_a = div(a_loc - 1, Ps.pdim) + 1
+                                    comp_a = mod(a_loc - 1, Ps.pdim) + 1
+                                    Ia_node = nnet[e, node_a]
+                                    Ia = (Ia_node - 1) * Ps.pdim + comp_a
+                            
+                                    row_start =
+                                        element_start + (a_loc - 1) * ndofs_u_loc
+                            
+                                    @inbounds for b_loc in 1:ndofs_u_loc
+                                        node_b = div(b_loc - 1, Pu.pdim) + 1
+                                        comp_b = mod(b_loc - 1, Pu.pdim) + 1
+                                        Jb_node = nnet[e, node_b]
+                                        Jb = (Jb_node - 1) * Pu.pdim + comp_b
+                            
+                                        p = row_start + b_loc - 1
+                            
+                                        if build_pattern
+                                            Ithread[p] = Ia
+                                            Jthread[p] = Jb
+                                            Vthread[p] = Ke[a_loc, b_loc]
+                                        else
+                                            Vthread[p] += Ke[a_loc, b_loc]
+                                        end
+                                    end
                                 end
-
-                                I[pos] = Ia
-                                J[pos] = Jb
-                                V[pos] = Ke[a_loc, b_loc]
-
-                            else
-                                pos <= length(V) ||
-                                    error("""
-                                    assemble_operator: assembly pattern mismatch.
-
-                                    The current operator generated more entries than
-                                    the existing V vector contains.
-
-                                    Current position:
-                                        $pos
-
-                                    Length of V:
-                                        $(length(V))
-                                    """)
-
-                                V[pos] += Ke[a_loc, b_loc]
                             end
-
-                            pos += 1
                         end
                     end
+                    pos += block_entries
                 end
             end
         end
+   
+        nentries = pos - 1
+        nrows = ndofs(Ps)
+        ncols = ndofs(Pu)
+        
+        @assert nrows > 0
+        @assert ncols > 0
+        
+        if assembly === :add
+            nentries == length(V) ||
+                error("""
+                    assemble_operator: assembly pattern mismatch.
+        
+                The existing V vector contains:
+                    $(length(V)) entries
+        
+                The current operator generated:
+                    $nentries entries
+        
+                All compound terms must traverse exactly the same
+                elements and local matrix entries in the same order.
+                """)
+        
+            return V
+        end
+        
+        resize!(I, nentries)
+        resize!(J, nentries)
+        resize!(V, nentries)
+        
+        if nentries > 0
+            @assert maximum(I) <= nrows
+            @assert maximum(J) <= ncols
+            @assert minimum(I) >= 1
+            @assert minimum(J) >= 1
+        end
+        
+        if assembly === :triplets
+            return I, J, V, nrows, ncols
+        end
+        
+        K = sparse(I, J, V, nrows, ncols)
+        dropzeros!(K)
+   
+        return SystemMatrix(K, Pu, Ps)
+    finally
+        if use_threads && old_blas_threads != 1
+            LinearAlgebra.BLAS.set_num_threads(old_blas_threads)
+        end
     end
-
-    #resize!(I, pos - 1)
-    #resize!(J, pos - 1)
-    #resize!(V, pos - 1)
-    #K = sparse(I, J, V, ndofs(Ps), ndofs(Pu))
-    #dropzeros!(K)
-    #@assert ndofs(Ps) > 0
-    #@assert ndofs(Pu) > 0
-    #@assert maximum(I[1:pos-1]) <= ndofs(Ps)
-    #@assert maximum(J[1:pos-1]) <= ndofs(Pu)
-    #@assert minimum(I[1:pos-1]) >= 1
-    #@assert minimum(J[1:pos-1]) >= 1
-    #return SystemMatrix(K, Pu, Ps)
-    nentries = pos - 1
-    nrows = ndofs(Ps)
-    ncols = ndofs(Pu)
-    
-    @assert nrows > 0
-    @assert ncols > 0
-    
-    if assembly === :add
-        nentries == length(V) ||
-            error("""
-                assemble_operator: assembly pattern mismatch.
-    
-            The existing V vector contains:
-                $(length(V)) entries
-    
-            The current operator generated:
-                $nentries entries
-    
-            All compound terms must traverse exactly the same
-            elements and local matrix entries in the same order.
-            """)
-    
-        return V
-    end
-    
-    resize!(I, nentries)
-    resize!(J, nentries)
-    resize!(V, nentries)
-    
-    if nentries > 0
-        @assert maximum(I) <= nrows
-        @assert maximum(J) <= ncols
-        @assert minimum(I) >= 1
-        @assert minimum(J) >= 1
-    end
-    
-    if assembly === :triplets
-        return I, J, V, nrows, ncols
-    end
-    
-    K = sparse(I, J, V, nrows, ncols)
-    dropzeros!(K)
-
-    return SystemMatrix(K, Pu, Ps)
 end
 
 """
@@ -3429,7 +3539,7 @@ end
 # Internal assembly
 # ------------------------------------------------------------
 
-function _assemble(term::WeakTerm{BilinearTerm}, dom, weight=nothing)
+function _assemble(term::WeakTerm{BilinearTerm}, dom, weight=nothing, gauss=:full, multithread::Bool=true)
 
     Pu = term.term.a.P
 
@@ -3446,19 +3556,21 @@ function _assemble(term::WeakTerm{BilinearTerm}, dom, weight=nothing)
         term.term.b.P,
         term.term.b.op,
         coefficient=coef, #isa AbstractMatrix ? 1.0 : coef,
-        weight=nothing, #coef isa AbstractMatrix ? coef : nothing,
-        domain=dom
+        weight=weight, #coef isa AbstractMatrix ? coef : nothing,
+        domain=dom,
+        gauss=gauss,
+        multithread=multithread
     )
 
 end
 
-function _assemble(expr::WeakSum, dom, weight)
+function _assemble(expr::WeakSum, dom, weight, gauss=:full, multithread::Bool=true)
 
-    _assemble(expr.a, dom, weight) + _assemble(expr.b, dom, weight)
+    _assemble(expr.a, dom, weight, gauss, multithread) + _assemble(expr.b, dom, weight, gauss, multithread)
 
 end
 
-function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing)
+function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing, gauss=:full, multithread::Bool=true)
 
     t = term.term
     chain = t.chain
@@ -3486,7 +3598,8 @@ function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing)
         op.op,
         g;
         weight = weight,
-        domain = dom
+        domain = dom,
+        gauss=gauss
     )
 
 end
@@ -3496,7 +3609,7 @@ end
 # ------------------------------------------------------------
 
 """
-    ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing)
+    ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread=true)
 
 Assemble a finite element operator from a weak-form expression.
 
@@ -3540,11 +3653,32 @@ With coefficient
 
     f = ∫(PT ⋅ PT * h, Γ="right")
 
+The bilinear operator assembly is multithreaded by default when Julia is
+started with more than one thread. Element-level integration is distributed
+across Julia threads, while the global sparse matrix is assembled after the
+parallel element loop.
+
+Multithreading can be disabled for individual integrals with
+
+    multithread=false
+
+For example
+
+    K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
+          Ω="solid",
+          multithread=false)
+
+Linear-form assembly is currently serial.
+
 # Arguments
 
 `expr`
 
 Weak-form expression composed of operators and coefficients.
+
+`gauss`
+
+`:full` or `:reduced` integration, or `Int` that is a signed number:  the increment of Gauss points relative to `:full`.
 
 # Keyword arguments
 
@@ -3560,17 +3694,17 @@ Boundary physical group name.
 
 `SystemMatrix` or `ScalarField`, `VectorField`, `TensorField`
 """
-function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
+function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
 
     _check_scalarfields(expr)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
-    return _assemble(expr, dom, weight)
+    return _assemble(expr, dom, weight, gauss, multithread)
 
 end
 
-function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
+function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -3589,12 +3723,13 @@ function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:ful
         coefficient = t.coef,
         domain = dom,
         weight = weight,
-        gauss = gauss
+        gauss = gauss,
+        multithread=multithread
     )
 
 end
 
-function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
+function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -3613,12 +3748,13 @@ function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing,
         coefficient = 1.0,
         domain = dom,
         weight = weight,
-        gauss = gauss
+        gauss = gauss,
+        multithread=multithread
     )
 
 end
 
-function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
+function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -3651,9 +3787,9 @@ function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
 
 end
 
-function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
+function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
 
-    return ∫(LinearTerm(mc); Ω=Ω, Γ=Γ, weight=weight)
+    return ∫(LinearTerm(mc); Ω=Ω, Γ=Γ, weight=weight, gauss=gauss, multithread=multithread)
 
 end
 
@@ -3674,7 +3810,7 @@ Convenience wrapper for volume integration on physical group `name`.
 K = ∫Ω("solid", Grad(Pu) ⋅ Grad(Pu))
 ```
 """
-∫Ω(name, expr) = ∫(expr; Ω=name)
+∫Ω(name, expr; kwargs...) = ∫(expr; Ω=name, kwargs...)
 
 """
     ∫Γ(name, expr)
@@ -3693,7 +3829,7 @@ Convenience wrapper for boundary integration on physical group `name`.
 KΓ = ∫Γ("loaded_boundary", Id(Pu) ⋅ Id(Pu))
 ```
 """
-∫Γ(name, expr) = ∫(expr; Γ=name)
+∫Γ(name, expr; kwargs...) = ∫(expr; Γ=name, kwargs...)
 
 const ε = SymGrad
 
@@ -3821,9 +3957,9 @@ Base.:*(t::Union{BilinearTerm,LinearTerm,CompoundBilinear}, w::Union{Number,Scal
 Base.:*(w::Union{Number,ScalarField}, t::Union{BilinearTerm,LinearTerm,CompoundBilinear}) =
     WeightedTerm(t, w)
 
-function ∫(wt::WeightedTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full)
+function ∫(wt::WeightedTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
     weight === nothing || error("Weight specified both as `* weight` and keyword `weight=...`.")
-    return ∫(wt.term; Ω=Ω, Γ=Γ, weight=wt.weight, gauss=gauss)
+    return ∫(wt.term; Ω=Ω, Γ=Γ, weight=wt.weight, gauss=gauss, multithread=multithread)
 end
 
 withgauss(chain, gauss) = ChainSumTerm(chain, gauss)
@@ -4039,7 +4175,8 @@ end
 
 function ∫(expr::CompoundBilinear;
     Ω=nothing, Γ=nothing, weight=nothing,
-    gauss=:auto)
+    gauss=:auto,
+    multithread::Bool=true)
     #@show typeof(expr.left)
     #@show typeof(expr.right)
 
@@ -4094,7 +4231,8 @@ function ∫(expr::CompoundBilinear;
                     domain = dom,
                     weight = weight,
                     gauss = g,
-                    assembly = :triplets
+                    assembly = :triplets,
+                    multithread=multithread
                 )
 
                 first = false
@@ -4109,7 +4247,8 @@ function ∫(expr::CompoundBilinear;
                     weight = weight,
                     gauss = g,
                     assembly = :add,
-                    V = V
+                    V = V,
+                    multithread=multithread
                 )
 
             end
