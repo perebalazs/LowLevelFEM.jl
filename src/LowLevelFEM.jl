@@ -116,10 +116,6 @@ export probe_field
         _ = sqrt(tfA)
         _ = cbrt(tfA)
         _ = log(tfA)
-        _ = ∇(sfA)
-        _ = ∂x(sfA)
-        _ = ∂y(sfA)
-        _ = ∂z(sfA)
         poissonMatrix(prob)
         advectionMatrix(prob)
         reactionMatrix(prob)
@@ -188,6 +184,11 @@ end
             Kblock_pc = SystemMatrix(reshape([K_pc], 1, 1))
             Fblock_pc = SystemVector([f_pc])
             solveField(Kblock_pc, Fblock_pc; support=support_pc)
+            s = scalarField(Pu_pc, "body", 0)
+            _ = ∇(s)
+            _ = ∂x(s)
+            _ = ∂y(s)
+            _ = ∂z(s)
         end
     finally
         if gmsh.isInitialized() != 0
