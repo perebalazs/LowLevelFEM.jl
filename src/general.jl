@@ -2781,7 +2781,7 @@ dzs = ∂z(s)      # computes 0
 ## 2) Derivative of an elementwise field
 
 ```julia
-se = elementsToNodes(s) |> r -> ∂e(r, 1)  # manually
+se = nodesToElements(s) |> r -> ∂e(r, 1)  # manually
 dxs = ∂x(se)                              # same result, auto-detected
 ```
 
@@ -2813,9 +2813,12 @@ grad_s = VectorField([gx, gy, gz])
 * Direction indices follow FEM convention:
   1 → x, 2 → y, 3 → z.
 """
-∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
-∂y(r::ScalarField) = isNodal(r) ? ∂(r, 2) : ∂e(r, 2)
-∂z(r::ScalarField) = isNodal(r) ? ∂(r, 3) : ∂e(r, 3)
+∂x(r::ScalarField) = ∇(r)[1]
+∂y(r::ScalarField) = ∇(r)[2]
+∂z(r::ScalarField) = ∇(r)[3]
+#∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
+#∂y(r::ScalarField) = isNodal(r) ? ∂(r, 2) : ∂e(r, 2)
+#∂z(r::ScalarField) = isNodal(r) ? ∂(r, 3) : ∂e(r, 3)
 
 """
     ∂t(s::Union{ScalarField,VectorField,TensorField})
@@ -2915,6 +2918,56 @@ Raises an error for any non-scalar indexing:
 Only single-component extraction `v[k]` is allowed.
 """
 function Base.getindex(v::VectorField, k::Int)
+    pdim =
+        v.type == :v2D ? 2 :
+        v.type == :v3D ? 3 :
+        error("Unknown VectorField type $(v.type)")
+
+    @assert 1 ≤ k ≤ pdim "VectorField has exactly $pdim components."
+
+    if isElementwise(v)
+        Aout = Vector{Matrix{Float64}}(undef, length(v.A))
+
+        @inbounds for e in eachindex(v.A)
+            Ae = v.A[e]
+
+            size(Ae, 1) % pdim == 0 ||
+                error(
+                    "VectorField: incompatible local data size " *
+                    "for element $(v.numElem[e])."
+                )
+
+            Aout[e] = Ae[k:pdim:end, :]
+        end
+
+        return ScalarField(
+            Aout,
+            [;;],
+            v.t,
+            v.numElem,
+            v.nsteps,
+            :scalar,
+            v.model
+        )
+    end
+
+    if isNodal(v)
+        return ScalarField(
+            [],
+            v.a[k:pdim:end, :],
+            v.t,
+            v.numElem,
+            v.nsteps,
+            :scalar,
+            v.model
+        )
+    end
+
+    error("VectorField: no data found in A or a.")
+end
+
+#=
+function Base.getindex(v::VectorField, k::Int)
     pdim = v.model.pdim
     pdim =
         v.type == :v2D ? 2 :
@@ -2950,6 +3003,7 @@ function Base.getindex(v::VectorField, k::Int)
 
     error("VectorField: no data found in A or a.")
 end
+=#
 
 """
     Base.getindex(T::TensorField, i::Int, j::Int)
@@ -2978,13 +3032,26 @@ function Base.getindex(T::TensorField, i::Int, j::Int)
     # --- elementwise ---
     if T.A != []
         numElem  = length(T.A)
-        numNodes = size(T.A[1], 1) ÷ 9     # 9 tensor components
-        Aout = Vector{Matrix{Float64}}(undef, numElem)
+        #numNodes = size(T.A[1], 1) ÷ 9     # 9 tensor components
+        #Aout = Vector{Matrix{Float64}}(undef, numElem)
 
-        @inbounds for e in 1:numElem
+        #@inbounds for e in 1:numElem
+        #    Ae = T.A[e]
+        #    rows = block:9:9*numNodes
+        #    Aout[e] = Ae[rows, :]
+        #end
+        Aout = Vector{Matrix{Float64}}(undef, length(T.A))
+
+        @inbounds for e in eachindex(T.A)
             Ae = T.A[e]
-            rows = block:9:9*numNodes
-            Aout[e] = Ae[rows, :]
+
+            size(Ae, 1) % 9 == 0 ||
+                error(
+                    "TensorField: incompatible local data size " *
+                    "for element $(T.numElem[e])."
+                )
+
+            Aout[e] = Ae[block:9:end, :]
         end
 
         return ScalarField(Aout, [;;], T.t, T.numElem, T.nsteps, :scalar, T.model)
@@ -5135,6 +5202,7 @@ function freeDoFs(problem, supports)
     return fdofs
 end
 
+#=
 """
     elementsToNodes(T)
 
@@ -5147,7 +5215,153 @@ Types:
 - `T`: ScalarField, VectorField or TensorField
 - `F`: ScalarField, VectorField or TensorField
 """
-function elementsToNodes(S)
+=#
+
+"""
+    elementsToNodes(S::Union{ScalarField,VectorField,TensorField})
+
+Convert an elementwise field to a nodal field by averaging the values
+of all elements connected to each node.
+
+Only elements contained in `S.numElem` contribute to the nodal average.
+For discontinuous elementwise fields, this operation smooths jumps across
+element boundaries by arithmetic averaging.
+"""
+function elementsToNodes(
+    S::Union{ScalarField,VectorField,TensorField}
+)
+    isNodal(S) && return S
+
+    problem = S.model
+    gmsh.model.setCurrent(problem.name)
+
+    T = typeof(S)
+    nsteps = S.nsteps
+    numElem = S.numElem
+    σ = S.A
+    non = problem.non
+
+    epn =
+        S isa ScalarField ? 1 :
+        S isa VectorField ? (S.type == :v2D ? 2 : 3) :
+        S isa TensorField ? 9 :
+        error("elementsToNodes: unsupported field type $(typeof(S)).")
+
+    s = zeros(Float64, non * epn, nsteps)
+    pcs = zeros(Int, non)
+
+    isempty(numElem) &&
+        return T(
+            Matrix{Float64}[],
+            s,
+            S.t,
+            Int[],
+            nsteps,
+            S.type,
+            problem
+        )
+
+    # Map each Gmsh element tag to the corresponding position in S.A.
+    elementIndex = Dict{Int,Int}()
+    sizehint!(elementIndex, length(numElem))
+
+    for (fieldIndex, elementTag) in pairs(numElem)
+        haskey(elementIndex, elementTag) &&
+            error(
+                "elementsToNodes: duplicate element tag $elementTag " *
+                "in the field."
+            )
+
+        elementIndex[elementTag] = fieldIndex
+    end
+
+    # Retrieve the complete mesh connectivity in a single Gmsh call.
+    elementTypes, elementTags, elementNodeTags =
+        gmsh.model.mesh.getElements(-1, -1)
+
+    found = 0
+
+    for block in eachindex(elementTypes)
+        tags = elementTags[block]
+        connectivity = elementNodeTags[block]
+        numberOfElements = length(tags)
+
+        numberOfElements == 0 && continue
+
+        numberOfNodes =
+            length(connectivity) ÷ numberOfElements
+
+        @inbounds for localElement in 1:numberOfElements
+            elementTag = Int(tags[localElement])
+            fieldIndex = get(elementIndex, elementTag, 0)
+
+            fieldIndex == 0 && continue
+
+            values = σ[fieldIndex]
+
+            size(values, 1) == epn * numberOfNodes ||
+                error(
+                    "elementsToNodes: incompatible number of local " *
+                    "values for element $elementTag."
+                )
+
+            nodeOffset = (localElement - 1) * numberOfNodes
+
+            for localNode in 1:numberOfNodes
+                nodeTag =
+                    Int(connectivity[nodeOffset + localNode])
+
+                pcs[nodeTag] += 1
+
+                localOffset = (localNode - 1) * epn
+                nodalOffset = (nodeTag - 1) * epn
+
+                for step in 1:nsteps
+                    for component in 1:epn
+                        s[nodalOffset + component, step] +=
+                            values[localOffset + component, step]
+                    end
+                end
+            end
+
+            found += 1
+        end
+
+        found == length(numElem) && break
+    end
+
+    found == length(numElem) ||
+        error(
+            "elementsToNodes: only $found of $(length(numElem)) " *
+            "field elements were found in the current Gmsh model."
+        )
+
+    @inbounds for node in 1:non
+        count = pcs[node]
+        count == 0 && continue
+
+        factor = 1.0 / count
+        nodalOffset = (node - 1) * epn
+
+        for step in 1:nsteps
+            for component in 1:epn
+                s[nodalOffset + component, step] *= factor
+            end
+        end
+    end
+
+    return T(
+        Matrix{Float64}[],
+        s,
+        S.t,
+        Int[],
+        nsteps,
+        S.type,
+        problem
+    )
+end
+
+function elementsToNodes_old(S)
     problem = S.model
     gmsh.model.setCurrent(problem.name)
     
@@ -5205,7 +5419,110 @@ Types:
 - `F`: ScalarField, VectorField or TensorField
 - `onPhysicalGroup`: String
 """
-function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysicalGroup="")
+function nodesToElements(
+    r::Union{ScalarField,VectorField,TensorField};
+    onPhysicalGroup=""
+    )
+    if isElementwise(r)
+        return r
+    end
+
+    problem = r.model
+    gmsh.model.setCurrent(problem.name)
+
+    T = typeof(r)
+
+    ncomp =
+        r isa ScalarField ? 1 :
+        r isa VectorField ? (r.type == :v2D ? 2 : 3) :
+        9
+
+    nsteps = r.nsteps
+
+    ε = Vector{Matrix{Float64}}()
+    numElem = Int[]
+
+    # r.a follows the ordering returned by getNodes(), while element
+    # connectivity contains Gmsh node tags. Build the mapping only when
+    # node tags cannot be used directly as indices.
+    nodeTags, _, _ = gmsh.model.mesh.getNodes()
+
+    contiguousNodeTags =
+        length(nodeTags) == problem.non &&
+        all(i -> nodeTags[i] == i, eachindex(nodeTags))
+
+    nodeIndex = contiguousNodeTags ?
+        nothing :
+        Dict{Int,Int}(Int(tag) => i for (i, tag) in enumerate(nodeTags))
+
+    physicalGroups = onPhysicalGroup == "" ?
+        (material.phName for material in problem.material) :
+        (onPhysicalGroup,)
+
+    for phName in physicalGroups
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        for (edim, etag) in dimTags
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for i in eachindex(elemTypes)
+                nelem = length(elemTags[i])
+                nelem == 0 && continue
+
+                connectivity = elemNodeTags[i]
+                numNodes = length(connectivity) ÷ nelem
+
+                sizehint!(ε, length(ε) + nelem)
+                sizehint!(numElem, length(numElem) + nelem)
+
+                for j in 1:nelem
+                    push!(numElem, Int(elemTags[i][j]))
+
+                    e = Matrix{Float64}(
+                        undef,
+                        ncomp * numNodes,
+                        nsteps
+                    )
+
+                    offset = (j - 1) * numNodes
+
+                    @inbounds for it in 1:nsteps
+                        for l in 1:numNodes
+                            nodeTag = Int(connectivity[offset + l])
+
+                            idx = contiguousNodeTags ?
+                                nodeTag :
+                                nodeIndex[nodeTag]
+
+                            localOffset = (l - 1) * ncomp
+                            globalOffset = (idx - 1) * ncomp
+
+                            for component in 1:ncomp
+                                e[localOffset + component, it] =
+                                    r.a[globalOffset + component, it]
+                            end
+                        end
+                    end
+
+                    push!(ε, e)
+                end
+            end
+        end
+    end
+
+    return T(
+        ε,
+        [;;],
+        r.t,
+        numElem,
+        nsteps,
+        r.type,
+        problem
+    )
+end
+
+function nodesToElements_old(r::Union{ScalarField,VectorField,TensorField}; onPhysicalGroup="")
     problem = r.model
     gmsh.model.setCurrent(problem.name)
     
@@ -5318,7 +5635,7 @@ isNodal(strain_field)         # returns false
 ```
 """
 function isNodal(a::Union{ScalarField,VectorField,TensorField})
-    return !(a.a == [;;])
+    return !isempty(a.a)
     if a.a != [;;] && a.A == []
         return true
     elseif a.a == [;;] && a.A != []
@@ -5343,7 +5660,7 @@ isElementwise(strain_field)         # returns true
 ```
 """
 function isElementwise(a::Union{ScalarField,VectorField,TensorField})
-    return !(a.A == [])
+    return !isempty(a.A)
     if a.a == [;;] && a.A != []
         return true
     elseif a.a != [;;] && a.A == []
@@ -5712,13 +6029,11 @@ Iz = integrate(prob, "body", f)
 """
 function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=0)
     gmsh.model.setCurrent(problem.name)
-    f2 = 0
-    #if f isa ScalarField
-    #    f2 = elementsToNodes(f)
-    #end
     is_elementwise = f isa ScalarField && f.a == [;;]
-    elemToField = is_elementwise ? Dict(f.numElem[i] => i for i in eachindex(f.numElem)) : Dict{Int,Int}()
-    f2 = f isa ScalarField && !is_elementwise ? f : nothing
+    # In the usual case, the element order in the field is identical to the
+    # Gmsh element order. Build a tag-to-field map only as a fallback for
+    # reordered or partially overlapping elementwise fields.
+    elemToField = Dict{Int,Int}()
     DIM = problem.dim
     b = problem.thickness
     #ncoord2 = zeros(3 * problem.non)
@@ -5750,21 +6065,37 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
             comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
             h = reshape(fun, :, numIntPoints)
             #nnet = zeros(Int, length(elementTags[ii]), numNodes)
-            # Batched geometric data for all elements of this type
-            elemTagsGlobal, _ = gmsh.model.mesh.getElementsByType(et)
+            # Batched geometric data for the current geometric entity only.
+            # The returned data follow the same element order as `getElements`
+            # above, so no global element-to-local-index map is needed.
+            jacAll, detAll, coordAll = gmsh.model.mesh.getJacobians(et, intPoints, tag)
 
-            jacAll, detAll, coordAll = gmsh.model.mesh.getJacobians(et, intPoints)
+            numElements = length(elementTags[ii])
+            @assert length(detAll) == numElements * numIntPoints
+            @assert length(jacAll) == 9 * numElements * numIntPoints
+            @assert length(coordAll) == 3 * numElements * numIntPoints
 
-            numElementsGlobal = length(elemTagsGlobal)
-            nip = length(detAll) ÷ numElementsGlobal
+            fieldStart = 0
+            if is_elementwise && numElements > 0
+                firstElem = elementTags[ii][1]
+                firstIdx = findfirst(==(firstElem), f.numElem)
 
-            @assert nip == numIntPoints
+                if firstIdx !== nothing && firstIdx + numElements - 1 <= length(f.numElem)
+                    fieldStart = firstIdx
+                    @inbounds for k in 1:numElements
+                        if f.numElem[fieldStart + k - 1] != elementTags[ii][k]
+                            fieldStart = 0
+                            break
+                        end
+                    end
+                end
 
-            idxmap = Dict{eltype(elemTagsGlobal),Int}()
-            sizehint!(idxmap, numElementsGlobal)
-
-            @inbounds for (gi, elemTag) in enumerate(elemTagsGlobal)
-                idxmap[elemTag] = gi - 1
+                if fieldStart == 0 && isempty(elemToField)
+                    sizehint!(elemToField, length(f.numElem))
+                    @inbounds for k in eachindex(f.numElem)
+                        elemToField[f.numElem[k]] = k
+                    end
+                end
             end
 
             nodes = elemNodeTags[ii]
@@ -5774,24 +6105,25 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                 #    nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
                 #end
                 offset = (l - 1) * numNodes
-                nodeids = @view nodes[offset + 1 : offset + numNodes]
                 fieldIdx = 0
-                if f isa ScalarField && is_elementwise
-                    fieldIdx = get(elemToField, elem, 0)
+                if is_elementwise
+                    fieldIdx = fieldStart > 0 ? fieldStart + l - 1 : get(elemToField, elem, 0)
                     fieldIdx == 0 && continue
                 end
 
-                gidx = idxmap[elem]
+                fieldValues = is_elementwise ? f.A[fieldIdx] : nothing
 
-                jacOffset = gidx * 9 * nip
-                detOffset = gidx * nip
-                coordOffset = gidx * 3 * nip
+                gidx = l - 1
 
-                Jac = reshape(@view(jacAll[jacOffset + 1 : jacOffset + 9 * nip]), 3, :)
+                jacOffset = gidx * 9 * numIntPoints
+                detOffset = gidx * numIntPoints
+                coordOffset = gidx * 3 * numIntPoints
 
-                jacDet = @view detAll[detOffset + 1 : detOffset + nip]
+                Jac = reshape(@view(jacAll[jacOffset + 1 : jacOffset + 9 * numIntPoints]), 3, :)
 
-                coord = @view coordAll[coordOffset + 1 : coordOffset + 3 * nip]
+                jacDet = @view detAll[detOffset + 1 : detOffset + numIntPoints]
+
+                coord = @view coordAll[coordOffset + 1 : coordOffset + 3 * numIntPoints]
 
                 #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                 #Jac = reshape(jac, 3, :)
@@ -5815,13 +6147,14 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                     ff = 0.0
                     if f isa Function
                         ff = f(x, y, z)
-                    elseif f isa ScalarField && is_elementwise
-                        ff = dot(view(h, :, j), view(f.A[fieldIdx], :, step))
-                        #ff = h[:, j]' * f.A[fieldIdx][:, step]
+                    elseif is_elementwise
+                        @simd for k in 1:numNodes
+                            ff += h[k, j] * fieldValues[k, step]
+                        end
                     elseif f isa ScalarField
-                        ff = dot(view(h, :, j), view(f2.a, nodeids, step))
-                        #ff = h[:, j]' * f2.a[nnet[l, :]]
-                        #ff = h[:, j]' * f2.a[nodeids, step]
+                        @simd for k in 1:numNodes
+                            ff += h[k, j] * f.a[nodes[offset + k], step]
+                        end
                     else
                         error("integrate: 3rd argument must be a Function or a ScalarField")
                     end
@@ -5865,7 +6198,7 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
     return sum0
 end
 
-∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1) = integrate(problem, phName, f, step=step)
+∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=0) = integrate(problem, phName, f, step=step, order=order)
 
 """
     time_integral!(s, t, d; s0=0.0)

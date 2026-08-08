@@ -11,4 +11,6 @@ Tutorials provide scenario-driven workflows for common LowLevelFEM tasks.
 - [Weak-Form DSL: Navier-Stokes](multifield-weak-form-dsl.md) – Building coupled PDEs directly from their weak form using compound operators.
 - [Displacement Recovery from Strain](strain-displacement-relation.md) – Reconstructing displacement fields from measured strains using a least-squares approach.
 - [Torsion of a prismatic bar using the Prandtl stress function](prandtl-stress-function.md) – Solving Saint-Venant torsion using the Prandtl stress function formulation.
+- [Gauss's Divergence Theorem](gauss-theorem.md) – Verifying the divergence theorem using surface and volume integration on a solid torus.
+- [Stokes' Theorem](stokes-theorem.md) – Comparing circulation and curl flux using line and surface integration on a spherical octant.
 - [Legacy Example Gallery](legacy-examples.md) – Collection of additional examples covering a wide range of finite element applications.

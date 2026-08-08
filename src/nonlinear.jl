@@ -1,4 +1,4 @@
-export nodePositionVector, ∇, curl, rot, div, grad
+export nodePositionVector, ∇_old, curl, rot, div, grad
 #export tangentMatrixConstitutive, tangentMatrixInitialStress
 #export equivalentNodalForce, nonFollowerLoadVector
 #export applyDeformationBoundaryConditions!, suppressDeformationAtBoundaries!, suppressDeformationAtBoundaries
@@ -127,7 +127,7 @@ DV = ∇(T, nabla=:div)  # VectorField
 gmsh.finalize()
 ```
 """
-function ∇(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+function ∇_old(rr::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
 
