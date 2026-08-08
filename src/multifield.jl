@@ -1524,8 +1524,10 @@ function assemble_element_matrix!(
     Jac = reshape(jac_slice, 3, :)
 
     @inbounds for k in 1:numIntPoints
-        @views invJac[1:3, 3k-2:3k] .=
-            inv(Jac[1:3, 3k-2:3k])'
+        #@views invJac[1:3, 3k-2:3k] .=
+        #    inv(Jac[1:3, 3k-2:3k])'
+        Jk = SMatrix{3,3,Float64}(Jac[1:3, 3k-2:3k])
+        invJac[1:3, 3k-2:3k] .= transpose(inv3x3_fast(Jk))
     end
 
     # Physical / tangential gradients
@@ -2353,8 +2355,123 @@ function _field_pdim(f)
     end
 end
 
+mutable struct LinearWorkspace
+    invJac::Matrix{Float64}
+    ∂h::Matrix{Float64}
+    B::Matrix{Float64}
+    fe::Vector{Float64}
+end
+
 """
-    assemble_linear(P::Problem, op, rhs; weight=nothing, domain)
+    LinearWorkspace(dim, num_nodes, num_integration_points, outdim, ndofs_loc)
+
+Allocate reusable element-level work arrays for linear-form assembly.
+"""
+function LinearWorkspace(
+    dim::Int,
+    num_nodes::Integer,
+    num_integration_points::Integer,
+    outdim::Integer,
+    ndofs_loc::Integer
+)
+    return LinearWorkspace(
+        zeros(3, 3 * num_integration_points),
+        zeros(dim, num_nodes * num_integration_points),
+        zeros(outdim, ndofs_loc),
+        zeros(ndofs_loc)
+    )
+end
+
+"""
+    assemble_element_vector!(ws, elem, gidx, ...)
+
+Compute the local element vector and store it in `ws.fe`.
+"""
+function assemble_element_vector!(
+    ws::LinearWorkspace,
+    elem::Integer,
+    gidx::Integer,
+    jac_all,
+    det_all,
+    nip::Integer,
+    numIntPoints::Integer,
+    dim::Integer,
+    numNodes::Integer,
+    ∇h,
+    h,
+    intWeights,
+    Gprep,
+    Wprep,
+    op::AbstractOp,
+    P::Problem
+)
+    invJac = ws.invJac
+    ∂h = ws.∂h
+    B = ws.B
+    fe = ws.fe
+
+    jac_slice =
+        @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
+
+    jacDet =
+        @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
+
+    Jac = reshape(jac_slice, 3, :)
+
+    @inbounds for k in 1:numIntPoints
+        #@views invJac[1:3, 3k-2:3k] .=
+        #    inv(Jac[1:3, 3k-2:3k])'
+        Jk = SMatrix{3,3,Float64}(Jac[1:3, 3k-2:3k])
+        invJac[1:3, 3k-2:3k] .= transpose(inv3x3_fast(Jk))
+    end
+
+    fill!(∂h, 0.0)
+
+    @inbounds for k in 1:numIntPoints, a in 1:numNodes
+        @views begin
+            invJk = invJac[1:dim, 3k-2:3k-(3-dim)]
+            gha = ∇h[a*3-2:a*3-(3-dim), k]
+            dha = ∂h[1:dim, (k-1)*numNodes+a]
+            mul!(dha, invJk, gha)
+        end
+    end
+
+    fill!(fe, 0.0)
+
+    @inbounds for k in 1:numIntPoints
+        wcoef = 1.0
+
+        if Wprep !== nothing
+            wcoef = _eval_coefficient_at_gp(
+                Wprep, elem, view(h, :, k)
+            )
+            wcoef isa Number ||
+                error("assemble_linear: weight must evaluate to a scalar.")
+        end
+
+        w = jacDet[k] * intWeights[k] * wcoef
+
+        build_B!(B, op, P, k, h, ∂h, numNodes)
+
+        g_gp = _eval_coefficient_at_gp(
+            Gprep, elem, view(h, :, k)
+        )
+
+        if g_gp isa Number
+            @assert size(B, 1) == 1
+            for i in eachindex(fe)
+                fe[i] += B[1, i] * g_gp * w
+            end
+        else
+            mul!(fe, transpose(B), g_gp, w, 1.0)
+        end
+    end
+
+    return nothing
+end
+
+"""
+    assemble_linear(P::Problem, op, rhs; weight=nothing, domain, multithread=true)
 
 Assemble a linear finite element operator of the form
 
@@ -2373,6 +2490,7 @@ Arguments
         `:full`       2order+1
         `:reduced`    2order-1
         Int           2order+1 + Int
+- `multithread` : distribute element integration across Julia threads
 
 Returns
 -------
@@ -2384,7 +2502,17 @@ function assemble_linear(
     g;
     weight = nothing,
     domain = nothing,
-    gauss = :full)
+    gauss = :full,
+    multithread::Bool = true)
+
+    use_threads = multithread && Threads.nthreads() > 1
+
+    old_blas_threads = LinearAlgebra.BLAS.get_num_threads()
+    if use_threads && old_blas_threads != 1
+        LinearAlgebra.BLAS.set_num_threads(1)
+    end
+
+    try
 
     gmsh.model.setCurrent(P.name)
 
@@ -2409,7 +2537,8 @@ function assemble_linear(
     end
 
     nd = ndofs(P)
-    rhs = zeros(nd)
+    I = Int[]
+    V = Float64[]
 
     phNames = domain === nothing ?
         [mat.phName for mat in P.material] :
@@ -2483,97 +2612,122 @@ function assemble_linear(
                     idxmap[gtag] = gi - 1
                 end
 
-                ndofs_loc = P.pdim * numNodes
-                B = zeros(outdim, ndofs_loc)
-                fe = zeros(ndofs_loc)
-
                 nel = length(elemTags[itype])
+                ndofs_loc = P.pdim * numNodes
 
-                invJac = zeros(3, 3 * numIntPoints)
-                ∂h = zeros(P.dim, numNodes * numIntPoints)
+                block_start = length(V) + 1
+                block_entries = nel * ndofs_loc
 
-                for e in 1:nel
-                    fill!(fe, 0.0)
+                resize!(I, length(I) + block_entries)
+                resize!(V, length(V) + block_entries)
 
-                    elem = elemTags[itype][e]
+                nworkspaces = use_threads ? Threads.maxthreadid() : 1
 
-                    gidx = idxmap[elem]
+                workspaces = [
+                    LinearWorkspace(
+                        P.dim,
+                        numNodes,
+                        numIntPoints,
+                        outdim,
+                        ndofs_loc
+                    )
+                    for _ in 1:nworkspaces
+                ]
 
-                    jac_slice = @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
+                let Ithread = I, Vthread = V
+                    if use_threads
+                        Threads.@threads :static for e in 1:nel
+                            ws = workspaces[Threads.threadid()]
+                            elem = elemTags[itype][e]
+                            gidx = idxmap[elem]
 
-                    jacDet = @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
+                            assemble_element_vector!(
+                                ws,
+                                elem,
+                                gidx,
+                                jac_all,
+                                det_all,
+                                nip,
+                                numIntPoints,
+                                P.dim,
+                                numNodes,
+                                ∇h,
+                                h,
+                                intWeights,
+                                Gprep,
+                                Wprep,
+                                op,
+                                P
+                            )
 
-                    Jac = reshape(jac_slice, 3, :)
+                            element_start =
+                                block_start + (e - 1) * ndofs_loc
 
-                    #elem = elemTags[itype][e]
+                            @inbounds for a_loc in 1:ndofs_loc
+                                node = div(a_loc - 1, P.pdim) + 1
+                                comp = mod(a_loc - 1, P.pdim) + 1
 
-                    #jac, jacDet, _ =
-                    #    gmsh.model.mesh.getJacobian(elem, intPoints)
+                                gnode =
+                                    elemNodeTags[itype][
+                                        (e - 1) * numNodes + node
+                                    ]
 
-                    #Jac = reshape(jac, 3, :)
-
-                    @inbounds for k in 1:numIntPoints
-                        @views invJac[1:3, 3k-2:3k] .= inv(Jac[1:3, 3k-2:3k])'
-                    end
-
-                    fill!(∂h, 0.0)
-                    @inbounds for k in 1:numIntPoints, a in 1:numNodes
-                        @views begin
-                            invJk = invJac[1:P.dim, 3k-2:3k-(3-P.dim)]
-                            gha = ∇h[a*3-2:a*3-(3-P.dim), k]
-                            dha = ∂h[1:P.dim, (k-1)*numNodes+a]
-                            mul!(dha, invJk, gha)
-                            #∂h[1:P.dim, (k-1)*numNodes+a] .= invJk * gha
-                        end
-                    end
-
-                    for k in 1:numIntPoints
-
-                        wcoef = 1.0
-
-                        if Wprep !== nothing
-                            wcoef = _eval_coefficient_at_gp(Wprep, elem, view(h, :, k))
-                            wcoef isa Number || error("assemble_linear: weight must evaluate to a scalar.")
-                        end
-
-                        w = jacDet[k] * intWeights[k] * wcoef
-
-                        build_B!(B, op, P, k, h, ∂h, numNodes)
-
-                        g_gp = _eval_coefficient_at_gp(
-                            Gprep,
-                            elem,
-                            view(h, :, k)
-                        )
-
-                        #gvec = g_gp isa Number ? [g_gp] : g_gp
-
-                        #fe .+= (transpose(B) * gvec) * w
-                        
-                        if g_gp isa Number
-                            @assert outdim == 1
-                            @inbounds for i in 1:ndofs_loc
-                                fe[i] += B[1, i] * g_gp * w
+                                p = element_start + a_loc - 1
+                                Ithread[p] =
+                                    (gnode - 1) * P.pdim + comp
+                                Vthread[p] = ws.fe[a_loc]
                             end
-                        else
-                            mul!(fe, transpose(B), g_gp, w, 1.0)
                         end
-                    end
+                    else
+                        @inbounds for e in 1:nel
+                            ws = workspaces[1]
+                            elem = elemTags[itype][e]
+                            gidx = idxmap[elem]
 
-                    # scatter local element vector -> global rhs
-                    for a_loc in 1:ndofs_loc
-                        node = div(a_loc - 1, P.pdim) + 1
-                        comp = mod(a_loc - 1, P.pdim) + 1
+                            assemble_element_vector!(
+                                ws,
+                                elem,
+                                gidx,
+                                jac_all,
+                                det_all,
+                                nip,
+                                numIntPoints,
+                                P.dim,
+                                numNodes,
+                                ∇h,
+                                h,
+                                intWeights,
+                                Gprep,
+                                Wprep,
+                                op,
+                                P
+                            )
 
-                        gnode = elemNodeTags[itype][(e-1)*numNodes + node]
-                        row = (gnode - 1) * P.pdim + comp
+                            element_start =
+                                block_start + (e - 1) * ndofs_loc
 
-                        rhs[row] += fe[a_loc]
+                            for a_loc in 1:ndofs_loc
+                                node = div(a_loc - 1, P.pdim) + 1
+                                comp = mod(a_loc - 1, P.pdim) + 1
+
+                                gnode =
+                                    elemNodeTags[itype][
+                                        (e - 1) * numNodes + node
+                                    ]
+
+                                p = element_start + a_loc - 1
+                                Ithread[p] =
+                                    (gnode - 1) * P.pdim + comp
+                                Vthread[p] = ws.fe[a_loc]
+                            end
+                        end
                     end
                 end
             end
         end
     end
+
+    rhs = collect(sparsevec(I, V, nd))
 
     if P.pdim == 1
         return ScalarField([], reshape(rhs, :, 1), [0], [], 1, :scalar, P)
@@ -2587,6 +2741,11 @@ function assemble_linear(
 
     else
         error("assemble_linear: unsupported pdim $(P.pdim).")
+    end
+    finally
+        if use_threads && old_blas_threads != 1
+            LinearAlgebra.BLAS.set_num_threads(old_blas_threads)
+        end
     end
 end
 
@@ -3599,7 +3758,8 @@ function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing, gauss=:full,
         g;
         weight = weight,
         domain = dom,
-        gauss=gauss
+        gauss=gauss,
+        multithread=multithread
     )
 
 end
@@ -3653,9 +3813,9 @@ With coefficient
 
     f = ∫(PT ⋅ PT * h, Γ="right")
 
-The bilinear operator assembly is multithreaded by default when Julia is
-started with more than one thread. Element-level integration is distributed
-across Julia threads, while the global sparse matrix is assembled after the
+The bilinear- and linear-form assembly is multithreaded by default when Julia
+is started with more than one thread. Element-level integration is distributed
+across Julia threads, while the global matrix or vector is assembled after the
 parallel element loop.
 
 Multithreading can be disabled for individual integrals with
@@ -3667,8 +3827,6 @@ For example
     K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
           Ω="solid",
           multithread=false)
-
-Linear-form assembly is currently serial.
 
 # Arguments
 
@@ -3782,7 +3940,8 @@ function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full,
         rhs;
         domain = dom,
         weight = weight,
-        gauss = gauss
+        gauss = gauss,
+        multithread=multithread
     )
 
 end
