@@ -2808,6 +2808,17 @@ function compliance9_iso(E, nu; penalty=1e8)
     return Ssym + Santi
 end
 
+struct SymmetricSystemMatrix
+    parent::SystemMatrix
+    uplo::Symbol
+end
+
+function LinearAlgebra.Symmetric(K::SystemMatrix, uplo::Symbol=:U)
+    uplo in (:U, :L) ||
+        throw(ArgumentError("uplo must be :U or :L"))
+    return SymmetricSystemMatrix(K, uplo)
+end
+
 """
     solveField(K::SystemMatrix, 
                F::SystemVector; 
@@ -2978,6 +2989,48 @@ function solveField(
     else
         return tuple(results...)
     end
+end
+
+function solveField(
+    Ks::SymmetricSystemMatrix,
+    f::Union{ScalarField,VectorField,TensorField};
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    iterative=false,
+    reltol::Real=sqrt(eps()),
+    maxiter::Int=Ks.parent.model.non * Ks.parent.model.dim,
+    preconditioner=Identity(),
+    ordering=true
+)
+    K = Ks.parent
+    A = Symmetric(K.A, Ks.uplo)
+
+    problem = K.model
+    fixed = constrainedDoFs(problem, support)
+    free = freeDoFs(problem, support)
+
+    u = copy(f)
+    fill!(u.a, 0.0)
+    applyBoundaryConditions!(u, support)
+
+    # Fontos: itt is a Symmetric nézetet kell használni.
+    f_kin = A[:, fixed] * u.a[fixed, 1]
+
+    A_ff = Symmetric(K.A[free, free], Ks.uplo)
+    b_f = f.a[free, 1] - f_kin[free]
+
+    if iterative
+        u.a[free] = cg(
+            A_ff,
+            b_f;
+            Pl=preconditioner,
+            reltol=reltol,
+            maxiter=maxiter
+        )
+    else
+        u.a[free] = A_ff \ b_f
+    end
+
+    return u
 end
 
 ###############################################################

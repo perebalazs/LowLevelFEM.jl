@@ -28,7 +28,7 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-#=
+
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
@@ -128,15 +128,68 @@ export probe_field
         internalForceVector(prob, P=tfA)
         externalTangentFollower(prob, [lc], F=tfA)
         loadVector(prob, [], F=tfA)
-        try
-            ∫(Grad(Problem()) ⋅ Grad(Problem()))
-            ∫(Problem() ⋅ Problem())
-            ∫(Div(Problem()) ⋅ Div(Problem()))
-            ∫(SymGrad(Problem()) ⋅ SymGrad(Problem()))
-        catch
-            #
+    end
+end
+
+@setup_workload begin
+    gmsh_was_initialized = gmsh.isInitialized() != 0
+
+    try
+        structured_box_mesh(n=1, order=1)
+
+        mat_pc = Material("body")
+        Pu_pc = Problem([mat_pc], type=:VectorField, dim=3, field=:u)
+
+        μ_pc = mat_pc.μ
+        λ_pc = mat_pc.λ
+        D_pc = [
+            λ_pc+2μ_pc  λ_pc        λ_pc        0.0   0.0   0.0
+            λ_pc        λ_pc+2μ_pc  λ_pc        0.0   0.0   0.0
+            λ_pc        λ_pc        λ_pc+2μ_pc  0.0   0.0   0.0
+            0.0         0.0         0.0         μ_pc  0.0   0.0
+            0.0         0.0         0.0         0.0   μ_pc  0.0
+            0.0         0.0         0.0         0.0   0.0   μ_pc
+        ]
+
+        support_pc = [
+            BoundaryCondition(
+                "left";
+                problem=Pu_pc,
+                ux=0.0,
+                uy=0.0,
+                uz=0.0
+            )
+        ]
+
+        @compile_workload begin
+            K_pc = ∫(
+                SymGrad(Pu_pc) ⋅ D_pc ⋅ SymGrad(Pu_pc);
+                multithread=true
+            )
+
+            ∫(
+                Pu_pc ⋅ [1.0, 1.0, 1.0];
+                multithread=true
+            )
+
+            f_pc = ∫(
+                Pu_pc ⋅ [1.0, 1.0, 1.0];
+                Γ="right",
+                multithread=true
+            )
+
+            solveField(K_pc, f_pc; support=support_pc)
+
+            Kblock_pc = SystemMatrix(reshape([K_pc], 1, 1))
+            Fblock_pc = SystemVector([f_pc])
+            solveField(Kblock_pc, Fblock_pc; support=support_pc)
+        end
+    finally
+        if gmsh.isInitialized() != 0
+            gmsh.clear()
+            gmsh_was_initialized || gmsh.finalize()
         end
     end
 end
-=#
+
 end #module
