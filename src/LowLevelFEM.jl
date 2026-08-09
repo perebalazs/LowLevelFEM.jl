@@ -185,10 +185,17 @@ end
             Fblock_pc = SystemVector([f_pc])
             solveField(Kblock_pc, Fblock_pc; support=support_pc)
             s = scalarField(Pu_pc, "body", 0)
+            S = ScalarField(Pu_pc, "body", 0)
+            V = VectorField(Pu_pc, "body", [0,0,0])
+            T = TensorField(Pu_pc, "body", [0 0 0; 0 0 0; 0 0 0])
             _ = ∇(s)
             _ = ∂x(s)
             _ = ∂y(s)
             _ = ∂z(s)
+            _ = elementsToElements(S, onPhysicalGroup="left")
+            _ = elementsToElements(V, onPhysicalGroup="left")
+            _ = elementsToElements(T, onPhysicalGroup="left")
+            _ = elementsToElements(S, onPhysicalGroup="left", fromPhysicalGroup="body")
         end
     finally
         if gmsh.isInitialized() != 0
