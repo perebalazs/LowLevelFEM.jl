@@ -11,4 +11,4 @@ The example also illustrates the use of surface-normal fields, differential oper
 ## Related
 
 - [Legacy Example Gallery](legacy-examples.md)
-- [Reference: General](../reference/general.md)
+- [Reference: Operators](../reference/operators.md)
