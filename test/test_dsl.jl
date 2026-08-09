@@ -45,6 +45,75 @@
 
         @test norm(Kthreaded.A - Kserial.A) / norm(Kserial.A) < 1e-12
 
+        # ------------------------------------------------------
+        # Threaded and serial linear-form assembly must agree
+        # ------------------------------------------------------
+        fvolume_serial = ∫(
+            Pu ⋅ [1.0, 1.0, 1.0];
+            multithread=false
+        )
+
+        fvolume_threaded = ∫(
+            Pu ⋅ [1.0, 1.0, 1.0];
+            multithread=true
+        )
+
+        @test fvolume_threaded.a ≈ fvolume_serial.a rtol=1e-12 atol=1e-12
+
+        volume_resultant = vec(sum(
+            reshape(fvolume_serial.a[:, 1], Pu.pdim, :);
+            dims=2
+        ))
+        @test volume_resultant ≈ [1.0, 1.0, 1.0] rtol=1e-12 atol=1e-12
+
+        ftraction_serial = ∫(
+            Pu ⋅ [1.0, 1.0, 1.0];
+            Γ="right",
+            multithread=false
+        )
+
+        ftraction_threaded = ∫(
+            Pu ⋅ [1.0, 1.0, 1.0];
+            Γ="right",
+            multithread=true
+        )
+
+        @test ftraction_threaded.a ≈ ftraction_serial.a rtol=1e-12 atol=1e-12
+
+        traction_resultant = vec(sum(
+            reshape(ftraction_serial.a[:, 1], Pu.pdim, :);
+            dims=2
+        ))
+        @test traction_resultant ≈ [1.0, 1.0, 1.0] rtol=1e-12 atol=1e-12
+
+        # ------------------------------------------------------
+        # Single-field and block solveField paths must agree
+        # ------------------------------------------------------
+        support = [
+            BoundaryCondition(
+                "left";
+                problem=Pu,
+                ux=0.0,
+                uy=0.0,
+                uz=0.0
+            )
+        ]
+
+        u = solveField(Kserial, ftraction_serial; support=support)
+
+        fixed = constrainedDoFs(Pu, support)
+        free = freeDoFs(Pu, support)
+        residual = Kserial.A * u.a[:, 1] - ftraction_serial.a[:, 1]
+
+        @test norm(residual[free]) / norm(ftraction_serial.a[free, 1]) < 1e-10
+        @test all(iszero, u.a[fixed, 1])
+
+        Kblock = SystemMatrix(reshape([Kserial], 1, 1))
+        Fblock = SystemVector([ftraction_serial])
+        ublock = solveField(Kblock, Fblock; support=support)
+
+        @test ublock.a ≈ u.a rtol=1e-12 atol=1e-12
+
     finally
         gmsh.finalize()
     end

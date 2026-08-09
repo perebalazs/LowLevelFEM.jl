@@ -21,6 +21,7 @@ isSaved
 DoFs
 elementsToNodes
 nodesToElements
+elementsToElements
 isNodal
 isElementwise
 ```

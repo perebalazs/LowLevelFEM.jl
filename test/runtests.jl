@@ -9,5 +9,6 @@ using Test
     include("test_assembly.jl")
     include("test_validation.jl")
     include("test_cube.jl")
+    include("test_integration.jl")
     include("test_dsl.jl")
 end

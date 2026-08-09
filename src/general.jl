@@ -6,7 +6,8 @@ export field, scalarField, vectorField, tensorField, ScalarField, VectorField, T
 export mergeFields
 export SystemMatrix, SystemVector
 export constrainedDoFs, freeDoFs, allDoFs, DoFs
-export elementsToNodes, nodesToElements, projectTo2D, expandTo3D, isNodal, isElementwise
+export elementsToNodes, nodesToElements, elementsToElements
+export projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
 export rotateNodes, CoordinateSystem
 export showDoFResults, showModalResults, showBucklingResults
@@ -2781,7 +2782,7 @@ dzs = ∂z(s)      # computes 0
 ## 2) Derivative of an elementwise field
 
 ```julia
-se = elementsToNodes(s) |> r -> ∂e(r, 1)  # manually
+se = nodesToElements(s) |> r -> ∂e(r, 1)  # manually
 dxs = ∂x(se)                              # same result, auto-detected
 ```
 
@@ -2813,9 +2814,12 @@ grad_s = VectorField([gx, gy, gz])
 * Direction indices follow FEM convention:
   1 → x, 2 → y, 3 → z.
 """
-∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
-∂y(r::ScalarField) = isNodal(r) ? ∂(r, 2) : ∂e(r, 2)
-∂z(r::ScalarField) = isNodal(r) ? ∂(r, 3) : ∂e(r, 3)
+∂x(r::ScalarField) = ∇(r)[1]
+∂y(r::ScalarField) = ∇(r)[2]
+∂z(r::ScalarField) = ∇(r)[3]
+#∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
+#∂y(r::ScalarField) = isNodal(r) ? ∂(r, 2) : ∂e(r, 2)
+#∂z(r::ScalarField) = isNodal(r) ? ∂(r, 3) : ∂e(r, 3)
 
 """
     ∂t(s::Union{ScalarField,VectorField,TensorField})
@@ -2915,6 +2919,56 @@ Raises an error for any non-scalar indexing:
 Only single-component extraction `v[k]` is allowed.
 """
 function Base.getindex(v::VectorField, k::Int)
+    pdim =
+        v.type == :v2D ? 2 :
+        v.type == :v3D ? 3 :
+        error("Unknown VectorField type $(v.type)")
+
+    @assert 1 ≤ k ≤ pdim "VectorField has exactly $pdim components."
+
+    if isElementwise(v)
+        Aout = Vector{Matrix{Float64}}(undef, length(v.A))
+
+        @inbounds for e in eachindex(v.A)
+            Ae = v.A[e]
+
+            size(Ae, 1) % pdim == 0 ||
+                error(
+                    "VectorField: incompatible local data size " *
+                    "for element $(v.numElem[e])."
+                )
+
+            Aout[e] = Ae[k:pdim:end, :]
+        end
+
+        return ScalarField(
+            Aout,
+            [;;],
+            v.t,
+            v.numElem,
+            v.nsteps,
+            :scalar,
+            v.model
+        )
+    end
+
+    if isNodal(v)
+        return ScalarField(
+            [],
+            v.a[k:pdim:end, :],
+            v.t,
+            v.numElem,
+            v.nsteps,
+            :scalar,
+            v.model
+        )
+    end
+
+    error("VectorField: no data found in A or a.")
+end
+
+#=
+function Base.getindex(v::VectorField, k::Int)
     pdim = v.model.pdim
     pdim =
         v.type == :v2D ? 2 :
@@ -2950,6 +3004,7 @@ function Base.getindex(v::VectorField, k::Int)
 
     error("VectorField: no data found in A or a.")
 end
+=#
 
 """
     Base.getindex(T::TensorField, i::Int, j::Int)
@@ -2978,13 +3033,26 @@ function Base.getindex(T::TensorField, i::Int, j::Int)
     # --- elementwise ---
     if T.A != []
         numElem  = length(T.A)
-        numNodes = size(T.A[1], 1) ÷ 9     # 9 tensor components
-        Aout = Vector{Matrix{Float64}}(undef, numElem)
+        #numNodes = size(T.A[1], 1) ÷ 9     # 9 tensor components
+        #Aout = Vector{Matrix{Float64}}(undef, numElem)
 
-        @inbounds for e in 1:numElem
+        #@inbounds for e in 1:numElem
+        #    Ae = T.A[e]
+        #    rows = block:9:9*numNodes
+        #    Aout[e] = Ae[rows, :]
+        #end
+        Aout = Vector{Matrix{Float64}}(undef, length(T.A))
+
+        @inbounds for e in eachindex(T.A)
             Ae = T.A[e]
-            rows = block:9:9*numNodes
-            Aout[e] = Ae[rows, :]
+
+            size(Ae, 1) % 9 == 0 ||
+                error(
+                    "TensorField: incompatible local data size " *
+                    "for element $(T.numElem[e])."
+                )
+
+            Aout[e] = Ae[block:9:end, :]
         end
 
         return ScalarField(Aout, [;;], T.t, T.numElem, T.nsteps, :scalar, T.model)
@@ -5135,6 +5203,7 @@ function freeDoFs(problem, supports)
     return fdofs
 end
 
+#=
 """
     elementsToNodes(T)
 
@@ -5147,44 +5216,150 @@ Types:
 - `T`: ScalarField, VectorField or TensorField
 - `F`: ScalarField, VectorField or TensorField
 """
-function elementsToNodes(S)
+=#
+
+"""
+    elementsToNodes(S::Union{ScalarField,VectorField,TensorField})
+
+Convert an elementwise field to a nodal field by averaging the values
+of all elements connected to each node.
+
+Only elements contained in `S.numElem` contribute to the nodal average.
+For discontinuous elementwise fields, this operation smooths jumps across
+element boundaries by arithmetic averaging.
+"""
+function elementsToNodes(
+    S::Union{ScalarField,VectorField,TensorField}
+    )
+    isNodal(S) && return S
+
     problem = S.model
     gmsh.model.setCurrent(problem.name)
-    
-    if S.a != [;;]
-        return S
-    end
+
     T = typeof(S)
-    type = S.type
     nsteps = S.nsteps
     numElem = S.numElem
     σ = S.A
     non = problem.non
-    if S isa TensorField
-        epn = 9
-    elseif (S.type == :v3D) && S isa VectorField
-        epn = 3
-    elseif (S.type ==:v2D) && S isa VectorField
-        epn = 2
-    elseif S isa ScalarField #type == :scalar
-        epn = 1
-    else
-        error("elementsToNodes: type is $type .")
+
+    epn =
+        S isa ScalarField ? 1 :
+        S isa VectorField ? (S.type == :v2D ? 2 : 3) :
+        S isa TensorField ? 9 :
+        error("elementsToNodes: unsupported field type $(typeof(S)).")
+
+    s = zeros(Float64, non * epn, nsteps)
+    pcs = zeros(Int, non)
+
+    isempty(numElem) &&
+        return T(
+            Matrix{Float64}[],
+            s,
+            S.t,
+            Int[],
+            nsteps,
+            S.type,
+            problem
+        )
+
+    # Map each Gmsh element tag to the corresponding position in S.A.
+    elementIndex = Dict{Int,Int}()
+    sizehint!(elementIndex, length(numElem))
+
+    for (fieldIndex, elementTag) in pairs(numElem)
+        haskey(elementIndex, elementTag) &&
+            error(
+                "elementsToNodes: duplicate element tag $elementTag " *
+                "in the field."
+            )
+
+        elementIndex[elementTag] = fieldIndex
     end
-    s = zeros(non * epn, nsteps)
-    pcs = zeros(Int64, non)
-    
-    for e in 1:length(numElem)
-        elementType, nodeTags, dim, tag = gmsh.model.mesh.getElement(numElem[e])
-        for i in 1:length(nodeTags)
-            s[(nodeTags[i]-1) * epn + 1: nodeTags[i] * epn, :] .+= σ[e][(i-1)*epn+1:i*epn, :]
-            pcs[nodeTags[i]] += 1
+
+    # Retrieve the complete mesh connectivity in a single Gmsh call.
+    elementTypes, elementTags, elementNodeTags =
+        gmsh.model.mesh.getElements(-1, -1)
+
+    found = 0
+
+    for block in eachindex(elementTypes)
+        tags = elementTags[block]
+        connectivity = elementNodeTags[block]
+        numberOfElements = length(tags)
+
+        numberOfElements == 0 && continue
+
+        numberOfNodes =
+            length(connectivity) ÷ numberOfElements
+
+        @inbounds for localElement in 1:numberOfElements
+            elementTag = Int(tags[localElement])
+            fieldIndex = get(elementIndex, elementTag, 0)
+
+            fieldIndex == 0 && continue
+
+            values = σ[fieldIndex]
+
+            size(values, 1) == epn * numberOfNodes ||
+                error(
+                    "elementsToNodes: incompatible number of local " *
+                    "values for element $elementTag."
+                )
+
+            nodeOffset = (localElement - 1) * numberOfNodes
+
+            for localNode in 1:numberOfNodes
+                nodeTag =
+                    Int(connectivity[nodeOffset + localNode])
+
+                pcs[nodeTag] += 1
+
+                localOffset = (localNode - 1) * epn
+                nodalOffset = (nodeTag - 1) * epn
+
+                for step in 1:nsteps
+                    for component in 1:epn
+                        s[nodalOffset + component, step] +=
+                            values[localOffset + component, step]
+                    end
+                end
+            end
+
+            found += 1
+        end
+
+        found == length(numElem) && break
+    end
+
+    found == length(numElem) ||
+        error(
+            "elementsToNodes: only $found of $(length(numElem)) " *
+            "field elements were found in the current Gmsh model."
+        )
+
+    @inbounds for node in 1:non
+        count = pcs[node]
+        count == 0 && continue
+
+        factor = 1.0 / count
+        nodalOffset = (node - 1) * epn
+
+        for step in 1:nsteps
+            for component in 1:epn
+                s[nodalOffset + component, step] *= factor
+            end
         end
     end
-    for l in 1:non
-        s[epn * (l - 1) + 1: epn * l, :] ./= pcs[l] == 0 ? 1 : pcs[l]
-    end
-    return T([], s, S.t, [], S.nsteps, type, problem)
+
+    return T(
+        Matrix{Float64}[],
+        s,
+        S.t,
+        Int[],
+        nsteps,
+        S.type,
+        problem
+    )
 end
 
 """
@@ -5205,102 +5380,1114 @@ Types:
 - `F`: ScalarField, VectorField or TensorField
 - `onPhysicalGroup`: String
 """
-function nodesToElements(r::Union{ScalarField,VectorField,TensorField}; onPhysicalGroup="")
-    problem = r.model
-    gmsh.model.setCurrent(problem.name)
-    
+function nodesToElements(
+    r::Union{ScalarField,VectorField,TensorField};
+    onPhysicalGroup=""
+    )
     if isElementwise(r)
         return r
     end
-    T = typeof(r)
-    if r isa ScalarField
-        size = 1
-    elseif r isa VectorField
-        #size = r.model.dim
-        size = r.type == :v2D ? 2 : 3
-    elseif r isa TensorField
-        size = 9
-    end
-    type = r.type
-    
-    nsteps = r.nsteps
-    ε = []
-    numElem = Int[]
-    ncoord2 = zeros(3 * problem.non)
-    dim = problem.dim
-    pdim = problem.pdim
-    non = problem.non
-    nom = length(problem.material)
-    phName = ""
-    if onPhysicalGroup ≠ ""
-        nom = 1
-        phName = onPhysicalGroup
-    end
 
+    problem = r.model
+    gmsh.model.setCurrent(problem.name)
+
+    T = typeof(r)
+
+    ncomp =
+        r isa ScalarField ? 1 :
+        r isa VectorField ? (r.type == :v2D ? 2 : 3) :
+        9
+
+    nsteps = r.nsteps
+
+    ε = Vector{Matrix{Float64}}()
+    numElem = Int[]
+
+    # r.a follows the ordering returned by getNodes(), while element
+    # connectivity contains Gmsh node tags. Build the mapping only when
+    # node tags cannot be used directly as indices.
     nodeTags, _, _ = gmsh.model.mesh.getNodes()
-    nodeIndex = Dict{Int,Int}()
-    for (i, tag) in enumerate(nodeTags)
-        nodeIndex[tag] = i
-    end
-    
-    for ipg in 1:nom
-        if onPhysicalGroup == ""
-            phName = problem.material[ipg].phName
-        end
-        dim = problem.dim
-        
+
+    contiguousNodeTags =
+        length(nodeTags) == problem.non &&
+        all(i -> nodeTags[i] == i, eachindex(nodeTags))
+
+    nodeIndex = contiguousNodeTags ?
+        nothing :
+        Dict{Int,Int}(Int(tag) => i for (i, tag) in enumerate(nodeTags))
+
+    physicalGroups = onPhysicalGroup == "" ?
+        (material.phName for material in problem.material) :
+        (onPhysicalGroup,)
+
+    for phName in physicalGroups
         dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-        for idm in 1:length(dimTags)
-            dimTag = dimTags[idm]
-            edim = dimTag[1]
-            etag = dimTag[2]
-            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
-            for i in 1:length(elemTypes)
-                et = elemTypes[i]
-                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
-                nodeCoord = zeros(numNodes * 3)
-                for k in 1:dim, j = 1:numNodes
-                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
-                end
-                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
-                h = reshape(fun, :, numNodes)
-                nnet = zeros(Int, length(elemTags[i]), numNodes)
-                nn2 = zeros(Int, size * numNodes)
-                H = zeros(size * numNodes, size * numNodes)
-                for k in 1:numNodes, l in 1:numNodes
-                    for kk in 1:size
-                        H[k*size-(size-kk), l*size-(size-kk)] = h[(k-1)*numNodes+l]
-                    end
-                end
-                for j in 1:length(elemTags[i])
-                    elem = elemTags[i][j]
-                    for k in 1:numNodes
-                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
-                    end
-                    push!(numElem, elem)
-                    for l in 1:numNodes
-                        idx = nodeIndex[nnet[j, l]]
-                        for k in 1:size
-                            nn2[(l-1)*size + k] = size * idx - (size - k)
+
+        for (edim, etag) in dimTags
+            elemTypes, elemTags, elemNodeTags =
+                gmsh.model.mesh.getElements(edim, etag)
+
+            for i in eachindex(elemTypes)
+                nelem = length(elemTags[i])
+                nelem == 0 && continue
+
+                connectivity = elemNodeTags[i]
+                numNodes = length(connectivity) ÷ nelem
+
+                sizehint!(ε, length(ε) + nelem)
+                sizehint!(numElem, length(numElem) + nelem)
+
+                for j in 1:nelem
+                    push!(numElem, Int(elemTags[i][j]))
+
+                    e = Matrix{Float64}(
+                        undef,
+                        ncomp * numNodes,
+                        nsteps
+                    )
+
+                    offset = (j - 1) * numNodes
+
+                    @inbounds for it in 1:nsteps
+                        for l in 1:numNodes
+                            nodeTag = Int(connectivity[offset + l])
+
+                            idx = contiguousNodeTags ?
+                                nodeTag :
+                                nodeIndex[nodeTag]
+
+                            localOffset = (l - 1) * ncomp
+                            globalOffset = (idx - 1) * ncomp
+
+                            for component in 1:ncomp
+                                e[localOffset + component, it] =
+                                    r.a[globalOffset + component, it]
+                            end
                         end
                     end
-                    #for k in 1:size
-                    #    nn2[k:size:size*numNodes] = size * nnet[j, 1:numNodes] .- (size - k)
-                    #end
-                    e = zeros(size*numNodes, nsteps)
-                    for k in 1:numNodes
-                        H1 = H[k*size-(size-1):k*size, 1:size*numNodes]
-                        for kk in 1:nsteps
-                            e0 = H1 * r.a[nn2, kk]
-                            e[(k-1)*size+1:k*size, kk] = [e0[ll] for ll in 1:size]
-                        end
-                    end
+
                     push!(ε, e)
                 end
             end
         end
     end
-    return T(ε, [;;], r.t, numElem, nsteps, type, problem)
+
+    return T(
+        ε,
+        [;;],
+        r.t,
+        numElem,
+        nsteps,
+        r.type,
+        problem
+    )
+end
+
+#=
+"""
+    elementsToElements(
+        S::Union{ScalarField,VectorField,TensorField};
+        onPhysicalGroup::String,
+        fromPhysicalGroup::String=""
+    )
+
+Transfer an elementwise field directly to the elements of another physical
+group while preserving elementwise discontinuities.
+
+Each target element is matched to a codimension-one side of a source element
+through common primary Gmsh node tags. Values are copied from the matched
+source element without nodal averaging. Target nodes that are not present in
+the matched source element are assigned zero.
+
+If a target element is adjacent to more than one source element, the transfer
+is ambiguous and an error is thrown. Use `fromPhysicalGroup` to select the
+source side of an internal interface. To average discontinuous values instead,
+use `nodesToElements(elementsToNodes(S); onPhysicalGroup=...)`.
+
+The source and target meshes must be conforming, and the target elements must
+have dimension one less than the source elements.
+
+# Examples
+
+```julia
+surface_field = elementsToElements(
+    volume_field;
+    onPhysicalGroup="surface"
+)
+
+interface_field = elementsToElements(
+    volume_field;
+    onPhysicalGroup="interface",
+    fromPhysicalGroup="body_1"
+)
+```
+"""
+function elementsToElements(
+    S::Union{ScalarField,VectorField,TensorField};
+    onPhysicalGroup::String,
+    fromPhysicalGroup::String=""
+    )
+    isElementwise(S) ||
+        error("elementsToElements: the source field must be elementwise.")
+
+    isempty(onPhysicalGroup) &&
+        error("elementsToElements: onPhysicalGroup must not be empty.")
+
+    length(S.A) == length(S.numElem) ||
+        error(
+            "elementsToElements: the number of local value arrays does not " *
+            "match the number of source element tags."
+        )
+
+    isempty(S.numElem) &&
+        error("elementsToElements: the source field contains no elements.")
+
+    problem = S.model
+    gmsh.model.setCurrent(problem.name)
+
+    ncomp =
+        S isa ScalarField ? 1 :
+        S isa VectorField && S.type == :v2D ? 2 :
+        S isa VectorField && S.type == :v3D ? 3 :
+        S isa TensorField ? 9 :
+        error(
+            "elementsToElements: unsupported field type $(typeof(S)) " *
+            "with type $(S.type)."
+        )
+
+    # Element tags are the stable link between the field data and the Gmsh
+    # connectivity. No assumption is made about the order of S.numElem.
+    sourceIndex = Dict{Int,Int}()
+    sizehint!(sourceIndex, length(S.numElem))
+
+    for (fieldIndex, elementTag0) in pairs(S.numElem)
+        elementTag = Int(elementTag0)
+        haskey(sourceIndex, elementTag) &&
+            error(
+                "elementsToElements: duplicate source element tag " *
+                "$elementTag."
+            )
+        sourceIndex[elementTag] = fieldIndex
+    end
+
+    nsource = length(S.numElem)
+    sourceConnectivity = Vector{Vector{Int}}(undef, nsource)
+    sourceDimension = fill(-1, nsource)
+    sourceElementTypes = Set{Int}()
+    foundSourceElements = 0
+
+    elementTypes, elementTags, elementNodeTags =
+        gmsh.model.mesh.getElements(-1, -1)
+
+    for block in eachindex(elementTypes)
+        elementType = Int(elementTypes[block])
+        tags = elementTags[block]
+        connectivity = elementNodeTags[block]
+        numberOfElements = length(tags)
+        numberOfElements == 0 && continue
+
+        _, elementDimension, _, numberOfNodes, _, _ =
+            gmsh.model.mesh.getElementProperties(elementType)
+
+        @inbounds for localElement in 1:numberOfElements
+            elementTag = Int(tags[localElement])
+            fieldIndex = get(sourceIndex, elementTag, 0)
+            fieldIndex == 0 && continue
+
+            firstNode = (localElement - 1) * numberOfNodes + 1
+            lastNode = localElement * numberOfNodes
+            sourceConnectivity[fieldIndex] =
+                Int.(connectivity[firstNode:lastNode])
+            sourceDimension[fieldIndex] = elementDimension
+            push!(sourceElementTypes, elementType)
+            foundSourceElements += 1
+
+            values = S.A[fieldIndex]
+            size(values, 1) == ncomp * numberOfNodes ||
+                error(
+                    "elementsToElements: incompatible local data size for " *
+                    "source element $elementTag."
+                )
+            size(values, 2) == S.nsteps ||
+                error(
+                    "elementsToElements: incompatible number of steps for " *
+                    "source element $elementTag."
+                )
+        end
+    end
+
+    foundSourceElements == nsource ||
+        error(
+            "elementsToElements: only $foundSourceElements of $nsource " *
+            "source elements were found in the current Gmsh model."
+        )
+
+    sourceDim = sourceDimension[1]
+    all(==(sourceDim), sourceDimension) ||
+        error(
+            "elementsToElements: all source elements must have the same " *
+            "dimension."
+        )
+
+    sourceDim in (1, 2, 3) ||
+        error(
+            "elementsToElements: source element dimension $sourceDim is " *
+            "not supported."
+        )
+
+    # fromPhysicalGroup restricts the source candidates before sides are
+    # indexed. This resolves the two-sided trace on internal interfaces.
+    allowedSource = trues(nsource)
+
+    if !isempty(fromPhysicalGroup)
+        fill!(allowedSource, false)
+        fromEntities =
+            gmsh.model.getEntitiesForPhysicalName(fromPhysicalGroup)
+
+        isempty(fromEntities) &&
+            error(
+                "elementsToElements: source physical group " *
+                "\"$fromPhysicalGroup\" contains no entities."
+            )
+
+        fromDimensions = unique(first.(fromEntities))
+        fromDimensions == [sourceDim] ||
+            error(
+                "elementsToElements: source physical group " *
+                "\"$fromPhysicalGroup\" must have dimension $sourceDim."
+            )
+
+        for (entityDimension, entityTag) in fromEntities
+            _, tagsByType, _ =
+                gmsh.model.mesh.getElements(entityDimension, entityTag)
+
+            for tags in tagsByType
+                for elementTag0 in tags
+                    fieldIndex =
+                        get(sourceIndex, Int(elementTag0), 0)
+                    fieldIndex == 0 && continue
+                    allowedSource[fieldIndex] = true
+                end
+            end
+        end
+
+        any(allowedSource) ||
+            error(
+                "elementsToElements: source physical group " *
+                "\"$fromPhysicalGroup\" contains none of the elements " *
+                "stored in the source field."
+            )
+    end
+
+    function sideKey(nodes)
+        numberOfNodes = length(nodes)
+        numberOfNodes in 1:4 ||
+            error(
+                "elementsToElements: only point, line, triangular and " *
+                "quadrangular sides are supported."
+            )
+
+        sortedNodes = sort!(Int.(nodes))
+        return (
+            numberOfNodes,
+            sortedNodes[1],
+            numberOfNodes >= 2 ? sortedNodes[2] : 0,
+            numberOfNodes >= 3 ? sortedNodes[3] : 0,
+            numberOfNodes == 4 ? sortedNodes[4] : 0
+        )
+    end
+
+    # A positive value identifies the unique source element. Zero marks an
+    # ambiguous side shared by multiple eligible source elements.
+    sideSources = Dict{NTuple{5,Int},Int}()
+
+    function addSide!(nodes, fieldIndex)
+        key = sideKey(nodes)
+        previous = get(sideSources, key, -1)
+
+        if previous == -1
+            sideSources[key] = fieldIndex
+        elseif previous != fieldIndex
+            sideSources[key] = 0
+        end
+
+        return nothing
+    end
+
+    # Gmsh returns side nodes element by element, in the same element order as
+    # getElementsByType. Primary nodes are sufficient for identifying a side.
+    for elementType in sourceElementTypes
+        tagsByType, _ =
+            gmsh.model.mesh.getElementsByType(elementType)
+        numberOfElements = length(tagsByType)
+        numberOfElements == 0 && continue
+
+        if sourceDim == 1
+            _, _, _, _, _, numberOfPrimaryNodes =
+                gmsh.model.mesh.getElementProperties(elementType)
+            numberOfPrimaryNodes == 2 ||
+                error(
+                    "elementsToElements: unsupported one-dimensional " *
+                    "source element type $elementType."
+                )
+
+            _, connectivity =
+                gmsh.model.mesh.getElementsByType(elementType)
+            _, _, _, numberOfNodes, _, _ =
+                gmsh.model.mesh.getElementProperties(elementType)
+
+            @inbounds for localElement in 1:numberOfElements
+                fieldIndex =
+                    get(sourceIndex, Int(tagsByType[localElement]), 0)
+                fieldIndex == 0 && continue
+                allowedSource[fieldIndex] || continue
+
+                firstNode = (localElement - 1) * numberOfNodes + 1
+                addSide!(view(connectivity, firstNode:firstNode), fieldIndex)
+                addSide!(
+                    view(connectivity, firstNode + 1:firstNode + 1),
+                    fieldIndex
+                )
+            end
+        elseif sourceDim == 2
+            edgeNodes = gmsh.model.mesh.getElementEdgeNodes(
+                elementType,
+                -1,
+                true
+            )
+
+            length(edgeNodes) % (2 * numberOfElements) == 0 ||
+                error(
+                    "elementsToElements: invalid edge-node data returned " *
+                    "by Gmsh for element type $elementType."
+                )
+
+            numberOfEdges =
+                length(edgeNodes) ÷ (2 * numberOfElements)
+
+            @inbounds for localElement in 1:numberOfElements
+                fieldIndex =
+                    get(sourceIndex, Int(tagsByType[localElement]), 0)
+                fieldIndex == 0 && continue
+                allowedSource[fieldIndex] || continue
+
+                for localEdge in 1:numberOfEdges
+                    firstNode =
+                        ((localElement - 1) * numberOfEdges +
+                         localEdge - 1) * 2 + 1
+                    addSide!(
+                        view(edgeNodes, firstNode:firstNode + 1),
+                        fieldIndex
+                    )
+                end
+            end
+        else
+            for faceType in (3, 4)
+                faceNodes = gmsh.model.mesh.getElementFaceNodes(
+                    elementType,
+                    faceType,
+                    -1,
+                    true
+                )
+                isempty(faceNodes) && continue
+
+                length(faceNodes) % (faceType * numberOfElements) == 0 ||
+                    error(
+                        "elementsToElements: invalid face-node data " *
+                        "returned by Gmsh for element type $elementType."
+                    )
+
+                numberOfFaces =
+                    length(faceNodes) ÷
+                    (faceType * numberOfElements)
+
+                @inbounds for localElement in 1:numberOfElements
+                    fieldIndex =
+                        get(sourceIndex, Int(tagsByType[localElement]), 0)
+                    fieldIndex == 0 && continue
+                    allowedSource[fieldIndex] || continue
+
+                    for localFace in 1:numberOfFaces
+                        firstNode =
+                            ((localElement - 1) * numberOfFaces +
+                             localFace - 1) * faceType + 1
+                        addSide!(
+                            view(
+                                faceNodes,
+                                firstNode:firstNode + faceType - 1
+                            ),
+                            fieldIndex
+                        )
+                    end
+                end
+            end
+        end
+    end
+
+    targetEntities =
+        gmsh.model.getEntitiesForPhysicalName(onPhysicalGroup)
+
+    isempty(targetEntities) &&
+        error(
+            "elementsToElements: target physical group " *
+            "\"$onPhysicalGroup\" contains no entities."
+        )
+
+    targetDimensions = unique(first.(targetEntities))
+    targetDimensions == [sourceDim - 1] ||
+        error(
+            "elementsToElements: target physical group " *
+            "\"$onPhysicalGroup\" must have dimension $(sourceDim - 1), " *
+            "one less than the source elements."
+        )
+
+    Aout = Matrix{Float64}[]
+    targetElementTags = Int[]
+
+    # Node-to-local-index maps are built lazily and reused when several target
+    # sides belong to the same source element.
+    sourceNodeIndex =
+        Vector{Union{Nothing,Dict{Int,Int}}}(undef, nsource)
+    fill!(sourceNodeIndex, nothing)
+
+    for (targetDimension, entityTag) in targetEntities
+        targetTypes, tagsByType, nodeTagsByType =
+            gmsh.model.mesh.getElements(targetDimension, entityTag)
+
+        for block in eachindex(targetTypes)
+            targetType = Int(targetTypes[block])
+            tags = tagsByType[block]
+            connectivity = nodeTagsByType[block]
+            numberOfElements = length(tags)
+            numberOfElements == 0 && continue
+
+            _, elementDimension, _, numberOfNodes, _, numberOfPrimaryNodes =
+                gmsh.model.mesh.getElementProperties(targetType)
+
+            elementDimension == sourceDim - 1 ||
+                error(
+                    "elementsToElements: unexpected target element " *
+                    "dimension $elementDimension."
+                )
+
+            sizehint!(Aout, length(Aout) + numberOfElements)
+            sizehint!(
+                targetElementTags,
+                length(targetElementTags) + numberOfElements
+            )
+
+            @inbounds for localElement in 1:numberOfElements
+                elementTag = Int(tags[localElement])
+                firstNode = (localElement - 1) * numberOfNodes + 1
+                lastNode = localElement * numberOfNodes
+                targetNodes = connectivity[firstNode:lastNode]
+                key = sideKey(
+                    view(targetNodes, 1:numberOfPrimaryNodes)
+                )
+                fieldIndex = get(sideSources, key, -1)
+
+                if fieldIndex == 0
+                    qualifier = isempty(fromPhysicalGroup) ?
+                        " Specify fromPhysicalGroup to select the source " *
+                        "side of the interface." :
+                        " The selected fromPhysicalGroup still contains " *
+                        "more than one matching source element."
+                    error(
+                        "elementsToElements: target element $elementTag " *
+                        "matches multiple source elements." *
+                        qualifier
+                    )
+                end
+
+                targetValues = zeros(
+                    Float64,
+                    ncomp * numberOfNodes,
+                    S.nsteps
+                )
+
+                if fieldIndex > 0
+                    nodeIndex = sourceNodeIndex[fieldIndex]
+
+                    if nodeIndex === nothing
+                        nodeIndex = Dict{Int,Int}()
+                        sizehint!(
+                            nodeIndex,
+                            length(sourceConnectivity[fieldIndex])
+                        )
+                        for (localNode, nodeTag) in
+                            pairs(sourceConnectivity[fieldIndex])
+                            nodeIndex[nodeTag] = localNode
+                        end
+                        sourceNodeIndex[fieldIndex] = nodeIndex
+                    end
+
+                    sourceValues = S.A[fieldIndex]
+
+                    for targetLocalNode in 1:numberOfNodes
+                        nodeTag = Int(targetNodes[targetLocalNode])
+                        sourceLocalNode = get(nodeIndex, nodeTag, 0)
+                        sourceLocalNode == 0 && continue
+
+                        targetRows =
+                            (targetLocalNode - 1) * ncomp + 1:targetLocalNode * ncomp
+                        sourceRows =
+                            (sourceLocalNode - 1) * ncomp + 1:sourceLocalNode * ncomp
+                        targetValues[targetRows, :] .=
+                            sourceValues[sourceRows, :]
+                    end
+                end
+
+                push!(Aout, targetValues)
+                push!(targetElementTags, elementTag)
+            end
+        end
+    end
+
+    isempty(targetElementTags) &&
+        error(
+            "elementsToElements: target physical group " *
+            "\"$onPhysicalGroup\" contains no mesh elements."
+        )
+
+    return typeof(S)(
+        Aout,
+        [;;],
+        S.t,
+        targetElementTags,
+        S.nsteps,
+        S.type,
+        problem
+    )
+end
+=#
+
+"""
+    elementsToElements(
+        S::Union{ScalarField,VectorField,TensorField};
+        onPhysicalGroup::String,
+        fromPhysicalGroup::String=""
+    )
+
+Transfer an elementwise field directly to the elements of another physical
+group while preserving elementwise discontinuities.
+
+Each target element is matched to a codimension-one side of a source element
+through common primary Gmsh node tags. Values are copied from the matched
+source element without nodal averaging. Target nodes that are not present in
+the matched source element are assigned zero.
+
+If a target element is adjacent to more than one source element, the transfer
+is ambiguous and an error is thrown. Use `fromPhysicalGroup` to select the
+source side of an internal interface. To average discontinuous values instead,
+use `nodesToElements(elementsToNodes(S); onPhysicalGroup=...)`.
+
+The source and target meshes must be conforming, and the target elements must
+have dimension one less than the source elements.
+
+# Examples
+
+```julia
+surface_field = elementsToElements(
+    volume_field;
+    onPhysicalGroup="surface"
+)
+
+interface_field = elementsToElements(
+    volume_field;
+    onPhysicalGroup="interface",
+    fromPhysicalGroup="body_1"
+)
+```
+"""
+function elementsToElements(
+    S::Union{ScalarField,VectorField,TensorField};
+    onPhysicalGroup::String,
+    fromPhysicalGroup::String=""
+    )
+    isElementwise(S) ||
+        error("elementsToElements: the source field must be elementwise.")
+
+    isempty(onPhysicalGroup) &&
+        error("elementsToElements: onPhysicalGroup must not be empty.")
+
+    length(S.A) == length(S.numElem) ||
+        error(
+            "elementsToElements: the number of local value arrays does not " *
+            "match the number of source element tags."
+        )
+
+    isempty(S.numElem) &&
+        error("elementsToElements: the source field contains no elements.")
+
+    problem = S.model
+    gmsh.model.setCurrent(problem.name)
+
+    ncomp =
+        S isa ScalarField ? 1 :
+        S isa VectorField && S.type == :v2D ? 2 :
+        S isa VectorField && S.type == :v3D ? 3 :
+        S isa TensorField ? 9 :
+        error(
+            "elementsToElements: unsupported field type $(typeof(S)) " *
+            "with type $(S.type)."
+        )
+
+    # Element tags are the stable link between the field data and the Gmsh
+    # connectivity. No assumption is made about the order of S.numElem.
+    sourceIndex = Dict{Int,Int}()
+    sizehint!(sourceIndex, length(S.numElem))
+
+    for (fieldIndex, elementTag0) in pairs(S.numElem)
+        elementTag = Int(elementTag0)
+        haskey(sourceIndex, elementTag) &&
+            error(
+                "elementsToElements: duplicate source element tag " *
+                "$elementTag."
+            )
+        sourceIndex[elementTag] = fieldIndex
+    end
+
+    nsource = length(S.numElem)
+    # Keep indices into the bulk Gmsh connectivity instead of allocating a
+    # separate node-tag vector for every source element.
+    sourceBlock = zeros(Int, nsource)
+    sourceLocalElement = zeros(Int, nsource)
+    sourceNumberOfNodes = zeros(Int, nsource)
+    sourceDimension = fill(-1, nsource)
+    sourceElementTypes = Set{Int}()
+    foundSourceElements = 0
+
+    elementTypes, elementTags, elementNodeTags =
+        gmsh.model.mesh.getElements(-1, -1)
+
+    for block in eachindex(elementTypes)
+        elementType = Int(elementTypes[block])
+        tags = elementTags[block]
+        connectivity = elementNodeTags[block]
+        numberOfElements = length(tags)
+        numberOfElements == 0 && continue
+
+        _, elementDimension, _, numberOfNodes, _, _ =
+            gmsh.model.mesh.getElementProperties(elementType)
+
+        @inbounds for localElement in 1:numberOfElements
+            elementTag = Int(tags[localElement])
+            fieldIndex = get(sourceIndex, elementTag, 0)
+            fieldIndex == 0 && continue
+
+            firstNode = (localElement - 1) * numberOfNodes + 1
+            lastNode = localElement * numberOfNodes
+            sourceBlock[fieldIndex] = block
+            sourceLocalElement[fieldIndex] = localElement
+            sourceNumberOfNodes[fieldIndex] = numberOfNodes
+            sourceDimension[fieldIndex] = elementDimension
+            push!(sourceElementTypes, elementType)
+            foundSourceElements += 1
+
+            values = S.A[fieldIndex]
+            size(values, 1) == ncomp * numberOfNodes ||
+                error(
+                    "elementsToElements: incompatible local data size for " *
+                    "source element $elementTag."
+                )
+            size(values, 2) == S.nsteps ||
+                error(
+                    "elementsToElements: incompatible number of steps for " *
+                    "source element $elementTag."
+                )
+        end
+    end
+
+    foundSourceElements == nsource ||
+        error(
+            "elementsToElements: only $foundSourceElements of $nsource " *
+            "source elements were found in the current Gmsh model."
+        )
+
+    sourceDim = sourceDimension[1]
+    all(==(sourceDim), sourceDimension) ||
+        error(
+            "elementsToElements: all source elements must have the same " *
+            "dimension."
+        )
+
+    sourceDim in (1, 2, 3) ||
+        error(
+            "elementsToElements: source element dimension $sourceDim is " *
+            "not supported."
+        )
+
+    # fromPhysicalGroup restricts the source candidates before sides are
+    # indexed. This resolves the two-sided trace on internal interfaces.
+    allowedSource = trues(nsource)
+
+    if !isempty(fromPhysicalGroup)
+        fill!(allowedSource, false)
+        fromEntities =
+            gmsh.model.getEntitiesForPhysicalName(fromPhysicalGroup)
+
+        isempty(fromEntities) &&
+            error(
+                "elementsToElements: source physical group " *
+                "\"$fromPhysicalGroup\" contains no entities."
+            )
+
+        fromDimensions = unique(first.(fromEntities))
+        fromDimensions == [sourceDim] ||
+            error(
+                "elementsToElements: source physical group " *
+                "\"$fromPhysicalGroup\" must have dimension $sourceDim."
+            )
+
+        for (entityDimension, entityTag) in fromEntities
+            _, tagsByType, _ =
+                gmsh.model.mesh.getElements(entityDimension, entityTag)
+
+            for tags in tagsByType
+                for elementTag0 in tags
+                    fieldIndex =
+                        get(sourceIndex, Int(elementTag0), 0)
+                    fieldIndex == 0 && continue
+                    allowedSource[fieldIndex] = true
+                end
+            end
+        end
+
+        any(allowedSource) ||
+            error(
+                "elementsToElements: source physical group " *
+                "\"$fromPhysicalGroup\" contains none of the elements " *
+                "stored in the source field."
+            )
+    end
+
+    @inline function sideKey(nodes)
+        numberOfNodes = length(nodes)
+        numberOfNodes in 1:4 ||
+            error(
+                "elementsToElements: only point, line, triangular and " *
+                "quadrangular sides are supported."
+            )
+
+        a = Int(nodes[1])
+        numberOfNodes == 1 && return (1, a, 0, 0, 0)
+
+        b = Int(nodes[2])
+        a > b && ((a, b) = (b, a))
+        numberOfNodes == 2 && return (2, a, b, 0, 0)
+
+        c = Int(nodes[3])
+        b > c && ((b, c) = (c, b))
+        a > b && ((a, b) = (b, a))
+        numberOfNodes == 3 && return (3, a, b, c, 0)
+
+        d = Int(nodes[4])
+        c > d && ((c, d) = (d, c))
+        b > c && ((b, c) = (c, b))
+        a > b && ((a, b) = (b, a))
+        return (4, a, b, c, d)
+    end
+
+    targetEntities =
+        gmsh.model.getEntitiesForPhysicalName(onPhysicalGroup)
+
+    isempty(targetEntities) &&
+        error(
+            "elementsToElements: target physical group " *
+            "\"$onPhysicalGroup\" contains no entities."
+        )
+
+    targetDimensions = unique(first.(targetEntities))
+    targetDimensions == [sourceDim - 1] ||
+        error(
+            "elementsToElements: target physical group " *
+            "\"$onPhysicalGroup\" must have dimension $(sourceDim - 1), " *
+            "one less than the source elements."
+        )
+
+    # Only sides that occur in the target group need to be retained. This
+    # avoids a large dictionary containing every internal source side.
+    targetSideKeys = Set{NTuple{5,Int}}()
+    for (targetDimension, entityTag) in targetEntities
+        targetTypes, tagsByType, nodeTagsByType =
+            gmsh.model.mesh.getElements(targetDimension, entityTag)
+
+        for block in eachindex(targetTypes)
+            targetType = Int(targetTypes[block])
+            tags = tagsByType[block]
+            connectivity = nodeTagsByType[block]
+            numberOfElements = length(tags)
+            numberOfElements == 0 && continue
+
+            _, _, _, numberOfNodes, _, numberOfPrimaryNodes =
+                gmsh.model.mesh.getElementProperties(targetType)
+            sizehint!(
+                targetSideKeys,
+                length(targetSideKeys) + numberOfElements
+            )
+
+            @inbounds for localElement in 1:numberOfElements
+                firstNode = (localElement - 1) * numberOfNodes + 1
+                primaryNodes = view(
+                    connectivity,
+                    firstNode:firstNode + numberOfPrimaryNodes - 1
+                )
+                push!(targetSideKeys, sideKey(primaryNodes))
+            end
+        end
+    end
+
+    # A positive value identifies the unique source element. Zero marks an
+    # ambiguous side shared by multiple eligible source elements.
+    sideSources = Dict{NTuple{5,Int},Int}()
+
+    function addSide!(nodes, fieldIndex)
+        key = sideKey(nodes)
+        key in targetSideKeys || return nothing
+        previous = get(sideSources, key, -1)
+
+        if previous == -1
+            sideSources[key] = fieldIndex
+        elseif previous != fieldIndex
+            sideSources[key] = 0
+        end
+
+        return nothing
+    end
+
+    # Gmsh returns side nodes element by element, in the same element order as
+    # getElementsByType. Primary nodes are sufficient for identifying a side.
+    for elementType in sourceElementTypes
+        tagsByType, _ =
+            gmsh.model.mesh.getElementsByType(elementType)
+        numberOfElements = length(tagsByType)
+        numberOfElements == 0 && continue
+
+        if sourceDim == 1
+            _, _, _, _, _, numberOfPrimaryNodes =
+                gmsh.model.mesh.getElementProperties(elementType)
+            numberOfPrimaryNodes == 2 ||
+                error(
+                    "elementsToElements: unsupported one-dimensional " *
+                    "source element type $elementType."
+                )
+
+            _, connectivity =
+                gmsh.model.mesh.getElementsByType(elementType)
+            _, _, _, numberOfNodes, _, _ =
+                gmsh.model.mesh.getElementProperties(elementType)
+
+            @inbounds for localElement in 1:numberOfElements
+                fieldIndex =
+                    get(sourceIndex, Int(tagsByType[localElement]), 0)
+                fieldIndex == 0 && continue
+                allowedSource[fieldIndex] || continue
+
+                firstNode = (localElement - 1) * numberOfNodes + 1
+                addSide!(view(connectivity, firstNode:firstNode), fieldIndex)
+                addSide!(
+                    view(connectivity, firstNode + 1:firstNode + 1),
+                    fieldIndex
+                )
+            end
+        elseif sourceDim == 2
+            edgeNodes = gmsh.model.mesh.getElementEdgeNodes(
+                elementType,
+                -1,
+                true
+            )
+
+            length(edgeNodes) % (2 * numberOfElements) == 0 ||
+                error(
+                    "elementsToElements: invalid edge-node data returned " *
+                    "by Gmsh for element type $elementType."
+                )
+
+            numberOfEdges =
+                length(edgeNodes) ÷ (2 * numberOfElements)
+
+            @inbounds for localElement in 1:numberOfElements
+                fieldIndex =
+                    get(sourceIndex, Int(tagsByType[localElement]), 0)
+                fieldIndex == 0 && continue
+                allowedSource[fieldIndex] || continue
+
+                for localEdge in 1:numberOfEdges
+                    firstNode =
+                        ((localElement - 1) * numberOfEdges +
+                         localEdge - 1) * 2 + 1
+                    addSide!(
+                        view(edgeNodes, firstNode:firstNode + 1),
+                        fieldIndex
+                    )
+                end
+            end
+        else
+            for faceType in (3, 4)
+                faceNodes = gmsh.model.mesh.getElementFaceNodes(
+                    elementType,
+                    faceType,
+                    -1,
+                    true
+                )
+                isempty(faceNodes) && continue
+
+                length(faceNodes) % (faceType * numberOfElements) == 0 ||
+                    error(
+                        "elementsToElements: invalid face-node data " *
+                        "returned by Gmsh for element type $elementType."
+                    )
+
+                numberOfFaces =
+                    length(faceNodes) ÷
+                    (faceType * numberOfElements)
+
+                @inbounds for localElement in 1:numberOfElements
+                    fieldIndex =
+                        get(sourceIndex, Int(tagsByType[localElement]), 0)
+                    fieldIndex == 0 && continue
+                    allowedSource[fieldIndex] || continue
+
+                    for localFace in 1:numberOfFaces
+                        firstNode =
+                            ((localElement - 1) * numberOfFaces +
+                             localFace - 1) * faceType + 1
+                        addSide!(
+                            view(
+                                faceNodes,
+                                firstNode:firstNode + faceType - 1
+                            ),
+                            fieldIndex
+                        )
+                    end
+                end
+            end
+        end
+    end
+
+    Aout = Matrix{Float64}[]
+    targetElementTags = Int[]
+
+    for (targetDimension, entityTag) in targetEntities
+        targetTypes, tagsByType, nodeTagsByType =
+            gmsh.model.mesh.getElements(targetDimension, entityTag)
+
+        for block in eachindex(targetTypes)
+            targetType = Int(targetTypes[block])
+            tags = tagsByType[block]
+            connectivity = nodeTagsByType[block]
+            numberOfElements = length(tags)
+            numberOfElements == 0 && continue
+
+            _, elementDimension, _, numberOfNodes, _, numberOfPrimaryNodes =
+                gmsh.model.mesh.getElementProperties(targetType)
+
+            elementDimension == sourceDim - 1 ||
+                error(
+                    "elementsToElements: unexpected target element " *
+                    "dimension $elementDimension."
+                )
+
+            sizehint!(Aout, length(Aout) + numberOfElements)
+            sizehint!(
+                targetElementTags,
+                length(targetElementTags) + numberOfElements
+            )
+
+            @inbounds for localElement in 1:numberOfElements
+                elementTag = Int(tags[localElement])
+                firstNode = (localElement - 1) * numberOfNodes + 1
+                lastNode = localElement * numberOfNodes
+                targetNodes = view(connectivity, firstNode:lastNode)
+                key = sideKey(
+                    view(targetNodes, 1:numberOfPrimaryNodes)
+                )
+                fieldIndex = get(sideSources, key, -1)
+
+                if fieldIndex == 0
+                    qualifier = isempty(fromPhysicalGroup) ?
+                        " Specify fromPhysicalGroup to select the source " *
+                        "side of the interface." :
+                        " The selected fromPhysicalGroup still contains " *
+                        "more than one matching source element."
+                    error(
+                        "elementsToElements: target element $elementTag " *
+                        "matches multiple source elements." *
+                        qualifier
+                    )
+                end
+
+                targetValues = zeros(
+                    Float64,
+                    ncomp * numberOfNodes,
+                    S.nsteps
+                )
+
+                if fieldIndex > 0
+                    sourceValues = S.A[fieldIndex]
+                    sourceConnectivityBlock = sourceBlock[fieldIndex]
+                    localSourceElement =
+                        sourceLocalElement[fieldIndex]
+                    numberOfSourceNodes =
+                        sourceNumberOfNodes[fieldIndex]
+                    sourceFirstNode =
+                        (localSourceElement - 1) * numberOfSourceNodes + 1
+                    sourceNodes = view(
+                        elementNodeTags[sourceConnectivityBlock],
+                        sourceFirstNode:
+                        sourceFirstNode + numberOfSourceNodes - 1
+                    )
+
+                    for targetLocalNode in 1:numberOfNodes
+                        nodeTag = Int(targetNodes[targetLocalNode])
+                        sourceLocalNode = 0
+                        for localSourceNode in 1:numberOfSourceNodes
+                            if Int(sourceNodes[localSourceNode]) == nodeTag
+                                sourceLocalNode = localSourceNode
+                                break
+                            end
+                        end
+                        sourceLocalNode == 0 && continue
+
+                        targetOffset =
+                            (targetLocalNode - 1) * ncomp
+                        sourceOffset =
+                            (sourceLocalNode - 1) * ncomp
+                        for step in 1:S.nsteps
+                            for component in 1:ncomp
+                                targetValues[
+                                    targetOffset + component,
+                                    step
+                                ] = sourceValues[
+                                    sourceOffset + component,
+                                    step
+                                ]
+                            end
+                        end
+                    end
+                end
+
+                push!(Aout, targetValues)
+                push!(targetElementTags, elementTag)
+            end
+        end
+    end
+
+    isempty(targetElementTags) &&
+        error(
+            "elementsToElements: target physical group " *
+            "\"$onPhysicalGroup\" contains no mesh elements."
+        )
+
+    return typeof(S)(
+        Aout,
+        [;;],
+        S.t,
+        targetElementTags,
+        S.nsteps,
+        S.type,
+        problem
+    )
 end
 
 """
@@ -5318,7 +6505,7 @@ isNodal(strain_field)         # returns false
 ```
 """
 function isNodal(a::Union{ScalarField,VectorField,TensorField})
-    return !(a.a == [;;])
+    return !isempty(a.a)
     if a.a != [;;] && a.A == []
         return true
     elseif a.a == [;;] && a.A != []
@@ -5343,7 +6530,7 @@ isElementwise(strain_field)         # returns true
 ```
 """
 function isElementwise(a::Union{ScalarField,VectorField,TensorField})
-    return !(a.A == [])
+    return !isempty(a.A)
     if a.a == [;;] && a.A != []
         return true
     elseif a.a != [;;] && a.A == []
@@ -5712,13 +6899,11 @@ Iz = integrate(prob, "body", f)
 """
 function integrate(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=0)
     gmsh.model.setCurrent(problem.name)
-    f2 = 0
-    #if f isa ScalarField
-    #    f2 = elementsToNodes(f)
-    #end
     is_elementwise = f isa ScalarField && f.a == [;;]
-    elemToField = is_elementwise ? Dict(f.numElem[i] => i for i in eachindex(f.numElem)) : Dict{Int,Int}()
-    f2 = f isa ScalarField && !is_elementwise ? f : nothing
+    # In the usual case, the element order in the field is identical to the
+    # Gmsh element order. Build a tag-to-field map only as a fallback for
+    # reordered or partially overlapping elementwise fields.
+    elemToField = Dict{Int,Int}()
     DIM = problem.dim
     b = problem.thickness
     #ncoord2 = zeros(3 * problem.non)
@@ -5750,21 +6935,37 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
             comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
             h = reshape(fun, :, numIntPoints)
             #nnet = zeros(Int, length(elementTags[ii]), numNodes)
-            # Batched geometric data for all elements of this type
-            elemTagsGlobal, _ = gmsh.model.mesh.getElementsByType(et)
+            # Batched geometric data for the current geometric entity only.
+            # The returned data follow the same element order as `getElements`
+            # above, so no global element-to-local-index map is needed.
+            jacAll, detAll, coordAll = gmsh.model.mesh.getJacobians(et, intPoints, tag)
 
-            jacAll, detAll, coordAll = gmsh.model.mesh.getJacobians(et, intPoints)
+            numElements = length(elementTags[ii])
+            @assert length(detAll) == numElements * numIntPoints
+            @assert length(jacAll) == 9 * numElements * numIntPoints
+            @assert length(coordAll) == 3 * numElements * numIntPoints
 
-            numElementsGlobal = length(elemTagsGlobal)
-            nip = length(detAll) ÷ numElementsGlobal
+            fieldStart = 0
+            if is_elementwise && numElements > 0
+                firstElem = elementTags[ii][1]
+                firstIdx = findfirst(==(firstElem), f.numElem)
 
-            @assert nip == numIntPoints
+                if firstIdx !== nothing && firstIdx + numElements - 1 <= length(f.numElem)
+                    fieldStart = firstIdx
+                    @inbounds for k in 1:numElements
+                        if f.numElem[fieldStart + k - 1] != elementTags[ii][k]
+                            fieldStart = 0
+                            break
+                        end
+                    end
+                end
 
-            idxmap = Dict{eltype(elemTagsGlobal),Int}()
-            sizehint!(idxmap, numElementsGlobal)
-
-            @inbounds for (gi, elemTag) in enumerate(elemTagsGlobal)
-                idxmap[elemTag] = gi - 1
+                if fieldStart == 0 && isempty(elemToField)
+                    sizehint!(elemToField, length(f.numElem))
+                    @inbounds for k in eachindex(f.numElem)
+                        elemToField[f.numElem[k]] = k
+                    end
+                end
             end
 
             nodes = elemNodeTags[ii]
@@ -5774,24 +6975,25 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                 #    nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
                 #end
                 offset = (l - 1) * numNodes
-                nodeids = @view nodes[offset + 1 : offset + numNodes]
                 fieldIdx = 0
-                if f isa ScalarField && is_elementwise
-                    fieldIdx = get(elemToField, elem, 0)
+                if is_elementwise
+                    fieldIdx = fieldStart > 0 ? fieldStart + l - 1 : get(elemToField, elem, 0)
                     fieldIdx == 0 && continue
                 end
 
-                gidx = idxmap[elem]
+                fieldValues = is_elementwise ? f.A[fieldIdx] : nothing
 
-                jacOffset = gidx * 9 * nip
-                detOffset = gidx * nip
-                coordOffset = gidx * 3 * nip
+                gidx = l - 1
 
-                Jac = reshape(@view(jacAll[jacOffset + 1 : jacOffset + 9 * nip]), 3, :)
+                jacOffset = gidx * 9 * numIntPoints
+                detOffset = gidx * numIntPoints
+                coordOffset = gidx * 3 * numIntPoints
 
-                jacDet = @view detAll[detOffset + 1 : detOffset + nip]
+                Jac = reshape(@view(jacAll[jacOffset + 1 : jacOffset + 9 * numIntPoints]), 3, :)
 
-                coord = @view coordAll[coordOffset + 1 : coordOffset + 3 * nip]
+                jacDet = @view detAll[detOffset + 1 : detOffset + numIntPoints]
+
+                coord = @view coordAll[coordOffset + 1 : coordOffset + 3 * numIntPoints]
 
                 #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
                 #Jac = reshape(jac, 3, :)
@@ -5815,13 +7017,14 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
                     ff = 0.0
                     if f isa Function
                         ff = f(x, y, z)
-                    elseif f isa ScalarField && is_elementwise
-                        ff = dot(view(h, :, j), view(f.A[fieldIdx], :, step))
-                        #ff = h[:, j]' * f.A[fieldIdx][:, step]
+                    elseif is_elementwise
+                        @simd for k in 1:numNodes
+                            ff += h[k, j] * fieldValues[k, step]
+                        end
                     elseif f isa ScalarField
-                        ff = dot(view(h, :, j), view(f2.a, nodeids, step))
-                        #ff = h[:, j]' * f2.a[nnet[l, :]]
-                        #ff = h[:, j]' * f2.a[nodeids, step]
+                        @simd for k in 1:numNodes
+                            ff += h[k, j] * f.a[nodes[offset + k], step]
+                        end
                     else
                         error("integrate: 3rd argument must be a Function or a ScalarField")
                     end
@@ -5865,7 +7068,7 @@ function integrate(problem::Problem, phName::String, f::Union{Function,ScalarFie
     return sum0
 end
 
-∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1) = integrate(problem, phName, f, step=step)
+∫(problem::Problem, phName::String, f::Union{Function,ScalarField}; step::Int64=1, order::Int64=0) = integrate(problem, phName, f, step=step, order=order)
 
 """
     time_integral!(s, t, d; s0=0.0)
