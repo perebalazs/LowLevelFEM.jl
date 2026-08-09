@@ -5799,6 +5799,14 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
     if K.model != M.model || M.model != C.model || C.model != f.model
         error("CDM: K, M, C and f does not belong to the same model.")
     end
+
+    if K.model !== M.model ||
+        M.model !== C.model ||
+        C.model !== f.model ||
+        f.model !== U0.model ||
+        U0.model !== V0.model
+        error("CDM: K, M, C, f, U0 and V0 must belong to the same model.")
+    end
     
     if f.nsteps != 1 && f.nsteps != n
         error("CDM: number of time steps in load vector is not equal to the time steps given in CDM.")
@@ -5826,17 +5834,28 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
     uu = elementsToNodes(uu)
     vv = copy(uu)
     applyBoundaryConditions!(uu, bc)
-    for i in 1:n-1
-        vv.a[fix,i] .= (uu.a[fix,i+1] .- uu.a[fix,i]) ./ Δt
-    end
-    if n >= 3
-        vv.a[fix,end] .= 2.0 .* vv.a[fix,end-1] .- vv.a[fix,end-2]
-    elseif n == 2
-        vv.a[fix,end] .= vv.a[fix,end-1]
+
+    # Velocities of prescribed DOFs
+    if !isempty(fix)
+        if n >= 3
+            @views vv.a[fix, 1] .=
+                (-3.0 .* uu.a[fix, 1] .+
+                  4.0 .* uu.a[fix, 2] .-
+                          uu.a[fix, 3]) ./ (2.0 * Δt)
+        else
+            @views vv.a[fix, 1] .=
+                (uu.a[fix, 2] .- uu.a[fix, 1]) ./ Δt
+        end
+
+        for i in 2:n
+            @views vv.a[fix, i] .=
+                (uu.a[fix, i] .- uu.a[fix, i-1]) ./ Δt
+        end
     end
 
-    uu.a[free, 1] .= DoFs(U0)[free, 1]
-    vv.a[free, 1] .= DoFs(V0)[free, 1]
+    # Initial conditions on free DOFs
+    @views uu.a[free, 1] .= DoFs(U0)[free, 1]
+    @views vv.a[free, 1] .= DoFs(V0)[free, 1]
 
     #isdiag = size(M.A, 1) == nnz(M.A) ? true : false
     if !isdiag(M.A)
@@ -5850,14 +5869,14 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
     Cfc = C.A[free, fix]
 
     Mff = M.A[free, free]   # diagonális
-    Mfc = M.A[free, fix]
+    #Mfc = M.A[free, fix]
 
-    ff = f.a[free, :]
+    ff = @view f.a[free, :]
 
     d = diag(Mff)
     all(abs.(d) .> 0) || error("CDM: zero diagonal entry detected in Mff on free DOFs.")
-    invMff = spdiagm(1.0 ./ d)
-    #invMff = spdiagm(1.0 ./ diag(Mff))
+    all(>(0), d) || error("CDM: non-positive diagonal entry detected in Mff on free DOFs.")
+    #invMff = spdiagm(1.0 ./ d)
 
     nsteps = n
     
@@ -5865,7 +5884,7 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
     v = vv.a
     t = ts
     
-    u00 = zeros(eltype(u), size(u,1))
+    #u00 = zeros(eltype(u), size(u,1))
 
     a0 = Mff \ (
         f.a[free,1] .-
@@ -5874,38 +5893,51 @@ function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarF
         Cff * v[free,1] .-
         Cfc * v[fix,1])
 
-    u00[free] .= u[free,1] .- v[free,1] .* Δt .+ 0.5 .* a0 .* Δt^2
-    u00[fix]  .= 2.0 .* u[fix,1] .- u[fix,2]
+    #u00[free] .= u[free,1] .- v[free,1] .* Δt .+ 0.5 .* a0 .* Δt^2
+    #u00[fix]  .= 2.0 .* u[fix,1] .- u[fix,2]
 
-    #a0 = M.A \ (f.a[:,1] - K.A * u[:,1] - C.A * v[:,1])
-    #u00 = u[:,1] - v[:,1] * Δt + a0 * Δt^2 / 2
-    #a0 = M.A[free,free] \ (f.a[free,1] - K.A[free,free] * u[free,1] - C.A[free,free] * v[free,1])
-    #u00[free] = u[free,1] - v[free,1] * Δt + a0 * Δt^2 / 2
-    #u00[fix] .= 2.0 .* u[fix,1] .- u[fix,2]
-    
-    #t[1] = 0
-    #u0 = DoFs(uu)[:, 1]
-    u0 = copy(u[:,1])
+    #u0 = copy(u[:,1])
     ΔtΔt = Δt * Δt
 
+    invd = 1.0 ./ d
+
+    u0_free = copy(@view u[free, 1])
+    u00_free = u0_free .- (@view v[free, 1]) .* Δt .+ 0.5 .* a0 .* Δt^2
     for i in 2:nsteps
-        ii = f.nsteps == 1 ? 1 : i
-        uc = u[fix, i]
-        vc = v[fix, i]
-        #ac = (uc - 2uc_prev + uc_prev2) / Δt^2
+        # u[:, i] is computed from the equilibrium equation at step i - 1
+        ii = f.nsteps == 1 ? 1 : i - 1
 
-        rhs = ff[:,ii] - Kfc * uc - Cfc * vc # - Mfc * ac # prescibed displacement
-        u1 = 2.0 .* u0[free] .- u00[free] .-
-            Δt .* (invMff * (Cff * (u0[free] .- u00[free]))) .-
-            ΔtΔt .* (invMff * (Kff * u0[free])) .+
-            ΔtΔt .* (invMff * rhs)
+        @views begin
+            uc = u[fix, i-1]
+            vc = v[fix, i-1]
 
-        u[free, i] .= u1
-        v1 = (u1 .- u0[free]) ./ Δt
-        v[free, i] .= v1
-        #t[i] = t[i-1] + Δt
-        u00 = u0
-        u0 = u[:, i]
+            #u0_free = u0[free]
+            #u00_free = u00[free]
+        end
+
+        rhs =
+            ff[:, ii] -
+            Kfc * uc -
+            Cfc * vc
+
+        Δu = u0_free .- u00_free
+
+        u1 =
+            2.0 .* u0_free .-
+            u00_free .+
+            invd .* (
+                ΔtΔt .* (rhs .- Kff * u0_free) .-
+                Δt .* (Cff * Δu)
+            )
+
+        @views begin
+            u[free, i] .= u1
+            v[free, i] .= (u1 .- u0_free) ./ Δt
+        end
+
+        u00_free, u0_free = u0_free, u1
+        #u00 = u0
+        #u0 = copy(@view u[:, i])
     end
     return TYPE([], u, t, [], length(t), U0.type, f.model), TYPE([], v, t, [], length(t), V0.type, f.model)
 end
@@ -6053,8 +6085,11 @@ function HHT(
     γ = 0.5 + δ,
     β = 0.25 * (0.5 + γ)^2)
 
-    if K.model != M.model || M.model != f.model || f.model != U0.model || U0.model != V0.model
-        error("HHT: K, M, f, U0 and V0 does not belong to the same model.")
+    if K.model !== M.model ||
+        M.model !== f.model ||
+        f.model !== U0.model ||
+        U0.model !== V0.model
+        error("HHT: K, M, f, U0 and V0 must belong to the same model.")
     end
     if f.nsteps != 1 && f.nsteps != n
         error("HHT: number of time steps in load vector is not equal to the time steps given in HHT.")
@@ -6107,136 +6142,134 @@ function HHT(
     #v[:, 1]    .= DoFs(V0)[:, 1]
     #t[1] = 0.0
 
-    # Initial acceleration a0 from equilibrium at step 1 (full vector)
-    a = zeros(ndof)
-    a[free] = M.A[free,free] \ (
-        f.a[free,1] .-
-        K.A[free,free] * u[free,1] .-
-        K.A[free,fix]  * u[fix,1])
-    #a = zeros(ndof)
-    #a[free] = M.A[free,free] \ (DoFs(f)[free,1] - K.A[free,free] * u[free,1])
+    has_fix = !isempty(fix)
 
-    # Effective stiffness blocks (constant here)
-    A   = (1 + α) * K.A + c0 * M.A
-    Aff = A[free, free]
-    Afc = A[free, fix]
+    Kff = K.A[free, free]
+    Mff = M.A[free, free]
+
+    if has_fix
+        Kfc = K.A[free, fix]
+        Mfc = M.A[free, fix]
+    else
+        Kfc = spzeros(length(free), 0)
+        Mfc = spzeros(length(free), 0)
+    end
+
+    # Initial acceleration
+    a = zeros(ndof)
+    if has_fix
+        if n >= 3
+            @views begin
+                v[fix, 1] .=
+                    (-3.0 .* u[fix, 1] .+
+                      4.0 .* u[fix, 2] .-
+                              u[fix, 3]) ./ (2.0 * Δt)
+   
+                a[fix] .=
+                    (u[fix, 1] .-
+                     2.0 .* u[fix, 2] .+
+                            u[fix, 3]) ./ Δt^2
+            end
+        else
+            @views v[fix, 1] .=
+                (u[fix, 2] .- u[fix, 1]) ./ Δt
+        end
+    end
+
+    #a[free] .= Mff \ rhs0
+    rhs0 = copy(@view f.a[free, 1])
+    if has_fix
+        mul!(rhs0, Kfc, @view(u[fix, 1]), -1.0, 1.0)
+        mul!(rhs0, Mfc, @view(a[fix]), -1.0, 1.0)
+    end
+
+    u_f0 = @view u[free, 1]
+    mul!(rhs0, Kff, u_f0, -1.0, 1.0)
+
+    #if has_fix
+    #    u_c0 = @view u[fix, 1]
+    #    mul!(rhs0, Kfc, u_c0, -1.0, 1.0)
+    #end
+
+    a[free] .= Mff \ rhs0
+
+    # Effective stiffness
+    Aff = (1 + α) * Kff + c0 * Mff
+    Afc = (1 + α) * Kfc + c0 * Mfc
+
     luAff = lu(Aff)
 
-    # Time stepping
-    for i in 2:n
-        ii = (f.nsteps == 1) ? 1 : i
+    # Reusable workspaces
+    predictor = zeros(ndof)
+    rhs_full = zeros(ndof)
+    rhs_free = zeros(length(free))
+    u_free_np1 = similar(rhs_free)
 
-        # Previous state (full vectors at step n=i-1)
+    a_np1 = similar(a)
+    u_fix_np1 = zeros(length(fix))
+
+    for i in 2:n
         u_n = @view u[:, i-1]
         v_n = @view v[:, i-1]
-        a_n = a  # 'a' stores a_n at loop start
-
-        # Prescribed displacement at step n+1 (already in uu from applyBoundaryConditions!)
-        u_fix_np1 = @view u[fix, i]
-
-        # Build RHS using ONLY previous step quantities (u_n, v_n, a_n)
-        rhs_full = DoFs(f)[:, ii] + M.A * (u_n * c0 + v_n * c2 + a_n * c3) + α * (K.A * u_n)
-
-        # Condense to free dofs and subtract constraint contribution
-        rhs_free = rhs_full[free] - Afc * u_fix_np1
-
-        # Solve for free displacements at n+1
-        u_free_np1 = luAff \ rhs_free
-        u[free, i] .= u_free_np1
-        # u[fix, i] is already prescribed by BC
-
-        # --- Now compute a_{n+1} and v_{n+1} for ALL dofs from Newmark relations ---
-        # a_{n+1} = c0*(u_{n+1}-u_n) - c2*v_n - c3*a_n
-        # v_{n+1} = v_n + c6*a_n + c7*a_{n+1}
-
-        # Assemble u_{n+1} (full vector view)
         u_np1 = @view u[:, i]
-
-        a_np1 = c0 .* (u_np1 .- u_n) .- c2 .* v_n .- c3 .* a_n
-        v_np1 = v_n .+ c6 .* a_n .+ c7 .* a_np1
-
-        v[:, i] .= v_np1
-        a .= a_np1  # store as "current" for next loop
-
-        #t[i] = t[i-1] + dt
+   
+        # c0*u_n + c2*v_n + c3*a_n
+        @. predictor = c0 * u_n + c2 * v_n + c3 * a
+   
+        # M*predictor + α*K*u_n
+        mul!(rhs_full, M.A, predictor)
+        mul!(rhs_full, K.A, u_n, α, 1.0)
+   
+        # Condense and add the HHT-weighted load
+        if f.nsteps == 1
+            @inbounds for j in eachindex(free)
+                dof = free[j]
+                rhs_free[j] = rhs_full[dof] + f.a[dof, 1]
+            end
+        else
+            @inbounds for j in eachindex(free)
+                dof = free[j]
+                rhs_free[j] =
+                    rhs_full[dof] +
+                    (1 + α) * f.a[dof, i] -
+                    α * f.a[dof, i-1]
+            end
+        end
+   
+        # Prescribed displacement contribution
+        if has_fix
+            @views u_fix_np1 .= u[fix, i]
+            mul!(rhs_free, Afc, u_fix_np1, -1.0, 1.0)
+        end
+   
+        # Effective system solution
+        ldiv!(u_free_np1, luAff, rhs_free)
+        @views u[free, i] .= u_free_np1
+   
+        # Newmark acceleration and velocity
+        @. a_np1 =
+            c0 * (u_np1 - u_n) -
+            c2 * v_n -
+            c3 * a
+   
+        v_np1 = @view v[:, i]
+   
+        @. v_np1 =
+            v_n +
+            c6 * a +
+            c7 * a_np1
+   
+        # Reuse acceleration workspaces
+        a, a_np1 = a_np1, a
     end
 
     return TYPE([], u, t, [], length(t), U0.type, K.model),
            TYPE([], v, t, [], length(t), V0.type, K.model)
 end
 
-HHT(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=BoundaryCondition[], α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
-    HHT(K, M, f, support, uu0, vv0, n, Δt; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
-
-    #=
-function HHT_old_wrong(K::SystemMatrix, M::SystemMatrix, f::VectorField, bc::Vector{BoundaryCondition}, U0::VectorField, V0::VectorField, n::Int, Δt::Float64; α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
-    if K.model != M.model || M.model != f.model || f.model != U0.model || U0.model != V0.model
-        error("HHT: K, M, f, u0 and v0 does not belong to the same model.")
-    end
-    if f.nsteps != 1 && f.nsteps != n
-        error("HHT: number of time steps in load vector is not equal to the time steps given in CDM.")
-    end
-
-    f = elementsToNodes(f)
-    U0 = elementsToNodes(U0)
-    V0 = elementsToNodes(V0)
-    
-    ts = [i for i in 0:n-1]
-    uu = VectorField([], zeros(size(f.a,1), n), ts, [], n, f.type, f.model)
-    vv = copy(uu)
-    applyBoundaryConditions!(uu, bc)
-
-    free = freeDoFs(K.model, bc)
-    fix = constrainedDoFs(K.model, bc)
-    
-    K0 = K.A
-    M0 = M.A
-
-    nsteps = n
-    u = uu.a #zeros(dof, nsteps)
-    v = vv.a #zeros(dof, nsteps)
-    t = zeros(nsteps)
-    
-    dt = Δt
-    dtdt = dt * dt
-    
-    c0 = 1.0 / (β * dtdt)
-    c1 = γ / (β * dt)
-    c2 = 1.0 / (β * dt)
-    c3 = 0.5 / β - 1.0
-    c4 = γ / β - 1.0
-    c5 = dt / 2.0 * (γ / β - 2.0)
-    c6 = dt * (1.0 - γ)
-    c7 = γ * dt
-    
-    a0 = M.A \ (DoFs(f)[:,1] - K.A * DoFs(uu)[:,1])
-    
-    u[free, 1] = DoFs(uu)[free,1]
-    v[free, 1] = DoFs(vv)[free,1]
-    t[1] = 0
-    
-    A = (α + 1) * K.A + M.A * c0
-    AA = lu(A)
-    
-    u0 = DoFs(U0)[:,1]
-    v0 = DoFs(V0)[:,1]
-
-    for i in 2:nsteps
-        ii = f.nsteps == 1 ? 1 : i
-        b = DoFs(f)[free,ii] + M0 * (u0 * c0 + v0 * c2 + a0 * c3) + α * K0 * u0
-        u1 = AA \ b
-        u[free, i] .= u1
-        a1 = (u1 - u0[free]) * c0 - v0[free] * c2 - a0[free] * c3
-        v1 = v0[free] + a0[free] * c6 + a1 * c7
-        v[free, i] .= v1
-        t[i] = t[i-1] + Δt
-        u0 = u[:,i]
-        v0 = v[:,i]
-        a0 = a1
-    end
-    return VectorField([], u, t, [], length(t), uu0.type, f.model), VectorField([], v, t, [], length(t), vv0.type, f.model)
-end
-=#
+HHT(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=BoundaryCondition[], 
+    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
+        HHT(K, M, f, support, uu0, vv0, n, Δt; α=α, δ=δ, γ=γ, β=β)
 
 """
     CDMaccuracyAnalysis(ωₘᵢₙ::Float64, 

@@ -1475,6 +1475,11 @@ function FDM(
 
     TYPE = typeof(q)
     # --- checks --------------------------------------------------------------
+    if K.model !== C.model ||
+        C.model !== q.model ||
+        q.model !== TT0.model
+        error("FDM: K, C, q and TT0 must belong to the same model.")
+    end
     if K.model != C.model || C.model != q.model || q.model != TT0.model
         error("FDM: K, C, q and TT0 does not belong to the same model.")
     end
@@ -1484,7 +1489,16 @@ function FDM(
     if TT0.nsteps != 1 && TT0.nsteps != n
         error("FDM: number of time steps in TT0 must be 1 or n.")
     end
+    typeof(q) === typeof(TT0) ||
+        error("FDM: q and TT0 must be fields of the same type.")
 
+    q.type == TT0.type ||
+        error("FDM: q and TT0 must have the same field type.")
+
+    n >= 2 || error("FDM: n must be at least 2.")
+    Δt > 0 || error("FDM: Δt must be positive.")
+    0.0 <= ϑ <= 1.0 ||
+        error("FDM: ϑ must be between 0 and 1.")
     # --- nodalize ------------------------------------------------------------
     q   = elementsToNodes(q)
     TT0 = elementsToNodes(TT0)
@@ -1496,13 +1510,11 @@ function FDM(
     # --- build temperature container and apply BC for ALL steps --------------
     TT = TYPE([], zeros(ndof, n), ts, [], n, q.type, K.model)
 
-    if TT0.nsteps == 1
-        for i in 1:n
-            TT.a[:, i] .= TT0.a[:, 1]
-        end
-    else
-        TT.a[:, :] .= TT0.a[:, 1:n]
-    end
+    TT0.nsteps == 1 ||
+        error("FDM: TT0 must contain exactly one initial state.")
+
+    TT = TYPE([], zeros(ndof, n), ts, [], n, q.type, K.model)
+    TT.a[:, 1] .= TT0.a[:, 1]
 
     applyBoundaryConditions!(TT, bc)
 
@@ -1523,9 +1535,10 @@ function FDM(
     T0 = copy(TT.a[free, 1])
 
     # load helper
+    qdofs = DoFs(q)
     @inline function q_free(i::Int)
-        ii = (q.nsteps == 1) ? 1 : i
-        return DoFs(q)[free, ii]
+        ii = q.nsteps == 1 ? 1 : i
+        return @view qdofs[free, ii]
     end
 
     # "true" theta load: q^{n+θ} = (1-θ) q^n + θ q^{n+1}
@@ -1538,6 +1551,11 @@ function FDM(
         end
     end
 
+    d = diag(Cff)
+    all(>(0), d) ||
+        error("FDM: non-positive diagonal entry detected in Cff on free DOFs.")
+
+    invd = 1.0 ./ d
     # explicit theta=0 diagonal-C shortcut (kept, but now uses q^n)
     is_diag = isdiag(Cff)
     if ϑ == 0 && is_diag
@@ -1551,7 +1569,10 @@ function FDM(
             Tc_np1 = TT.a[fix, i]
             qn = q_free(i-1)
 
-            T1 = T0 - Δt * (invC * (Kff * T0 + Kfc * Tc_n)) + Δt * (invC * qn) - (invC * (Cfc * ((Tc_np1 - Tc_n) ./ Δt)))
+            r = qn - Kff * T0 - Kfc * Tc_n
+
+            T1 = T0 + invd .* (Δt .* r - Cfc * (Tc_np1 - Tc_n))
+            #T1 = T0 - Δt * (invC * (Kff * T0 + Kfc * Tc_n)) + Δt * (invC * qn) - (invC * (Cfc * (Tc_np1 - Tc_n)))
 
             TT.a[free, i] .= T1
             #t[i] = t[i-1] + Δt
@@ -1563,6 +1584,8 @@ function FDM(
         # (C + θΔt K) T^{n+1} = (C - (1-θ)Δt K) T^n + Δt q^{n+θ}
         A = Cff + ϑ * Δt * Kff
         B = Cff - (1 - ϑ) * Δt * Kff
+        Afc = Cfc + ϑ * Δt * Kfc
+        Bfc = Cfc - (1 - ϑ) * Δt * Kfc
         luA = lu(A)
 
         for i in 2:n
@@ -1574,8 +1597,8 @@ function FDM(
             rhs =
                 B * T0 +
                 Δt * qth -
-                ((Cfc + ϑ * Δt * Kfc) * Tc_np1 -
-                (Cfc - (1 - ϑ) * Δt * Kfc) * Tc_n)
+                Afc * Tc_np1 +
+                Bfc * Tc_n
 
             T1 = luA \ rhs
 

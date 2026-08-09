@@ -4794,6 +4794,18 @@ function FDM(
     Δt::Float64;
     ϑ=0.5)
 
+    all(isfinite, K.A.nzval) ||
+        error("FDM: K contains non-finite entries.")
+
+    all(isfinite, C.A.nzval) ||
+        error("FDM: C contains non-finite entries.")
+
+    all(isfinite, q.a) ||
+        error("FDM: q contains non-finite entries.")
+
+    all(isfinite, X0.a) ||
+        error("FDM: X0 contains non-finite entries.")
+
     @assert size(K.A,1) == size(K.A,2)
     @assert size(C.A,1) == size(C.A,2)
     @assert size(K.A) == size(C.A)
@@ -4836,6 +4848,17 @@ function FDM(
     n >= 1 || error("FDM: n must be at least 1.")
     Δt > 0 || error("FDM: Δt must be positive.")
 
+    nq = size(q.a, 2)
+    nq == 1 || nq == n ||
+        error("FDM: q must contain either 1 or n time steps.")
+
+    nX0 = size(X0.a, 2)
+    nX0 == 1 || nX0 == n ||
+        error("FDM: X0 must contain either 1 or n time steps.")
+
+    0.0 <= ϑ <= 1.0 ||
+        error("FDM: ϑ must be between 0 and 1.")
+
     # ------------------------------------------------------------------
     # 2) BC data
     # ------------------------------------------------------------------
@@ -4845,7 +4868,8 @@ function FDM(
     # 3) Allocate history
     # ------------------------------------------------------------------
     X = zeros(ndof, n)
-    t = zeros(n)
+    #t = zeros(n)
+    t = collect(0:Δt:(n-1)*Δt)
 
     # initial condition
     X .= X0.a
@@ -4862,46 +4886,59 @@ function FDM(
     Kff = K0[free, free]
     Cff = C0[free, free]
 
-    if !isempty(fix)
-        Kfc = K0[free, fix]
-        Cfc = C0[free, fix]
-    else
-        Kfc = zeros(length(free), 0)
-        Cfc = zeros(length(free), 0)
-    end
-
-    # explicit shortcut only if Cff is diagonal and theta = 0
-    is_diag_Cff = isdiag(Cff)
+    Kfc = K0[free, fix]
+    Cfc = C0[free, fix]
+    #if !isempty(fix)
+    #    Kfc = K0[free, fix]
+    #    Cfc = C0[free, fix]
+    #else
+    #    Kfc = zeros(length(free), 0)
+    #    Cfc = zeros(length(free), 0)
+    #end
 
     # ------------------------------------------------------------------
     # 5) Time stepping
     # ------------------------------------------------------------------
+    is_diag_Cff = isdiag(Cff)
+
     if ϑ == 0 && is_diag_Cff
-        invCff = spdiagm(1.0 ./ diag(Cff))
+        d = diag(Cff)
+
+        all(>(0), d) ||
+            error("FDM: non-positive diagonal entry detected in Cff on free DOFs.")
+
+        invd = 1.0 ./ d
+        has_fix = !isempty(fix)
 
         for i in 2:n
-            qi = size(q.a, 2) == 1 ? 1 : i
-            qn = q.a[:, qi]
+            qi = size(q.a, 2) == 1 ? 1 : i - 1
 
-            xc_n = isempty(fix) ? zeros(0) : xD[fix, i-1]
-            xc_np1 = isempty(fix) ? zeros(0) : xD[fix, i]
-
-            xfree_n = @view X[free, i-1]
-
-            rhs =
-                qn[free] -
-                Kff * xfree_n -
-                Kfc * xc_n -
-                Cfc * ((xc_np1 - xc_n) ./ Δt)
-
-            xfree_np1 = xfree_n + Δt .* (invCff * rhs)
-
-            X[free, i] .= xfree_np1
-            if !isempty(fix)
-                X[fix, i] .= xc_np1
+            @views begin
+                qn = q.a[free, qi]
+                xfree_n = X[free, i-1]
             end
 
-            t[i] = t[i-1] + Δt
+            rhs =
+                qn -
+                Kff * xfree_n
+
+            if has_fix
+                @views begin
+                    xc_n = xD[fix, i-1]
+                    xc_np1 = xD[fix, i]
+                end
+
+                rhs .-=
+                    Kfc * xc_n +
+                    Cfc * ((xc_np1 - xc_n) ./ Δt)
+            end
+
+            @views X[free, i] .=
+                xfree_n .+ Δt .* invd .* rhs
+
+            if has_fix
+                @views X[fix, i] .= xD[fix, i]
+            end
         end
 
     else
@@ -4909,31 +4946,46 @@ function FDM(
         B = Cff - (1 - ϑ) * Δt * Kff
         luA = lu(A)
 
+        has_fix = !isempty(fix)
+
+        if has_fix
+            Afc = Cfc + ϑ * Δt * Kfc
+            Bfc = Cfc - (1 - ϑ) * Δt * Kfc
+        end
+
+        x_n = copy(@view X[free, 1])
+        x_np1 = similar(x_n)
+        rhs = similar(x_n)
+
         for i in 2:n
-            qi = size(q.a, 2) == 1 ? 1 : i
-            mi = qi == 1 ? 0 : 1
-            qn = q.a[:, qi-mi]
-            qnp1 = q.a[:, qi]
-            @views qth = (1 - ϑ) .* qn[free] .+ ϑ .* qnp1[free]
-
-            xc_n = isempty(fix) ? zeros(0) : xD[fix, i-1]
-            xc_np1 = isempty(fix) ? zeros(0) : xD[fix, i]
-
-            rhs =
-                B * (@view X[free, i-1]) +
-                Δt .* qth
-
-            if !isempty(fix)
-                rhs .-= (Cfc + ϑ * Δt * Kfc) * xc_np1
-                rhs .+= (Cfc - (1 - ϑ) * Δt * Kfc) * xc_n
+            # rhs = B * x_n
+            mul!(rhs, B, x_n)
+   
+            if size(q.a, 2) == 1
+                @views rhs .+= Δt .* q.a[free, 1]
+            else
+                @views rhs .+= Δt .* ((1 - ϑ) .* q.a[free, i-1] .+ ϑ .* q.a[free, i])
             end
-
-            X[free, i] .= luA \ rhs
-            if !isempty(fix)
-                X[fix, i] .= xc_np1
+   
+            if has_fix
+                @views begin
+                    xc_n = xD[fix, i-1]
+                    xc_np1 = xD[fix, i]
+   
+                    mul!(rhs, Afc, xc_np1, -1.0, 1.0)
+                    mul!(rhs, Bfc, xc_n, 1.0, 1.0)
+                end
             end
-
-            t[i] = t[i-1] + Δt
+   
+            ldiv!(x_np1, luA, rhs)
+   
+            @views X[free, i] .= x_np1
+   
+            if has_fix
+                @views X[fix, i] .= xD[fix, i]
+            end
+   
+            x_n, x_np1 = x_np1, x_n
         end
     end
 

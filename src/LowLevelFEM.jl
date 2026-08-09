@@ -168,6 +168,11 @@ end
                 multithread=true
             )
 
+            M_pc = ∫(
+                Pu_pc ⋅ Pu_pc;
+                multithread=true
+            )
+
             ∫(
                 Pu_pc ⋅ [1.0, 1.0, 1.0];
                 multithread=true
