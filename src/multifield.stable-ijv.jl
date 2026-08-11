@@ -2220,43 +2220,6 @@ function _run_workers(f, nworkers::Int)
     return nothing
 end
 
-@inline function reduce_csc_worker!(
-    target::Vector{Float64},
-    buffers::Vector{Vector{Float64}},
-    nworkers::Int,
-    worker::Int
-)
-    @inbounds for p in _worker_range(length(target), nworkers, worker)
-        value = target[p]
-        for source in 2:nworkers
-            value += buffers[source][p]
-        end
-        target[p] = value
-    end
-
-    return nothing
-end
-
-"""
-    reduce_csc_buffers!(target, buffers, nworkers)
-
-Accumulate private worker CSC value buffers into `target`. With one worker,
-`target` already contains the complete assembly, so the reduction is skipped.
-"""
-function reduce_csc_buffers!(
-    target::Vector{Float64},
-    buffers::Vector{Vector{Float64}},
-    nworkers::Int
-)
-    nworkers == 1 && return nothing
-
-    _run_workers(nworkers) do worker
-        reduce_csc_worker!(target, buffers, nworkers, worker)
-    end
-
-    return nothing
-end
-
 """
     assemble_csc_worker!(ws, nzval, element_tags, connectivity, coordinates,
                          colptr, rowval, chunk, num_threads, worker,
@@ -3077,17 +3040,18 @@ function assemble_operator(
         @assert ncols > 0
 
         if direct_csc
-            Kcsc_typed = Kcsc::SparseMatrixCSC{Float64,Int}
-            nzval_buffers_typed =
-                nzval_buffers::Vector{Vector{Float64}}
+            _run_workers(num_threads) do worker
+                @inbounds for p in _worker_range(
+                    length(Kcsc.nzval), num_threads, worker)
 
-            reduce_csc_buffers!(
-                Kcsc_typed.nzval,
-                nzval_buffers_typed,
-                num_threads
-            )
-
-            return SystemMatrix(Kcsc_typed, Pu, Ps)
+                    value = Kcsc.nzval[p]
+                    for source in 2:num_threads
+                        value += nzval_buffers[source][p]
+                    end
+                    Kcsc.nzval[p] = value
+                end
+            end
+            return SystemMatrix(Kcsc, Pu, Ps)
         end
         
         if assembly === :add

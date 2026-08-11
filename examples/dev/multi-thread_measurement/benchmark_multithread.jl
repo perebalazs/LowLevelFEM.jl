@@ -139,26 +139,22 @@ function worker()
 
         # Warm-up: compilation is intentionally excluded from the measurements.
         K = ∫(
-            SymGrad(problem) ⋅ D ⋅ SymGrad(problem);
-            multithread=true,
+            SymGrad(problem) ⋅ D ⋅ SymGrad(problem), assembly=:csc
         )
 
         f = ∫(
-            problem ⋅ [1.0, 2.0, 3.0];
-            multithread=true,
+            problem ⋅ [1.0, 2.0, 3.0]
         )
 
         K, matrix_time, matrix_bytes = median_timed(REPEATS) do
             ∫(
-                SymGrad(problem) ⋅ D ⋅ SymGrad(problem);
-                multithread=true,
+                SymGrad(problem) ⋅ D ⋅ SymGrad(problem), assembly=:csc
             )
         end
 
         f, vector_time, vector_bytes = median_timed(REPEATS) do
             ∫(
-                problem ⋅ [1.0, 2.0, 3.0];
-                multithread=true,
+                problem ⋅ [1.0, 2.0, 3.0]
             )
         end
 
