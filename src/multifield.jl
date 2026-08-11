@@ -48,8 +48,9 @@ Compound operator sums
 or
     K = ∫(B' ⋅ D ⋅ B * (2π*r); Ω="body")
 
-The sum is expanded into ordinary bilinear terms and assembled using the
-standard bilinear assembler. Each term may carry its own quadrature rule via
+The sum is expanded into ordinary bilinear terms. With the default direct CSC
+assembly, one structural pattern and one set of worker value buffers are reused
+for all expanded terms. Each term may carry its own quadrature rule via
 `full(...)` and `reduced(...)`.
 
 The implementation is designed to be
@@ -1956,7 +1957,25 @@ The pattern is constructed from node connectivity without allocating full
 degree-of-freedom triplet arrays. The returned matrix has zero-valued `nzval`
 entries and sorted row indices in every column.
 
-The returned pattern is used by both serial and parallel direct CSC assembly.
+The construction is independent of element shape and interpolation order: it
+uses the connectivity returned by Gmsh and expands every connected node pair to
+the test/trial field components. Consequently, it supports all Gmsh Lagrange
+element types that are otherwise supported by the selected LowLevelFEM
+operators and element kernel.
+
+The returned pattern can be supplied as `csc_matrix` to a bilinear or compound
+integral. Serial assembly writes directly to its `nzval` array. Parallel
+assembly uses the same array as the first worker's accumulator and allocates
+one additional private `nzval` buffer per remaining worker, followed by an
+allocation-free reduction.
+
+Before reusing the pattern for a new independent assembly, reset its numerical
+values with `fill!(K.nzval, 0.0)`. Do not call `dropzeros!(K)`, because that
+would remove structural entries required by subsequent direct CSC scatter.
+
+The caller is responsible for reusing a pattern only with the same mesh,
+domain, and compatible test/trial spaces. Matrix dimensions alone do not prove
+structural compatibility.
 """
 function build_csc_pattern(
     Pu::Problem,
@@ -2464,6 +2483,23 @@ Use direct CSC assembly. The CSC pattern is created first, element Jacobians
 are computed on demand from nodal coordinates, and element matrices are
 accumulated into one `nzval` array per worker. The first worker writes directly
 to the final matrix; the remaining worker-local arrays are reduced into it.
+With one worker, no private value buffer or reduction pass is required.
+
+The same CSC path is used for scalar, matrix, and matrix-chain coefficients.
+Matrices may contain `Number` and `ScalarField` entries; their values are
+evaluated at Gauss points before the element matrix is scattered.
+
+`K`
+
+Optional prebuilt `SparseMatrixCSC{Float64,Int}` pattern. Its dimensions and
+structural entries must match the current mesh, domain, and test/trial spaces.
+Assembly adds to its existing `nzval` values; use
+`fill!(K.nzval, 0.0)` before a new independent assembly.
+
+`node_coordinates`
+
+Optional reusable dense `3 × number_of_nodes` coordinate array for internal
+compound assembly.
 
 `threads`
 
@@ -2475,6 +2511,12 @@ the serial low-memory path.
 Element scheduling block size for `assembly=:csc`. `:auto` uses at most 4096
 elements and adapts to the element and worker counts. Chunks are distributed
 cyclically among the requested workers.
+
+`_nzval_buffers`
+
+Internal reusable worker buffers used by compound CSC assembly. The first
+buffer must be identical to `K.nzval`. This keyword is not part of the public
+API.
 
 # Returns
 
@@ -2489,7 +2531,7 @@ function assemble_operator(
     weight=nothing,
     domain=nothing,
     gauss=:full,
-    assembly::Symbol=:ijv,
+    assembly::Symbol=:csc,
     threads=:auto,
     I=nothing,
     J=nothing,
@@ -4606,7 +4648,7 @@ end
 
 function _assemble(
     term::WeakTerm{BilinearTerm}, dom, weight=nothing, gauss=:full,
-    threads=:auto, assembly::Symbol=:ijv)
+    threads=:auto, assembly::Symbol=:csc)
 
     Pu = term.term.a.P
 
@@ -4637,7 +4679,7 @@ end
 
 function _assemble(
     expr::WeakSum, dom, weight, gauss=:full,
-    threads=:auto, assembly::Symbol=:ijv)
+    threads=:auto, assembly::Symbol=:csc)
 
     _assemble(expr.a, dom, weight, gauss, threads, assembly) +
         _assemble(expr.b, dom, weight, gauss, threads, assembly)
@@ -4646,7 +4688,7 @@ end
 
 function _assemble(
     term::WeakTerm{LinearTerm}, dom, weight=nothing, gauss=:full,
-    threads=:auto, assembly::Symbol=:ijv)
+    threads=:auto, assembly::Symbol=:csc)
 
     t = term.term
     chain = t.chain
@@ -4773,7 +4815,7 @@ Boundary physical group name.
 """
 function ∫(
     expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full,
-    threads=:auto, assembly::Symbol=:ijv)
+    threads=:auto, assembly::Symbol=:csc)
 
     _check_scalarfields(expr)
 
@@ -4787,11 +4829,28 @@ function ∫(
 
 end
 
+"""
+    ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing,
+      gauss=:full, threads=:auto, assembly=:csc,
+      csc_matrix=nothing, element_chunk_size=:auto)
+
+Assemble one bilinear term.
+
+Direct CSC assembly is the default. If `csc_matrix` is omitted, the structural
+pattern is built once, filled, and finalized by removing numerical zeros. If a
+prebuilt `SparseMatrixCSC{Float64,Int}` is supplied, its complete pattern is
+preserved so that it can be reused. Assembly adds to its current `nzval`
+contents; reset them with `fill!(csc_matrix.nzval, 0.0)` before starting an
+independent assembly.
+
+Use `assembly=:ijv` for the legacy triplet-based path. `csc_matrix` and
+`element_chunk_size` apply only to direct CSC assembly.
+"""
 function ∫(t::BilinearTerm;
     Ω=nothing, Γ=nothing, weight=nothing,
     gauss=:full,
     threads=:auto,
-    assembly::Symbol=:ijv,
+    assembly::Symbol=:csc,
     csc_matrix=nothing,
     element_chunk_size::Union{Integer,Symbol}=:auto)
 
@@ -4833,11 +4892,18 @@ function ∫(t::BilinearTerm;
 
 end
 
+"""
+    ∫(a::OpApplied, b::OpApplied; kwargs...)
+
+Assemble the bilinear form defined by two applied operators with an identity
+coefficient. The CSC-related keywords and pattern-reuse rules are identical to
+those of `∫(::BilinearTerm)`.
+"""
 function ∫(a::OpApplied, b::OpApplied;
     Ω=nothing, Γ=nothing, weight=nothing,
     gauss=:full,
     threads=:auto,
-    assembly::Symbol=:ijv,
+    assembly::Symbol=:csc,
     csc_matrix=nothing,
     element_chunk_size::Union{Integer,Symbol}=:auto)
 
@@ -5087,7 +5153,7 @@ function ∫(wt::WeightedTerm;
     Ω=nothing, Γ=nothing, weight=nothing,
     gauss=:full,
     threads=:auto,
-    assembly::Symbol=:ijv,
+    assembly::Symbol=:csc,
     csc_matrix=nothing,
     element_chunk_size::Union{Integer,Symbol}=:auto)
 
@@ -5335,11 +5401,38 @@ end
 
 # ---------------------------------------------------------------------------
 
+"""
+    ∫(expr::CompoundBilinear; Ω=nothing, Γ=nothing, weight=nothing,
+      gauss=:auto, threads=:auto, assembly=:csc,
+      csc_matrix=nothing, element_chunk_size=:auto)
+
+Expand and assemble a compound bilinear operator expression.
+
+For `assembly=:csc`, the structural pattern is built exactly once per integral
+unless `csc_matrix` is supplied. The same final `nzval` array, worker-local
+value buffers, and dense node-coordinate array are reused for every expanded
+left/right term pair. The first worker accumulates directly into the final
+matrix; the other workers' buffers are cleared for each term and reduced into
+the final array. Thus the expanded terms are summed without rebuilding the
+pattern or allocating a new sparse matrix for each term.
+
+If `csc_matrix` is supplied, its complete structural pattern is preserved.
+Reset `csc_matrix.nzval` before a new independent compound assembly, but not
+between the internally expanded terms. The supplied pattern must correspond to
+the same mesh, selected domain, and compatible test/trial spaces.
+
+Matrix chains and matrices containing `Number` and `ScalarField` entries use
+the same coefficient evaluation and element kernel as ordinary bilinear terms.
+Each compound term may select `full(...)` or `reduced(...)` quadrature; with
+`gauss=:auto`, mixed-rule products use full integration.
+
+Use `assembly=:ijv` to select the legacy triplet path.
+"""
 function ∫(expr::CompoundBilinear;
     Ω=nothing, Γ=nothing, weight=nothing,
     gauss=:auto,
     threads=:auto,
-    assembly::Symbol=:ijv,
+    assembly::Symbol=:csc,
     csc_matrix=nothing,
     element_chunk_size::Union{Integer,Symbol}=:auto)
     #@show typeof(expr.left)

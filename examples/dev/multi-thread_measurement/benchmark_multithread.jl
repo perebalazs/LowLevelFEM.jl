@@ -139,7 +139,7 @@ function worker()
 
         # Warm-up: compilation is intentionally excluded from the measurements.
         K = ∫(
-            SymGrad(problem) ⋅ D ⋅ SymGrad(problem), assembly=:csc
+            SymGrad(problem) ⋅ D ⋅ SymGrad(problem)
         )
 
         f = ∫(
@@ -148,7 +148,7 @@ function worker()
 
         K, matrix_time, matrix_bytes = median_timed(REPEATS) do
             ∫(
-                SymGrad(problem) ⋅ D ⋅ SymGrad(problem), assembly=:csc
+                SymGrad(problem) ⋅ D ⋅ SymGrad(problem)
             )
         end
 

@@ -54,7 +54,9 @@ A BibTeX entry is provided in `CITATION.cff`.
 - Coordinate systems: rotate nodal DOFs with constant or function-defined local coordinate systems (incl. curvilinear).
 - Truss structures (static, transient, modal analysis)
 - **Nonlinear solid mechanics (Total Lagrangian formulation)** Energy-based hyperelasticity with consistent stress and tangent operators, including geometric stiffness and follower loads for large-deformation problems.
-- Bilinear weak-form assembly is now multithreaded by default and optimized for high-performance shared-memory execution.
+- Weak-form assembly supports shared-memory multithreading. Bilinear forms use
+  memory-efficient direct CSC assembly by default, while the triplet-based IJV
+  method remains available as an option.
 
 ## Installation
 
@@ -132,6 +134,23 @@ bc = BoundaryCondition("left", ux=0, uy=0)
 u = solveField(K, f, support=[bc])
 ```
 
+Bilinear forms are assembled directly into CSC sparse matrices by default. This
+reduces temporary memory use and allows substantially larger problems than
+triplet-based assembly. For repeated assembly on the same mesh and field pair,
+the sparsity pattern can be built once and reused:
+
+```julia
+Kpattern = build_csc_pattern(Pu, Pu; Ω="body")
+
+fill!(Kpattern.nzval, 0.0)
+K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
+      Ω="body", csc_matrix=Kpattern)
+```
+
+The pattern must retain its structural zeros; do not call `dropzeros!` on it.
+Before an independent reuse, reset its numerical values with `fill!` as shown
+above. The previous triplet route remains available with `assembly=:ijv`.
+
 The three examples above solve the same class of problem at different levels of
 abstraction:
 
@@ -166,7 +185,7 @@ and the online [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stabl
 
 ## Planned features
 
-* Beam and shell elements (partially implemented using compound operators for weak-form assembly)
+* Hierarchical H1/H2 approximation for beam and shell formulations
 * Contact problems (penalty, Lagrange multiplier)
 
 Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome.
