@@ -584,6 +584,146 @@ Equivalent form:
 \frac{\partial u}{\partial s}
 ```
 
+# Matrix assembly
+
+Bilinear forms use direct compressed sparse column (CSC) assembly by default:
+
+```julia
+K = ∫(SymGrad(Pu) ⋅ D ⋅ SymGrad(Pu); Ω="body")
+```
+
+The structural sparsity pattern is built from the Gmsh element connectivity
+before numerical integration. Element matrices are then accumulated directly
+into the `nzval` arrays associated with that pattern. This avoids storing the
+full element-level `I`, `J`, and `V` triplet arrays and substantially reduces
+the memory required for large problems.
+
+The legacy triplet-based assembly remains available explicitly:
+
+```julia
+K = ∫(SymGrad(Pu) ⋅ D ⋅ SymGrad(Pu);
+      Ω="body",
+      assembly=:ijv)
+```
+
+The `assembly` keyword affects bilinear forms only. Linear forms use their own
+parallel vector-assembly path.
+
+## Parallel CSC assembly
+
+By default, assembly uses all Julia threads available to the process:
+
+```julia
+K = ∫(Grad(P) ⋅ Grad(P); threads=:auto)
+```
+
+The number of workers can also be selected explicitly:
+
+```julia
+K1 = ∫(Grad(P) ⋅ Grad(P); threads=1)
+K4 = ∫(Grad(P) ⋅ Grad(P); threads=4)
+```
+
+With one worker, element contributions are written directly to the final
+`nzval` array, and no reduction is required. With multiple workers, the first
+worker uses the final array and every additional worker uses a private value
+buffer with the same structural pattern. These buffers are reduced into the
+final array after assembly, avoiding data races.
+
+`element_chunk_size` controls the scheduling block size for direct CSC
+assembly. The default `:auto` setting adapts the block size to the element and
+worker counts and uses at most 4096 elements per block:
+
+```julia
+K = ∫(Grad(P) ⋅ Grad(P); element_chunk_size=2048)
+```
+
+Normally, the automatic setting should be preferred.
+
+## Reusing a CSC pattern
+
+For repeated assembly on the same mesh and domain with compatible trial and
+test spaces, the structural pattern can be built once and reused:
+
+```julia
+Kpattern = build_csc_pattern(Pu, Pu; Ω="body")
+
+fill!(Kpattern.nzval, 0.0)
+K1 = ∫(SymGrad(Pu) ⋅ D1 ⋅ SymGrad(Pu);
+       Ω="body",
+       csc_matrix=Kpattern)
+
+# Copy the numerical result if it must remain available after Kpattern is reused.
+A1 = copy(K1.A)
+
+fill!(Kpattern.nzval, 0.0)
+K2 = ∫(SymGrad(Pu) ⋅ D2 ⋅ SymGrad(Pu);
+       Ω="body",
+       csc_matrix=Kpattern)
+```
+
+Assembly adds contributions to the existing `nzval` entries. Therefore,
+`fill!(Kpattern.nzval, 0.0)` is required before every new independent
+assembly. Do not call `dropzeros!(Kpattern)`: the explicitly stored zero
+entries belong to the reusable structural pattern and are required by direct
+CSC scatter.
+
+The returned `SystemMatrix` wraps the supplied sparse matrix. Reusing and
+clearing that pattern therefore also changes earlier results that still refer
+to it; copy the assembled matrix first if both numerical results are needed.
+
+A reusable pattern is valid only for the same mesh, selected physical domain,
+and structurally compatible trial/test spaces. Equal matrix dimensions alone
+do not guarantee compatibility.
+
+When no pattern is supplied, it is created once within the integral, filled,
+and numerical zeros are removed from the returned matrix.
+
+## Compound operators and coefficient chains
+
+For a compound bilinear form such as
+
+```julia
+B = A1 ⋅ Grad(Pu) + A2 ⋅ Pu
+K = ∫(B' ⋅ D ⋅ B; Ω="body")
+```
+
+the expression is expanded into ordinary bilinear terms. With direct CSC
+assembly, all expanded terms share:
+
+- one structural pattern;
+- the final `nzval` array;
+- the worker-local value buffers;
+- one dense nodal-coordinate array.
+
+The worker-local buffers are cleared between expanded terms, while the final
+array is retained so that the terms accumulate into the same matrix. The
+pattern is therefore not rebuilt for every term.
+
+Direct CSC assembly uses the same element kernel and Gauss-point coefficient
+evaluation as the triplet path. It supports scalar coefficients, ordinary
+matrices, matrix chains, and matrices whose entries are `Number` or
+`ScalarField` values, including mixed matrices containing both types:
+
+```julia
+K = ∫(Grad(Pu) ⋅ A ⋅ B ⋅ C ⋅ Grad(Pu); Ω="body")
+```
+
+Only the global scatter operation differs between the CSC and IJV paths.
+
+## Element types and interpolation order
+
+The CSC pattern builder does not assume a specific element shape or polynomial
+order. It uses the connectivity and number of element nodes returned by Gmsh,
+then expands every connected node pair to the components of the trial and test
+fields.
+
+Consequently, direct CSC assembly supports every Gmsh Lagrange element type
+and interpolation order that is otherwise supported by the selected
+LowLevelFEM operator and element kernel. CSC assembly does not add support for
+an element or operator that is not implemented elsewhere in LowLevelFEM, but
+it does not introduce an additional element-type restriction.
+
 ## Weak-Form DSL Operators
 
 ```@docs
@@ -608,6 +748,7 @@ SurfaceSymGrad
 ∫
 ∫Ω
 ∫Γ
+build_csc_pattern
 ```
 
 ## Multifield Solver

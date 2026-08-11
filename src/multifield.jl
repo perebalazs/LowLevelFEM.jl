@@ -48,8 +48,9 @@ Compound operator sums
 or
     K = ∫(B' ⋅ D ⋅ B * (2π*r); Ω="body")
 
-The sum is expanded into ordinary bilinear terms and assembled using the
-standard bilinear assembler. Each term may carry its own quadrature rule via
+The sum is expanded into ordinary bilinear terms. With the default direct CSC
+assembly, one structural pattern and one set of worker value buffers are reused
+for all expanded terms. Each term may carry its own quadrature rule via
 `full(...)` and `reduced(...)`.
 
 The implementation is designed to be
@@ -76,6 +77,7 @@ export SurfaceGrad
 export SurfaceDiv
 export SurfaceSymGrad
 export full, reduced
+export build_csc_pattern
 
 export ∫
 export ∫Ω
@@ -905,6 +907,12 @@ function _prepare_coefficient(C, domain)
     # tensor coefficient
     elseif C isa AbstractMatrix
 
+        # Constant numeric tensors are reused at every Gauss point. Keeping a
+        # concrete Float64 matrix here avoids one matrix allocation per point.
+        if eltype(C) <: Number || all(x -> x isa Number, C)
+            return Float64.(C)
+        end
+
         W = Matrix{Any}(undef, size(C)...)
 
         for I in CartesianIndices(C)
@@ -1043,6 +1051,8 @@ function _eval_coefficient_at_gp(Cprep, elem, hgp)
 
     # tensor coefficient
     if Cprep isa AbstractMatrix
+
+        eltype(Cprep) <: Number && return Cprep
 
         m, n = size(Cprep)
         W = Matrix{Float64}(undef, m, n)
@@ -1416,6 +1426,8 @@ end
 end
 
 mutable struct OperatorWorkspace
+    Jac::Matrix{Float64}
+    jacDet::Vector{Float64}
     invJac::Matrix{Float64}
     ∂h::Matrix{Float64}
     Bu::Matrix{Float64}
@@ -1470,6 +1482,8 @@ function OperatorWorkspace(
 
     return OperatorWorkspace(
         zeros(3, 3 * num_integration_points),
+        zeros(num_integration_points),
+        zeros(3, 3 * num_integration_points),
         zeros(dim, num_nodes * num_integration_points),
         Bu,
         Bs,
@@ -1483,9 +1497,154 @@ function OperatorWorkspace(
 end
 
 """
+    dense_node_coordinates(problem)
+
+Return a `3 × number_of_nodes` coordinate table indexed by node tag.
+
+The common Gmsh case, in which node tags are already ordered as `1:n`, returns
+a reshaped view of the coordinate vector without copying it. A single compact
+reordering copy is used otherwise. LowLevelFEM currently requires dense node
+tags because global degrees of freedom are derived directly from node tags.
+"""
+function dense_node_coordinates(problem::Problem)
+    gmsh.model.setCurrent(problem.name)
+    node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
+
+    number_of_nodes, remainder = divrem(ndofs(problem), problem.pdim)
+    remainder == 0 || error("dense_node_coordinates: invalid number of degrees of freedom.")
+    length(node_tags) == number_of_nodes || error(
+        "dense_node_coordinates: the mesh contains $(length(node_tags)) nodes, " *
+        "but the problem expects $number_of_nodes."
+    )
+
+    ordered = true
+    @inbounds for i in eachindex(node_tags)
+        if Int(node_tags[i]) != i
+            ordered = false
+            break
+        end
+    end
+
+    if ordered
+        return reshape(coordinates, 3, number_of_nodes)
+    end
+
+    dense = Matrix{Float64}(undef, 3, number_of_nodes)
+    @inbounds for source in eachindex(node_tags)
+        node = Int(node_tags[source])
+        1 <= node <= number_of_nodes || error(
+            "dense_node_coordinates: node tag $node is outside 1:$number_of_nodes."
+        )
+        source3 = 3 * (source - 1)
+        dense[1, node] = coordinates[source3 + 1]
+        dense[2, node] = coordinates[source3 + 2]
+        dense[3, node] = coordinates[source3 + 3]
+    end
+
+    return dense
+end
+
+@inline function jacobian_smatrix(Jac::AbstractMatrix{<:Real}, first_col::Int)
+    return SMatrix{3,3,Float64,9}((
+        Jac[1, first_col],     Jac[2, first_col],     Jac[3, first_col],
+        Jac[1, first_col + 1], Jac[2, first_col + 1], Jac[3, first_col + 1],
+        Jac[1, first_col + 2], Jac[2, first_col + 2], Jac[3, first_col + 2]
+    ))
+end
+
+"""
+    compute_element_geometry!(ws, coordinates, connectivity, first_node,
+                              num_nodes, num_integration_points, dim, edim, grad_h)
+
+Compute Jacobians and integration measures for one element directly from its
+nodal coordinates. Only the reusable arrays in `ws` are written; no
+element-sized heap allocation is required.
+"""
+function compute_element_geometry!(
+    ws::OperatorWorkspace,
+    coordinates::AbstractMatrix{<:Real},
+    connectivity::AbstractVector{<:Integer},
+    first_node::Integer,
+    numNodes::Integer,
+    numIntPoints::Integer,
+    dim::Integer,
+    edim::Integer,
+    ∇h
+)
+    Jac = ws.Jac
+    jacDet = ws.jacDet
+    fill!(Jac, 0.0)
+
+    @inbounds for k in 1:numIntPoints
+        first_col = 3k - 2
+
+        for a in 1:numNodes
+            node = Int(connectivity[first_node + a])
+            grad_row = 3a - 2
+
+            for α in 1:edim
+                dNa = ∇h[grad_row + α - 1, k]
+                col = first_col + α - 1
+                Jac[1, col] += coordinates[1, node] * dNa
+                Jac[2, col] += coordinates[2, node] * dNa
+                Jac[3, col] += coordinates[3, node] * dNa
+            end
+        end
+
+        if edim == dim
+            if dim == 1
+                jacDet[k] = abs(Jac[1, first_col])
+                Jac[2, first_col + 1] = 1.0
+                Jac[3, first_col + 2] = 1.0
+            elseif dim == 2
+                jacDet[k] = abs(
+                    Jac[1, first_col] * Jac[2, first_col + 1] -
+                    Jac[1, first_col + 1] * Jac[2, first_col]
+                )
+                Jac[3, first_col + 2] = 1.0
+            else
+                Jk = jacobian_smatrix(Jac, first_col)
+                jacDet[k] = abs(det(Jk))
+            end
+        elseif edim == 1
+            measure2 = 0.0
+            for i in 1:dim
+                measure2 += Jac[i, first_col]^2
+            end
+            jacDet[k] = sqrt(measure2)
+        elseif edim == 2
+            g11 = 0.0
+            g12 = 0.0
+            g22 = 0.0
+            for i in 1:dim
+                a1 = Jac[i, first_col]
+                a2 = Jac[i, first_col + 1]
+                g11 += a1 * a1
+                g12 += a1 * a2
+                g22 += a2 * a2
+            end
+            jacDet[k] = sqrt(max(0.0, g11 * g22 - g12 * g12))
+        else
+            error(
+                "compute_element_geometry!: unsupported entity dimension " *
+                "$edim for problem dimension $dim."
+            )
+        end
+
+        jacDet[k] > 0.0 || error(
+            "compute_element_geometry!: singular geometry at integration point $k."
+        )
+    end
+
+    return nothing
+end
+
+"""
     assemble_element_matrix!(ws, elem, gidx, ...)
 
-Compute the local element matrix and store it in `ws.Ke`.
+Compute the local element matrix from the batched Gmsh geometry and store it
+in `ws.Ke`. The Jacobian data are accessed through views; no element-level
+geometry copy is made.
 """
 function assemble_element_matrix!(
     ws::OperatorWorkspace,
@@ -1508,6 +1667,109 @@ function assemble_element_matrix!(
     op_s::AbstractOp,
     Ps::Problem
 )
+    nip == numIntPoints || error(
+        "assemble_element_matrix!: inconsistent number of integration points."
+    )
+
+    jac_slice =
+        @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
+    jacDet =
+        @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
+    Jac = reshape(jac_slice, 3, :)
+
+    return assemble_element_matrix_with_geometry!(
+        ws,
+        Jac,
+        jacDet,
+        elem,
+        numIntPoints,
+        dim,
+        edim,
+        numNodes,
+        ∇h,
+        h,
+        intWeights,
+        Cprep,
+        Wprep,
+        op_u,
+        Pu,
+        op_s,
+        Ps
+    )
+end
+
+"""
+    assemble_element_matrix_from_geometry!(ws, elem, ...)
+
+Compute the local element matrix using geometry already stored in `ws.Jac`
+and `ws.jacDet`. This is shared by the legacy batched-Gmsh path and the
+low-memory on-the-fly geometry path.
+"""
+function assemble_element_matrix_from_geometry!(
+    ws::OperatorWorkspace,
+    elem::Integer,
+    numIntPoints::Integer,
+    dim::Integer,
+    edim::Integer,
+    numNodes::Integer,
+    ∇h,
+    h,
+    intWeights,
+    Cprep,
+    Wprep,
+    op_u::AbstractOp,
+    Pu::Problem,
+    op_s::AbstractOp,
+    Ps::Problem
+)
+    return assemble_element_matrix_with_geometry!(
+        ws,
+        ws.Jac,
+        ws.jacDet,
+        elem,
+        numIntPoints,
+        dim,
+        edim,
+        numNodes,
+        ∇h,
+        h,
+        intWeights,
+        Cprep,
+        Wprep,
+        op_u,
+        Pu,
+        op_s,
+        Ps
+    )
+end
+
+"""
+    assemble_element_matrix_with_geometry!(ws, Jac, jacDet, elem, ...)
+
+Compute the local element matrix using explicitly supplied Jacobian and
+integration-measure arrays. This keeps the element kernel shared while allowing
+the IJV path to use zero-copy Gmsh views and the CSC path to use workspace-owned
+geometry.
+"""
+function assemble_element_matrix_with_geometry!(
+    ws::OperatorWorkspace,
+    Jac::AbstractMatrix{<:Real},
+    jacDet::AbstractVector{<:Real},
+    elem::Integer,
+    numIntPoints::Integer,
+    dim::Integer,
+    edim::Integer,
+    numNodes::Integer,
+    ∇h,
+    h,
+    intWeights,
+    Cprep,
+    Wprep,
+    op_u::AbstractOp,
+    Pu::Problem,
+    op_s::AbstractOp,
+    Ps::Problem
+)
     invJac = ws.invJac
     ∂h     = ws.∂h
     Bu     = ws.Bu
@@ -1515,19 +1777,11 @@ function assemble_element_matrix!(
     Ke     = ws.Ke
     tmp    = ws.tmp
 
-    jac_slice =
-        @view jac_all[gidx * 9 * nip + 1 : (gidx + 1) * 9 * nip]
-
-    jacDet =
-        @view det_all[gidx * nip + 1 : (gidx + 1) * nip]
-
-    Jac = reshape(jac_slice, 3, :)
-
     @inbounds for k in 1:numIntPoints
-        #@views invJac[1:3, 3k-2:3k] .=
-        #    inv(Jac[1:3, 3k-2:3k])'
-        Jk = SMatrix{3,3,Float64}(Jac[1:3, 3k-2:3k])
-        invJac[1:3, 3k-2:3k] .= transpose(inv3x3_fast(Jk))
+        if edim == dim
+            Jk = jacobian_smatrix(Jac, 3k - 2)
+            invJac[1:3, 3k-2:3k] .= transpose(inv3x3_fast(Jk))
+        end
     end
 
     # Physical / tangential gradients
@@ -1581,9 +1835,7 @@ function assemble_element_matrix!(
                 t1, t2 = surface_basis_from_J(Jac, k)
                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
             elseif op_u isa AxialGradOp
-                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
-                Jk = inv(invJk')
-                t = Jk[:, 1]
+                t = @view Jac[1:Pu.dim, 3k-2]
                 t = t / norm(t)
                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
             elseif op_u isa TangentialGradOp
@@ -1598,9 +1850,7 @@ function assemble_element_matrix!(
                 t1, t2 = surface_basis_from_J(Jac, k)
                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
             elseif op_s isa AxialGradOp
-                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
-                Jk = inv(invJk')
-                t = Jk[:, 1]
+                t = @view Jac[1:Ps.dim, 3k-2]
                 t = t / norm(t)
                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
             elseif op_s isa TangentialGradOp
@@ -1631,9 +1881,7 @@ function assemble_element_matrix!(
                 t1, t2 = surface_basis_from_J(Jac, k)
                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t1, t2)
             elseif op_u isa AxialGradOp
-                invJk = invJac[1:Pu.dim, 3k-2:3k-(3-Pu.dim)]
-                Jk = inv(invJk')
-                t = Jk[:, 1]
+                t = @view Jac[1:Pu.dim, 3k-2]
                 t = t / norm(t)
                 build_B!(Bu, op_u, Pu, k, h, ∂h, numNodes, t)
             elseif op_u isa TangentialGradOp
@@ -1648,9 +1896,7 @@ function assemble_element_matrix!(
                 t1, t2 = surface_basis_from_J(Jac, k)
                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t1, t2)
             elseif op_s isa AxialGradOp
-                invJk = invJac[1:Ps.dim, 3k-2:3k-(3-Ps.dim)]
-                Jk = inv(invJk')
-                t = Jk[:, 1]
+                t = @view Jac[1:Ps.dim, 3k-2]
                 t = t / norm(t)
                 build_B!(Bs, op_s, Ps, k, h, ∂h, numNodes, t)
             elseif op_s isa TangentialGradOp
@@ -1696,6 +1942,453 @@ function assemble_element_matrix!(
             )
         else
             error("assemble_element_matrix!: unsupported coefficient type")
+        end
+    end
+
+    return nothing
+end
+
+"""
+    build_csc_pattern(Pu::Problem, Ps::Problem; domain=nothing, Ω=nothing, Γ=nothing)
+
+Build the exact structural CSC pattern required by the selected mesh domain.
+
+The pattern is constructed from node connectivity without allocating full
+degree-of-freedom triplet arrays. The returned matrix has zero-valued `nzval`
+entries and sorted row indices in every column.
+
+The construction is independent of element shape and interpolation order: it
+uses the connectivity returned by Gmsh and expands every connected node pair to
+the test/trial field components. Consequently, it supports all Gmsh Lagrange
+element types that are otherwise supported by the selected LowLevelFEM
+operators and element kernel.
+
+The returned pattern can be supplied as `csc_matrix` to a bilinear or compound
+integral. Serial assembly writes directly to its `nzval` array. Parallel
+assembly uses the same array as the first worker's accumulator and allocates
+one additional private `nzval` buffer per remaining worker, followed by an
+allocation-free reduction.
+
+Before reusing the pattern for a new independent assembly, reset its numerical
+values with `fill!(K.nzval, 0.0)`. Do not call `dropzeros!(K)`, because that
+would remove structural entries required by subsequent direct CSC scatter.
+
+The caller is responsible for reusing a pattern only with the same mesh,
+domain, and compatible test/trial spaces. Matrix dimensions alone do not prove
+structural compatibility.
+"""
+function build_csc_pattern(
+    Pu::Problem,
+    Ps::Problem;
+    domain=nothing,
+    Ω=nothing,
+    Γ=nothing
+)
+    @assert Pu.name == Ps.name "Both problems must refer to the same gmsh model/mesh."
+    @assert Pu.dim == Ps.dim "Both problems must have the same spatial dimension."
+
+    gmsh.model.setCurrent(Pu.name)
+
+    if Ω !== nothing || Γ !== nothing
+        domain === nothing || error(
+            "build_csc_pattern: use either domain=... or Ω/Γ, not both."
+        )
+        domain = _domain_spec(; Ω=Ω, Γ=Γ)
+    end
+
+    nrows = ndofs(Ps)
+    ncols = ndofs(Pu)
+
+    nrow_nodes, rem_s = divrem(nrows, Ps.pdim)
+    ncol_nodes, rem_u = divrem(ncols, Pu.pdim)
+
+    rem_s == 0 || error("build_csc_pattern: invalid number of test-space degrees of freedom.")
+    rem_u == 0 || error("build_csc_pattern: invalid number of trial-space degrees of freedom.")
+
+    # Collect node-level adjacency first. Expanding to components only after
+    # duplicate removal keeps temporary storage much smaller than DoF-level I/J.
+    row_nodes_by_col_node = [Int[] for _ in 1:ncol_nodes]
+
+    phNames = String[]
+    domkind = nothing
+
+    if domain === nothing
+        phNames = [mat.phName for mat in Pu.material]
+    elseif domain isa DomainSpec
+        phNames = [domain.name]
+        domkind = domain.kind
+    elseif domain isa AbstractString
+        phNames = [String(domain)]
+    else
+        error(
+            "build_csc_pattern: unsupported domain type $(typeof(domain)). " *
+            "Expected nothing, DomainSpec or String."
+        )
+    end
+
+    for phName in phNames
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        isempty(dimTags) && error("build_csc_pattern: physical group \"$phName\" not found.")
+
+        for (edim, etag) in dimTags
+            if domkind === :Ω
+                edim == Pu.dim ||
+                    error("Ω=\"$phName\" has dim=$edim but problem.dim=$(Pu.dim)")
+            elseif domkind === :Γ
+                edim < Pu.dim ||
+                    error("Γ=\"$phName\" has dim=$edim but expected < $(Pu.dim)")
+            end
+
+            elemTypes = gmsh.model.mesh.getElementTypes(edim, etag)
+
+            for et in elemTypes
+                _, _, _, numNodes::Int64, _, _ =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                _, connectivity =
+                    gmsh.model.mesh.getElementsByType(et, etag)
+                nel = length(connectivity) ÷ numNodes
+
+                @inbounds for e in 1:nel
+                    first_node = (e - 1) * numNodes
+
+                    for b in 1:numNodes
+                        col_node = Int(connectivity[first_node + b])
+
+                        1 <= col_node <= ncol_nodes || error(
+                            "build_csc_pattern: node tag $col_node is outside " *
+                            "the trial-space node range 1:$ncol_nodes."
+                        )
+
+                        rows = row_nodes_by_col_node[col_node]
+
+                        for a in 1:numNodes
+                            row_node = Int(connectivity[first_node + a])
+
+                            1 <= row_node <= nrow_nodes || error(
+                                "build_csc_pattern: node tag $row_node is outside " *
+                                "the test-space node range 1:$nrow_nodes."
+                            )
+
+                            push!(rows, row_node)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    # Sort and remove duplicates in place. Unlike unique!, this pass needs no
+    # auxiliary hash set because the vectors are already sorted.
+    total_node_nonzeros = 0
+
+    for rows in row_nodes_by_col_node
+        sort!(rows)
+
+        if !isempty(rows)
+            write_pos = 1
+            previous = rows[1]
+
+            @inbounds for read_pos in 2:length(rows)
+                current = rows[read_pos]
+
+                if current != previous
+                    write_pos += 1
+                    rows[write_pos] = current
+                    previous = current
+                end
+            end
+
+            resize!(rows, write_pos)
+            sizehint!(rows, write_pos; shrink=true)
+        end
+
+        total_node_nonzeros += length(rows)
+    end
+
+    total_nonzeros = Base.Checked.checked_mul(
+        Base.Checked.checked_mul(total_node_nonzeros, Ps.pdim),
+        Pu.pdim
+    )
+
+    colptr = Vector{Int}(undef, ncols + 1)
+    rowval = Vector{Int}(undef, total_nonzeros)
+
+    position = 1
+
+    @inbounds for col_node in 1:ncol_nodes
+        rows = row_nodes_by_col_node[col_node]
+
+        for comp_u in 1:Pu.pdim
+            col = (col_node - 1) * Pu.pdim + comp_u
+            colptr[col] = position
+
+            for row_node in rows
+                first_row = (row_node - 1) * Ps.pdim
+
+                for comp_s in 1:Ps.pdim
+                    rowval[position] = first_row + comp_s
+                    position += 1
+                end
+            end
+        end
+    end
+
+    colptr[ncols + 1] = position
+    @assert position == total_nonzeros + 1
+
+    return SparseMatrixCSC(
+        nrows,
+        ncols,
+        colptr,
+        rowval,
+        zeros(Float64, total_nonzeros)
+    )
+end
+
+"""
+    find_csc_position(rowval, first, last, row)
+
+Return the `nzval` position of `row` in a sorted CSC column range.
+
+The search is allocation-free. An error indicates that the prebuilt sparsity
+pattern and the element connectivity used for assembly are inconsistent.
+"""
+@inline function find_csc_position(
+    rowval::Vector{Int},
+    first::Int,
+    last::Int,
+    row::Int
+)
+    lo = first
+    hi = last
+
+    @inbounds while lo <= hi
+        mid = lo + ((hi - lo) >>> 1)
+        current = rowval[mid]
+
+        if current < row
+            lo = mid + 1
+        elseif current > row
+            hi = mid - 1
+        else
+            return mid
+        end
+    end
+
+    error("find_csc_position: row $row is missing from the CSC pattern.")
+end
+
+"""
+    resolve_num_threads(threads) -> Int
+
+Resolve the requested number of assembly workers.
+
+- `threads=:auto` uses all Julia threads in the default thread pool.
+- `threads=1` selects serial assembly.
+- A positive integer selects exactly that many worker tasks, up to
+  `Threads.nthreads()`.
+"""
+function resolve_num_threads(threads)
+    available = Threads.nthreads()
+
+    if threads === :auto
+        return available
+    elseif threads isa Bool
+        throw(ArgumentError(
+            "`threads` must be `:auto` or a positive integer; " *
+            "use `threads=1` instead of `false`."
+        ))
+    elseif threads isa Integer
+        threads >= 1 || throw(ArgumentError(
+            "`threads` must be `:auto` or a positive integer."
+        ))
+        threads <= available || throw(ArgumentError(
+            "Requested threads=$threads, but Julia has only " *
+            "$available thread(s) in the default thread pool."
+        ))
+        return Int(threads)
+    else
+        throw(ArgumentError(
+            "`threads` must be `:auto` or a positive integer; " *
+            "got $(repr(threads))."
+        ))
+    end
+end
+
+@inline function _worker_range(nitems::Int, nworkers::Int, worker::Int)
+    base, extra = divrem(nitems, nworkers)
+    count = base + (worker <= extra)
+    first = (worker - 1) * base + min(worker - 1, extra) + 1
+    return first:(first + count - 1)
+end
+
+function _run_workers(f, nworkers::Int)
+    if nworkers == 1
+        f(1)
+        return nothing
+    end
+
+    @sync begin
+        for worker in 1:nworkers
+            let worker = worker
+                Threads.@spawn f(worker)
+            end
+        end
+    end
+    return nothing
+end
+
+@inline function reduce_csc_worker!(
+    target::Vector{Float64},
+    buffers::Vector{Vector{Float64}},
+    nworkers::Int,
+    worker::Int
+)
+    @inbounds for p in _worker_range(length(target), nworkers, worker)
+        value = target[p]
+        for source in 2:nworkers
+            value += buffers[source][p]
+        end
+        target[p] = value
+    end
+
+    return nothing
+end
+
+"""
+    reduce_csc_buffers!(target, buffers, nworkers)
+
+Accumulate private worker CSC value buffers into `target`. With one worker,
+`target` already contains the complete assembly, so the reduction is skipped.
+"""
+function reduce_csc_buffers!(
+    target::Vector{Float64},
+    buffers::Vector{Vector{Float64}},
+    nworkers::Int
+)
+    nworkers == 1 && return nothing
+
+    _run_workers(nworkers) do worker
+        reduce_csc_worker!(target, buffers, nworkers, worker)
+    end
+
+    return nothing
+end
+
+"""
+    assemble_csc_worker!(ws, nzval, element_tags, connectivity, coordinates,
+                         colptr, rowval, chunk, num_threads, worker,
+                         num_nodes, num_integration_points, dim, edim,
+                         grad_h, h, integration_weights, coefficient, weight,
+                         op_u, Pu, op_s, Ps)
+
+Assemble one worker's element subset directly into its private CSC value
+buffer. All data used by the element loop are explicit arguments so Julia can
+specialize the complete geometry, element-matrix, and scatter kernel without
+capturing variables from `assemble_operator`.
+"""
+function assemble_csc_worker!(
+    ws::OperatorWorkspace,
+    nzval::Vector{Float64},
+    element_tags::AbstractVector{<:Integer},
+    connectivity::AbstractVector{<:Integer},
+    coordinates::AbstractMatrix{<:Real},
+    colptr::Vector{Int},
+    rowval::Vector{Int},
+    chunk::Int,
+    num_threads::Int,
+    worker::Int,
+    num_nodes::Integer,
+    num_integration_points::Integer,
+    dim::Integer,
+    edim::Integer,
+    grad_h,
+    h,
+    integration_weights,
+    coefficient,
+    weight,
+    op_u::OU,
+    Pu::Problem,
+    op_s::OS,
+    Ps::Problem
+) where {OU<:AbstractOp,OS<:AbstractOp}
+    pdim_u = Pu.pdim
+    pdim_s = Ps.pdim
+    stride = chunk * num_threads
+
+    for chunk_first in (1 + (worker - 1) * chunk):stride:length(element_tags)
+        chunk_last = min(length(element_tags), chunk_first + chunk - 1)
+
+        @inbounds for e in chunk_first:chunk_last
+            elem = element_tags[e]
+            first_node = (e - 1) * num_nodes
+
+            compute_element_geometry!(
+                ws,
+                coordinates,
+                connectivity,
+                first_node,
+                num_nodes,
+                num_integration_points,
+                dim,
+                edim,
+                grad_h
+            )
+
+            assemble_element_matrix_from_geometry!(
+                ws,
+                elem,
+                num_integration_points,
+                dim,
+                edim,
+                num_nodes,
+                grad_h,
+                h,
+                integration_weights,
+                coefficient,
+                weight,
+                op_u,
+                Pu,
+                op_s,
+                Ps
+            )
+
+            Ke = ws.Ke
+
+            # Columns belonging to the components of one trial node have
+            # identical row patterns. Search once per node pair, then address
+            # the complete component block by fixed offsets in nzval.
+            for node_b in 1:num_nodes
+                Jb_node = Int(connectivity[first_node + node_b])
+                first_col = (Jb_node - 1) * pdim_u + 1
+                first = colptr[first_col]
+                last = colptr[first_col + 1] - 1
+                column_nnz = last - first + 1
+                b_loc0 = (node_b - 1) * pdim_u
+
+                for node_a in 1:num_nodes
+                    Ia_node = Int(connectivity[first_node + node_a])
+                    first_row = (Ia_node - 1) * pdim_s + 1
+                    block_position = find_csc_position(
+                        rowval,
+                        first,
+                        last,
+                        first_row
+                    )
+                    a_loc0 = (node_a - 1) * pdim_s
+
+                    for comp_b in 1:pdim_u
+                        p = block_position + (comp_b - 1) * column_nnz
+                        b_loc = b_loc0 + comp_b
+
+                        for comp_a in 1:pdim_s
+                            a_loc = a_loc0 + comp_a
+                            nzval[p + comp_a - 1] += Ke[a_loc, b_loc]
+                        end
+                    end
+                end
+            end
         end
     end
 
@@ -1784,6 +2477,47 @@ Number of integration points.
     `:reduced`    2order-1
     Int           2order+1 + Int
 
+`assembly=:csc`
+
+Use direct CSC assembly. The CSC pattern is created first, element Jacobians
+are computed on demand from nodal coordinates, and element matrices are
+accumulated into one `nzval` array per worker. The first worker writes directly
+to the final matrix; the remaining worker-local arrays are reduced into it.
+With one worker, no private value buffer or reduction pass is required.
+
+The same CSC path is used for scalar, matrix, and matrix-chain coefficients.
+Matrices may contain `Number` and `ScalarField` entries; their values are
+evaluated at Gauss points before the element matrix is scattered.
+
+`K`
+
+Optional prebuilt `SparseMatrixCSC{Float64,Int}` pattern. Its dimensions and
+structural entries must match the current mesh, domain, and test/trial spaces.
+Assembly adds to its existing `nzval` values; use
+`fill!(K.nzval, 0.0)` before a new independent assembly.
+
+`node_coordinates`
+
+Optional reusable dense `3 × number_of_nodes` coordinate array for internal
+compound assembly.
+
+`threads`
+
+Number of assembly workers. `:auto` uses all Julia threads, while `1` selects
+the serial low-memory path.
+
+`element_chunk_size`
+
+Element scheduling block size for `assembly=:csc`. `:auto` uses at most 4096
+elements and adapts to the element and worker counts. Chunks are distributed
+cyclically among the requested workers.
+
+`_nzval_buffers`
+
+Internal reusable worker buffers used by compound CSC assembly. The first
+buffer must be identical to `K.nzval`. This keyword is not part of the public
+API.
+
 # Returns
 
 `SystemMatrix`
@@ -1797,21 +2531,26 @@ function assemble_operator(
     weight=nothing,
     domain=nothing,
     gauss=:full,
-    assembly::Symbol=:matrix,
-    multithread::Bool=true,
+    assembly::Symbol=:csc,
+    threads=:auto,
     I=nothing,
     J=nothing,
-    V=nothing)
+    V=nothing,
+    K=nothing,
+    node_coordinates=nothing,
+    _nzval_buffers=nothing,
+    element_chunk_size::Union{Integer,Symbol}=:auto)
 
-    use_threads = multithread && Threads.nthreads() > 1
+    direct_csc = assembly === :csc
+    num_threads = resolve_num_threads(threads)
 
     old_blas_threads = LinearAlgebra.BLAS.get_num_threads()
-    if use_threads && old_blas_threads != 1
+    if old_blas_threads != 1
         LinearAlgebra.BLAS.set_num_threads(1)
     end
 
     try
-        assembly ∈ (:matrix, :triplets, :add) ||
+        assembly ∈ (:matrix, :triplets, :add, :csc) ||
         error("""
         assemble_operator: invalid assembly mode $assembly.
    
@@ -1819,6 +2558,7 @@ function assemble_operator(
             :matrix
             :triplets
             :add
+            :csc
         """)
         @assert Pu.name == Ps.name "Both problems must refer to the same gmsh model/mesh."
         @assert Pu.dim == Ps.dim "Both problems must have the same spatial dimension."
@@ -1921,9 +2661,66 @@ function assemble_operator(
         # Assembly storage
         # ------------------------------------------------------------
    
-        build_pattern = assembly !== :add
-   
-        if build_pattern
+        build_pattern = assembly !== :add && !direct_csc
+
+        Kcsc = nothing
+        coordinates = nothing
+        nzval_buffers = nothing
+
+        if direct_csc
+            I === nothing ||
+                error("assemble_operator: I must be nothing for assembly=:csc.")
+            J === nothing ||
+                error("assemble_operator: J must be nothing for assembly=:csc.")
+            V === nothing ||
+                error("assemble_operator: V must be nothing for assembly=:csc.")
+
+            if K === nothing
+                Kcsc = build_csc_pattern(Pu, Ps; domain=domain)
+            else
+                K isa SparseMatrixCSC{Float64,Int} || error(
+                    "assemble_operator: assembly=:csc requires " *
+                    "K::SparseMatrixCSC{Float64,Int}; got $(typeof(K))."
+                )
+
+                size(K) == (ndofs(Ps), ndofs(Pu)) || error(
+                    "assemble_operator: supplied CSC matrix has size $(size(K)); " *
+                    "expected $((ndofs(Ps), ndofs(Pu)))."
+                )
+
+                Kcsc = K
+            end
+
+            coordinates = node_coordinates === nothing ?
+                dense_node_coordinates(Pu) : node_coordinates
+
+            size(coordinates, 1) == 3 || error(
+                "assemble_operator: node_coordinates must have three rows."
+            )
+            if _nzval_buffers === nothing
+                nzval_buffers = Vector{Vector{Float64}}(undef, num_threads)
+                nzval_buffers[1] = Kcsc.nzval
+                for worker in 2:num_threads
+                    nzval_buffers[worker] = zeros(Float64, length(Kcsc.nzval))
+                end
+            else
+                _nzval_buffers isa Vector{Vector{Float64}} || error(
+                    "assemble_operator: invalid internal CSC accumulator storage."
+                )
+                length(_nzval_buffers) == num_threads || error(
+                    "assemble_operator: CSC accumulator count does not match threads."
+                )
+                _nzval_buffers[1] === Kcsc.nzval || error(
+                    "assemble_operator: the first CSC accumulator must be K.nzval."
+                )
+                all(length(buffer) == length(Kcsc.nzval) for buffer in _nzval_buffers) ||
+                    error("assemble_operator: CSC accumulator length mismatch.")
+                nzval_buffers = _nzval_buffers
+                for worker in 2:num_threads
+                    fill!(nzval_buffers[worker], 0.0)
+                end
+            end
+        elseif build_pattern
             I === nothing ||
                 error("assemble_operator: I must be nothing for assembly=$assembly.")
    
@@ -2003,11 +2800,26 @@ function assemble_operator(
                     edim < Pu.dim || error("Γ=\"$phName\" has dim=$edim but expected < $(Pu.dim)")
                 end
    
-                elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+                if direct_csc
+                    elemTypes = gmsh.model.mesh.getElementTypes(edim, etag)
+                    elemTags = nothing
+                    elemNodeTags = nothing
+                else
+                    elemTypes, elemTags, elemNodeTags =
+                        gmsh.model.mesh.getElements(edim, etag)
+                end
    
                 for itype in eachindex(elemTypes)
                     et = elemTypes[itype]
                     _, _, order, numNodes::Int64, _, _ = gmsh.model.mesh.getElementProperties(et)
+
+                    if direct_csc
+                        element_tags, connectivity =
+                            gmsh.model.mesh.getElementsByType(et, etag)
+                    else
+                        element_tags = elemTags[itype]
+                        connectivity = elemNodeTags[itype]
+                    end
    
                     gorder = gauss == :reduced ? max(1, 2order - 1) :
                         gauss == :full    ? (2order + 1) :
@@ -2024,34 +2836,39 @@ function assemble_operator(
                     _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
                     ∇h = reshape(dfun, :, numIntPoints)
    
-                    # Batched Jacobian retrieval
-                    elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
-                    jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
-   
-                    numElementsGlobal = length(elemTags_global)
-                    nip = length(det_all) ÷ numElementsGlobal
-   
-                    @assert nip == numIntPoints
-   
-                    TagType = eltype(elemTags_global)
-                    idxmap = Dict{TagType,Int}()
-                    sizehint!(idxmap, numElementsGlobal)
-   
-                    @inbounds for (gi, gtag) in enumerate(elemTags_global)
-                        idxmap[gtag] = gi - 1
+                    if !direct_csc
+                        # Legacy IJV path: keep the original batched Gmsh
+                        # geometry retrieval until that path is retired.
+                        elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+                        jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+
+                        numElementsGlobal = length(elemTags_global)
+                        nip = length(det_all) ÷ numElementsGlobal
+                        @assert nip == numIntPoints
+
+                        TagType = eltype(elemTags_global)
+                        idxmap = Dict{TagType,Int}()
+                        sizehint!(idxmap, numElementsGlobal)
+
+                        @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                            idxmap[gtag] = gi - 1
+                        end
                     end
    
                     # buffers
-                    nel = length(elemTags[itype])
-                    nnet = zeros(Int, nel, numNodes)
+                    nel = length(element_tags)
    
                     ndofs_u_loc = Pu.pdim * numNodes
                     ndofs_s_loc = Ps.pdim * numNodes
    
-                    # connectivity table
-                    @inbounds for e in 1:nel
-                        for a in 1:numNodes
-                            nnet[e, a] = elemNodeTags[itype][(e-1)*numNodes+a]
+                    # The CSC path uses the flat Gmsh connectivity directly.
+                    # The legacy IJV path retains its old dense table for now.
+                    nnet = direct_csc ? nothing : zeros(Int, nel, numNodes)
+                    if !direct_csc
+                        @inbounds for e in 1:nel
+                            for a in 1:numNodes
+                                nnet[e, a] = connectivity[(e-1)*numNodes+a]
+                            end
                         end
                     end
    
@@ -2059,7 +2876,7 @@ function assemble_operator(
                     block_start = pos
                     block_entries = nel * entries_per_element
    
-                    if build_pattern && block_start + block_entries - 1 > length(V)
+                    if !direct_csc && build_pattern && block_start + block_entries - 1 > length(V)
                         newlen = max(
                             block_start + block_entries - 1,
                             Int(ceil(1.5 * length(V))) + 1000
@@ -2068,7 +2885,7 @@ function assemble_operator(
                         resize!(I, newlen)
                         resize!(J, newlen)
                         resize!(V, newlen)
-                    elseif !build_pattern && block_start + block_entries - 1 > length(V)
+                    elseif !direct_csc && !build_pattern && block_start + block_entries - 1 > length(V)
                         error("""
                         assemble_operator: assembly pattern mismatch.
                     
@@ -2077,7 +2894,17 @@ function assemble_operator(
                         """)
                     end
    
-                    nworkspaces = use_threads ? Threads.maxthreadid() : 1
+                    # `Threads.threadid()` is a global thread identifier, not
+                    # an index local to the default thread pool. In notebook
+                    # environments the task that enters `@threads` may run on
+                    # an `:interactive` thread whose ID is larger than
+                    # `Threads.nthreads()`. The static IJV path indexes by the
+                    # actual thread ID, so provide a workspace for every
+                    # possible global thread ID. Logical-worker paths continue
+                    # to need only `num_threads` workspaces.
+                    workspace_count =
+                        !direct_csc && threads === :auto && num_threads > 1 ?
+                        Threads.maxthreadid() : num_threads
 
                     workspaces = [
                         OperatorWorkspace(
@@ -2089,27 +2916,71 @@ function assemble_operator(
                             ndofs_u_loc,
                             ndofs_s_loc
                         )
-                        for _ in 1:nworkspaces
+                        for _ in 1:workspace_count
                     ]
                     
-                    Vthread = V::Vector{Float64}
-                    Ithread = build_pattern ? (I::Vector{Int}) : Int[]
-                    Jthread = build_pattern ? (J::Vector{Int}) : Int[]
+                    if direct_csc
+                        colptr = Kcsc.colptr
+                        rowval = Kcsc.rowval
+
+                        chunk = element_chunk_size === :auto ?
+                            max(1, min(4096, cld(nel, num_threads))) :
+                            element_chunk_size isa Integer ? Int(element_chunk_size) :
+                            error(
+                                "assemble_operator: element_chunk_size must be " *
+                                ":auto or a positive integer."
+                            )
+                        chunk > 0 || error(
+                            "assemble_operator: element_chunk_size must be positive."
+                        )
+
+                        _run_workers(num_threads) do worker
+                            assemble_csc_worker!(
+                                workspaces[worker],
+                                nzval_buffers[worker],
+                                element_tags,
+                                connectivity,
+                                coordinates,
+                                colptr,
+                                rowval,
+                                chunk,
+                                num_threads,
+                                worker,
+                                numNodes,
+                                numIntPoints,
+                                dim,
+                                edim,
+                                ∇h,
+                                h,
+                                intWeights,
+                                Cprep,
+                                Wprep,
+                                op_u,
+                                Pu,
+                                op_s,
+                                Ps
+                            )
+                        end
+                    else
+                        Vthread = V::Vector{Float64}
+                        Ithread = build_pattern ? (I::Vector{Int}) : Int[]
+                        Jthread = build_pattern ? (J::Vector{Int}) : Int[]
    
-                    let Ithread = Ithread,
+                        let Ithread = Ithread,
                         Jthread = Jthread,
                         Vthread = Vthread,
                         build_pattern = build_pattern
    
-                        # element loop
-                        # TODO: duplicated loop -- separate helper function is needed
-                        if use_threads
+                        if threads === :auto && num_threads > 1
+                            # Restore the original v1.13.28 scheduling for the
+                            # default multithreaded IJV path. Static scheduling
+                            # keeps each thread on a fixed element subset and
+                            # associates its workspace with the actual thread.
                             Threads.@threads :static for e in 1:nel
                                 ws = workspaces[Threads.threadid()]
-                            
                                 elem = elemTags[itype][e]
                                 gidx = idxmap[elem]
-                    
+
                                 assemble_element_matrix!(
                                     ws,
                                     elem,
@@ -2131,29 +3002,30 @@ function assemble_operator(
                                     op_s,
                                     Ps
                                 )
-                    
+
                                 Ke = ws.Ke
-                    
-                                element_start = block_start + (e - 1) * entries_per_element
-                            
+
+                                element_start =
+                                    block_start + (e - 1) * entries_per_element
+
                                 # scatter Ke(s,u) -> global IJV
                                 @inbounds for a_loc in 1:ndofs_s_loc
                                     node_a = div(a_loc - 1, Ps.pdim) + 1
                                     comp_a = mod(a_loc - 1, Ps.pdim) + 1
                                     Ia_node = nnet[e, node_a]
                                     Ia = (Ia_node - 1) * Ps.pdim + comp_a
-                            
+
                                     row_start =
                                         element_start + (a_loc - 1) * ndofs_u_loc
-                            
+
                                     @inbounds for b_loc in 1:ndofs_u_loc
                                         node_b = div(b_loc - 1, Pu.pdim) + 1
                                         comp_b = mod(b_loc - 1, Pu.pdim) + 1
                                         Jb_node = nnet[e, node_b]
                                         Jb = (Jb_node - 1) * Pu.pdim + comp_b
-                            
+
                                         p = row_start + b_loc - 1
-                            
+
                                         if build_pattern
                                             Ithread[p] = Ia
                                             Jthread[p] = Jb
@@ -2165,66 +3037,73 @@ function assemble_operator(
                                 end
                             end
                         else
-                            @inbounds for e in 1:nel
-                                ws = workspaces[1]
-                            
-                                elem = elemTags[itype][e]
-                                gidx = idxmap[elem]
-                    
-                                assemble_element_matrix!(
-                                    ws,
-                                    elem,
-                                    gidx,
-                                    jac_all,
-                                    det_all,
-                                    nip,
-                                    numIntPoints,
-                                    dim,
-                                    edim,
-                                    numNodes,
-                                    ∇h,
-                                    h,
-                                    intWeights,
-                                    Cprep,
-                                    Wprep,
-                                    op_u,
-                                    Pu,
-                                    op_s,
-                                    Ps
-                                )
-                    
-                                Ke = ws.Ke
-                    
-                                element_start = block_start + (e - 1) * entries_per_element
-                            
-                                # scatter Ke(s,u) -> global IJV
-                                @inbounds for a_loc in 1:ndofs_s_loc
-                                    node_a = div(a_loc - 1, Ps.pdim) + 1
-                                    comp_a = mod(a_loc - 1, Ps.pdim) + 1
-                                    Ia_node = nnet[e, node_a]
-                                    Ia = (Ia_node - 1) * Ps.pdim + comp_a
-                            
-                                    row_start =
-                                        element_start + (a_loc - 1) * ndofs_u_loc
-                            
-                                    @inbounds for b_loc in 1:ndofs_u_loc
-                                        node_b = div(b_loc - 1, Pu.pdim) + 1
-                                        comp_b = mod(b_loc - 1, Pu.pdim) + 1
-                                        Jb_node = nnet[e, node_b]
-                                        Jb = (Jb_node - 1) * Pu.pdim + comp_b
-                            
-                                        p = row_start + b_loc - 1
-                            
-                                        if build_pattern
-                                            Ithread[p] = Ia
-                                            Jthread[p] = Jb
-                                            Vthread[p] = Ke[a_loc, b_loc]
-                                        else
-                                            Vthread[p] += Ke[a_loc, b_loc]
+                            # Keep the common function barrier for serial and
+                            # explicitly limited worker counts. With one worker,
+                            # _run_workers calls the closure directly and creates
+                            # no task.
+                            _run_workers(num_threads) do worker
+                                ws = workspaces[worker]
+                                for e in _worker_range(nel, num_threads, worker)
+                                    elem = elemTags[itype][e]
+                                    gidx = idxmap[elem]
+
+                                    assemble_element_matrix!(
+                                        ws,
+                                        elem,
+                                        gidx,
+                                        jac_all,
+                                        det_all,
+                                        nip,
+                                        numIntPoints,
+                                        dim,
+                                        edim,
+                                        numNodes,
+                                        ∇h,
+                                        h,
+                                        intWeights,
+                                        Cprep,
+                                        Wprep,
+                                        op_u,
+                                        Pu,
+                                        op_s,
+                                        Ps
+                                    )
+
+                                    Ke = ws.Ke
+
+                                    element_start =
+                                        block_start + (e - 1) * entries_per_element
+
+                                    # scatter Ke(s,u) -> global IJV
+                                    @inbounds for a_loc in 1:ndofs_s_loc
+                                        node_a = div(a_loc - 1, Ps.pdim) + 1
+                                        comp_a = mod(a_loc - 1, Ps.pdim) + 1
+                                        Ia_node = nnet[e, node_a]
+                                        Ia = (Ia_node - 1) * Ps.pdim + comp_a
+
+                                        row_start =
+                                            element_start + (a_loc - 1) * ndofs_u_loc
+
+                                        @inbounds for b_loc in 1:ndofs_u_loc
+                                            node_b = div(b_loc - 1, Pu.pdim) + 1
+                                            comp_b = mod(b_loc - 1, Pu.pdim) + 1
+                                            Jb_node = nnet[e, node_b]
+                                            Jb = (Jb_node - 1) * Pu.pdim + comp_b
+
+                                            p = row_start + b_loc - 1
+
+                                            if build_pattern
+                                                Ithread[p] = Ia
+                                                Jthread[p] = Jb
+                                                Vthread[p] = Ke[a_loc, b_loc]
+                                            else
+                                                Vthread[p] += Ke[a_loc, b_loc]
+                                            end
                                         end
                                     end
                                 end
                             end
+                        end
                         end
                     end
                     pos += block_entries
@@ -2238,6 +3117,20 @@ function assemble_operator(
         
         @assert nrows > 0
         @assert ncols > 0
+
+        if direct_csc
+            Kcsc_typed = Kcsc::SparseMatrixCSC{Float64,Int}
+            nzval_buffers_typed =
+                nzval_buffers::Vector{Vector{Float64}}
+
+            reduce_csc_buffers!(
+                Kcsc_typed.nzval,
+                nzval_buffers_typed,
+                num_threads
+            )
+
+            return SystemMatrix(Kcsc_typed, Pu, Ps)
+        end
         
         if assembly === :add
             nentries == length(V) ||
@@ -2277,7 +3170,7 @@ function assemble_operator(
    
         return SystemMatrix(K, Pu, Ps)
     finally
-        if use_threads && old_blas_threads != 1
+        if old_blas_threads != 1
             LinearAlgebra.BLAS.set_num_threads(old_blas_threads)
         end
     end
@@ -2471,7 +3364,7 @@ function assemble_element_vector!(
 end
 
 """
-    assemble_linear(P::Problem, op, rhs; weight=nothing, domain, multithread=true)
+    assemble_linear(P::Problem, op, rhs; weight=nothing, domain, threads=:auto)
 
 Assemble a linear finite element operator of the form
 
@@ -2490,7 +3383,8 @@ Arguments
         `:full`       2order+1
         `:reduced`    2order-1
         Int           2order+1 + Int
-- `multithread` : distribute element integration across Julia threads
+- `threads` : number of assembly workers; `:auto` uses all Julia threads and
+  `1` selects serial assembly
 
 Returns
 -------
@@ -2503,9 +3397,10 @@ function assemble_linear(
     weight = nothing,
     domain = nothing,
     gauss = :full,
-    multithread::Bool = true)
+    threads = :auto)
 
-    use_threads = multithread && Threads.nthreads() > 1
+    num_threads = resolve_num_threads(threads)
+    use_threads = num_threads > 1
 
     old_blas_threads = LinearAlgebra.BLAS.get_num_threads()
     if use_threads && old_blas_threads != 1
@@ -2621,8 +3516,6 @@ function assemble_linear(
                 resize!(I, length(I) + block_entries)
                 resize!(V, length(V) + block_entries)
 
-                nworkspaces = use_threads ? Threads.maxthreadid() : 1
-
                 workspaces = [
                     LinearWorkspace(
                         P.dim,
@@ -2631,13 +3524,14 @@ function assemble_linear(
                         outdim,
                         ndofs_loc
                     )
-                    for _ in 1:nworkspaces
+                    for _ in 1:num_threads
                 ]
 
                 let Ithread = I, Vthread = V
                     if use_threads
-                        Threads.@threads :static for e in 1:nel
-                            ws = workspaces[Threads.threadid()]
+                        _run_workers(num_threads) do worker
+                            ws = workspaces[worker]
+                            for e in _worker_range(nel, num_threads, worker)
                             elem = elemTags[itype][e]
                             gidx = idxmap[elem]
 
@@ -2676,6 +3570,7 @@ function assemble_linear(
                                 Ithread[p] =
                                     (gnode - 1) * P.pdim + comp
                                 Vthread[p] = ws.fe[a_loc]
+                            end
                             end
                         end
                     else
@@ -3751,7 +4646,9 @@ end
 # Internal assembly
 # ------------------------------------------------------------
 
-function _assemble(term::WeakTerm{BilinearTerm}, dom, weight=nothing, gauss=:full, multithread::Bool=true)
+function _assemble(
+    term::WeakTerm{BilinearTerm}, dom, weight=nothing, gauss=:full,
+    threads=:auto, assembly::Symbol=:csc)
 
     Pu = term.term.a.P
 
@@ -3762,7 +4659,7 @@ function _assemble(term::WeakTerm{BilinearTerm}, dom, weight=nothing, gauss=:ful
 
     coef = term.term.coef
 
-    assemble_operator(
+    K = assemble_operator(
         term.term.a.P,
         term.term.a.op,
         term.term.b.P,
@@ -3771,18 +4668,27 @@ function _assemble(term::WeakTerm{BilinearTerm}, dom, weight=nothing, gauss=:ful
         weight=weight, #coef isa AbstractMatrix ? coef : nothing,
         domain=dom,
         gauss=gauss,
-        multithread=multithread
+        assembly = assembly === :csc ? :csc : :matrix,
+        threads=threads
     )
 
-end
-
-function _assemble(expr::WeakSum, dom, weight, gauss=:full, multithread::Bool=true)
-
-    _assemble(expr.a, dom, weight, gauss, multithread) + _assemble(expr.b, dom, weight, gauss, multithread)
+    assembly === :csc && dropzeros!(K.A)
+    return K
 
 end
 
-function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing, gauss=:full, multithread::Bool=true)
+function _assemble(
+    expr::WeakSum, dom, weight, gauss=:full,
+    threads=:auto, assembly::Symbol=:csc)
+
+    _assemble(expr.a, dom, weight, gauss, threads, assembly) +
+        _assemble(expr.b, dom, weight, gauss, threads, assembly)
+
+end
+
+function _assemble(
+    term::WeakTerm{LinearTerm}, dom, weight=nothing, gauss=:full,
+    threads=:auto, assembly::Symbol=:csc)
 
     t = term.term
     chain = t.chain
@@ -3812,7 +4718,7 @@ function _assemble(term::WeakTerm{LinearTerm}, dom, weight=nothing, gauss=:full,
         weight = weight,
         domain = dom,
         gauss=gauss,
-        multithread=multithread
+        threads=threads
     )
 
 end
@@ -3822,7 +4728,8 @@ end
 # ------------------------------------------------------------
 
 """
-    ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread=true)
+    ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full,
+      threads=:auto, assembly=:csc)
 
 Assemble a finite element operator from a weak-form expression.
 
@@ -3866,20 +4773,21 @@ With coefficient
 
     f = ∫(PT ⋅ PT * h, Γ="right")
 
-The bilinear- and linear-form assembly is multithreaded by default when Julia
-is started with more than one thread. Element-level integration is distributed
-across Julia threads, while the global matrix or vector is assembled after the
-parallel element loop.
+The bilinear- and linear-form assembly uses all available Julia threads by
+default. Set `threads` to a positive integer to control the worker count.
 
-Multithreading can be disabled for individual integrals with
+Serial assembly can be selected for individual integrals with
 
-    multithread=false
+    threads=1
 
 For example
 
     K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
           Ω="solid",
-          multithread=false)
+          threads=1)
+
+Direct CSC matrix assembly is the default. The legacy IJV path remains
+available explicitly with `assembly=:ijv`.
 
 # Arguments
 
@@ -3905,17 +4813,55 @@ Boundary physical group name.
 
 `SystemMatrix` or `ScalarField`, `VectorField`, `TensorField`
 """
-function ∫(expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
+function ∫(
+    expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full,
+    threads=:auto, assembly::Symbol=:csc)
 
     _check_scalarfields(expr)
 
+    assembly in (:csc, :ijv) || error(
+        "Unsupported matrix assembly mode $assembly. Expected :csc or :ijv."
+    )
+
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
-    return _assemble(expr, dom, weight, gauss, multithread)
+    return _assemble(expr, dom, weight, gauss, threads, assembly)
 
 end
 
-function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
+"""
+    ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing,
+      gauss=:full, threads=:auto, assembly=:csc,
+      csc_matrix=nothing, element_chunk_size=:auto)
+
+Assemble one bilinear term.
+
+Direct CSC assembly is the default. If `csc_matrix` is omitted, the structural
+pattern is built once, filled, and finalized by removing numerical zeros. If a
+prebuilt `SparseMatrixCSC{Float64,Int}` is supplied, its complete pattern is
+preserved so that it can be reused. Assembly adds to its current `nzval`
+contents; reset them with `fill!(csc_matrix.nzval, 0.0)` before starting an
+independent assembly.
+
+Use `assembly=:ijv` for the legacy triplet-based path. `csc_matrix` and
+`element_chunk_size` apply only to direct CSC assembly.
+"""
+function ∫(t::BilinearTerm;
+    Ω=nothing, Γ=nothing, weight=nothing,
+    gauss=:full,
+    threads=:auto,
+    assembly::Symbol=:csc,
+    csc_matrix=nothing,
+    element_chunk_size::Union{Integer,Symbol}=:auto)
+
+    assembly ∈ (:ijv, :csc) || error(
+        "Unsupported matrix assembly mode $assembly. " *
+        "Expected :csc or :ijv."
+    )
+
+    assembly === :ijv && csc_matrix !== nothing && error(
+        "csc_matrix is only valid with assembly=:csc."
+    )
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -3926,7 +4872,7 @@ function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:ful
         _check_domain_dim(Pu, dom)
     end
 
-    return assemble_operator(
+    K = assemble_operator(
         t.b.P,
         t.b.op,
         t.a.P,
@@ -3935,12 +4881,40 @@ function ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:ful
         domain = dom,
         weight = weight,
         gauss = gauss,
-        multithread=multithread
+        assembly = assembly === :csc ? :csc : :matrix,
+        threads=threads,
+        K=csc_matrix,
+        element_chunk_size=element_chunk_size
     )
+
+    assembly === :csc && csc_matrix === nothing && dropzeros!(K.A)
+    return K
 
 end
 
-function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
+"""
+    ∫(a::OpApplied, b::OpApplied; kwargs...)
+
+Assemble the bilinear form defined by two applied operators with an identity
+coefficient. The CSC-related keywords and pattern-reuse rules are identical to
+those of `∫(::BilinearTerm)`.
+"""
+function ∫(a::OpApplied, b::OpApplied;
+    Ω=nothing, Γ=nothing, weight=nothing,
+    gauss=:full,
+    threads=:auto,
+    assembly::Symbol=:csc,
+    csc_matrix=nothing,
+    element_chunk_size::Union{Integer,Symbol}=:auto)
+
+    assembly ∈ (:ijv, :csc) || error(
+        "Unsupported matrix assembly mode $assembly. " *
+        "Expected :csc or :ijv."
+    )
+
+    assembly === :ijv && csc_matrix !== nothing && error(
+        "csc_matrix is only valid with assembly=:csc."
+    )
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -3951,7 +4925,7 @@ function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing,
         _check_domain_dim(Pu, dom)
     end
 
-    return assemble_operator(
+    K = assemble_operator(
         b.P,
         b.op,
         a.P,
@@ -3960,12 +4934,18 @@ function ∫(a::OpApplied, b::OpApplied; Ω=nothing, Γ=nothing, weight=nothing,
         domain = dom,
         weight = weight,
         gauss = gauss,
-        multithread=multithread
+        assembly = assembly === :csc ? :csc : :matrix,
+        threads=threads,
+        K=csc_matrix,
+        element_chunk_size=element_chunk_size
     )
+
+    assembly === :csc && csc_matrix === nothing && dropzeros!(K.A)
+    return K
 
 end
 
-function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
+function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, threads=:auto)
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -3994,14 +4974,14 @@ function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full,
         domain = dom,
         weight = weight,
         gauss = gauss,
-        multithread=multithread
+        threads=threads
     )
 
 end
 
-function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
+function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, threads=:auto)
 
-    return ∫(LinearTerm(mc); Ω=Ω, Γ=Γ, weight=weight, gauss=gauss, multithread=multithread)
+    return ∫(LinearTerm(mc); Ω=Ω, Γ=Γ, weight=weight, gauss=gauss, threads=threads)
 
 end
 
@@ -4169,9 +5149,45 @@ Base.:*(t::Union{BilinearTerm,LinearTerm,CompoundBilinear}, w::Union{Number,Scal
 Base.:*(w::Union{Number,ScalarField}, t::Union{BilinearTerm,LinearTerm,CompoundBilinear}) =
     WeightedTerm(t, w)
 
-function ∫(wt::WeightedTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, multithread::Bool=true)
+function ∫(wt::WeightedTerm;
+    Ω=nothing, Γ=nothing, weight=nothing,
+    gauss=:full,
+    threads=:auto,
+    assembly::Symbol=:csc,
+    csc_matrix=nothing,
+    element_chunk_size::Union{Integer,Symbol}=:auto)
+
     weight === nothing || error("Weight specified both as `* weight` and keyword `weight=...`.")
-    return ∫(wt.term; Ω=Ω, Γ=Γ, weight=wt.weight, gauss=gauss, multithread=multithread)
+
+    if wt.term isa LinearTerm
+        assembly in (:csc, :ijv) || error(
+            "Unsupported matrix assembly mode $assembly. Expected :csc or :ijv."
+        )
+        csc_matrix === nothing || error(
+            "csc_matrix is only available for bilinear forms."
+        )
+
+        return ∫(
+            wt.term;
+            Ω=Ω,
+            Γ=Γ,
+            weight=wt.weight,
+            gauss=gauss,
+            threads=threads
+        )
+    end
+
+    return ∫(
+        wt.term;
+        Ω=Ω,
+        Γ=Γ,
+        weight=wt.weight,
+        gauss=gauss,
+        threads=threads,
+        assembly=assembly,
+        csc_matrix=csc_matrix,
+        element_chunk_size=element_chunk_size
+    )
 end
 
 withgauss(chain, gauss) = ChainSumTerm(chain, gauss)
@@ -4385,15 +5401,120 @@ end
 
 # ---------------------------------------------------------------------------
 
+"""
+    ∫(expr::CompoundBilinear; Ω=nothing, Γ=nothing, weight=nothing,
+      gauss=:auto, threads=:auto, assembly=:csc,
+      csc_matrix=nothing, element_chunk_size=:auto)
+
+Expand and assemble a compound bilinear operator expression.
+
+For `assembly=:csc`, the structural pattern is built exactly once per integral
+unless `csc_matrix` is supplied. The same final `nzval` array, worker-local
+value buffers, and dense node-coordinate array are reused for every expanded
+left/right term pair. The first worker accumulates directly into the final
+matrix; the other workers' buffers are cleared for each term and reduced into
+the final array. Thus the expanded terms are summed without rebuilding the
+pattern or allocating a new sparse matrix for each term.
+
+If `csc_matrix` is supplied, its complete structural pattern is preserved.
+Reset `csc_matrix.nzval` before a new independent compound assembly, but not
+between the internally expanded terms. The supplied pattern must correspond to
+the same mesh, selected domain, and compatible test/trial spaces.
+
+Matrix chains and matrices containing `Number` and `ScalarField` entries use
+the same coefficient evaluation and element kernel as ordinary bilinear terms.
+Each compound term may select `full(...)` or `reduced(...)` quadrature; with
+`gauss=:auto`, mixed-rule products use full integration.
+
+Use `assembly=:ijv` to select the legacy triplet path.
+"""
 function ∫(expr::CompoundBilinear;
     Ω=nothing, Γ=nothing, weight=nothing,
     gauss=:auto,
-    multithread::Bool=true)
+    threads=:auto,
+    assembly::Symbol=:csc,
+    csc_matrix=nothing,
+    element_chunk_size::Union{Integer,Symbol}=:auto)
     #@show typeof(expr.left)
     #@show typeof(expr.right)
 
     left_terms = _side_terms(expr.left)
     right_terms = _side_terms(expr.right)
+
+    assembly ∈ (:ijv, :csc) || error(
+        "Unsupported matrix assembly mode $assembly. " *
+        "Expected :csc or :ijv."
+    )
+
+    assembly === :ijv && csc_matrix !== nothing && error(
+        "csc_matrix is only valid with assembly=:csc."
+    )
+
+    if assembly === :csc
+        dom = _domain_spec(; Ω=Ω, Γ=Γ)
+        num_threads = resolve_num_threads(threads)
+
+        isempty(left_terms) && error("Cannot assemble an empty compound bilinear form.")
+        isempty(right_terms) && error("Cannot assemble an empty compound bilinear form.")
+
+        first_bt = _make_bilinear_term(left_terms[1], expr.mats, right_terms[1])
+        Pu = first_bt.b.P
+        Ps = first_bt.a.P
+
+        if csc_matrix === nothing
+            Kcsc = build_csc_pattern(Pu, Ps; domain=dom)
+        else
+            csc_matrix isa SparseMatrixCSC{Float64,Int} || error(
+                "csc_matrix must be SparseMatrixCSC{Float64,Int}; " *
+                "got $(typeof(csc_matrix))."
+            )
+            size(csc_matrix) == (ndofs(Ps), ndofs(Pu)) || error(
+                "csc_matrix has size $(size(csc_matrix)); expected " *
+                "$((ndofs(Ps), ndofs(Pu)))."
+            )
+            Kcsc = csc_matrix
+        end
+
+        coordinates = dense_node_coordinates(Pu)
+        nzval_buffers = Vector{Vector{Float64}}(undef, num_threads)
+        nzval_buffers[1] = Kcsc.nzval
+        for worker in 2:num_threads
+            nzval_buffers[worker] = zeros(Float64, length(Kcsc.nzval))
+        end
+
+        for LL in left_terms
+            for R in right_terms
+                bt = _make_bilinear_term(LL, expr.mats, R)
+                g = _select_gauss(LL, R, gauss)
+
+                Kterm = assemble_operator(
+                    bt.b.P,
+                    bt.b.op,
+                    bt.a.P,
+                    bt.a.op;
+                    coefficient = bt.coef,
+                    domain = dom,
+                    weight = weight,
+                    gauss = g,
+                    assembly = :csc,
+                    threads = num_threads,
+                    K = Kcsc,
+                    node_coordinates = coordinates,
+                    _nzval_buffers = nzval_buffers,
+                    element_chunk_size = element_chunk_size
+                )
+
+                Kcsc = Kterm.A
+            end
+        end
+
+        Kcsc === nothing && error("Cannot assemble an empty compound bilinear form.")
+        # Preserve the complete reusable pattern supplied by the caller.
+        # A matrix created internally is finalized like the original IJV path.
+        csc_matrix === nothing && dropzeros!(Kcsc)
+
+        return SystemMatrix(Kcsc, Pu, Ps)
+    end
     #@show left_terms
     #@show right_terms
 
@@ -4444,7 +5565,7 @@ function ∫(expr::CompoundBilinear;
                     weight = weight,
                     gauss = g,
                     assembly = :triplets,
-                    multithread=multithread
+                    threads=threads
                 )
 
                 first = false
@@ -4460,7 +5581,7 @@ function ∫(expr::CompoundBilinear;
                     gauss = g,
                     assembly = :add,
                     V = V,
-                    multithread=multithread
+                    threads=threads
                 )
 
             end

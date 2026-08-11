@@ -164,24 +164,20 @@ end
 
         @compile_workload begin
             K_pc = ∫(
-                SymGrad(Pu_pc) ⋅ D_pc ⋅ SymGrad(Pu_pc);
-                multithread=true
+                SymGrad(Pu_pc) ⋅ D_pc ⋅ SymGrad(Pu_pc)
             )
 
             M_pc = ∫(
-                Pu_pc ⋅ Pu_pc;
-                multithread=true
+                Pu_pc ⋅ Pu_pc
             )
 
             ∫(
-                Pu_pc ⋅ [1.0, 1.0, 1.0];
-                multithread=true
+                Pu_pc ⋅ [1.0, 1.0, 1.0]
             )
 
             f_pc = ∫(
                 Pu_pc ⋅ [1.0, 1.0, 1.0];
-                Γ="right",
-                multithread=true
+                Γ="right"
             )
 
             solveField(K_pc, f_pc; support=support_pc)
