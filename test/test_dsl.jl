@@ -35,12 +35,11 @@
         # ------------------------------------------------------
         Kserial = ∫(
             SymGrad(Pu) ⋅ D ⋅ SymGrad(Pu);
-            multithread=false
+            threads=1
         )
 
         Kthreaded = ∫(
-            SymGrad(Pu) ⋅ D ⋅ SymGrad(Pu);
-            multithread=true
+            SymGrad(Pu) ⋅ D ⋅ SymGrad(Pu)
         )
 
         @test norm(Kthreaded.A - Kserial.A) / norm(Kserial.A) < 1e-12
@@ -50,12 +49,12 @@
         # ------------------------------------------------------
         fvolume_serial = ∫(
             Pu ⋅ [1.0, 1.0, 1.0];
-            multithread=false
+            threads=1
         )
 
         fvolume_threaded = ∫(
             Pu ⋅ [1.0, 1.0, 1.0];
-            multithread=true
+            threads=1
         )
 
         @test fvolume_threaded.a ≈ fvolume_serial.a rtol=1e-12 atol=1e-12
@@ -69,13 +68,12 @@
         ftraction_serial = ∫(
             Pu ⋅ [1.0, 1.0, 1.0];
             Γ="right",
-            multithread=false
+            threads=1
         )
 
         ftraction_threaded = ∫(
             Pu ⋅ [1.0, 1.0, 1.0];
-            Γ="right",
-            multithread=true
+            Γ="right"
         )
 
         @test ftraction_threaded.a ≈ ftraction_serial.a rtol=1e-12 atol=1e-12
