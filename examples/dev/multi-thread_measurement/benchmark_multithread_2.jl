@@ -121,6 +121,8 @@ function worker()
             dim=3,
             field=:u,
         )
+        
+        Kpattern = build_csc_pattern(problem, problem; Ω="body")
 
         μ = mat.μ
         λ = mat.λ
@@ -138,8 +140,9 @@ function worker()
         println("Elements:             ", nelements)
 
         # Warm-up: compilation is intentionally excluded from the measurements.
+        fill!(Kpattern.nzval, 0.0)
         K = ∫(
-            SymGrad(problem) ⋅ D ⋅ SymGrad(problem)
+              SymGrad(problem) ⋅ D ⋅ SymGrad(problem), csc_matrix=Kpattern
         )
 
         f = ∫(
@@ -147,8 +150,9 @@ function worker()
         )
 
         K, matrix_time, matrix_bytes = median_timed(REPEATS) do
+            fill!(Kpattern.nzval, 0.0)
             ∫(
-                SymGrad(problem) ⋅ D ⋅ SymGrad(problem)
+                SymGrad(problem) ⋅ D ⋅ SymGrad(problem), csc_matrix=Kpattern
             )
         end
 
