@@ -1,0 +1,34 @@
+perebal@perebal-Latitude-5580:~/Dokumentumok/GitHub/LowLevelFEM.jl/examples/dev/compare_LLFEM_Ferrite_dealII_Gridap$ julia lowlevelfem_elasticity_benchmark.jl 
+LowLevelFEM.jl linear elasticity benchmark
+Threads: 4, mesh parameter n: 30
+Mesh generation (not timed):    0.3912 s, 6.1 MiB
+Complete analysis (median):     38.8836 s, 3603.9 MiB
+Includes: CSC pattern, assembly, solve, and stress postprocessing
+Checksums: 4.0073076923076982e9, 0.07057241535937334, 0.0
+
+perebal@perebal-Latitude-5580:~/Dokumentumok/GitHub/LowLevelFEM.jl/examples/dev/compare_LLFEM_Ferrite_dealII_Gridap$ julia ferrite_elasticity_benchmark.jl 
+Info    : Reading 'elasticity_benchmark.msh'...
+Info    : 27 entities
+Info    : 29791 nodes
+Info    : 32400 elements
+Info    : Done reading 'elasticity_benchmark.msh'
+Ferrite.jl linear elasticity benchmark
+Threads: 4, cells: 27000, dofs: 89373
+Mesh generation (not timed):    4.0589 s, 129.8 MiB
+Complete analysis (median):     17.7148 s, 3417.7 MiB
+Includes: dofs, coloring, pattern, assembly, solve, and stress postprocessing
+Checksums: 3.9392842569616666e9, 0.07057241535937218, 1.03504135148051
+
+perebal@perebal-Latitude-5580:~/Dokumentumok/GitHub/LowLevelFEM.jl/examples/dev/compare_LLFEM_Ferrite_dealII_Gridap$ julia --project=gridap-benchmark gridap_elasticity_benchmark.jl
+Info    : Reading '/home/perebal/Dokumentumok/GitHub/LowLevelFEM.jl/examples/dev/compare_LLFEM_Ferrite_dealII_Gridap/elasticity_benchmark.msh'...
+Info    : 27 entities
+Info    : 29791 nodes
+Info    : 32400 elements
+Info    : Done reading '/home/perebal/Dokumentumok/GitHub/LowLevelFEM.jl/examples/dev/compare_LLFEM_Ferrite_dealII_Gridap/elasticity_benchmark.msh'
+Gridap.jl linear elasticity benchmark
+Threads: 4, cells: 27000
+Mesh import (not timed):        8.2838 s, 858.8 MiB
+Complete analysis (median):     35.2343 s, 4292.4 MiB
+Includes: FE spaces, algebraic operator/pattern, assembly, solve, and stress postprocessing
+Checksums: 0.07244636599682991, 1.0369326310410678
+
