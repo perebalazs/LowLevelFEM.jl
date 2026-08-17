@@ -1,4 +1,4 @@
-export Problem, Material, getEigenVectors, getEigenValues, material
+export Problem, Field, Material, getEigenVectors, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
 export LoadCondition
 export temperatureConstraint, heatFlux, heatSource, heatConvection
@@ -18,6 +18,7 @@ export probe
 export saveField, loadField, isSaved
 export ∂x, ∂y, ∂z, ∂t
 export structured_rect_mesh, structured_box_mesh, line_mesh, openGeometry
+export renumberNodes!
 
 """
     Material(phName; kwargs...)
@@ -235,6 +236,107 @@ struct Material
     Material(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A) = new(name, type, E, ν, ρ, k, c, α, λ, μ, κ, η, p₀, A)
 end
 =#
+
+"""
+    renumberNodes!(material::Material; method::Symbol=:RCMK)
+    renumberNodes!(materials::Vector{Material}; method::Symbol=:RCMK)
+
+Renumber the Gmsh mesh nodes associated with the given material domain(s).
+
+The renumbering is computed from the finite elements belonging to the
+physical groups referenced by the supplied `Material` objects. The supported
+methods are `:RCMK`, `:Hilbert`, and `:Metis`.
+
+If several material domains belong to the same finite-element problem, it is
+recommended to pass all of them together in a vector so that the renumbering
+is computed from the complete element connectivity of the problem.
+
+# Warning
+
+Node renumbering modifies the node tags of the Gmsh mesh and must therefore
+be performed **before creating any `Problem` or `Field` objects** that use
+the mesh.
+
+Do not call `renumberNodes!` after a `Problem` or `Field` has already been
+created, because existing node/DoF mappings may then become inconsistent
+with the modified Gmsh mesh.
+
+# Examples
+
+```julia
+mat = Material("body")
+
+renumberNodes!(mat; method=:RCMK)
+
+u = Field([mat], type=:VectorField, dim=3, field=:u)
+```
+
+For a problem containing several material domains:
+
+```julia
+mat1 = Material("body1")
+mat2 = Material("body2")
+
+renumberNodes!([mat1, mat2]; method=:RCMK)
+
+u = Field([mat1, mat2], type=:VectorField, dim=3, field=:u)
+```
+
+"""
+function renumberNodes!(
+    materials::Vector{Material};
+    method::Symbol=:RCMK
+    )
+    method in (:RCMK, :Hilbert, :Metis) ||
+    error(
+        "renumberNodes!: method can be `:RCMK`, `:Hilbert` or `:Metis`. " *
+        "Now method = `$method`."
+    )
+
+    isempty(materials) &&
+        error("renumberNodes!: material vector must not be empty.")
+
+    elemTags = Int[]
+
+    for material in materials
+        phName = material.phName
+   
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+   
+        isempty(dimTags) &&
+            error(
+                "renumberNodes!: physical group '$phName' was not found."
+            )
+   
+        for (edim, etag) in dimTags
+            _, elementTags, _ =
+                gmsh.model.mesh.getElements(edim, etag)
+   
+            for tags in elementTags
+                append!(elemTags, tags)
+            end
+        end
+    end
+
+    isempty(elemTags) &&
+        error(
+            "renumberNodes!: no finite elements were found in the supplied material domains."
+        )
+
+    oldTags, newTags =
+        gmsh.model.mesh.computeRenumbering(method, elemTags)
+
+    gmsh.model.mesh.renumberNodes(oldTags, newTags)
+
+    return nothing
+end
+
+function renumberNodes!(
+    material::Material;
+    method::Symbol=:RCMK
+    )
+    return renumberNodes!([material]; method=method)
+end
 
 mutable struct Geometry
     nameGap::String
@@ -646,6 +748,16 @@ end
 =#
 
 """
+    Field
+
+Alias for [`Problem`](@ref).
+
+`Field` can be used instead of `Problem` when defining unknown fields in
+multifield formulations. Both names refer to exactly the same type.
+"""
+const Field = Problem
+
+"""
     Transformation(T::SparseMatrixCSC{Float64}, non::Int64, dim::Int64)
 
 Structure containing the transformation matrix `T` at each node in the FE mesh, the number of
@@ -757,6 +869,295 @@ This assembles the global block system
 
 corresponding to a two-field problem.  
 """
+struct SystemMatrix
+    A::SparseMatrixCSC
+    model::Union{Problem,Nothing}
+    test_model::Union{Problem,Nothing}
+    problems::Union{Vector{Problem},Nothing}      # multifield metadata
+    offsets::Union{Vector{Int},Nothing}           # global starting indices
+
+    # ----------------------------------------------------------
+    # Single-field constructors
+    # ----------------------------------------------------------
+
+    SystemMatrix(
+        A::SparseMatrixCSC{Float64},
+        model::Problem,
+        test_model::Problem
+    ) = new(A, model, test_model, nothing, nothing)
+
+    SystemMatrix(
+        A::SparseMatrixCSC{Float64},
+        model::Problem
+    ) = new(A, model, model, nothing, nothing)
+
+    SystemMatrix(
+        A::SparseMatrixCSC{Float64},
+        model::Union{Problem,Nothing},
+        test_model::Union{Problem,Nothing},
+        problems::Union{Vector{Problem},Nothing},
+        offsets::Union{Vector{Int},Nothing}
+    ) = new(A, model, test_model, problems, offsets)
+
+
+    # ----------------------------------------------------------
+    # Multifield block constructor
+    #
+    # The global sparse matrix is assembled directly in CSC
+    # format from the already assembled CSC blocks.
+    #
+    # No IJV representation and no call to sparse(I,J,V) are
+    # used here.
+    # ----------------------------------------------------------
+
+    function SystemMatrix(blocks::Matrix{SystemMatrix})
+
+        nrows, ncols = size(blocks)
+
+        # ------------------------------------------------------
+        # 1) Collect trial problems (column-based order)
+        # ------------------------------------------------------
+        trial_problems = Problem[]
+
+        function push_unique!(vec, P)
+            P === nothing && return
+            if all(q -> q !== P, vec)
+                push!(vec, P)
+            end
+        end
+
+        for j in 1:ncols
+            for i in 1:nrows
+                blk = blocks[i, j]
+                if blk.model !== nothing
+                    push_unique!(trial_problems, blk.model)
+                    break
+                end
+            end
+        end
+
+        isempty(trial_problems) &&
+            error("No trial Problems found in block matrix.")
+
+        # ------------------------------------------------------
+        # 2) Collect test problems (row-based order)
+        # ------------------------------------------------------
+        test_problems = Problem[]
+
+        for i in 1:nrows
+            for j in 1:ncols
+                blk = blocks[i, j]
+                if blk.test_model !== nothing
+                    push_unique!(test_problems, blk.test_model)
+                    break
+                end
+            end
+        end
+
+        isempty(test_problems) &&
+            error("No test Problems found in block matrix.")
+
+        # ------------------------------------------------------
+        # 3) Field-level square check
+        # ------------------------------------------------------
+        if length(trial_problems) != length(test_problems) ||
+           any(trial_problems[i] !== test_problems[i]
+               for i in eachindex(trial_problems))
+            error(
+                "Block system is not square in field sense. " *
+                "Trial and test spaces differ."
+            )
+        end
+
+        problems = trial_problems
+        nproblems = length(problems)
+
+        # ------------------------------------------------------
+        # 4) Compute global offsets
+        # ------------------------------------------------------
+        offsets = Vector{Int}(undef, nproblems)
+        offsets[1] = 0
+
+        for i in 2:nproblems
+            offsets[i] =
+                offsets[i - 1] + ndofs(problems[i - 1])
+        end
+
+        total_dofs =
+            offsets[end] + ndofs(problems[end])
+
+        # ------------------------------------------------------
+        # Helper: find Problem index by object identity
+        # ------------------------------------------------------
+        function problem_index(P)
+            for (k, q) in enumerate(problems)
+                if q === P
+                    return k
+                end
+            end
+
+            error("Problem not found in metadata.")
+        end
+
+        # ------------------------------------------------------
+        # 5) Map input blocks to their actual field positions
+        #
+        # blockmap[i,j] corresponds to:
+        #
+        #   test  = problems[i]
+        #   trial = problems[j]
+        #
+        # This makes the CSC assembly independent of the
+        # physical ordering of the supplied block matrix.
+        # ------------------------------------------------------
+        blockmap =
+            Matrix{Union{SystemMatrix,Nothing}}(
+                nothing,
+                nproblems,
+                nproblems
+            )
+
+        for bi in 1:nrows
+            for bj in 1:ncols
+
+                blk = blocks[bi, bj]
+
+                rowP = blk.test_model
+                colP = blk.model
+
+                rowP === nothing &&
+                    error("Block ($bi,$bj) is missing test_model.")
+
+                colP === nothing &&
+                    error("Block ($bi,$bj) is missing model.")
+
+                iP = problem_index(rowP)
+                jP = problem_index(colP)
+
+                # Each field pair must already have been reduced
+                # to a single SystemMatrix before this constructor.
+                blockmap[iP, jP] === nothing ||
+                    error(
+                        "Multiple blocks found for the same " *
+                        "(test_model, model) pair."
+                    )
+
+                A = blk.A
+
+                expected_size =
+                    (ndofs(rowP), ndofs(colP))
+
+                size(A) == expected_size ||
+                    error(
+                        "Block size mismatch in block ($bi,$bj): " *
+                        "got $(size(A)), expected $expected_size."
+                    )
+
+                blockmap[iP, jP] = blk
+            end
+        end
+
+        # ------------------------------------------------------
+        # 6) Determine exact number of stored nonzeros
+        # ------------------------------------------------------
+        total_nnz = 0
+
+        for iP in 1:nproblems
+            for jP in 1:nproblems
+                blk = blockmap[iP, jP]
+                blk === nothing && continue
+
+                total_nnz += nnz(blk.A)
+            end
+        end
+
+        # ------------------------------------------------------
+        # 7) Allocate final CSC storage
+        # ------------------------------------------------------
+        colptr = Vector{Int}(undef, total_dofs + 1)
+        rowval = Vector{Int}(undef, total_nnz)
+        nzval  = Vector{Float64}(undef, total_nnz)
+
+        pos = 1
+        colptr[1] = 1
+
+        # ------------------------------------------------------
+        # 8) Assemble the global matrix column by column
+        #
+        # CSC requirement:
+        #
+        #   - columns are written consecutively
+        #   - row indices inside each column remain sorted
+        #
+        # Since row blocks are traversed in global row order
+        # and each input CSC block already has sorted row indices,
+        # the resulting global row indices are sorted as well.
+        # ------------------------------------------------------
+        @inbounds for jP in 1:nproblems
+
+            ncol_local = ndofs(problems[jP])
+            col_offset = offsets[jP]
+
+            for local_col in 1:ncol_local
+
+                global_col = col_offset + local_col
+
+                for iP in 1:nproblems
+
+                    blk = blockmap[iP, jP]
+                    blk === nothing && continue
+
+                    A = blk.A
+                    row_offset = offsets[iP]
+
+                    p1 = A.colptr[local_col]
+                    p2 = A.colptr[local_col + 1] - 1
+
+                    for p in p1:p2
+                        rowval[pos] =
+                            row_offset + A.rowval[p]
+
+                        nzval[pos] =
+                            A.nzval[p]
+
+                        pos += 1
+                    end
+                end
+
+                colptr[global_col + 1] = pos
+            end
+        end
+
+        # Defensive consistency check
+        pos == total_nnz + 1 ||
+            error(
+                "Internal CSC assembly error: " *
+                "expected $total_nnz stored entries, " *
+                "but wrote $(pos - 1)."
+            )
+
+        # ------------------------------------------------------
+        # 9) Construct SparseMatrixCSC directly
+        # ------------------------------------------------------
+        A_big = SparseMatrixCSC(
+            total_dofs,
+            total_dofs,
+            colptr,
+            rowval,
+            nzval
+        )
+
+        return new(
+            A_big,
+            nothing,
+            nothing,
+            problems,
+            offsets
+        )
+    end
+end
+
+#=
 struct SystemMatrix
     A::SparseMatrixCSC
     model::Union{Problem,Nothing}
@@ -897,6 +1298,7 @@ struct SystemMatrix
         return new(A_big, nothing, nothing, problems, offsets)
     end
 end
+=#
 
 """
     Base.show(io::IO, M::SystemMatrix)

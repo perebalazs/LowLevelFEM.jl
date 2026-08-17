@@ -12,6 +12,7 @@ structured_box_mesh
 projectTo2D
 expandTo3D
 rotateNodes
+renumberNodes!
 ```
 
 ## Model Setup and Parameters

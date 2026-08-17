@@ -2418,7 +2418,86 @@ function /(A::SystemMatrix, b::Number)
     SystemMatrix(A.A / b, A.model, A.test_model, A.problems, A.offsets)
 end
 
+@inline function _same_csc_pattern(
+    A::SparseMatrixCSC,
+    B::SparseMatrixCSC
+    )
+    size(A) == size(B) || return false
+    length(A.nzval) == length(B.nzval) || return false
+    A.colptr == B.colptr || return false
+    A.rowval == B.rowval || return false
+    return true
+end
 
+"""
+    +(A::SystemMatrix, B::SystemMatrix)
+    -(A::SystemMatrix, B::SystemMatrix)
+
+Addition and subtraction of system matrices.
+
+If the sparse matrices have identical CSC patterns, only the numerical
+values are added or subtracted. Otherwise, the general sparse matrix
+operation is used.
+"""
+function +(A::SystemMatrix, B::SystemMatrix)
+
+    if _same_csc_pattern(A.A, B.A)
+
+        C = copy(A.A)
+        @. C.nzval += B.A.nzval
+
+    else
+
+        C = A.A + B.A
+
+    end
+
+    return SystemMatrix(
+        C,
+        A.model,
+        A.test_model,
+        A.problems,
+        A.offsets
+    )
+end
+
+function -(A::SystemMatrix, B::SystemMatrix)
+
+    if _same_csc_pattern(A.A, B.A)
+
+        C = copy(A.A)
+        @. C.nzval -= B.A.nzval
+
+    else
+
+        C = A.A - B.A
+
+    end
+
+    return SystemMatrix(
+        C,
+        A.model,
+        A.test_model,
+        A.problems,
+        A.offsets
+    )
+end
+
+function -(A::SystemMatrix)
+
+    C = copy(A.A)
+    @. C.nzval = -C.nzval
+
+    return SystemMatrix(
+        C,
+        A.model,
+        A.test_model,
+        A.problems,
+        A.offsets
+    )
+end
+
+#=
 """
     +(A::SystemMatrix, B::SystemMatrix)
     -(A::SystemMatrix, B::SystemMatrix)
@@ -2434,7 +2513,7 @@ end
 function -(A::SystemMatrix)
     SystemMatrix(-A.A, A.model, A.test_model, A.problems, A.offsets)
 end
-
+=#
 
 ###############################################################################
 # Optional but recommended utilities
