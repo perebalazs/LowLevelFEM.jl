@@ -3766,6 +3766,179 @@ Example
 function solveField(
     K::SystemMatrix,
     F::SystemVector;
+    support::Vector{BoundaryCondition}=BoundaryCondition[]
+)
+
+    # ----------------------------------------------------------
+    # 1) Consistency checks
+    # ----------------------------------------------------------
+
+    K.problems === nothing &&
+        error("solveField: SystemMatrix is not a block system.")
+
+    F.problems === nothing &&
+        error("solveField: SystemVector is not a block vector.")
+
+    K.problems == F.problems ||
+        error("solveField: Problem ordering mismatch between K and F.")
+
+    problems = K.problems
+    offsets = K.offsets
+
+    A = K.A
+    b = F.a
+
+    ndof, nsteps = size(b)
+
+    # ----------------------------------------------------------
+    # 2) Collect global constrained DOFs
+    # ----------------------------------------------------------
+
+    fixed = Int[]
+
+    for bc in support
+        P = bc.problem
+
+        idx = findfirst(q -> q === P, problems)
+
+        idx === nothing &&
+            error("solveField: BC refers to Problem not in system.")
+
+        offset = offsets[idx]
+        local_dofs = constrainedDoFs(P, [bc])
+
+        append!(fixed, offset .+ local_dofs)
+    end
+
+    unique!(fixed)
+    sort!(fixed)
+
+    free = setdiff(1:ndof, fixed)
+
+    # ----------------------------------------------------------
+    # 3) Prescribed values in the full space
+    # ----------------------------------------------------------
+
+    xD = zeros(Float64, ndof)
+
+    for bc in support
+        P = bc.problem
+
+        idx = findfirst(q -> q === P, problems)
+        offset = offsets[idx]
+
+        x_local = applyBoundaryConditions(P, [bc])
+        local_dofs = constrainedDoFs(P, [bc])
+
+        xD[offset .+ local_dofs] .= x_local.a[local_dofs, 1]
+    end
+
+    # ----------------------------------------------------------
+    # 4) Standard full-order solution
+    # ----------------------------------------------------------
+
+    if !any(P.reducedOrder for P in problems)
+
+        x = zeros(Float64, ndof, nsteps)
+
+        A_ff = A[free, free]
+        f_kin = A[free, fixed] * xD[fixed]
+
+        for i in 1:nsteps
+            x[free, i] =
+                A_ff \ (b[free, i] - f_kin)
+        end
+
+        if !isempty(fixed)
+            x[fixed, :] .= xD[fixed]
+        end
+
+        return _reconstruct_fields(x, problems, offsets)
+    end
+
+    # ----------------------------------------------------------
+    # 5) Build global reduction and restriction matrices
+    # ----------------------------------------------------------
+
+    Tblocks = Vector{SparseMatrixCSC{Float64,Int}}(
+        undef,
+        length(problems)
+    )
+
+    Rblocks = Vector{SparseMatrixCSC{Float64,Int}}(
+        undef,
+        length(problems)
+    )
+
+    for (i, P) in enumerate(problems)
+
+        if P.reducedOrder
+            Tblocks[i], Rblocks[i] = reductionMatrices(P)
+        else
+            n = ndofs(P)
+
+            I = spdiagm(0 => ones(Float64, n))
+
+            Tblocks[i] = I
+            Rblocks[i] = I
+        end
+    end
+
+    T = blockdiag(Tblocks...)
+    R = blockdiag(Rblocks...)
+
+    # ----------------------------------------------------------
+    # 6) Convert Dirichlet data to the reduced space
+    # ----------------------------------------------------------
+
+    free_r, fixed_r, xD_r =
+        reduced_bc_data(R, fixed, xD)
+
+    # ----------------------------------------------------------
+    # 7) Galerkin projection
+    # ----------------------------------------------------------
+
+    AT = A * T
+    Kr = T' * AT
+
+    nr = size(T, 2)
+    xr = zeros(Float64, nr, nsteps)
+
+    if !isempty(fixed_r)
+        xr[fixed_r, :] .= xD_r[fixed_r]
+    end
+
+    Kr_ff = Kr[free_r, free_r]
+
+    # ----------------------------------------------------------
+    # 8) Solve in the reduced space
+    # ----------------------------------------------------------
+
+    for i in 1:nsteps
+
+        fr = T' * b[:, i]
+
+        if !isempty(fixed_r)
+            fr .-= Kr[:, fixed_r] * xD_r[fixed_r]
+        end
+
+        xr[free_r, i] =
+            Kr_ff \ fr[free_r]
+    end
+
+    # ----------------------------------------------------------
+    # 9) Prolongate to the full field representation
+    # ----------------------------------------------------------
+
+    x = T * xr
+
+    return _reconstruct_fields(x, problems, offsets)
+end
+
+#=
+function solveField(
+    K::SystemMatrix,
+    F::SystemVector;
     support::Vector{BoundaryCondition}=BoundaryCondition[])
 
     # ----------------------------------------------------------
@@ -3885,6 +4058,7 @@ function solveField(
         return tuple(results...)
     end
 end
+=#
 
 function solveField(
     Ks::SymmetricSystemMatrix,
@@ -3895,7 +4069,7 @@ function solveField(
     maxiter::Int=Ks.parent.model.non * Ks.parent.model.dim,
     preconditioner=Identity(),
     ordering=true
-)
+    )
     K = Ks.parent
     A = Symmetric(K.A, Ks.uplo)
 
@@ -3926,6 +4100,70 @@ function solveField(
     end
 
     return u
+end
+
+"""
+    _reconstruct_fields(x, problems, offsets)
+
+Reconstruct full-space finite element fields from a global solution matrix.
+"""
+function _reconstruct_fields(x, problems, offsets)
+
+    nsteps = size(x, 2)
+
+    results = Vector{Any}(undef, length(problems))
+
+    for (i, P) in enumerate(problems)
+
+        offset = offsets[i]
+        nloc = ndofs(P)
+
+        xloc = @view x[offset+1:offset+nloc, :]
+
+        if P.pdim == 1
+
+            results[i] = ScalarField(
+                [],
+                Matrix(xloc),
+                [0],
+                [],
+                1,
+                :scalar,
+                P
+            )
+
+        elseif P.pdim == 2 || P.pdim == 3
+
+            type = P.pdim == 2 ? :v2D : :v3D
+
+            results[i] = VectorField(
+                [],
+                Matrix(xloc),
+                [0],
+                [],
+                1,
+                type,
+                P
+            )
+
+        elseif P.pdim == 9
+
+            results[i] = TensorField(
+                [],
+                Matrix(xloc),
+                [0],
+                [],
+                1,
+                :tensor,
+                P
+            )
+
+        else
+            error("solveField: unsupported pdim $(P.pdim).")
+        end
+    end
+
+    return length(results) == 1 ? results[1] : tuple(results...)
 end
 
 ###############################################################

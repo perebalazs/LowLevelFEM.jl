@@ -139,7 +139,7 @@ function reductionMatrices(P::Problem)
 
         for (edim, etag) in dimTags
 
-            edim == P.dim || continue
+            #edim == P.dim || continue
 
             elemTypes, elemTags, elemNodeTags =
                 gmsh.model.mesh.getElements(edim, etag)
@@ -740,4 +740,66 @@ function reductionMatrices(P::Problem)
     R = kron(Rn, Id)
 
     return T, R
+end
+
+"""
+    reduced_bc_data(R, fixed, uD)
+
+Convert full-space Dirichlet data to the reduced finite element space.
+
+A reduced DOF is considered constrained if its restriction row depends
+exclusively on constrained full-space DOFs.
+
+Returns
+
+    free_r, fixed_r, uD_r
+
+where `uD_r` contains the prescribed values at the reduced DOFs.
+"""
+function reduced_bc_data(
+    R::SparseMatrixCSC,
+    fixed::AbstractVector{<:Integer},
+    uD::AbstractVector
+    )
+    nr = size(R, 1)
+
+    if isempty(fixed)
+        return collect(1:nr), Int[], zeros(Float64, nr)
+    end
+
+    fixed_mask = falses(size(R, 2))
+    fixed_mask[fixed] .= true
+
+    # Column i of R' is row i of R.
+    Rt = sparse(transpose(R))
+    rows = rowvals(Rt)
+
+    fixed_r = Int[]
+    sizehint!(fixed_r, length(fixed))
+
+    @inbounds for ir in 1:nr
+        rng = nzrange(Rt, ir)
+        isempty(rng) && continue
+
+        constrained = true
+
+        for k in rng
+            if !fixed_mask[rows[k]]
+                constrained = false
+                break
+            end
+        end
+
+        constrained && push!(fixed_r, ir)
+    end
+
+    fixed_r = unique(fixed_r)
+    sort!(fixed_r)
+
+    free_r = setdiff(collect(1:nr), fixed_r)
+
+    # Interpolate the prescribed full-space field to the reduced nodes.
+    uD_r = R * uD
+
+    return free_r, fixed_r, uD_r
 end

@@ -1429,28 +1429,105 @@ uniformly for `ScalarField` and `VectorField` unknowns.
 - When `iterative = true`, the system is solved using conjugate gradient on
   the reduced matrix `K_ff`.
 """
-function solveField(K::SystemMatrix, f::Union{ScalarField,VectorField,TensorField}; 
-                           support::Vector{BoundaryCondition}=BoundaryCondition[], 
-                           iterative=false,
-                           reltol::Real = sqrt(eps()),
-                           maxiter::Int = K.model.non * K.model.dim,
-                           preconditioner = Identity(),
-                           ordering=true)
+function solveField(
+    K::SystemMatrix,
+    f::Union{ScalarField,VectorField,TensorField};
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    iterative=false,
+    reltol::Real=sqrt(eps()),
+    maxiter::Int=K.model.non * K.model.dim,
+    preconditioner=Identity(),
+    ordering=true
+)
+
     problem = K.model
 
     fixed = constrainedDoFs(problem, support)
     free = freeDoFs(problem, support)
+
     u = copy(f)
     fill!(u.a, 0.0)
     applyBoundaryConditions!(u, support)
-    f_kin = K.A[:, fixed] * u.a[fixed,1]
-    if iterative
-        u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free], Pl=preconditioner, reltol=reltol, maxiter=maxiter)
-    elseif ordering == false
-        u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
-    else
-        u.a[free] = (K.A[free, free]) \ (f.a[free,1] - f_kin[free,1])
+
+    # ----------------------------------------------------------
+    # Standard full-order solution
+    # ----------------------------------------------------------
+
+    if !problem.reducedOrder
+
+        f_kin = K.A[:, fixed] * u.a[fixed, 1]
+
+        if iterative
+            u.a[free] = cg(
+                K.A[free, free],
+                f.a[free] - f_kin[free],
+                Pl=preconditioner,
+                reltol=reltol,
+                maxiter=maxiter
+            )
+
+        elseif ordering == false
+            u.a[free] =
+                lu(K.A[free, free], q=nothing) \
+                (f.a[free] - f_kin[free])
+
+        else
+            u.a[free] =
+                K.A[free, free] \
+                (f.a[free, 1] - f_kin[free, 1])
+        end
+
+        return u
     end
+
+    # ----------------------------------------------------------
+    # Reduced-order solution
+    # ----------------------------------------------------------
+
+    T, R = reductionMatrices(problem)
+
+    # Full-space prescribed field -> reduced-space prescribed field
+    free_r, fixed_r, uD_r =
+        reduced_bc_data(R, fixed, @view(u.a[:, 1]))
+
+    # Galerkin projection
+    KT = K.A * T
+    Kr = T' * KT
+
+    fr = T' * @view(f.a[:, 1])
+
+    ur = zeros(Float64, size(T, 2))
+
+    # Reduced Dirichlet values
+    if !isempty(fixed_r)
+        ur[fixed_r] .= uD_r[fixed_r]
+        fr .-= Kr[:, fixed_r] * ur[fixed_r]
+    end
+
+    # Solve reduced system
+    if iterative
+        ur[free_r] = cg(
+            Kr[free_r, free_r],
+            fr[free_r],
+            Pl=preconditioner,
+            reltol=reltol,
+            maxiter=maxiter
+        )
+
+    elseif ordering == false
+        ur[free_r] =
+            lu(Kr[free_r, free_r], q=nothing) \
+            fr[free_r]
+
+    else
+        ur[free_r] =
+            Kr[free_r, free_r] \
+            fr[free_r]
+    end
+
+    # Prolongate back to the original full-space field
+    u.a[:, 1] .= T * ur
+
     return u
 end
 

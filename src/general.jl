@@ -391,6 +391,11 @@ materials. It serves as the central object for operator-based formulations.
   Name of the unknown field (e.g. `:u`, `:T`, `:p`).
 - `rhs_field::Symbol`  
   Name of the right-hand side field.
+- `reducedOrder::Bool`
+
+  If `true`, the field is solved in the continuous Lagrange space of
+  polynomial order `p - 1`, while assembly and field storage remain on
+  the original order-`p` mesh. Default: `false`.
 
 ## Problem configuration
 
@@ -481,16 +486,17 @@ struct Problem
     geometry::Geometry
     field::Symbol
     rhs_field::Symbol
+    reducedOrder::Bool
     Problem() = new()
-    Problem(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field) =
-        new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field)
-    Problem(name, type, dim, pdim, material, thickness, non, geometry) =
-        new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder=false) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, reducedOrder=false) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs, reducedOrder)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none,
         nameTopSurface=nothing, nameVolume=nothing, dim::Int=3,
-        field::Symbol=:unknown, rhs_field::Symbol=:rhs)
+        field::Symbol=:unknown, rhs_field::Symbol=:rhs, reducedOrder::Bool=false)
         if type == :dummy
-            return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field)
+            return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field, reducedOrder)
         end
         pdim = 3
         dim0 = dim
@@ -619,133 +625,10 @@ struct Problem
         if nameTopSurface !== nothing && nameVolume !== nothing
             initialize(geometry, mat, non, field, rhs_field)
         end
-        return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field)
+        return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder)
     end
 end
-#=
-struct Problem
-    name::String
-    type::Symbol
-    dim::Int64
-    pdim::Int64
-    material::Vector{Material}
-    thickness::Float64
-    non::Int64
-    geometry::Geometry
-    Problem() = new()
-    Problem(name, type, dim, pdim, material, thickness, non, geometry) = new(name, type, dim, pdim, material, thickness, non, geometry)
-    function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none, nameTopSurface="", nameVolume="", dim::Int=3)
-        if type == :dummy
-            return new("dummy", :dummy, 0, 0, mat, 0, 0)
-        end
-        pdim = 3
-        dim0 = dim
 
-        #if Sys.CPU_THREADS != Threads.nthreads()
-        #    @warn "Number of threads($(Threads.nthreads())) ≠ logical threads in CPU($(Sys.CPU_THREADS))."
-        #end
-        geometry = Geometry()
-
-        if type == :Solid
-            dim = 3
-            pdim = 3
-        elseif type == :PlaneStress
-            dim = 2
-            pdim = 2
-        elseif type == :PlaneStrain
-            dim = 2
-            pdim = 2
-        elseif type == :AxiSymmetric
-            dim = 2
-            pdim = 2
-        elseif type == :PlaneHeatConduction
-            dim = 2
-            pdim = 1
-        elseif type == :HeatConduction
-            dim = 3
-            pdim = 1
-        elseif type == :AxiSymmetricHeatConduction
-            dim = 2
-            pdim = 1
-        elseif type == :Truss
-            dim = 3
-            pdim = 3
-        elseif type == :ScalarField
-            dim0 < 1 && error("Problem: dimension of a :ScalarField problem must be one, two or three.")
-            dim0 > 3 && error("Problem: dimension of a :ScalarField problem must be equal or less than three.")
-            dim = dim0
-            pdim = 1
-        elseif type == :VectorField
-            dim0 < 1 && error("Problem: dimension of a :VectorField problem must be one, two or three.")
-            dim0 == 1 && error("Problem: dimension of a :VectorField problem must be greater than one.")
-            dim0 > 3 && error("Problem: dimension of a :VectorField problem must be two or three.")
-            dim = dim0
-            pdim = dim0
-        elseif type == :TensorField
-            dim0 < 1 && error("Problem: dimension of a :TensorField problem must be one, two or three.")
-            dim0 == 1 && error("Problem: dimension of a :TensorField problem must be greater than one.")
-            dim0 > 3 && error("Problem: dimension of a :TensorField problem must be two or three.")
-            dim = dim0
-            pdim = 9
-        elseif type == :Reynolds
-            geometry = Geometry(nameTopSurface, nameVolume)
-            dim = geometry.dim
-            pdim = 1
-        else
-            error("Problem type can be: `:Solid`, `:PlaneStress`, `:PlaneStrain`, `:AxiSymmetric`, `:PlaneHeatConduction`, `:HeatConduction`, `:AxiSymmetricHeatConduction`, `:Truss`, `:ScalarField`, `VectorField`.
-            Now problem type = $type ????")
-        end
-        if !isa(mat, Vector)
-            error("Problem: materials are not arranged in a vector. Put them in [...]")
-        end
-        name = gmsh.model.getCurrent()
-        gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
-        gmsh.option.setString("View.Format", "%.6g")
-        
-        material = mat
-        
-        if bandwidth ≠ :none
-            elemTags = []
-            for ipg in 1:length(material)
-                phName = material[ipg].phName
-                dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
-                for idm in 1:length(dimTags)
-                    dimTag = dimTags[idm]
-                    edim = dimTag[1]
-                    etag = dimTag[2]
-                    if edim != dim && (type != :Truss || edim != 1)
-                        error("Problem: dimension of the problem ($dim) is different than the dimension of finite elements ($edim).")
-                    end
-                    elementTypes, elementTags, nodeTags = gmsh.model.mesh.getElements(edim, etag)
-                    for i in 1:length(elementTags)
-                        if length(elementTags[i]) == 0
-                            error("Problem: No mesh in model '$name'.")
-                        end
-                        for j in 1:length(elementTags[i])
-                            push!(elemTags, elementTags[i][j])
-                        end
-                    end
-                end
-            end
-            
-            if bandwidth != :RCMK && bandwidth != :Hilbert && bandwidth != :Metis && bandwidth != :none
-                error("Problem: bandwidth can be `:Hilbert`, `:Metis`, `:RCMK` or `:none`. Now it is `$(bandwidth)`")
-            end
-            
-            #method = bandwidth == :none ? :RCMK : bandwidth
-            oldTags, newTags = gmsh.model.mesh.computeRenumbering(bandwidth, elemTags)
-            #permOldTags = sortperm(oldTags)
-            #sortNewTags = 1:length(oldTags)
-            #newTags[permOldTags] = sortNewTags
-            gmsh.model.mesh.renumberNodes(oldTags, newTags)
-        end
-        
-        nodeTags, coord, parametricCoord = gmsh.model.mesh.getNodes()
-        non = length(nodeTags)
-        return new(name, type, dim, pdim, material, thickness, non, geometry)
-    end
-end
-=#
 
 """
     Field

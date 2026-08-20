@@ -13,7 +13,7 @@ Point(3) = {6000, 6000, 0, 1.0};
 Line(2) = {2, 3};
 //+
 MeshSize {:} = 1;
-Mesh.ElementOrder=1;
+Mesh.ElementOrder=2;
 Mesh 1;
 //+
 Physical Curve("beam", 2) = {1,2};
