@@ -715,6 +715,54 @@ function build_B!(B::AbstractMatrix, ::AxialGradOp,
 
     fill!(B, 0.0)
 
+    pdim = P.pdim
+    dim = P.dim
+
+    if pdim == 1
+        # Scalar field:
+        # AxialGrad(φ) = ∇φ ⋅ t
+        @inbounds for a in 1:numNodes
+            val = 0.0
+
+            for d in 1:dim
+                val += t[d] * ∂h[d, (k-1)*numNodes + a]
+            end
+
+            B[1, a] = val
+        end
+
+    elseif pdim == dim
+        # Vector field:
+        # AxialGrad(u) = tᵀ ⋅ ∇u ⋅ t
+        @inbounds for a in 1:numNodes
+            for c in 1:pdim
+                col = (a - 1) * pdim + c
+
+                val = 0.0
+
+                for d in 1:dim
+                    val += t[c] * t[d] *
+                           ∂h[d, (k-1)*numNodes + a]
+                end
+
+                B[1, col] = val
+            end
+        end
+
+    else
+        error(
+            "AxialGradOp supports scalar fields or vector fields with pdim == dim."
+        )
+    end
+
+    return B
+end
+#=
+function build_B!(B::AbstractMatrix, ::AxialGradOp,
+                  P::Problem, k::Int, h, ∂h, numNodes::Integer, t)
+
+    fill!(B, 0.0)
+
     pdim = P.pdim   # 2
     dim  = P.dim    # 2
 
@@ -735,6 +783,7 @@ function build_B!(B::AbstractMatrix, ::AxialGradOp,
 
     return B
 end
+=#
 
 function build_B!(B::AbstractMatrix, ::TangentialGradOp,
                   P::Problem, k::Int, h, ∂h, numNodes::Integer, t)
@@ -6151,6 +6200,458 @@ function FDM(
     X0::SystemVector,
     n::Int,
     Δt::Float64;
+    ϑ=0.5
+)
+
+    all(isfinite, K.A.nzval) ||
+        error("FDM: K contains non-finite entries.")
+
+    all(isfinite, C.A.nzval) ||
+        error("FDM: C contains non-finite entries.")
+
+    all(isfinite, q.a) ||
+        error("FDM: q contains non-finite entries.")
+
+    all(isfinite, X0.a) ||
+        error("FDM: X0 contains non-finite entries.")
+
+    @assert size(K.A, 1) == size(K.A, 2)
+    @assert size(C.A, 1) == size(C.A, 2)
+    @assert size(K.A) == size(C.A)
+    @assert size(q.a, 1) == size(K.A, 1)
+    @assert size(X0.a, 1) == size(K.A, 1)
+
+    # ------------------------------------------------------------------
+    # 1) Compatibility checks
+    # ------------------------------------------------------------------
+
+    check_multifield_system_compatibility(K, C)
+
+    q.problems === nothing &&
+        error("FDM: q must be a block SystemVector.")
+
+    X0.problems === nothing &&
+        error("FDM: X0 must be a block SystemVector.")
+
+    K.problems == q.problems ||
+        error("FDM: Problem ordering mismatch between K and q.")
+
+    K.problems == X0.problems ||
+        error("FDM: Problem ordering mismatch between K and X0.")
+
+    K.offsets == q.offsets ||
+        error("FDM: Offset mismatch between K and q.")
+
+    K.offsets == X0.offsets ||
+        error("FDM: Offset mismatch between K and X0.")
+
+    ndof = size(K.A, 1)
+
+    size(q.a, 1) == ndof ||
+        error("FDM: size(q.a,1) = $(size(q.a,1)) does not match ndof = $ndof.")
+
+    size(X0.a, 1) == ndof ||
+        error("FDM: size(X0.a,1) = $(size(X0.a,1)) does not match ndof = $ndof.")
+
+    n >= 1 ||
+        error("FDM: n must be at least 1.")
+
+    Δt > 0 ||
+        error("FDM: Δt must be positive.")
+
+    nq = size(q.a, 2)
+
+    nq == 1 || nq == n ||
+        error("FDM: q must contain either 1 or n time steps.")
+
+    nX0 = size(X0.a, 2)
+
+    nX0 == 1 || nX0 == n ||
+        error("FDM: X0 must contain either 1 or n time steps.")
+
+    0.0 <= ϑ <= 1.0 ||
+        error("FDM: ϑ must be between 0 and 1.")
+
+    problems = K.problems
+    t = collect(0:Δt:(n - 1) * Δt)
+
+    has_reduced = any(P.reducedOrder for P in problems)
+
+    # ==================================================================
+    # FULL-ORDER PATH
+    # ==================================================================
+
+    if !has_reduced
+
+        # ------------------------------------------------------------------
+        # 2) BC data
+        # ------------------------------------------------------------------
+
+        free, fix, xD = multifield_bc_data(K, bc; nsteps=n)
+
+        # ------------------------------------------------------------------
+        # 3) Allocate history
+        # ------------------------------------------------------------------
+
+        X = zeros(ndof, n)
+
+        if size(X0.a, 2) == 1
+            X[:, 1] .= X0.a[:, 1]
+        else
+            X[:, 1] .= X0.a[:, 1]
+        end
+
+        if !isempty(fix)
+            X[fix, 1] .= xD[fix, 1]
+        end
+
+        # ------------------------------------------------------------------
+        # 4) Reduced matrices
+        # ------------------------------------------------------------------
+
+        K0 = K.A
+        C0 = C.A
+
+        Kff = K0[free, free]
+        Cff = C0[free, free]
+
+        Kfc = K0[free, fix]
+        Cfc = C0[free, fix]
+
+        # ------------------------------------------------------------------
+        # 5) Time stepping
+        # ------------------------------------------------------------------
+
+        is_diag_Cff = isdiag(Cff)
+
+        if ϑ == 0 && is_diag_Cff
+
+            d = diag(Cff)
+
+            all(>(0), d) ||
+                error("FDM: non-positive diagonal entry detected in Cff on free DOFs.")
+
+            invd = 1.0 ./ d
+            has_fix = !isempty(fix)
+
+            for i in 2:n
+
+                qi = size(q.a, 2) == 1 ? 1 : i - 1
+
+                @views begin
+                    qn = q.a[free, qi]
+                    xfree_n = X[free, i - 1]
+                end
+
+                rhs =
+                    qn -
+                    Kff * xfree_n
+
+                if has_fix
+
+                    @views begin
+                        xc_n = xD[fix, i - 1]
+                        xc_np1 = xD[fix, i]
+                    end
+
+                    rhs .-=
+                        Kfc * xc_n +
+                        Cfc * ((xc_np1 - xc_n) ./ Δt)
+                end
+
+                @views X[free, i] .=
+                    xfree_n .+ Δt .* invd .* rhs
+
+                if has_fix
+                    @views X[fix, i] .= xD[fix, i]
+                end
+            end
+
+        else
+
+            A = Cff + ϑ * Δt * Kff
+            B = Cff - (1 - ϑ) * Δt * Kff
+
+            luA = lu(A)
+
+            has_fix = !isempty(fix)
+
+            if has_fix
+                Afc = Cfc + ϑ * Δt * Kfc
+                Bfc = Cfc - (1 - ϑ) * Δt * Kfc
+            end
+
+            x_n = copy(@view X[free, 1])
+            x_np1 = similar(x_n)
+            rhs = similar(x_n)
+
+            for i in 2:n
+
+                mul!(rhs, B, x_n)
+
+                if size(q.a, 2) == 1
+                    @views rhs .+= Δt .* q.a[free, 1]
+                else
+                    @views rhs .+=
+                        Δt .* (
+                            (1 - ϑ) .* q.a[free, i - 1] .+
+                            ϑ .* q.a[free, i]
+                        )
+                end
+
+                if has_fix
+
+                    @views begin
+                        xc_n = xD[fix, i - 1]
+                        xc_np1 = xD[fix, i]
+
+                        mul!(rhs, Afc, xc_np1, -1.0, 1.0)
+                        mul!(rhs, Bfc, xc_n, 1.0, 1.0)
+                    end
+                end
+
+                ldiv!(x_np1, luA, rhs)
+
+                @views X[free, i] .= x_np1
+
+                if has_fix
+                    @views X[fix, i] .= xD[fix, i]
+                end
+
+                x_n, x_np1 = x_np1, x_n
+            end
+        end
+
+        return split_multifield_solution(
+            X,
+            problems,
+            K.offsets,
+            t
+        )
+    end
+
+    # ==================================================================
+    # REDUCED-ORDER PATH
+    # ==================================================================
+
+    # ------------------------------------------------------------------
+    # 2) Full-space BC data
+    # ------------------------------------------------------------------
+
+    _, fix, xD = multifield_bc_data(K, bc; nsteps=n)
+
+    # ------------------------------------------------------------------
+    # 3) Build global prolongation / restriction matrices
+    # ------------------------------------------------------------------
+
+    Tblocks = SparseMatrixCSC{Float64,Int}[]
+    Rblocks = SparseMatrixCSC{Float64,Int}[]
+
+    sizehint!(Tblocks, length(problems))
+    sizehint!(Rblocks, length(problems))
+
+    for P in problems
+
+        if P.reducedOrder
+
+            Tp, Rp = reductionMatrices(P)
+
+            push!(Tblocks, Tp)
+            push!(Rblocks, Rp)
+
+        else
+
+            Ip = spdiagm(0 => ones(Float64, ndofs(P)))
+
+            push!(Tblocks, Ip)
+            push!(Rblocks, Ip)
+        end
+    end
+
+    T = blockdiag(Tblocks...)
+    R = blockdiag(Rblocks...)
+
+    # ------------------------------------------------------------------
+    # 4) Reduced-space BC data
+    # ------------------------------------------------------------------
+
+    xD_r = R * xD
+
+    free_r, fix_r, _ =
+        reduced_bc_data(
+            R,
+            fix,
+            @view(xD[:, 1])
+        )
+
+    # ------------------------------------------------------------------
+    # 5) Project system to reduced space
+    # ------------------------------------------------------------------
+
+    KT = K.A * T
+    CT = C.A * T
+
+    Kr = T' * KT
+    Cr = T' * CT
+
+    qr = T' * q.a
+
+    nr = size(T, 2)
+
+    # ------------------------------------------------------------------
+    # 6) Allocate reduced history
+    # ------------------------------------------------------------------
+
+    Xr = zeros(Float64, nr, n)
+
+    Xr[:, 1] .= R * @view(X0.a[:, 1])
+
+    if !isempty(fix_r)
+        Xr[fix_r, 1] .= xD_r[fix_r, 1]
+    end
+
+    # ------------------------------------------------------------------
+    # 7) Reduced matrices
+    # ------------------------------------------------------------------
+
+    Kff = Kr[free_r, free_r]
+    Cff = Cr[free_r, free_r]
+
+    Kfc = Kr[free_r, fix_r]
+    Cfc = Cr[free_r, fix_r]
+
+    # ------------------------------------------------------------------
+    # 8) Time stepping in reduced space
+    # ------------------------------------------------------------------
+
+    is_diag_Cff = isdiag(Cff)
+
+    if ϑ == 0 && is_diag_Cff
+
+        d = diag(Cff)
+
+        all(>(0), d) ||
+            error(
+                "FDM: non-positive diagonal entry detected in reduced Cff on free DOFs."
+            )
+
+        invd = 1.0 ./ d
+        has_fix = !isempty(fix_r)
+
+        for i in 2:n
+
+            qi = size(qr, 2) == 1 ? 1 : i - 1
+
+            @views begin
+                qn = qr[free_r, qi]
+                xfree_n = Xr[free_r, i - 1]
+            end
+
+            rhs =
+                qn -
+                Kff * xfree_n
+
+            if has_fix
+
+                @views begin
+                    xc_n = xD_r[fix_r, i - 1]
+                    xc_np1 = xD_r[fix_r, i]
+                end
+
+                rhs .-=
+                    Kfc * xc_n +
+                    Cfc * ((xc_np1 - xc_n) ./ Δt)
+            end
+
+            @views Xr[free_r, i] .=
+                xfree_n .+ Δt .* invd .* rhs
+
+            if has_fix
+                @views Xr[fix_r, i] .= xD_r[fix_r, i]
+            end
+        end
+
+    else
+
+        A = Cff + ϑ * Δt * Kff
+        B = Cff - (1 - ϑ) * Δt * Kff
+
+        luA = lu(A)
+
+        has_fix = !isempty(fix_r)
+
+        if has_fix
+            Afc = Cfc + ϑ * Δt * Kfc
+            Bfc = Cfc - (1 - ϑ) * Δt * Kfc
+        end
+
+        x_n = copy(@view Xr[free_r, 1])
+        x_np1 = similar(x_n)
+        rhs = similar(x_n)
+
+        for i in 2:n
+
+            mul!(rhs, B, x_n)
+
+            if size(qr, 2) == 1
+
+                @views rhs .+=
+                    Δt .* qr[free_r, 1]
+
+            else
+
+                @views rhs .+=
+                    Δt .* (
+                        (1 - ϑ) .* qr[free_r, i - 1] .+
+                        ϑ .* qr[free_r, i]
+                    )
+            end
+
+            if has_fix
+
+                @views begin
+                    xc_n = xD_r[fix_r, i - 1]
+                    xc_np1 = xD_r[fix_r, i]
+
+                    mul!(rhs, Afc, xc_np1, -1.0, 1.0)
+                    mul!(rhs, Bfc, xc_n, 1.0, 1.0)
+                end
+            end
+
+            ldiv!(x_np1, luA, rhs)
+
+            @views Xr[free_r, i] .= x_np1
+
+            if has_fix
+                @views Xr[fix_r, i] .= xD_r[fix_r, i]
+            end
+
+            x_n, x_np1 = x_np1, x_n
+        end
+    end
+
+    # ------------------------------------------------------------------
+    # 9) Prolongate complete history to full space
+    # ------------------------------------------------------------------
+
+    X = T * Xr
+
+    return split_multifield_solution(
+        X,
+        problems,
+        K.offsets,
+        t
+    )
+end
+#=
+function FDM(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    q::SystemVector,
+    bc::Vector{BoundaryCondition},
+    X0::SystemVector,
+    n::Int,
+    Δt::Float64;
     ϑ=0.5)
 
     all(isfinite, K.A.nzval) ||
@@ -6350,6 +6851,7 @@ function FDM(
 
     return split_multifield_solution(X, K.problems, K.offsets, t)
 end
+=#
 
 FDM(K::SystemMatrix, C::SystemMatrix, q::SystemVector, X0::SystemVector, n::Int, Δt::Float64; ϑ=0.5, support=Vector{BoundaryCondition}()) =
     FDM(K, C, q, support, X0, n, Δt, ϑ=ϑ)
@@ -6391,6 +6893,155 @@ function freeDoFs(
 end
 
 """
+    reduced_system_matrices(K, C, support)
+
+Prepare stiffness and capacity/mass matrices for an eigenvalue problem.
+
+If no field uses reduced-order interpolation, the original matrices are
+restricted directly to the free full-space DOFs.
+
+If at least one field has `reducedOrder=true`, the system is projected to
+the reduced space using
+
+    Kr = T' * K * T
+    Cr = T' * C * T
+
+and Dirichlet constraints are mapped to the reduced space.
+
+Returns
+
+    K0, C0, T, free_r
+
+where `T === nothing` for a full-order system.
+"""
+function reduced_system_matrices(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    support::Vector{BoundaryCondition}
+)
+
+    size(K.A) == size(C.A) ||
+        error("reduced_system_matrices: K and C must have the same size.")
+
+    size(K.A, 1) == size(K.A, 2) ||
+        error("reduced_system_matrices: K must be square.")
+
+    size(C.A, 1) == size(C.A, 2) ||
+        error("reduced_system_matrices: C must be square.")
+
+    # ----------------------------------------------------------
+    # Single-field system
+    # ----------------------------------------------------------
+
+    if K.problems === nothing
+
+        P = K.model
+
+        fixed = constrainedDoFs(P, support)
+
+        if !P.reducedOrder
+
+            free = freeDoFs(P, support)
+
+            return (
+                K.A[free, free],
+                C.A[free, free],
+                nothing,
+                free
+            )
+        end
+
+        T, R = reductionMatrices(P)
+
+        zero_bc = zeros(Float64, size(R, 2))
+
+        free_r, _, _ =
+            reduced_bc_data(R, fixed, zero_bc)
+
+        KT = K.A * T
+        CT = C.A * T
+
+        Kr = T' * KT
+        Cr = T' * CT
+
+        return (
+            Kr[free_r, free_r],
+            Cr[free_r, free_r],
+            T,
+            free_r
+        )
+    end
+
+    # ----------------------------------------------------------
+    # Multifield system
+    # ----------------------------------------------------------
+
+    check_multifield_system_compatibility(K, C)
+
+    problems = K.problems
+
+    _, fixed, _ =
+        multifield_bc_data(K, support; nsteps=1)
+
+    if !any(P.reducedOrder for P in problems)
+
+        free = setdiff(1:size(K.A, 1), fixed)
+
+        return (
+            K.A[free, free],
+            C.A[free, free],
+            nothing,
+            free
+        )
+    end
+
+    Tblocks = SparseMatrixCSC{Float64,Int}[]
+    Rblocks = SparseMatrixCSC{Float64,Int}[]
+
+    sizehint!(Tblocks, length(problems))
+    sizehint!(Rblocks, length(problems))
+
+    for P in problems
+
+        if P.reducedOrder
+
+            Tp, Rp = reductionMatrices(P)
+
+            push!(Tblocks, Tp)
+            push!(Rblocks, Rp)
+
+        else
+
+            I = spdiagm(0 => ones(Float64, ndofs(P)))
+
+            push!(Tblocks, I)
+            push!(Rblocks, I)
+        end
+    end
+
+    T = blockdiag(Tblocks...)
+    R = blockdiag(Rblocks...)
+
+    zero_bc = zeros(Float64, size(R, 2))
+
+    free_r, _, _ =
+        reduced_bc_data(R, fixed, zero_bc)
+
+    KT = K.A * T
+    CT = C.A * T
+
+    Kr = T' * KT
+    Cr = T' * CT
+
+    return (
+        Kr[free_r, free_r],
+        Cr[free_r, free_r],
+        T,
+        free_r
+    )
+end
+
+"""
     smallestEigenValue(K::SystemMatrix, 
                        C::SystemMatrix; 
                        support=Vector{BoundaryCondition}())
@@ -6413,7 +7064,55 @@ function smallestEigenValue(
     K::SystemMatrix,
     C::SystemMatrix;
     support=Vector{BoundaryCondition}()
-)
+    )
+
+    K0, C0, _, _ =
+        reduced_system_matrices(K, C, support)
+
+    ϕ = nothing
+    λ = nothing
+
+    try
+        λ, ϕ = Arpack.eigs(
+            K0,
+            C0,
+            nev=1,
+            which=:LR,
+            sigma=1e-8,
+            maxiter=10000
+        )
+    catch
+        λ, ϕ = Arpack.eigs(
+            K0,
+            C0,
+            nev=1,
+            which=:SM,
+            maxiter=10000
+        )
+    end
+
+    r =
+        K0 * ϕ[:, 1] -
+        λ[1] * C0 * ϕ[:, 1]
+
+    err =
+        norm(r) /
+        norm(K0 * ϕ[:, 1])
+
+    if err > 1e-3
+        @warn(
+            "smallestEigenValue: relative residual too large: $err"
+        )
+    end
+
+    return abs(real(λ[1]))
+end
+#=
+function smallestEigenValue(
+    K::SystemMatrix,
+    C::SystemMatrix;
+    support=Vector{BoundaryCondition}()
+    )
     # ----------------------------------------------------------
     # 1) Compatibility checks
     # ----------------------------------------------------------
@@ -6482,6 +7181,7 @@ function smallestEigenValue(
 
     return λmin
 end
+=#
 
 """
     largestEigenValue(K::SystemMatrix, 
@@ -6508,7 +7208,40 @@ function largestEigenValue(
     K::SystemMatrix,
     C::SystemMatrix;
     support=Vector{BoundaryCondition}()
-)
+    )
+
+    K0, C0, _, _ =
+        reduced_system_matrices(K, C, support)
+
+    λ, ϕ = Arpack.eigs(
+        K0,
+        C0,
+        nev=1,
+        which=:LM
+    )
+
+    r =
+        K0 * ϕ[:, 1] -
+        λ[1] * C0 * ϕ[:, 1]
+
+    err =
+        norm(r) /
+        norm(K0 * ϕ[:, 1])
+
+    if err > 1e-3
+        @warn(
+            "largestEigenValue: relative residual too large: $err"
+        )
+    end
+
+    return abs(real(λ[1]))
+end
+#=
+function largestEigenValue(
+    K::SystemMatrix,
+    C::SystemMatrix;
+    support=Vector{BoundaryCondition}()
+    )
     # ----------------------------------------------------------
     # 1) Compatibility checks
     # ----------------------------------------------------------
@@ -6560,9 +7293,10 @@ function largestEigenValue(
 
     return λmax
 end
+=#
 
 """
-    solveEigenFields(K::SystemMatrix, M::SystemMatrix; n=6, fmin=0.0)
+    solveEigenFields(K::SystemMatrix, M::SystemMatrix; support=Vector{BoundaryCondition}(), n=6, fmin=0.0)
 
 Solve eigenproblem for multifield system and return field-wise Eigen objects.
 
@@ -6572,9 +7306,131 @@ Usage:
 function solveEigenFields(
     K::SystemMatrix,
     M::SystemMatrix;
+    n=6,
+    fmin=0.0,
+    support=Vector{BoundaryCondition}()
+    )
+
+    # ----------------------------------------------------------
+    # 1) Checks
+    # ----------------------------------------------------------
+
+    K.problems === nothing &&
+        error(
+            "solveEigenFields: use solveEigenModes for single-field problems."
+        )
+
+    K.problems == M.problems ||
+        error(
+            "solveEigenFields: K and M must have same block structure."
+        )
+
+    K.offsets == M.offsets ||
+        error(
+            "solveEigenFields: K and M must have same block offsets."
+        )
+
+    # ----------------------------------------------------------
+    # 2) Prepare full/reduced eigenproblem
+    # ----------------------------------------------------------
+
+    K0, M0, T, free_r =
+        reduced_system_matrices(
+            K,
+            M,
+            support
+        )
+
+    # ----------------------------------------------------------
+    # 3) Eigen solve
+    # ----------------------------------------------------------
+
+    ω2min = (2π * fmin)^2
+
+    λ, ϕ0 = Arpack.eigs(
+        K0,
+        M0,
+        nev=n,
+        which=:LR,
+        sigma=ω2min,
+        maxiter=10000
+    )
+
+    f =
+        sqrt.(abs.(real(λ))) ./
+        (2π)
+
+    ϕ0 = real(ϕ0)
+
+    # ----------------------------------------------------------
+    # 4) Reconstruct full-space modes
+    # ----------------------------------------------------------
+
+    if T === nothing
+
+        # Full-order system with Dirichlet constraints
+
+        ndof = size(K.A, 1)
+
+        _, fixed, _ =
+            multifield_bc_data(
+                K,
+                support;
+                nsteps=1
+            )
+
+        free =
+            setdiff(1:ndof, fixed)
+
+        ϕ = zeros(
+            Float64,
+            ndof,
+            size(ϕ0, 2)
+        )
+
+        ϕ[free, :] .= ϕ0
+
+    else
+
+        nr = size(T, 2)
+
+        ϕr = zeros(
+            Float64,
+            nr,
+            size(ϕ0, 2)
+        )
+
+        ϕr[free_r, :] .= ϕ0
+
+        ϕ = T * ϕr
+    end
+
+    # ----------------------------------------------------------
+    # 5) Pack global Eigen
+    # ----------------------------------------------------------
+
+    eig_global =
+        Eigen(
+            f,
+            ϕ,
+            nothing,
+            K.problems,
+            K.offsets
+        )
+
+    # ----------------------------------------------------------
+    # 6) Split fields
+    # ----------------------------------------------------------
+
+    return splitEigenToEigen(eig_global)
+end
+#=
+function solveEigenFields(
+    K::SystemMatrix,
+    M::SystemMatrix;
     n = 6,
     fmin = 0.0
-)
+    )
 
     # ----------------------------------------------------------
     # 1) Check multifield
@@ -6612,6 +7468,7 @@ function solveEigenFields(
     # ----------------------------------------------------------
     return splitEigenToEigen(eig_global)
 end
+=#
 
 function splitEigenToEigen(eig::Eigen)
 

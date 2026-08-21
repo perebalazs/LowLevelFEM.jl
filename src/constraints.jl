@@ -1,4 +1,4 @@
-export reductionMatrices
+export reductionMatrices, reduced_bc_data
 
 """
     reductionMatrices(P::Problem)
