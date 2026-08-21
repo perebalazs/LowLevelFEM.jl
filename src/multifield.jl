@@ -3867,7 +3867,7 @@ function solveField(
     K::SystemMatrix,
     F::SystemVector;
     support::Vector{BoundaryCondition}=BoundaryCondition[]
-)
+    )
 
     # ----------------------------------------------------------
     # 1) Consistency checks
@@ -4170,6 +4170,110 @@ function solveField(
     preconditioner=Identity(),
     ordering=true
     )
+
+    K = Ks.parent
+    problem = K.model
+
+    # ------------------------------------------------------------------
+    # Full-order path
+    # ------------------------------------------------------------------
+
+    if !problem.reducedOrder
+
+        A = Symmetric(K.A, Ks.uplo)
+
+        fixed = constrainedDoFs(problem, support)
+        free = freeDoFs(problem, support)
+
+        u = copy(f)
+        fill!(u.a, 0.0)
+
+        applyBoundaryConditions!(u, support)
+
+        f_kin = A[:, fixed] * u.a[fixed, 1]
+
+        A_ff = Symmetric(K.A[free, free], Ks.uplo)
+        b_f = f.a[free, 1] - f_kin[free]
+
+        if iterative
+            u.a[free] = cg(
+                A_ff,
+                b_f;
+                Pl=preconditioner,
+                reltol=reltol,
+                maxiter=maxiter
+            )
+        else
+            u.a[free] = A_ff \ b_f
+        end
+
+        return u
+    end
+
+    # ------------------------------------------------------------------
+    # Reduced-order path
+    # ------------------------------------------------------------------
+
+    T, R = reductionMatrices(problem)
+
+    fixed = constrainedDoFs(problem, support)
+
+    uD = copy(f)
+    fill!(uD.a, 0.0)
+    applyBoundaryConditions!(uD, support)
+
+    free_r, fixed_r, uD_r =
+        reduced_bc_data(
+            R,
+            fixed,
+            uD.a[:, 1]
+        )
+
+    # Reduced symmetric system
+    Kr = T' * K.A * T
+    Ar = Symmetric(Kr, Ks.uplo)
+
+    fr = T' * f.a[:, 1]
+
+    ur = zeros(Float64, size(T, 2))
+
+    if !isempty(fixed_r)
+        ur[fixed_r] .= uD_r[fixed_r]
+
+        fr .-= Ar[:, fixed_r] * ur[fixed_r]
+    end
+
+    A_ff = Symmetric(Kr[free_r, free_r], Ks.uplo)
+    b_f = fr[free_r]
+
+    if iterative
+        ur[free_r] = cg(
+            A_ff,
+            b_f;
+            Pl=preconditioner,
+            reltol=reltol,
+            maxiter=maxiter
+        )
+    else
+        ur[free_r] = A_ff \ b_f
+    end
+
+    u = copy(f)
+    u.a[:, 1] .= T * ur
+
+    return u
+end
+#=
+function solveField(
+    Ks::SymmetricSystemMatrix,
+    f::Union{ScalarField,VectorField,TensorField};
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    iterative=false,
+    reltol::Real=sqrt(eps()),
+    maxiter::Int=Ks.parent.model.non * Ks.parent.model.dim,
+    preconditioner=Identity(),
+    ordering=true
+    )
     K = Ks.parent
     A = Symmetric(K.A, Ks.uplo)
 
@@ -4201,6 +4305,7 @@ function solveField(
 
     return u
 end
+=#
 
 """
     _reconstruct_fields(x, problems, offsets)

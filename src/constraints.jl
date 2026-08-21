@@ -1,7 +1,7 @@
 export reductionMatrices, reduced_bc_data
 
 """
-    reductionMatrices(P::Problem)
+    reductionMatrices(P::Problem) -> T, R
 
 Construct sparse transformation matrices for reducing the polynomial order
 of a C0 Lagrange finite element field from order `p` to `p - 1`.
@@ -10,6 +10,7 @@ The returned matrices satisfy
 
     u_full = T * u_reduced
     u_reduced = R * u_full
+    K_reduced = T' * K * T
 
 for fields representable in the reduced space.
 
@@ -18,6 +19,14 @@ All element types belonging to the problem must have the same polynomial
 order. An error is thrown for first-order meshes.
 
 The matrices are expanded automatically according to `P.pdim`.
+
+## Example
+
+```julia
+
+T, R = reductionMatrices(problem)
+
+```
 """
 function reductionMatrices(P::Problem)
 
