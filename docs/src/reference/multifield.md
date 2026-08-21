@@ -756,4 +756,5 @@ build_csc_pattern
 ```@docs
 solveField
 solveEigenFields
+reductionMatrices
 ```

@@ -18,7 +18,7 @@ export probe
 export saveField, loadField, isSaved
 export ∂x, ∂y, ∂z, ∂t
 export structured_rect_mesh, structured_box_mesh, line_mesh, openGeometry
-export renumberNodes!
+export renumberNodes!, ndofs
 
 """
     Material(phName; kwargs...)
@@ -656,12 +656,6 @@ struct Transformation
     non::Int64
     dim::Int64
 end
-
-"""
-    ndofs(P::Problem)
-
-Return total number of dofs for a single-field problem.
-"""
 
 """
     ndofs(problem::Problem)

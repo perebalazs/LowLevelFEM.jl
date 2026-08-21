@@ -790,6 +790,56 @@ function build_B!(B::AbstractMatrix, ::TangentialGradOp,
 
     fill!(B, 0.0)
 
+    pdim = P.pdim
+    dim  = P.dim
+
+    if pdim == 1
+
+        # Scalar field:
+        # TangentialGrad(φ) = ∇φ ⋅ t
+        @inbounds for a in 1:numNodes
+            val = 0.0
+
+            for d in 1:dim
+                val += t[d] * ∂h[d, (k-1)*numNodes + a]
+            end
+
+            B[1, a] = val
+        end
+
+    elseif pdim == dim
+
+        # Vector field:
+        # TangentialGrad(u) = (∇u) ⋅ t
+        @inbounds for a in 1:numNodes
+
+            val = 0.0
+
+            for d in 1:dim
+                val += t[d] * ∂h[d, (k-1)*numNodes + a]
+            end
+
+            for c in 1:pdim
+                col = (a - 1)*pdim + c
+                B[c, col] = val
+            end
+        end
+
+    else
+
+        error(
+            "TangentialGradOp supports scalar fields or vector fields with pdim == dim."
+        )
+    end
+
+    return B
+end
+#=
+function build_B!(B::AbstractMatrix, ::TangentialGradOp,
+                  P::Problem, k::Int, h, ∂h, numNodes::Integer, t)
+
+    fill!(B, 0.0)
+
     pdim = P.pdim   # = dim
     dim  = P.dim
 
@@ -811,6 +861,7 @@ function build_B!(B::AbstractMatrix, ::TangentialGradOp,
 
     return B
 end
+=#
 
 function build_B!(B::AbstractMatrix, ::SurfaceGradOp,
     P::Problem, k::Int, h, ∂h, numNodes::Integer)
@@ -6201,7 +6252,7 @@ function FDM(
     n::Int,
     Δt::Float64;
     ϑ=0.5
-)
+    )
 
     all(isfinite, K.A.nzval) ||
         error("FDM: K contains non-finite entries.")
@@ -6865,7 +6916,7 @@ Return global constrained DOFs for single- or multi-field systems.
 function constrainedDoFs(
     K::SystemMatrix,
     support::Vector{BoundaryCondition}
-)
+    )
     if K.problems === nothing
         return constrainedDoFs(K.model, support)
     else
@@ -6883,7 +6934,7 @@ Return global free DOFs for single- or multi-field systems.
 function freeDoFs(
     K::SystemMatrix,
     support::Vector{BoundaryCondition}
-)
+    )
     if K.problems === nothing
         return freeDoFs(K.model, support)
     else
@@ -6918,7 +6969,7 @@ function reduced_system_matrices(
     K::SystemMatrix,
     C::SystemMatrix,
     support::Vector{BoundaryCondition}
-)
+    )
 
     size(K.A) == size(C.A) ||
         error("reduced_system_matrices: K and C must have the same size.")
@@ -7301,7 +7352,7 @@ end
 Solve eigenproblem for multifield system and return field-wise Eigen objects.
 
 Usage:
-    u_modes, p_modes = solveEigenFields(K, M)
+    u_modes, p_modes = solveEigenFields(K, M; support=[bc1, bc2])
 """
 function solveEigenFields(
     K::SystemMatrix,

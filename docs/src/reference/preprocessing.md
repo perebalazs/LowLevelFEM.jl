@@ -45,4 +45,5 @@ BoundaryCondition_to_LoadCondition
 constrainedDoFs
 freeDoFs
 allDoFs
+ndofs
 ```

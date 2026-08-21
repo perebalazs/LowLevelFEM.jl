@@ -50,7 +50,7 @@ export ∇
 end
 
 """
-    ∇_new(r::Union{ScalarField,VectorField,TensorField}; nabla=:grad)
+    ∇(r::Union{ScalarField,VectorField,TensorField}; nabla=:grad)
 
 Compute spatial derivatives at the element nodes and return an element-wise
 field. This experimental implementation retrieves the Jacobians of all

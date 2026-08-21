@@ -72,7 +72,7 @@ function _get_basis_cached(et::Int, nodeCoord::AbstractVector{<:Real}, numNodes:
 end
 
 """
-    ∇(r::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
+    ∇_old(r::Union{VectorField, ScalarField, TensorField}; nabla=:grad)
 
 Computes derivatives of `r`.
 - If `r` is a `ScalarField` and `nabla == :grad`, returns the gradient (a `VectorField`).
