@@ -387,9 +387,9 @@ materials. It serves as the central object for operator-based formulations.
 
 ## Field definition
 
-- `field::Symbol`  
+- `fieldName::Symbol`  
   Name of the unknown field (e.g. `:u`, `:T`, `:p`).
-- `rhs_field::Symbol`  
+- `rhsName::Symbol`  
   Name of the right-hand side field.
 - `reducedOrder::Bool`
 
@@ -494,7 +494,9 @@ struct Problem
         new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs, reducedOrder)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none,
         nameTopSurface=nothing, nameVolume=nothing, dim::Int=3,
-        field::Symbol=:unknown, rhs_field::Symbol=:rhs, reducedOrder::Bool=false)
+        fieldName::Symbol=:unknown, rhsName::Symbol=:rhs,
+        field::Symbol=fieldName, rhs_field::Symbol=rhsName,
+        reducedOrder::Bool=false)
         if type == :dummy
             return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field, reducedOrder)
         end
@@ -2373,9 +2375,15 @@ struct CoordinateSystem
 end
 
 """
-    BoundaryCondition
+    BoundaryCondition(phName::String; field=nothing, problem=field, kwargs...)
 
 General container type for prescribing boundary conditions in LowLevelFEM.
+
+- `phName` is a Gmsh physical group name.
+- `problem` optionally binds the load to a specific field (required for multi-field).
+- `field` alias for `problem`
+- `values` stores component-wise boundary condition data, such as `ux`, `uy`, `T`, `exx`, etc.,
+  as `Number`, `Function`, or `ScalarField`.
 
 `BoundaryCondition` unifies all Dirichlet- and Neumann-type boundary data
 (mechanical, thermal, elastic, convective, etc.) into a single, extensible
@@ -2474,7 +2482,7 @@ struct BoundaryCondition
     problem::Union{Problem,Nothing}
     values::Dict{Symbol,Union{Number,Function,ScalarField}}
 
-    function BoundaryCondition(phName::String; problem=nothing, kwargs...)
+    function BoundaryCondition(phName::String; field=nothing, problem=field, kwargs...)
         vals = Dict{Symbol,Union{Number,Function,ScalarField}}()
         for (k, v) in kwargs
             if v === nothing
@@ -2565,12 +2573,13 @@ end
 =#
 
 """
-    LoadCondition(phName; problem=nothing, kwargs...)
+    LoadCondition(phName; field=nothing, problem=field, kwargs...)
 
 Generic load specification for assembling right-hand side vectors.
 
 - `phName` is a Gmsh physical group name.
 - `problem` optionally binds the load to a specific field (required for multi-field).
+- `field` alias for `problem`
 - `values` stores component-wise load data, such as `fx`, `fy`, `q`, `σxx`, etc.,
   as `Number`, `Function`, or `ScalarField`.
 
@@ -2585,7 +2594,7 @@ struct LoadCondition
     function LoadCondition(name, prob, vals)
         return new(name, prob, vals)        
     end
-    function LoadCondition(phName::String; problem=nothing, kwargs...)
+    function LoadCondition(phName::String; field=nothing, problem=field, kwargs...)
         vals = Dict{Symbol,Union{Number,Function,ScalarField,Nothing}}()
         for (k, v) in kwargs
             v = v isa ScalarField ? elementsToNodes(v) : v
