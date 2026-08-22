@@ -12,7 +12,7 @@ Point(3) = {1000, 1000, 0, 1.0};
 //+
 Line(2) = {2, 3};
 //+
-MeshSize {:} = 100;
+MeshSize {:} = 1;
 Mesh.ElementOrder=2;
 Mesh 1;
 //+
