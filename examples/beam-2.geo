@@ -23,7 +23,7 @@ Point(6) = {400, 0, 0, 1.0};
 Circle(4) = {4, 5, 6};
 //+
 MeshSize {:} = 10;
-Mesh.ElementOrder=2;
+Mesh.ElementOrder=4;
 Mesh 1;
 //+
 Physical Curve("beam", 5) = {1, 2, 3, 4};
@@ -32,7 +32,7 @@ Physical Point("A", 6) = {1};
 //+
 Physical Point("C", 7) = {6};
 //+
-Physical Point("B1", 8) = {2};
+Physical Point("B", 8) = {2};
 //+
 Physical Point("B2", 9) = {3};
 //+

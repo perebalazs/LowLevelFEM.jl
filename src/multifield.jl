@@ -2547,7 +2547,8 @@ Supported types
     ScalarField
     Matrix{Number}
     Matrix{ScalarField}
-    Vector{Matrix}
+    coefficient chain containing matrices and scalar factors
+        (Number or ScalarField)
 
 The vector form represents a matrix chain
 
@@ -2699,6 +2700,67 @@ function assemble_operator(
             end
         
         elseif coefficient isa AbstractVector
+
+            isempty(coefficient) &&
+                error("Coefficient chain must not be empty.")
+
+            # Every factor must be either a scalar coefficient or a matrix.
+            for C in coefficient
+                (
+                    C isa Number ||
+                    C isa ScalarField ||
+                    C isa AbstractMatrix
+                ) ||
+                error(
+                    "Coefficient chain entries must be Number, ScalarField " *
+                    "or AbstractMatrix, got $(typeof(C)).")
+            end
+
+            # Scalar factors do not change dimensions.
+            matrices = [C for C in coefficient if C isa AbstractMatrix]
+
+            if isempty(matrices)
+
+                # Pure scalar chain:
+                #   B_s' * c1 * c2 * ... * B_u
+                out_s == out_u ||
+                    error(
+                        "Scalar coefficient chain requires equal test and trial " *
+                        "operator dimensions: $out_s != $out_u."
+                    )
+
+            else
+
+                A1 = first(matrices)
+                An = last(matrices)
+
+                size(A1, 1) == out_s ||
+                    error(
+                        "Coefficient chain size mismatch: first matrix has " *
+                        "$(size(A1,1)) rows, expected $out_s."
+                    )
+
+                size(An, 2) == out_u ||
+                    error(
+                        "Coefficient chain size mismatch: last matrix has " *
+                        "$(size(An,2)) columns, expected $out_u."
+                    )
+
+                # Scalar factors between matrices do not affect compatibility.
+                for i in 1:length(matrices)-1
+                    Ai = matrices[i]
+                    Aj = matrices[i+1]
+
+                    size(Ai, 2) == size(Aj, 1) ||
+                        error(
+                            "Coefficient chain matrix size mismatch: " *
+                            "$(size(Ai)) cannot be multiplied by $(size(Aj))."
+                        )
+                end
+            end
+        end
+#=
+        elseif coefficient isa AbstractVector
             if length(coefficient) == 1 &&
                (coefficient[1] isa Number || coefficient[1] isa ScalarField)
         
@@ -2746,6 +2808,7 @@ function assemble_operator(
                 end
             end
         end
+        =#
    
         # ------------------------------------------------------------
         # weight dimension check
@@ -3897,44 +3960,28 @@ function solveField(
     # 2) Collect global constrained DOFs
     # ----------------------------------------------------------
 
-    fixed = Int[]
-
-    for bc in support
-        P = bc.problem
-
-        idx = findfirst(q -> q === P, problems)
-
-        idx === nothing &&
-            error("solveField: BC refers to Problem not in system.")
-
-        offset = offsets[idx]
-        local_dofs = constrainedDoFs(P, [bc])
-
-        append!(fixed, offset .+ local_dofs)
-    end
-
-    unique!(fixed)
-    sort!(fixed)
-
-    free = setdiff(1:ndof, fixed)
+    #free = setdiff(1:ndof, fixed)
+    free, fixed, xDmat =
+    multifield_bc_data(K, support; nsteps=1)
 
     # ----------------------------------------------------------
     # 3) Prescribed values in the full space
     # ----------------------------------------------------------
 
-    xD = zeros(Float64, ndof)
+    #xD = zeros(Float64, ndof)
+    xD = @view xDmat[:, 1]
 
-    for bc in support
-        P = bc.problem
+    #for bc in support
+    #    P = bc.problem
 
-        idx = findfirst(q -> q === P, problems)
-        offset = offsets[idx]
+    #    idx = findfirst(q -> q === P, problems)
+    #    offset = offsets[idx]
 
-        x_local = applyBoundaryConditions(P, [bc])
-        local_dofs = constrainedDoFs(P, [bc])
+    #    x_local = applyBoundaryConditions(P, [bc])
+    #    local_dofs = constrainedDoFs(P, [bc])
 
-        xD[offset .+ local_dofs] .= x_local.a[local_dofs, 1]
-    end
+    #    xD[offset .+ local_dofs] .= x_local.a[local_dofs, 1]
+    #end
 
     # ----------------------------------------------------------
     # 4) Standard full-order solution
@@ -3978,12 +4025,16 @@ function solveField(
         if P.reducedOrder
             Tblocks[i], Rblocks[i] = reductionMatrices(P)
         else
-            n = ndofs(P)
+            #n = ndofs(P)
 
-            I = spdiagm(0 => ones(Float64, n))
+            #I = spdiagm(0 => ones(Float64, n))
 
-            Tblocks[i] = I
-            Rblocks[i] = I
+            #Tblocks[i] = I
+            #Rblocks[i] = I
+            Tp, Rp = active_identity(P)
+
+            Tblocks[i] = Tp
+            Rblocks[i] = Rp
         end
     end
 
@@ -6292,11 +6343,21 @@ function multifield_bc_data(
     fixed = unique(fixed)
     sort!(fixed)
 
-    free = setdiff(collect(1:ndof), fixed)
+    #free = setdiff(collect(1:ndof), fixed)
+    active = Int[]
+
+    for (i, P) in enumerate(problems)
+        off = offsets[i]
+        append!(active, off .+ allDoFs(P))
+    end
+
+    sort!(active)
+    unique!(active)
+
+    free = setdiff(active, fixed)
 
     return free, fixed, xD
 end
-
 
 """
     multifield_constrainedDoFs(K::SystemMatrix,
@@ -6784,10 +6845,14 @@ function FDM(
 
         else
 
-            Ip = spdiagm(0 => ones(Float64, ndofs(P)))
+            #Ip = spdiagm(0 => ones(Float64, ndofs(P)))
 
-            push!(Tblocks, Ip)
-            push!(Rblocks, Ip)
+            #push!(Tblocks, Ip)
+            #push!(Rblocks, Ip)
+            Tp, Rp = active_identity(P)
+
+            push!(Tblocks, Tp)
+            push!(Rblocks, Rp)
         end
     end
 
@@ -7308,7 +7373,8 @@ function reduced_system_matrices(
 
     if !any(P.reducedOrder for P in problems)
 
-        free = setdiff(1:size(K.A, 1), fixed)
+        #free = setdiff(1:size(K.A, 1), fixed)
+        free, _, _ = multifield_bc_data(K, support; nsteps=1)
 
         return (
             K.A[free, free],
@@ -7335,10 +7401,14 @@ function reduced_system_matrices(
 
         else
 
-            I = spdiagm(0 => ones(Float64, ndofs(P)))
+            #I = spdiagm(0 => ones(Float64, ndofs(P)))
 
-            push!(Tblocks, I)
-            push!(Rblocks, I)
+            #push!(Tblocks, I)
+            #push!(Rblocks, I)
+            Tp, Rp = active_identity(P)
+
+            push!(Tblocks, Tp)
+            push!(Rblocks, Rp)
         end
     end
 
@@ -7362,6 +7432,31 @@ function reduced_system_matrices(
         T,
         free_r
     )
+end
+
+function active_identity(P::Problem)
+
+    active = allDoFs(P)
+
+    n = ndofs(P)
+
+    I = sparse(
+        active,
+        1:length(active),
+        ones(Float64, length(active)),
+        n,
+        length(active)
+    )
+
+    R = sparse(
+        1:length(active),
+        active,
+        ones(Float64, length(active)),
+        length(active),
+        n
+    )
+
+    return I, R
 end
 
 """
@@ -7702,8 +7797,8 @@ function solveEigenFields(
                 nsteps=1
             )
 
-        free =
-            setdiff(1:ndof, fixed)
+        #free = setdiff(1:ndof, fixed)
+        free, fixed, _ = multifield_bc_data(K, support; nsteps=1)
 
         ϕ = zeros(
             Float64,

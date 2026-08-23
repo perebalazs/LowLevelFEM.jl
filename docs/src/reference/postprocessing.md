@@ -24,6 +24,7 @@ showElementResults
 showHeatFluxResults
 showOnSurface
 plotOnPath
+plotOnBeam
 ```
 
 ## Probing and UI

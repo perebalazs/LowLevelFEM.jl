@@ -1562,6 +1562,116 @@ struct VectorField <: AbstractField
     function VectorField(A0, a0, t0, numElem0, nsteps0, type0, model)
         return new(A0, a0, t0, numElem0, nsteps0, type0, model)
     end
+    function VectorField(comps::AbstractVector)
+
+        length(comps) == 3 ||
+            error("VectorField must have exactly 3 components.")
+
+        all(c -> c isa ScalarField || c isa Number, comps) ||
+            error(
+                "VectorField components must be ScalarField or Number."
+            )
+
+        # At least one ScalarField is required to determine the model,
+        # element support and time discretization.
+        iref = findfirst(c -> c isa ScalarField, comps)
+
+        iref === nothing &&
+            error(
+                "VectorField: at least one component must be a ScalarField " *
+                "when using VectorField([c1, c2, c3])."
+            )
+
+        ref = nodesToElements(comps[iref])
+
+        prob = ref.model
+        elems = ref.numElem
+        nsteps = ref.nsteps
+        t = ref.t
+
+        comps1 = Vector{ScalarField}(undef, 3)
+
+        for i in 1:3
+
+            c = comps[i]
+
+            if c isa ScalarField
+
+                s = nodesToElements(c)
+
+                s.model === prob ||
+                    error(
+                        "VectorField: all ScalarField components must belong " *
+                        "to the same Problem."
+                    )
+
+                s.numElem == elems ||
+                    error(
+                        "VectorField: ScalarField element numbering mismatch."
+                    )
+
+                s.nsteps == nsteps ||
+                    error(
+                        "VectorField: ScalarField time-step mismatch."
+                    )
+
+                comps1[i] = s
+
+            else
+                # Constant component with the same element support and
+                # time discretization as the reference ScalarField.
+                A = Vector{Matrix{Float64}}(undef, length(elems))
+
+                for e in eachindex(elems)
+                    A[e] = fill(
+                        Float64(c),
+                        size(ref.A[e], 1),
+                        nsteps
+                    )
+                end
+
+                comps1[i] = ScalarField(
+                    A,
+                    [;;],
+                    copy(t),
+                    copy(elems),
+                    nsteps,
+                    :scalar,
+                    prob
+                )
+            end
+        end
+
+        # Assemble interleaved vector components.
+        A = Vector{Matrix{Float64}}(undef, length(elems))
+
+        for e in eachindex(elems)
+
+            numNodes = size(comps1[1].A[e], 1)
+
+            block = zeros(
+                3 * numNodes,
+                nsteps
+            )
+
+            for c in 1:3
+                block[c:3:end, :] .= comps1[c].A[e]
+            end
+
+            A[e] = block
+        end
+
+        return VectorField(
+            A,
+            [;;],
+            copy(t),
+            copy(elems),
+            nsteps,
+            :v3D,
+            prob
+        )
+    end
+#= cab be deleted if the previous constructor is working
     function VectorField(comps::Vector{ScalarField})
         s1 = nodesToElements(comps[1])
         s2 = nodesToElements(comps[2])
@@ -1605,6 +1715,7 @@ struct VectorField <: AbstractField
         a = [;;]
         return new(copy(ε0), a, comps1[1].t, elems, comps1[1].nsteps, :v3D, prob)
     end
+=#
     function VectorField(problem::Problem, dataField)
         if !isa(dataField, Vector)
             error("VectorField: dataField are not arranged in a vector. Put them in [...]")
@@ -9633,14 +9744,14 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
 end
 
 """
-    openGeometry(name::String)
+    openGeometry(name::String; verbose::Int=0)
 
 Open a geometry or mesh file in the current Gmsh session.
 
 If Gmsh is not yet initialized, the function calls `gmsh.initialize()`.
 If the file `name` does not exist and has extension `.geo`, a new geometry
 file is created and initialized with a minimal header. Otherwise an error
-is thrown.
+is thrown. `verbose` sets the verbosity level of Gmsh.
 
 Before opening the file the current Gmsh model is cleared with `gmsh.clear()`,
 so any previously loaded geometry or mesh is removed.
@@ -9664,11 +9775,13 @@ openGeometry("beam.geo")     # create if missing and open
 openGeometry("mesh.msh")     # open existing mesh
 ```
 """
-function openGeometry(name::String)
+function openGeometry(name::String; verbose::Int=0)
 
     if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
+    
+    gmsh.option.setNumber("General.Verbosity", verbose)
 
     if !isfile(name)
         ext = lowercase(splitext(name)[2])

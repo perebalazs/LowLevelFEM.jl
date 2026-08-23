@@ -1,6 +1,6 @@
 //+
 SetFactory("OpenCASCADE");
-Rectangle(1) = {0, 0, 0, 1, 1, 0};
+Rectangle(1) = {1, 0, 0, 1, 1, 0};
 //+
 Physical Surface("body", 5) = {1};
 //+
