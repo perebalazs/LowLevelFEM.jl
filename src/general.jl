@@ -12,7 +12,7 @@ export fieldError, resultant, integrate, ∫, normalVector, tangentVector
 export rotateNodes, CoordinateSystem
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
-export plotOnPath, showOnSurface
+export plotOnPath, showOnSurface, plotOnBeam
 export openPreProcessor, openPostProcessor, setParameter, setParameters, getParameter
 export probe
 export saveField, loadField, isSaved
@@ -8299,7 +8299,7 @@ function plotOnPath(pathName, field; points=100, step=nothing, plot=false, name=
             for j in 1:length(stepRange)
                 v = 0
                 val, dis = gmsh.view.probe(field, pt1[1]+offsetX, pt1[2]+offsetY, pt1[3]+offsetZ, stepRange[j] - 1, -1, false, -1)
-                if dis < 1e-5
+                #if dis < 1e-5
                     if numComponents == 1
                         v = val[1]
                     elseif numComponents == 3
@@ -8309,9 +8309,9 @@ function plotOnPath(pathName, field; points=100, step=nothing, plot=false, name=
                     else
                         error("Vagy skalár vagy vektor vagy tenzor...")
                     end
-                else
-                    v = 0
-                end
+                #else
+                #    v = 0
+                #end
                 cv[3+j] = v
             end
             append!(CoordValue, cv)
@@ -8460,6 +8460,643 @@ function showOnSurface(field::ScalarField, phName::String; name=phName)
     s = nodesToElements(s, onPhysicalGroup=phName)
     view = showElementResults(s, name=name)
     return view
+end
+
+"""
+    plotOnBeam(
+        phName::String,
+        s::ScalarField;
+        step=nothing,
+        plot=false,
+        name="field on \$phName",
+        visible=false,
+        reverse=false
+    )
+
+Create a diagram of a scalar field along a one-dimensional finite element path.
+
+The physical group `phName` must define a single connected, non-branching,
+open chain of 1D finite elements. The element order is reconstructed from the
+mesh topology, independently of the order in which Gmsh returns the elements.
+
+The horizontal coordinate of the graph is the cumulative length of the
+discretized beam path.
+
+Both nodal and elementwise `ScalarField` representations are supported.
+For elementwise fields, common element-end nodes are repeated in the graph,
+so discontinuities between adjacent elements are preserved.
+
+If the field contains multiple time steps and `step=nothing`, all time steps
+are added to the Gmsh view and can be animated. If `step` is specified, it is
+interpreted as a zero-based time-step index, consistently with `plotOnPath`.
+
+With `reverse=true`, traversal starts from the opposite end of the beam path.
+
+# Arguments
+
+- `phName`: name of a 1D Gmsh physical group defining the beam path.
+- `s`: scalar field to plot.
+
+# Keyword arguments
+
+- `step=nothing`: plot all time steps, or select one zero-based time-step index.
+- `plot=false`: if `true`, also return `(x, y)` data for the selected or first step.
+- `name="field on \$phName"`: name of the generated Gmsh view.
+- `visible=false`: initial visibility of the generated Gmsh view.
+- `reverse=false`: reverse the traversal direction.
+
+# Returns
+
+If `plot=false`:
+
+    beamView
+
+If `plot=true`:
+
+    beamView, (x, y)
+
+where `x` is the cumulative beam length and `y` contains the values of the
+selected time step, or the first time step if all steps are shown.
+
+# Notes
+
+The physical group must contain exactly one open path. Branching, disconnected
+paths and closed loops are rejected because they do not define a unique beam
+coordinate.
+"""
+function plotOnBeam(
+    phName::String,
+    s::ScalarField;
+    step=nothing,
+    plot=false,
+    name="field on $phName",
+    visible=false,
+    reverse=false
+    )
+
+    problem = s.model
+    gmsh.model.setCurrent(problem.name)
+
+    # ------------------------------------------------------------------
+    # 1) Get the 1D physical group
+    # ------------------------------------------------------------------
+
+    dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+    isempty(dimTags) &&
+        error("plotOnBeam: physical group \"$phName\" does not exist.")
+
+    for (dim, _) in dimTags
+        dim == 1 ||
+            error(
+                "plotOnBeam: physical group \"$phName\" must contain " *
+                "only one-dimensional entities."
+            )
+    end
+
+    # ------------------------------------------------------------------
+    # 2) Collect all finite elements of the physical group
+    # ------------------------------------------------------------------
+
+    elementTags  = Int[]
+    elementTypes = Int[]
+    elementNodes = Vector{Vector{Int}}()
+
+    endNode1 = Int[]
+    endNode2 = Int[]
+
+    seenElements = Set{Int}()
+
+    for (_, entityTag) in dimTags
+
+        elemTypes, elemTags, elemNodeTags =
+            gmsh.model.mesh.getElements(1, entityTag)
+
+        for itype in eachindex(elemTypes)
+
+            et = Int(elemTypes[itype])
+
+            _, edim, _, numNodes, _, numPrimaryNodes =
+                gmsh.model.mesh.getElementProperties(et)
+
+            edim == 1 ||
+                error(
+                    "plotOnBeam: element type $et is not one-dimensional."
+                )
+
+            numPrimaryNodes >= 2 ||
+                error(
+                    "plotOnBeam: element type $et has fewer than two " *
+                    "primary nodes."
+                )
+
+            tags = elemTags[itype]
+            conn = elemNodeTags[itype]
+
+            length(conn) == length(tags) * numNodes ||
+                error(
+                    "plotOnBeam: inconsistent Gmsh connectivity for " *
+                    "element type $et."
+                )
+
+            for ie in eachindex(tags)
+
+                elem = Int(tags[ie])
+
+                # Avoid accidental duplication if entities overlap.
+                elem in seenElements && continue
+                push!(seenElements, elem)
+
+                first = (ie - 1) * numNodes + 1
+
+                nodes = Int.(
+                    conn[first:first + numNodes - 1]
+                )
+
+                push!(elementTags, elem)
+                push!(elementTypes, et)
+                push!(elementNodes, nodes)
+
+                # For Gmsh Lagrange line elements the first two primary
+                # nodes are the two element endpoints.
+                push!(endNode1, nodes[1])
+                push!(endNode2, nodes[2])
+            end
+        end
+    end
+
+    nelem = length(elementTags)
+
+    nelem > 0 ||
+        error(
+            "plotOnBeam: physical group \"$phName\" contains no 1D mesh elements."
+        )
+
+    # ------------------------------------------------------------------
+    # 3) Build endpoint topology
+    # ------------------------------------------------------------------
+
+    adjacency = Dict{Int,Vector{Int}}()
+
+    for ie in 1:nelem
+
+        n1 = endNode1[ie]
+        n2 = endNode2[ie]
+
+        push!(get!(adjacency, n1, Int[]), ie)
+        push!(get!(adjacency, n2, Int[]), ie)
+    end
+
+    # A beam path cannot contain branching nodes.
+    for (node, elems) in adjacency
+        if length(elems) > 2
+            error(
+                "plotOnBeam: physical group \"$phName\" contains a " *
+                "branching node (node $node is connected to " *
+                "$(length(elems)) beam elements)."
+            )
+        end
+    end
+
+    endNodes = sort([
+        node
+        for (node, elems) in adjacency
+        if length(elems) == 1
+    ])
+
+    if length(endNodes) == 0
+        error(
+            "plotOnBeam: physical group \"$phName\" forms a closed path. " *
+            "An open beam path with two endpoints is required."
+        )
+    elseif length(endNodes) != 2
+        error(
+            "plotOnBeam: physical group \"$phName\" does not form one " *
+            "connected open beam path. Found $(length(endNodes)) endpoints."
+        )
+    end
+
+    startNode =
+        reverse ? endNodes[2] : endNodes[1]
+
+    targetEnd =
+        reverse ? endNodes[1] : endNodes[2]
+
+    # ------------------------------------------------------------------
+    # 4) Traverse the beam graph
+    # ------------------------------------------------------------------
+
+    visited = falses(nelem)
+
+    orderedElements = Int[]
+    orderedStartNode = Int[]
+
+    currentNode = startNode
+
+    while true
+
+        candidates = Int[]
+
+        for ie in adjacency[currentNode]
+            !visited[ie] && push!(candidates, ie)
+        end
+
+        isempty(candidates) && break
+
+        length(candidates) == 1 ||
+            error(
+                "plotOnBeam: ambiguous traversal at node $currentNode."
+            )
+
+        ie = candidates[1]
+
+        push!(orderedElements, ie)
+        push!(orderedStartNode, currentNode)
+
+        visited[ie] = true
+
+        if endNode1[ie] == currentNode
+            currentNode = endNode2[ie]
+        elseif endNode2[ie] == currentNode
+            currentNode = endNode1[ie]
+        else
+            error("plotOnBeam: internal topology error.")
+        end
+    end
+
+    all(visited) ||
+        error(
+            "plotOnBeam: physical group \"$phName\" contains disconnected " *
+            "beam segments."
+        )
+
+    currentNode == targetEnd ||
+        error(
+            "plotOnBeam: beam traversal did not terminate at the expected endpoint."
+        )
+
+    # ------------------------------------------------------------------
+    # 5) Select time steps
+    # ------------------------------------------------------------------
+
+    s.nsteps >= 1 ||
+        error("plotOnBeam: ScalarField contains no time steps.")
+
+    stepRange = Int[]
+
+    if step === nothing
+
+        stepRange = collect(1:s.nsteps)
+
+    else
+
+        step isa Integer ||
+            error("plotOnBeam: step must be an integer or nothing.")
+
+        step >= 0 ||
+            error("plotOnBeam: step must be non-negative.")
+
+        if step >= s.nsteps
+
+            @warn(
+                "plotOnBeam: step is greater than max. number of steps " *
+                "(max. number is chosen) $step <==> $(s.nsteps - 1)!"
+            )
+
+            stepRange = [s.nsteps]
+
+        else
+
+            # User-facing step numbering follows Gmsh: 0,1,2,...
+            stepRange = [Int(step) + 1]
+        end
+    end
+
+    nplotsteps = length(stepRange)
+
+    # ------------------------------------------------------------------
+    # 6) Global node coordinates
+    # ------------------------------------------------------------------
+
+    nodeTags, coordinates, _ =
+        gmsh.model.mesh.getNodes()
+
+    coord = Dict{Int,NTuple{3,Float64}}()
+    sizehint!(coord, length(nodeTags))
+
+    for (i, tag0) in enumerate(nodeTags)
+
+        tag = Int(tag0)
+
+        coord[tag] = (
+            Float64(coordinates[3i - 2]),
+            Float64(coordinates[3i - 1]),
+            Float64(coordinates[3i])
+        )
+    end
+
+    # ------------------------------------------------------------------
+    # 7) Local node ordering for each Gmsh line element type
+    # ------------------------------------------------------------------
+
+    localPermutation =
+        Dict{Int,Vector{Int}}()
+
+    function get_local_permutation(et::Int, numNodes::Int)
+
+        return get!(localPermutation, et) do
+
+            _, edim, _, nnode, localNodeCoord, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            edim == 1 ||
+                error("plotOnBeam: expected a 1D element.")
+
+            nnode == numNodes ||
+                error(
+                    "plotOnBeam: inconsistent number of nodes for element type $et."
+                )
+
+            stride, rem =
+                divrem(length(localNodeCoord), numNodes)
+
+            rem == 0 && stride >= 1 ||
+                error(
+                    "plotOnBeam: cannot interpret local coordinates " *
+                    "of element type $et."
+                )
+
+            ξ = Vector{Float64}(undef, numNodes)
+
+            for a in 1:numNodes
+                ξ[a] =
+                    localNodeCoord[(a - 1) * stride + 1]
+            end
+
+            sortperm(ξ)
+        end
+    end
+
+    # ------------------------------------------------------------------
+    # 8) Field lookup
+    # ------------------------------------------------------------------
+
+    elementFieldIndex = Dict{Int,Int}()
+
+    if isElementwise(s)
+
+        sizehint!(elementFieldIndex, length(s.numElem))
+
+        for (i, elem) in enumerate(s.numElem)
+            elementFieldIndex[Int(elem)] = i
+        end
+
+    elseif !isNodal(s)
+
+        error(
+            "plotOnBeam: ScalarField is neither nodal nor elementwise."
+        )
+    end
+
+    # ------------------------------------------------------------------
+    # 9) Build ordered graph points
+    # ------------------------------------------------------------------
+
+    pointCoordinates =
+        NTuple{3,Float64}[]
+
+    pointValues =
+        Vector{Vector{Float64}}()
+
+    for (ipath, ie) in enumerate(orderedElements)
+
+        elem = elementTags[ie]
+        et = elementTypes[ie]
+        nodes = elementNodes[ie]
+
+        numNodes = length(nodes)
+
+        perm =
+            copy(get_local_permutation(et, numNodes))
+
+        firstNode = orderedStartNode[ipath]
+
+        # Orient the local element node sequence consistently with
+        # the global beam traversal.
+        if nodes[perm[1]] == firstNode
+
+            # already correctly oriented
+
+        elseif nodes[perm[end]] == firstNode
+
+            reverse!(perm)
+
+        else
+
+            error(
+                "plotOnBeam: could not orient element $elem along the beam path."
+            )
+        end
+
+        if isElementwise(s)
+
+            fieldIndex =
+                get(elementFieldIndex, elem, 0)
+
+            fieldIndex != 0 ||
+                error(
+                    "plotOnBeam: ScalarField contains no data for element $elem."
+                )
+
+            Ae = s.A[fieldIndex]
+
+            # Usually an elementwise ScalarField contains one value at
+            # each local element node. A single-row field is also
+            # accepted as a constant value over the element.
+            constantElement = size(Ae, 1) == 1
+
+            if !constantElement && size(Ae, 1) != numNodes
+                error(
+                    "plotOnBeam: field data for element $elem has " *
+                    "$(size(Ae,1)) rows, but the element has $numNodes nodes."
+                )
+            end
+
+            size(Ae, 2) >= maximum(stepRange) ||
+                error(
+                    "plotOnBeam: field data for element $elem contains " *
+                    "too few time steps."
+                )
+
+            # Keep both endpoints of every element. At a common node
+            # this intentionally creates two points at the same beam
+            # coordinate, preserving jumps in elementwise quantities.
+            for localIndex in perm
+
+                node = nodes[localIndex]
+
+                xyz =
+                    get(coord, node, nothing)
+
+                xyz === nothing &&
+                    error(
+                        "plotOnBeam: coordinates of node $node were not found."
+                    )
+
+                row =
+                    constantElement ? 1 : localIndex
+
+                values =
+                    Float64[
+                        Ae[row, it]
+                        for it in stepRange
+                    ]
+
+                push!(pointCoordinates, xyz)
+                push!(pointValues, values)
+            end
+
+        else
+
+            # Nodal quantities are continuous in the FE representation.
+            # Skip the first node of every element after the first one
+            # to avoid duplicating common endpoints.
+            firstLocal =
+                ipath == 1 ? 1 : 2
+
+            for q in firstLocal:length(perm)
+
+                localIndex = perm[q]
+                node = nodes[localIndex]
+
+                node <= size(s.a, 1) ||
+                    error(
+                        "plotOnBeam: nodal field does not contain node $node."
+                    )
+
+                xyz =
+                    get(coord, node, nothing)
+
+                xyz === nothing &&
+                    error(
+                        "plotOnBeam: coordinates of node $node were not found."
+                    )
+
+                values =
+                    Float64[
+                        s.a[node, it]
+                        for it in stepRange
+                    ]
+
+                push!(pointCoordinates, xyz)
+                push!(pointValues, values)
+            end
+        end
+    end
+
+    isempty(pointCoordinates) &&
+        error("plotOnBeam: no plot points were generated.")
+
+    # ------------------------------------------------------------------
+    # 10) Convert to Gmsh list-data representation
+    # ------------------------------------------------------------------
+
+    p0 = pointCoordinates[1]
+
+    CoordValue = Float64[]
+
+    recordLength = 3 + nplotsteps
+
+    sizehint!(
+        CoordValue,
+        recordLength * length(pointCoordinates)
+    )
+
+    for i in eachindex(pointCoordinates)
+
+        p = pointCoordinates[i]
+
+        push!(CoordValue, p[1] - p0[1])
+        push!(CoordValue, p[2] - p0[2])
+        push!(CoordValue, p[3] - p0[3])
+
+        append!(CoordValue, pointValues[i])
+    end
+
+    # ------------------------------------------------------------------
+    # 11) Create Gmsh graph view
+    # ------------------------------------------------------------------
+
+    beamView = gmsh.view.add(name)
+
+    gmsh.view.addListData(
+        beamView,
+        "SP",
+        length(pointCoordinates),
+        CoordValue
+    )
+
+    gmsh.view.option.setNumber(
+        beamView,
+        "Type",
+        2
+    )
+
+    gmsh.view.option.setNumber(
+        beamView,
+        "Axes",
+        1
+    )
+
+    gmsh.view.option.setNumber(
+        beamView,
+        "AdaptVisualizationGrid",
+        0
+    )
+
+    if !visible
+        gmsh.view.option.setNumber(
+            beamView,
+            "Visible",
+            0
+        )
+    end
+
+    # ------------------------------------------------------------------
+    # 12) Optional x-y data
+    # ------------------------------------------------------------------
+
+    if plot
+
+        np = length(pointCoordinates)
+
+        x = zeros(Float64, np)
+        y = zeros(Float64, np)
+
+        y[1] = pointValues[1][1]
+
+        for i in 2:np
+
+            p0i = pointCoordinates[i - 1]
+            p1i = pointCoordinates[i]
+
+            dx = p1i[1] - p0i[1]
+            dy = p1i[2] - p0i[2]
+            dz = p1i[3] - p0i[3]
+
+            x[i] =
+                x[i - 1] +
+                sqrt(dx^2 + dy^2 + dz^2)
+
+            y[i] = pointValues[i][1]
+        end
+
+        return beamView, (x, y)
+
+    else
+
+        return beamView
+    end
 end
 
 """
