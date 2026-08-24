@@ -3822,6 +3822,135 @@ function _energyMaterial(
     C::TensorField;
     params=NamedTuple(),
     stress::Bool=true,
+    tangent::Bool=true
+)
+    !stress && !tangent &&
+        error("_energyMaterial: stress or tangent must be true.")
+
+    problem = C.model
+    Ce = isElementwise(C) ? C : nodesToElements(C)
+
+    nsteps = Ce.nsteps
+    nelem = length(Ce.numElem)
+
+    # Parameter handling is specialized for constant and field-valued data.
+    pp = _prepare_energy_param_provider(params, Ce)
+
+    S_A = stress ?
+        Vector{Matrix{Float64}}(undef, nelem) :
+        nothing
+
+    D_A = tangent ?
+        [Vector{Matrix{Float64}}(undef, nelem) for _ in 1:6, _ in 1:6] :
+        nothing
+
+    @inbounds for eidx in 1:nelem
+
+        elem = Ce.numElem[eidx]
+        CAe = Ce.A[eidx]
+
+        nnloc = size(CAe, 1) ÷ 9
+
+        if stress
+            S_A[eidx] = zeros(9nnloc, nsteps)
+        end
+
+        if tangent
+            for i in 1:6, j in 1:6
+                D_A[i, j][eidx] = zeros(nnloc, nsteps)
+            end
+        end
+
+        SAe = stress ? S_A[eidx] : nothing
+
+        for it in 1:nsteps
+            for a in 1:nnloc
+
+                base = 9(a - 1)
+
+                Cmat = @SMatrix [
+                    CAe[base+1, it] CAe[base+4, it] CAe[base+7, it]
+                    CAe[base+2, it] CAe[base+5, it] CAe[base+8, it]
+                    CAe[base+3, it] CAe[base+6, it] CAe[base+9, it]
+                ]
+
+                p = _energy_params_at(pp, elem, a, it)
+
+                if stress
+                    Smat =
+                        LowLevelFEM.stress_from_energy(ψ, Cmat, p)
+
+                    SAe[base+1, it] = Smat[1, 1]
+                    SAe[base+2, it] = Smat[2, 1]
+                    SAe[base+3, it] = Smat[3, 1]
+                    SAe[base+4, it] = Smat[1, 2]
+                    SAe[base+5, it] = Smat[2, 2]
+                    SAe[base+6, it] = Smat[3, 2]
+                    SAe[base+7, it] = Smat[1, 3]
+                    SAe[base+8, it] = Smat[2, 3]
+                    SAe[base+9, it] = Smat[3, 3]
+                end
+
+                if tangent
+                    Dmat =
+                        LowLevelFEM.tangent_from_energy(ψ, Cmat, p)
+
+                    for j in 1:6
+                        for i in 1:6
+                            D_A[i, j][eidx][a, it] =
+                                Dmat[i, j]
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    S = if stress
+        TensorField(
+            S_A,
+            [;;],
+            Ce.t,
+            Ce.numElem,
+            nsteps,
+            :tensor,
+            problem
+        )
+    else
+        nothing
+    end
+
+    D = if tangent
+        DD = Matrix{ScalarField}(undef, 6, 6)
+
+        for j in 1:6
+            for i in 1:6
+                DD[i, j] = ScalarField(
+                    D_A[i, j],
+                    [;;],
+                    Ce.t,
+                    Ce.numElem,
+                    nsteps,
+                    :scalar,
+                    problem
+                )
+            end
+        end
+
+        DD
+    else
+        nothing
+    end
+
+    return (; S, D)
+end
+
+#=
+function _energyMaterial(
+    ψ,
+    C::TensorField;
+    params=NamedTuple(),
+    stress::Bool=true,
     tangent::Bool=true)
     !stress && !tangent && error("_energyMaterial: stress or tangent must be true.")
 
@@ -3905,6 +4034,40 @@ function _energyMaterial(
     end
 
     return (; S, D)
+end
+=#
+
+struct ConstantEnergyParams{P}
+    p::P
+end
+
+struct FieldEnergyParams{P}
+    p::P
+end
+
+@inline _energy_params_at(
+    p::ConstantEnergyParams,
+    elem,
+    a,
+    it
+) = p.p
+
+@inline _energy_params_at(
+    p::FieldEnergyParams,
+    elem,
+    a,
+    it
+) = _params_at_element_node(p.p, elem, a, it)
+
+@inline function _prepare_energy_param_provider(params, Ce)
+
+    if all(x -> x isa Number, values(params))
+        return ConstantEnergyParams(params)
+    end
+
+    return FieldEnergyParams(
+        _prepare_energy_params_elementwise(params, Ce)
+    )
 end
 
 """
