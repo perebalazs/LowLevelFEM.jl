@@ -9404,14 +9404,6 @@ Types:
 - `step`: Int
 """
 function probe(A::TensorField, x, y, z; step=1)
-    if isElementwise(A)
-        error(
-            "probe: elementwise TensorField is not supported because the " *
-            "field value may be ambiguous at element boundaries. " *
-            "Convert the field to nodal form with elementsToNodes first."
-        )
-    end
-
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
@@ -9430,13 +9422,6 @@ function probe(A::TensorField, x, y, z; step=1)
 end
 
 function probe(A::VectorField, x, y, z; step=1)
-    if isElementwise(A)
-        error(
-            "probe: elementwise VectorField is not supported because the " *
-            "field value may be ambiguous at element boundaries. " *
-            "Convert the field to nodal form with elementsToNodes first."
-        )
-    end
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
@@ -9465,13 +9450,6 @@ function probe(A::VectorField, x, y, z; step=1)
 end
 
 function probe(A::ScalarField, x, y, z; step=1)
-    if isElementwise(A)
-        error(
-            "probe: elementwise ScalarField is not supported because the " *
-            "field value may be ambiguous at element boundaries. " *
-            "Convert the field to nodal form with elementsToNodes first."
-        )
-    end
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
