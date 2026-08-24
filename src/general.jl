@@ -2173,6 +2173,103 @@ struct TensorField <: AbstractField
     #        error("TensorField: size of data is $(size(data)).")
     #    end
     #end
+    function TensorField(comps::AbstractMatrix)
+
+        size(comps) == (3, 3) ||
+            error("TensorField requires a 3×3 matrix.")
+
+        all(c -> c isa ScalarField || c isa Number, comps) ||
+            error("TensorField components must be ScalarField or Number.")
+
+        # At least one ScalarField is required to determine the mesh support.
+        iref = findfirst(c -> c isa ScalarField, comps)
+
+        iref === nothing &&
+            error(
+                "TensorField: at least one component must be a ScalarField " *
+                "when using TensorField(matrix)."
+            )
+
+        ref = nodesToElements(comps[iref])
+
+        prob    = ref.model
+        numElem = ref.numElem
+        nsteps  = ref.nsteps
+        t       = ref.t
+
+        comps2 = Matrix{ScalarField}(undef, 3, 3)
+
+        @inbounds for i in 1:3, j in 1:3
+
+            c = comps[i, j]
+
+            if c isa ScalarField
+
+                s = nodesToElements(c)
+
+                s.model === prob ||
+                    error("TensorField: ScalarFields must share the same Problem.")
+
+                s.numElem == numElem ||
+                    error("TensorField: element list mismatch.")
+
+                s.nsteps == nsteps ||
+                    error("TensorField: time step mismatch.")
+
+                comps2[i, j] = s
+
+            else
+                A = Vector{Matrix{Float64}}(undef, length(numElem))
+
+                for e in eachindex(numElem)
+                    A[e] = fill(
+                        Float64(c),
+                        size(ref.A[e], 1),
+                        nsteps
+                    )
+                end
+
+                comps2[i, j] = ScalarField(
+                    A,
+                    [;;],
+                    copy(t),
+                    copy(numElem),
+                    nsteps,
+                    :scalar,
+                    prob
+                )
+            end
+        end
+
+        A = Vector{Matrix{Float64}}(undef, length(numElem))
+
+        for e in eachindex(numElem)
+
+            numNodes = size(comps2[1, 1].A[e], 1)
+
+            block = zeros(
+                9 * numNodes,
+                nsteps
+            )
+
+            @inbounds for i in 1:3, j in 1:3
+                block[(j-1)*3+i:9:end, :] .= comps2[i, j].A[e]
+            end
+
+            A[e] = block
+        end
+
+        return TensorField(
+            A,
+            [;;],
+            copy(t),
+            copy(numElem),
+            nsteps,
+            :tensor,
+            prob
+        )
+    end
+    #=
     function TensorField(comps::Matrix{ScalarField})
         @assert size(comps) == (3,3) "TensorField requires a 3×3 matrix of ScalarFields."
    
@@ -2213,6 +2310,7 @@ struct TensorField <: AbstractField
         # --- 4) TensorField visszaadása ---
         return TensorField(A, [;;], t, numElem, nsteps, :tensor, prob)
     end
+    =#
 end
 
 """
@@ -9306,6 +9404,14 @@ Types:
 - `step`: Int
 """
 function probe(A::TensorField, x, y, z; step=1)
+    if isElementwise(A)
+        error(
+            "probe: elementwise TensorField is not supported because the " *
+            "field value may be ambiguous at element boundaries. " *
+            "Convert the field to nodal form with elementsToNodes first."
+        )
+    end
+
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
@@ -9324,6 +9430,13 @@ function probe(A::TensorField, x, y, z; step=1)
 end
 
 function probe(A::VectorField, x, y, z; step=1)
+    if isElementwise(A)
+        error(
+            "probe: elementwise VectorField is not supported because the " *
+            "field value may be ambiguous at element boundaries. " *
+            "Convert the field to nodal form with elementsToNodes first."
+        )
+    end
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
@@ -9352,6 +9465,13 @@ function probe(A::VectorField, x, y, z; step=1)
 end
 
 function probe(A::ScalarField, x, y, z; step=1)
+    if isElementwise(A)
+        error(
+            "probe: elementwise ScalarField is not supported because the " *
+            "field value may be ambiguous at element boundaries. " *
+            "Convert the field to nodal form with elementsToNodes first."
+        )
+    end
     elementTag, elementType, nodeTags, u, v, w = gmsh.model.mesh.getElementByCoordinates(x, y, z, -1, false)
     elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementType)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
