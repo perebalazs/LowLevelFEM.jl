@@ -338,6 +338,26 @@ function renumberNodes!(
     return renumberNodes!([material]; method=method)
 end
 
+function ensureContiguousNodeTags!()
+    nodeTags, _, _ = gmsh.model.mesh.getNodes()
+
+    isempty(nodeTags) &&
+        error("ensureContiguousNodeTags!: the current Gmsh model contains no nodes.")
+
+    n = length(nodeTags)
+
+    if minimum(nodeTags) != 1 || maximum(nodeTags) != n
+        oldTags = sort(nodeTags)
+        newTags = collect(1:n)
+
+        gmsh.model.mesh.renumberNodes(oldTags, newTags)
+
+        @info "Non-contiguous Gmsh node tags detected. Nodes were automatically renumbered to 1:$n."
+    end
+
+    return nothing
+end
+
 mutable struct Geometry
     nameGap::String
     nameVolume::String
@@ -583,6 +603,7 @@ struct Problem
             error("Problem: materials are not arranged in a vector. Put them in [...]")
         end
         name = gmsh.model.getCurrent()
+        ensureContiguousNodeTags!()
         gmsh.option.setString("General.GraphicsFontEngine", "Cairo")
         gmsh.option.setString("View.Format", "%.6g")
 
