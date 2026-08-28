@@ -14,6 +14,8 @@ It exposes each phase of the workflow as simple functions (mesh → matrices →
 Typical tasks such as strain energy or resultants are one-liners (for example, `U = q' * K * q / 2`).
 The package is suitable not only for classical structural mechanics problems, but also for rapid assembly of general linear PDEs expressed in weak form.
 
+“Low-level” here refers to direct access to finite element fields, operators, matrices, weak forms, and assembly results, rather than to explicit element-loop programming.
+
 ## Requirements
 
 - Julia 1.x

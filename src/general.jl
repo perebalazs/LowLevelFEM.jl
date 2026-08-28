@@ -1,6 +1,6 @@
 export Problem, Field, Material, getEigenVectors, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
-export LoadCondition
+export LoadCondition, MPC
 export temperatureConstraint, heatFlux, heatSource, heatConvection
 export field, scalarField, vectorField, tensorField, ScalarField, VectorField, TensorField
 export mergeFields
@@ -2908,6 +2908,157 @@ function _check_load_keys(problem::Problem, vals::Dict)
             error("loadVector: unknown load key '$sym'.")
         end
     end
+end
+
+struct MPC
+    master::String
+    slave::String
+    problem::Union{Problem,Nothing}
+    components::Dict{Symbol,Bool}
+
+    function MPC(;master::String, slave::String, field=nothing, problem=field, kwargs...)
+        comps = Dict{Symbol,Bool}()
+
+        for (k, v) in kwargs
+            v === nothing && continue
+            v isa Bool || error("MPC: component '$k' must be Bool.")
+            comps[k] = v
+        end
+
+        return new(master, slave, problem, comps)
+    end
+end
+
+function mpcRepresentativeMap(problem::Problem, mpcs::Vector{MPC})
+    ndof = problem.non * problem.pdim
+    rep = collect(1:ndof)
+
+    gmsh.model.setCurrent(problem.name)
+
+    comp_map = _bc_component_map(problem)
+    prefix = String(problem.field)
+
+    for mpc in mpcs
+
+        # Multifield filter
+        if mpc.problem !== nothing && mpc.problem !== problem
+            continue
+        end
+
+        masterTag = getTagForPhysicalName(mpc.master)
+        slaveTag  = getTagForPhysicalName(mpc.slave)
+
+        masterNodes, _ =
+            gmsh.model.mesh.getNodesForPhysicalGroup(-1, masterTag)
+
+        slaveNodes, _ =
+            gmsh.model.mesh.getNodesForPhysicalGroup(-1, slaveTag)
+
+        length(masterNodes) == 1 ||
+            error("MPC: master physical group '$(mpc.master)' must contain exactly one node.")
+
+        masterNode = Int(masterNodes[1])
+
+        # All components are tied by default.
+        active_components = trues(problem.pdim)
+
+        # Explicit keyword arguments override individual components.
+        for (sym, active) in mpc.components
+
+            s = String(sym)
+
+            startswith(s, prefix) ||
+                error("MPC: unknown component '$sym'.")
+
+            comp = s[length(prefix)+1:end]
+
+            haskey(comp_map, comp) ||
+                error(
+                    "MPC: invalid component '$comp' for field $(problem.field)."
+                )
+
+            active_components[comp_map[comp]] = active
+        end
+
+        components = findall(active_components)
+
+        for node in slaveNodes
+            slaveNode = Int(node)
+
+            slaveNode == masterNode && continue
+
+            for comp in components
+
+                masterDof =
+                    problem.pdim * (masterNode - 1) + comp
+
+                slaveDof =
+                    problem.pdim * (slaveNode - 1) + comp
+
+                rep[slaveDof] = masterDof
+            end
+        end
+    end
+
+    return rep
+end
+
+function mpcTransformation(rep::Vector{Int})
+
+    p = unique(rep)
+
+    representative_to_reduced = zeros(Int, length(rep))
+
+    for (j, dof) in enumerate(p)
+        representative_to_reduced[dof] = j
+    end
+
+    full_to_reduced =
+        [representative_to_reduced[rep[i]] for i in eachindex(rep)]
+
+    I = collect(eachindex(rep))
+    J = full_to_reduced
+    V = ones(Float64, length(rep))
+
+    T = sparse(I, J, V, length(rep), length(p))
+
+    return T, p, full_to_reduced
+end
+
+function mpcReducedBCData(full_to_reduced, fixed, uD)
+
+    nred = maximum(full_to_reduced)
+
+    fixed_r = Int[]
+    uD_r = zeros(Float64, nred)
+    assigned = falses(nred)
+
+    for i in fixed
+
+        j = full_to_reduced[i]
+        value = uD[i]
+
+        if assigned[j]
+
+            isapprox(uD_r[j], value) ||
+                error(
+                    "MPC: incompatible prescribed values on tied DOFs."
+                )
+
+        else
+
+            uD_r[j] = value
+            assigned[j] = true
+            push!(fixed_r, j)
+
+        end
+    end
+
+    sort!(unique!(fixed_r))
+
+    free_r = setdiff(1:nred, fixed_r)
+
+    return free_r, fixed_r, uD_r
 end
 
 using SparseArrays
@@ -9430,7 +9581,7 @@ function probe(A::TensorField, x, y, z; step=1)
     comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementType, [u, v, w], "Lagrange")
     SS = [0.0, 0, 0, 0, 0, 0, 0, 0, 0]
     if A.a == [;;]
-        ind = findfirst(i -> i == elementTag, A.numElem)
+        ind = _probe_element_index(A, elementTag)
         for i in range(1, 9)
             SS[i] = round(fun' * A.A[ind][i:9:9numNodes, step], digits=10)
         end
@@ -9458,7 +9609,7 @@ function probe(A::VectorField, x, y, z; step=1)
         error("probe: dimension cannot be determined.")
     end
     if A.a == [;;]
-        ind = findfirst(i -> i == elementTag, A.numElem)
+        ind = _probe_element_index(A, elementTag)
         for i in range(1, dim)
             SS[i] = round(fun' * A.A[ind][i:dim:dim*numNodes, step], digits=10)
         end
@@ -9477,13 +9628,26 @@ function probe(A::ScalarField, x, y, z; step=1)
     dim = 0
     SS = 0
     if A.a == [;;]
-        ind = findfirst(i -> i == elementTag, A.numElem)
+        ind = _probe_element_index(A, elementTag)
         SS = round(fun' * A.A[ind][1:numNodes, step], digits=10)
     elseif A.A == []
         SS = round(fun' * A.a[nodeTags, step], digits=10)
     end
     return SS
 end
+
+function _probe_element_index(A, elementTag)
+    ind = findfirst(==(elementTag), A.numElem)
+
+    ind === nothing && error(
+        "probe: no elementwise value is available at this point. " *
+        "The point may lie on a lower-dimensional boundary element. " *
+        "Convert the field to a nodal field with elementsToNodes(...) and try again."
+    )
+
+    return ind
+end
+
 
 """
     probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step=1)

@@ -1433,6 +1433,210 @@ function solveField(
     K::SystemMatrix,
     f::Union{ScalarField,VectorField,TensorField};
     support::Vector{BoundaryCondition}=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[],
+    iterative=false,
+    reltol::Real=sqrt(eps()),
+    maxiter::Int=K.model.non * K.model.dim,
+    preconditioner=Identity(),
+    ordering=true
+    )
+
+    problem = K.model
+
+    fixed = constrainedDoFs(problem, support)
+
+    u = copy(f)
+    fill!(u.a, 0.0)
+    applyBoundaryConditions!(u, support)
+
+    # ----------------------------------------------------------
+    # Standard full-order solution
+    # ----------------------------------------------------------
+    if !problem.reducedOrder
+
+        # ------------------------------------------------------
+        # Standard solution without MPC
+        # ------------------------------------------------------
+        if isempty(mpc)
+
+            free = freeDoFs(problem, support)
+
+            f_kin = K.A[:, fixed] * u.a[fixed, 1]
+
+            if iterative
+
+                u.a[free, 1] = cg(
+                    K.A[free, free],
+                    f.a[free, 1] - f_kin[free],
+                    Pl=preconditioner,
+                    reltol=reltol,
+                    maxiter=maxiter
+                )
+
+            elseif ordering == false
+
+                u.a[free, 1] =
+                    lu(K.A[free, free], q=nothing) \
+                    (f.a[free, 1] - f_kin[free])
+
+            else
+
+                u.a[free, 1] =
+                    K.A[free, free] \
+                    (f.a[free, 1] - f_kin[free])
+
+            end
+
+            return u
+        end
+
+        # ------------------------------------------------------
+        # Full-order solution with MPC
+        # ------------------------------------------------------
+
+        # Build master/slave representative map.
+        rep = mpcRepresentativeMap(problem, mpc)
+
+        # Kinematic transformation:
+        #
+        #     u = T * ur
+        #
+        T, _, full_to_reduced = mpcTransformation(rep)
+
+        # Galerkin projection:
+        #
+        #     Kr = T' * K * T
+        #     fr = T' * f
+        #
+        KT = K.A * T
+        Kr = T' * KT
+        fr = T' * @view(f.a[:, 1])
+
+        # Map prescribed values from full DOF space
+        # to MPC-reduced DOF space.
+        free_r, fixed_r, uD_r =
+            mpcReducedBCData(
+                full_to_reduced,
+                fixed,
+                @view(u.a[:, 1])
+            )
+
+        ur = zeros(Float64, size(T, 2))
+
+        # Prescribed values in reduced space.
+        if !isempty(fixed_r)
+
+            ur[fixed_r] .= uD_r[fixed_r]
+
+            fr .-= Kr[:, fixed_r] * ur[fixed_r]
+        end
+
+        # Solve MPC-reduced system.
+        if iterative
+
+            ur[free_r] = cg(
+                Kr[free_r, free_r],
+                fr[free_r],
+                Pl=preconditioner,
+                reltol=reltol,
+                maxiter=maxiter
+            )
+
+        elseif ordering == false
+
+            ur[free_r] =
+                lu(Kr[free_r, free_r], q=nothing) \
+                fr[free_r]
+
+        else
+
+            ur[free_r] =
+                Kr[free_r, free_r] \
+                fr[free_r]
+
+        end
+
+        # Prolongate back to the original full DOF space.
+        u.a[:, 1] .= T * ur
+
+        return u
+    end
+
+    # ----------------------------------------------------------
+    # Reduced-order solution
+    # ----------------------------------------------------------
+
+    # For the first implementation, keep MPC and H1/H2
+    # reduction as separate code paths.
+    if !isempty(mpc)
+        error(
+            "solveField: simultaneous reduced-order and MPC " *
+            "transformations are not yet supported."
+        )
+    end
+
+    T, R = reductionMatrices(problem)
+
+    # Full-space prescribed field -> reduced-space prescribed field.
+    free_r, fixed_r, uD_r =
+        reduced_bc_data(
+            R,
+            fixed,
+            @view(u.a[:, 1])
+        )
+
+    # Galerkin projection.
+    KT = K.A * T
+    Kr = T' * KT
+    fr = T' * @view(f.a[:, 1])
+
+    ur = zeros(Float64, size(T, 2))
+
+    # Reduced Dirichlet values.
+    if !isempty(fixed_r)
+
+        ur[fixed_r] .= uD_r[fixed_r]
+
+        fr .-= Kr[:, fixed_r] * ur[fixed_r]
+    end
+
+    # Solve reduced system.
+    if iterative
+
+        ur[free_r] = cg(
+            Kr[free_r, free_r],
+            fr[free_r],
+            Pl=preconditioner,
+            reltol=reltol,
+            maxiter=maxiter
+        )
+
+    elseif ordering == false
+
+        ur[free_r] =
+            lu(Kr[free_r, free_r], q=nothing) \
+            fr[free_r]
+
+    else
+
+        ur[free_r] =
+            Kr[free_r, free_r] \
+            fr[free_r]
+
+    end
+
+    # Prolongate back to the original full-space field.
+    u.a[:, 1] .= T * ur
+
+    return u
+end
+
+#=
+function solveField(
+    K::SystemMatrix,
+    f::Union{ScalarField,VectorField,TensorField};
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[],
     iterative=false,
     reltol::Real=sqrt(eps()),
     maxiter::Int=K.model.non * K.model.dim,
@@ -1530,6 +1734,7 @@ function solveField(
 
     return u
 end
+=#
 
 """
     gradMatrix(problem_u::Problem, problem_p::Problem)
