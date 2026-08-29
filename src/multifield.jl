@@ -94,7 +94,7 @@ export ⋅
 
 export solveEigenFields
 export consistentToLumped
-export rigidRotationMap
+export rigidRotationMap, collapseMPC
 
 
 """
@@ -9109,4 +9109,31 @@ function rigidRotationMap(mpc_u::MPC, mpc_φ::MPC)
         Φ,
         U
     )
+end
+
+"""
+    collapseMPC(field, mpc)
+
+Collapse generalized nodal forces from slave DOFs onto their MPC master DOFs.
+"""
+function collapseMPC(
+    field::Union{ScalarField,VectorField,TensorField},
+    mpc::MPC
+    )
+
+    problem = field.model
+
+    rep = mpcRepresentativeMap(problem, [mpc])
+    T, p, _ = mpcTransformation(rep)
+
+    f = elementsToNodes(field)
+
+    fred = T' * f.a
+
+    out = copy(f)
+    fill!(out.a, 0.0)
+
+    out.a[p, :] .= fred
+
+    return out
 end

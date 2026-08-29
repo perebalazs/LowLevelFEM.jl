@@ -2851,7 +2851,7 @@ function _extract_rhs_components(problem::Problem, vals::Dict)
     for (sym, val) in vals
         s = String(sym)
         if startswith(s, prefix)
-            comp = s[length(prefix)+1:end]
+            comp = String(chopprefix(s,prefix))
             comps[comp] = val
         end
     end
@@ -2929,6 +2929,220 @@ struct MPC
     end
 end
 
+function mpcRepresentativeMap(
+    problem::Problem,
+    mpcs::Vector{MPC}
+    )
+
+    ndof = problem.non * problem.pdim
+    rep = collect(1:ndof)
+
+    gmsh.model.setCurrent(problem.name)
+
+    comp_map = _bc_component_map(problem)
+    prefix = String(problem.field)
+
+    for mpc in mpcs
+
+        # ------------------------------------------------------
+        # Multifield filter
+        # ------------------------------------------------------
+
+        if mpc.problem !== nothing &&
+           mpc.problem !== problem
+
+            continue
+        end
+
+        masterTag =
+            getTagForPhysicalName(mpc.master)
+
+        slaveTag =
+            getTagForPhysicalName(mpc.slave)
+
+        masterNodes, _ =
+            gmsh.model.mesh.getNodesForPhysicalGroup(
+                -1,
+                masterTag
+            )
+
+        # ------------------------------------------------------
+        # Active components
+        # ------------------------------------------------------
+
+        active_components =
+            trues(problem.pdim)
+
+        for (sym, active) in mpc.components
+
+            s = String(sym)
+
+            startswith(s, prefix) ||
+                error(
+                    "MPC: unknown component '$sym'."
+                )
+
+            comp =
+                String(chopprefix(s, prefix))
+
+            haskey(comp_map, comp) ||
+                error(
+                    "MPC: invalid component '$comp' " *
+                    "for field $(problem.field)."
+                )
+
+            active_components[
+                comp_map[comp]
+            ] = active
+        end
+
+        components =
+            findall(active_components)
+
+        # ======================================================
+        # CASE 1:
+        # One master node -> all slave nodes tied to one master
+        # ======================================================
+
+        if length(masterNodes) == 1
+
+            slaveNodes, _ =
+                gmsh.model.mesh.getNodesForPhysicalGroup(
+                    -1,
+                    slaveTag
+                )
+
+            masterNode =
+                Int(masterNodes[1])
+
+            for node in slaveNodes
+
+                slaveNode = Int(node)
+
+                slaveNode == masterNode &&
+                    continue
+
+                for comp in components
+
+                    masterDof =
+                        problem.pdim *
+                        (masterNode - 1) +
+                        comp
+
+                    slaveDof =
+                        problem.pdim *
+                        (slaveNode - 1) +
+                        comp
+
+                    rep[slaveDof] =
+                        masterDof
+                end
+            end
+
+            continue
+        end
+
+        # ======================================================
+        # CASE 2:
+        # Multiple master nodes -> Gmsh periodic pairing
+        # ======================================================
+
+        bdim = problem.dim - 1
+
+        masterEntities =
+            Set(
+                gmsh.model.getEntitiesForPhysicalGroup(
+                    bdim,
+                    masterTag
+                )
+            )
+
+        slaveEntities =
+            gmsh.model.getEntitiesForPhysicalGroup(
+                bdim,
+                slaveTag
+            )
+
+        isempty(slaveEntities) &&
+            error(
+                "MPC: periodic slave physical group " *
+                "'$(mpc.slave)' contains no boundary entities."
+            )
+
+        for slaveEntity in slaveEntities
+
+            tagMaster,
+            slaveNodes,
+            periodicMasterNodes,
+            affineTransform =
+                gmsh.model.mesh.getPeriodicNodes(
+                    bdim,
+                    slaveEntity,
+                    true
+                )
+
+            tagMaster < 0 &&
+                error(
+                    "MPC: physical group '$(mpc.slave)' " *
+                    "is not defined as periodic in Gmsh."
+                )
+
+            tagMaster in masterEntities ||
+                error(
+                    "MPC: Gmsh periodic master of " *
+                    "'$(mpc.slave)' does not belong to " *
+                    "'$(mpc.master)'."
+                )
+
+            length(slaveNodes) ==
+            length(periodicMasterNodes) ||
+                error(
+                    "MPC: inconsistent periodic node mapping."
+                )
+
+            for k in eachindex(slaveNodes)
+
+                slaveNode =
+                    Int(slaveNodes[k])
+
+                masterNode =
+                    Int(periodicMasterNodes[k])
+
+                for comp in components
+
+                    slaveDof =
+                        problem.pdim *
+                        (slaveNode - 1) +
+                        comp
+
+                    masterDof =
+                        problem.pdim *
+                        (masterNode - 1) +
+                        comp
+
+                    # Detect contradictory MPC definitions.
+                    if rep[slaveDof] != slaveDof &&
+                       rep[slaveDof] != masterDof
+
+                        error(
+                            "MPC: DOF $slaveDof has " *
+                            "conflicting master DOFs."
+                        )
+                    end
+
+                    rep[slaveDof] =
+                        masterDof
+                end
+            end
+        end
+    end
+
+    _canonicalize_mpc_rep!(rep)
+
+    return rep
+end
+
+#=
 function mpcRepresentativeMap(problem::Problem, mpcs::Vector{MPC})
     ndof = problem.non * problem.pdim
     rep = collect(1:ndof)
@@ -3002,6 +3216,7 @@ function mpcRepresentativeMap(problem::Problem, mpcs::Vector{MPC})
 
     return rep
 end
+=#
 
 function mpcTransformation(rep::Vector{Int})
 
@@ -5689,7 +5904,7 @@ function constrainedDoFs(problem::Problem,
                 continue
             end
 
-            suffix = comp[length(fld)+1:end]
+            suffix = String(chopprefix(comp, fld))
 
             cidx = component_index(problem, suffix)
 

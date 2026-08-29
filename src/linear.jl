@@ -3547,7 +3547,7 @@ function applyBoundaryConditions!(
                 error("applyBoundaryConditions!: unknown BC key '$sym'")
             end
 
-            comp = s[length(prefix)+1:end]
+            comp = String(chopprefix(s, prefix))
 
             if !haskey(comp_map, comp)
                 error("applyBoundaryConditions!: invalid component '$comp' for field $(problem.field)")
