@@ -94,6 +94,7 @@ export ⋅
 
 export solveEigenFields
 export consistentToLumped
+export rigidRotationMap
 
 
 """
@@ -3881,6 +3882,500 @@ function LinearAlgebra.Symmetric(K::SystemMatrix, uplo::Symbol=:U)
 end
 
 """
+    _canonicalize_mpc_rep!(rep)
+
+Resolve chained MPC relations so that every constrained DOF points directly
+to its final master DOF.
+
+Cycles are rejected.
+"""
+function _canonicalize_mpc_rep!(rep::Vector{Int})
+
+    n = length(rep)
+
+    for i in 1:n
+        j = i
+        path = Int[]
+
+        while rep[j] != j
+
+            j in path &&
+                error("MPC: cyclic master-slave relation detected.")
+
+            push!(path, j)
+            j = rep[j]
+        end
+
+        root = j
+
+        for k in path
+            rep[k] = root
+        end
+
+        rep[i] = root
+    end
+
+    return rep
+end
+
+
+"""
+    _mpc_master_dofs(P, mpcs)
+
+Return all DOFs belonging to MPC master nodes of field `P`.
+
+All components are returned, including components explicitly disabled in
+the MPC. This preserves unconstrained master DOFs as genuine system DOFs.
+"""
+function _mpc_master_dofs(
+    P::Problem,
+    mpcs::Vector{MPC}
+    )
+
+    gmsh.model.setCurrent(P.name)
+
+    dofs = Int[]
+
+    for c in mpcs
+
+        c.problem === P || continue
+
+        tag = getTagForPhysicalName(c.master)
+
+        nodes, _ =
+            gmsh.model.mesh.getNodesForPhysicalGroup(-1, tag)
+
+        length(nodes) == 1 ||
+            error(
+                "MPC: master physical group '$(c.master)' " *
+                "must contain exactly one node."
+            )
+
+        node = Int(nodes[1])
+
+        for comp in 1:P.pdim
+            push!(
+                dofs,
+                P.pdim * (node - 1) + comp
+            )
+        end
+    end
+
+    sort!(unique!(dofs))
+
+    return dofs
+end
+
+
+"""
+    _represented_rows(T)
+
+Return a Boolean vector marking full-space DOFs represented by `T`.
+"""
+function _represented_rows(T::SparseMatrixCSC)
+
+    represented = falses(size(T, 1))
+
+    rows = rowvals(T)
+    vals = nonzeros(T)
+
+    for j in axes(T, 2)
+        for k in nzrange(T, j)
+
+            iszero(vals[k]) && continue
+
+            represented[rows[k]] = true
+        end
+    end
+
+    return represented
+end
+
+"""
+    _base_reduction(P, mpcs)
+
+Construct the field-level base transformation before applying MPCs.
+
+For full-order fields, active physical DOFs and MPC master DOFs are retained.
+
+For reduced-order fields, the polynomial-order reduction is used and
+additional active DOFs not represented by that reduction (e.g. remote
+reference points) are appended as identity DOFs.
+"""
+function _base_reduction(
+    P::Problem,
+    mpcs::Vector{MPC}
+    )
+
+    master_dofs = _mpc_master_dofs(P, mpcs)
+
+    if !P.reducedOrder
+
+        active =
+            sort!(
+                unique(
+                    vcat(
+                        allDoFs(P),
+                        master_dofs
+                    )
+                )
+            )
+
+        nfull = ndofs(P)
+        nred = length(active)
+
+        T = sparse(
+            active,
+            1:nred,
+            ones(Float64, nred),
+            nfull,
+            nred
+        )
+
+        R = sparse(
+            1:nred,
+            active,
+            ones(Float64, nred),
+            nred,
+            nfull
+        )
+
+        return T, R
+    end
+
+    # Polynomial-order reduction
+    T, R = reductionMatrices(P)
+
+    # Remote points and other lower-dimensional active DOFs are not
+    # necessarily represented by reductionMatrices().
+    represented = _represented_rows(T)
+
+    wanted =
+        sort!(
+            unique(
+                vcat(
+                    allDoFs(P),
+                    master_dofs
+                )
+            )
+        )
+
+    extra =
+        [
+            i for i in wanted
+            if !represented[i]
+        ]
+
+    isempty(extra) && return T, R
+
+    nfull = ndofs(P)
+    nextra = length(extra)
+
+    Te = sparse(
+        extra,
+        1:nextra,
+        ones(Float64, nextra),
+        nfull,
+        nextra
+    )
+
+    Re = sparse(
+        1:nextra,
+        extra,
+        ones(Float64, nextra),
+        nextra,
+        nfull
+    )
+
+    return hcat(T, Te), vcat(R, Re)
+end
+
+"""
+    _apply_mpc_to_reduction(T, R, P, mpcs)
+
+Apply equality MPC constraints to an existing field transformation.
+
+The constraints are imposed in the original full nodal space,
+
+    u_slave = u_master
+
+while the unknowns may already belong to a reduced-order basis.
+
+Returns the modified prolongation and restriction matrices.
+"""
+function _apply_mpc_to_reduction(
+    T::SparseMatrixCSC{Float64,Int},
+    R::SparseMatrixCSC{Float64,Int},
+    P::Problem,
+    mpcs::Vector{MPC}
+    )
+
+    isempty(mpcs) && return T, R
+
+    rep = mpcRepresentativeMap(P, mpcs)
+
+    _canonicalize_mpc_rep!(rep)
+
+    constraints =
+        [
+            (i, rep[i])
+            for i in eachindex(rep)
+            if rep[i] != i
+        ]
+
+    isempty(constraints) && return T, R
+
+    # Final root masters are protected from elimination whenever possible.
+    master_full =
+        unique(last(c) for c in constraints)
+
+    for (slave, master) in constraints
+
+        # Current constraint in the current reduced coordinates:
+        #
+        #     (T_slave - T_master) * q = 0
+        #
+        c =
+            vec(
+                Array(
+                    T[slave, :] - T[master, :]
+                )
+            )
+
+        scale = maximum(abs, c; init=0.0)
+        tol = 100eps(Float64) * max(1.0, scale)
+
+        nz =
+            findall(x -> abs(x) > tol, c)
+
+        # Constraint already follows from previous constraints.
+        isempty(nz) && continue
+
+        # ------------------------------------------------------
+        # Protect current master coordinates whenever possible.
+        # ------------------------------------------------------
+
+        protected = falses(size(T, 2))
+
+        for mdof in master_full
+
+            row = vec(Array(T[mdof, :]))
+
+            for j in eachindex(row)
+                if abs(row[j]) > tol
+                    protected[j] = true
+                end
+            end
+        end
+
+        candidates =
+            [
+                j for j in nz
+                if !protected[j]
+            ]
+
+        # This can occur for chained constraints.
+        isempty(candidates) &&
+            (candidates = nz)
+
+        pivot =
+            candidates[
+                argmax(abs.(c[candidates]))
+            ]
+
+        cp = c[pivot]
+
+        abs(cp) > tol ||
+            error("MPC: failed to select a stable elimination pivot.")
+
+        nold = size(T, 2)
+
+        keep =
+            [
+                j for j in 1:nold
+                if j != pivot
+            ]
+
+        nnew = nold - 1
+
+        I = Int[]
+        J = Int[]
+        V = Float64[]
+
+        sizehint!(I, 2nnew)
+        sizehint!(J, 2nnew)
+        sizehint!(V, 2nnew)
+
+        for (newj, oldj) in enumerate(keep)
+
+            # Identity part
+            push!(I, oldj)
+            push!(J, newj)
+            push!(V, 1.0)
+
+            # Eliminated pivot:
+            #
+            # q_p = -Σ c_j/c_p q_j
+            val = -c[oldj] / cp
+
+            if abs(val) > tol
+                push!(I, pivot)
+                push!(J, newj)
+                push!(V, val)
+            end
+        end
+
+        E = sparse(
+            I,
+            J,
+            V,
+            nold,
+            nnew
+        )
+
+        # Natural restriction corresponding to E.
+        S = sparse(
+            1:nnew,
+            keep,
+            ones(Float64, nnew),
+            nnew,
+            nold
+        )
+
+        T = T * E
+        R = S * R
+    end
+
+    return T, R
+end
+
+"""
+    _multifield_mpc_bc_data(K, mpcs, fixed, xD)
+
+Move prescribed values on tied slave DOFs to their final master DOFs.
+
+Conflicting prescribed values belonging to the same MPC DOF are rejected.
+"""
+function _multifield_mpc_bc_data(
+    K::SystemMatrix,
+    mpcs::Vector{MPC},
+    fixed::Vector{Int},
+    xD::AbstractVector
+    )
+
+    problems = K.problems
+    offsets = K.offsets
+
+    ndof = size(K.A, 1)
+
+    global_rep = collect(1:ndof)
+
+    for (i, P) in enumerate(problems)
+
+        local_mpcs =
+            [
+                c for c in mpcs
+                if c.problem === P
+            ]
+
+        isempty(local_mpcs) && continue
+
+        rep =
+            mpcRepresentativeMap(
+                P,
+                local_mpcs
+            )
+
+        _canonicalize_mpc_rep!(rep)
+
+        off = offsets[i]
+
+        for j in eachindex(rep)
+            global_rep[off + j] =
+                off + rep[j]
+        end
+    end
+
+    fixed_new = Int[]
+    xD_new = zeros(Float64, ndof)
+
+    assigned = Dict{Int,Float64}()
+
+    for dof in fixed
+
+        master = global_rep[dof]
+        value = xD[dof]
+
+        if haskey(assigned, master)
+
+            isapprox(
+                assigned[master],
+                value
+            ) ||
+                error(
+                    "MPC: incompatible prescribed values on tied DOFs."
+                )
+
+        else
+
+            assigned[master] = value
+            push!(fixed_new, master)
+            xD_new[master] = value
+        end
+    end
+
+    sort!(unique!(fixed_new))
+
+    return fixed_new, xD_new
+end
+
+function _remove_inactive_mpc_dofs(
+    Kr::SparseMatrixCSC,
+    Br::AbstractMatrix,
+    free::Vector{Int},
+    fixed::Vector{Int},
+    protected::Vector{Int},
+    prunable::Vector{Int}
+    )
+
+    n = size(Kr, 1)
+
+    active = falses(n)
+
+    rows = rowvals(Kr)
+    vals = nonzeros(Kr)
+
+    for j in axes(Kr, 2)
+        for k in nzrange(Kr, j)
+
+            iszero(vals[k]) && continue
+
+            active[j] = true
+            active[rows[k]] = true
+        end
+    end
+
+    for i in 1:n
+        if any(!iszero, @view Br[i, :])
+            active[i] = true
+        end
+    end
+
+    active[fixed] .= true
+    active[protected] .= true
+
+    can_prune = falses(n)
+    can_prune[prunable] .= true
+
+    return [
+        i for i in free
+        if !can_prune[i] || active[i]
+    ]
+end
+
+
+
+"""
     solveField(K::SystemMatrix, 
                F::SystemVector; 
                support::Vector{BoundaryCondition}=BoundaryCondition[])
@@ -3930,6 +4425,383 @@ Example
     (u, p) = solveField(K, F)
 """
 function solveField(
+    K::SystemMatrix,
+    F::SystemVector;
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[]
+    )
+
+    # ----------------------------------------------------------
+    # 1) Consistency checks
+    # ----------------------------------------------------------
+
+    K.problems === nothing &&
+        error("solveField: SystemMatrix is not a block system.")
+
+    F.problems === nothing &&
+        error("solveField: SystemVector is not a block vector.")
+
+    K.problems == F.problems ||
+        error(
+            "solveField: Problem ordering mismatch between K and F."
+        )
+
+    problems = K.problems
+    offsets = K.offsets
+
+    A = K.A
+    b = F.a
+
+    ndof, nsteps = size(b)
+
+    # ----------------------------------------------------------
+    # 2) Boundary-condition data in the original full space
+    # ----------------------------------------------------------
+
+    free, fixed, xDmat =
+        multifield_bc_data(
+            K,
+            support;
+            nsteps=1
+        )
+
+    xD = @view xDmat[:, 1]
+
+    # ==========================================================
+    # Existing path -- no MPC
+    #
+    # Keep this path unchanged to preserve existing behaviour.
+    # ==========================================================
+
+    if isempty(mpc)
+
+        # ------------------------------------------------------
+        # Standard full-order solution
+        # ------------------------------------------------------
+
+        if !any(P.reducedOrder for P in problems)
+
+            x = zeros(Float64, ndof, nsteps)
+
+            A_ff = A[free, free]
+
+            f_kin =
+                A[free, fixed] * xD[fixed]
+
+            for i in 1:nsteps
+
+                x[free, i] =
+                    A_ff \
+                    (b[free, i] - f_kin)
+            end
+
+            if !isempty(fixed)
+                x[fixed, :] .= xD[fixed]
+            end
+
+            return _reconstruct_fields(
+                x,
+                problems,
+                offsets
+            )
+        end
+
+        # ------------------------------------------------------
+        # Existing reduced-order path
+        # ------------------------------------------------------
+
+        Tblocks =
+            Vector{SparseMatrixCSC{Float64,Int}}(
+                undef,
+                length(problems)
+            )
+
+        Rblocks =
+            Vector{SparseMatrixCSC{Float64,Int}}(
+                undef,
+                length(problems)
+            )
+
+        for (i, P) in enumerate(problems)
+
+            if P.reducedOrder
+
+                Tblocks[i],
+                Rblocks[i] =
+                    reductionMatrices(P)
+
+            else
+
+                Tp, Rp =
+                    active_identity(P)
+
+                Tblocks[i] = Tp
+                Rblocks[i] = Rp
+            end
+        end
+
+        T = blockdiag(Tblocks...)
+        Rred = blockdiag(Rblocks...)
+
+        free_r, fixed_r, xD_r =
+            reduced_bc_data(
+                Rred,
+                fixed,
+                xD
+            )
+
+        AT = A * T
+        Kr = T' * AT
+
+        nr = size(T, 2)
+
+        xr =
+            zeros(
+                Float64,
+                nr,
+                nsteps
+            )
+
+        if !isempty(fixed_r)
+            xr[fixed_r, :] .=
+                xD_r[fixed_r]
+        end
+
+        Kr_ff =
+            Kr[free_r, free_r]
+
+        for i in 1:nsteps
+
+            fr =
+                T' * b[:, i]
+
+            if !isempty(fixed_r)
+
+                fr .-=
+                    Kr[:, fixed_r] *
+                    xD_r[fixed_r]
+            end
+
+            xr[free_r, i] =
+                Kr_ff \ fr[free_r]
+        end
+
+        x = T * xr
+
+        return _reconstruct_fields(
+            x,
+            problems,
+            offsets
+        )
+    end
+
+    # ==========================================================
+    # MPC path
+    # ==========================================================
+
+    # Every MPC in a multifield system must identify its field.
+    for c in mpc
+
+        c.problem === nothing &&
+            error(
+                "solveField: in a multifield system every MPC " *
+                "must have an explicit field."
+            )
+
+        any(P -> P === c.problem, problems) ||
+            error(
+                "solveField: MPC refers to a field that is not present " *
+                "in the SystemMatrix."
+            )
+    end
+
+    # ----------------------------------------------------------
+    # 3) Move slave BCs to their final master DOFs
+    # ----------------------------------------------------------
+
+    fixed_mpc, xD_mpc =
+        _multifield_mpc_bc_data(
+            K,
+            mpc,
+            fixed,
+            xD
+        )
+
+    # ----------------------------------------------------------
+    # 4) Build field-level order-reduction + MPC transforms
+    # ----------------------------------------------------------
+
+    Tblocks =
+        SparseMatrixCSC{Float64,Int}[]
+
+    Rblocks =
+        SparseMatrixCSC{Float64,Int}[]
+
+    prunable = Int[]
+    master_full_global = Int[]
+
+    final_offset = 0
+
+    for (i, P) in enumerate(problems)
+
+        local_mpcs =
+            [
+                c for c in mpc
+                if c.problem === P
+            ]
+
+        Tp, Rp =
+            _base_reduction(
+                P,
+                local_mpcs
+            )
+
+        Tp, Rp =
+            _apply_mpc_to_reduction(
+                Tp,
+                Rp,
+                P,
+                local_mpcs
+            )
+
+        push!(Tblocks, Tp)
+        push!(Rblocks, Rp)
+
+        # Only fields participating in MPCs may contain the intentional
+        # auxiliary zero DOFs that are removed below.
+        if !isempty(local_mpcs)
+
+            append!(
+                prunable,
+                final_offset .+
+                collect(1:size(Tp, 2))
+            )
+
+            local_master =
+                _mpc_master_dofs(
+                    P,
+                    local_mpcs
+                )
+
+            append!(
+                master_full_global,
+                offsets[i] .+ local_master
+            )
+        end
+
+        final_offset += size(Tp, 2)
+    end
+
+    T = blockdiag(Tblocks...)
+    Rred = blockdiag(Rblocks...)
+
+    # ----------------------------------------------------------
+    # 5) Dirichlet data in the final reduced/MPC space
+    # ----------------------------------------------------------
+
+    free_r, fixed_r, xD_r =
+        reduced_bc_data(
+            Rred,
+            fixed_mpc,
+            xD_mpc
+        )
+
+    # ----------------------------------------------------------
+    # 6) Galerkin projection
+    # ----------------------------------------------------------
+
+    AT = A * T
+    Kr = T' * AT
+
+    Br = T' * b
+
+    nr = size(T, 2)
+
+    # ----------------------------------------------------------
+    # 7) Protect MPC master DOFs from automatic inactive removal
+    # ----------------------------------------------------------
+
+    protected = Int[]
+
+    if !isempty(master_full_global)
+
+        RR =
+            Rred[:, master_full_global]
+
+        I, _, V = findnz(RR)
+
+        for k in eachindex(I)
+            iszero(V[k]) && continue
+            push!(protected, I[k])
+        end
+
+        sort!(unique!(protected))
+    end
+
+    # ----------------------------------------------------------
+    # 8) Remove intentional algebraically inactive auxiliary DOFs
+    # ----------------------------------------------------------
+
+    free_r =
+        _remove_inactive_mpc_dofs(
+            Kr,
+            Br,
+            free_r,
+            fixed_r,
+            protected,
+            prunable
+        )
+
+    # ----------------------------------------------------------
+    # 9) Solve
+    # ----------------------------------------------------------
+
+    xr =
+        zeros(
+            Float64,
+            nr,
+            nsteps
+        )
+
+    if !isempty(fixed_r)
+
+        xr[fixed_r, :] .=
+            xD_r[fixed_r]
+    end
+
+    Kr_ff =
+        Kr[free_r, free_r]
+
+    for i in 1:nsteps
+
+        fr =
+            copy(@view Br[:, i])
+
+        if !isempty(fixed_r)
+
+            fr .-=
+                Kr[:, fixed_r] *
+                xD_r[fixed_r]
+        end
+
+        xr[free_r, i] =
+            Kr_ff \ fr[free_r]
+    end
+
+    # ----------------------------------------------------------
+    # 10) Prolongate to the original full multifield space
+    # ----------------------------------------------------------
+
+    x = T * xr
+
+    return _reconstruct_fields(
+        x,
+        problems,
+        offsets
+    )
+end
+
+function solveField2(
     K::SystemMatrix,
     F::SystemVector;
     support::Vector{BoundaryCondition}=BoundaryCondition[]
@@ -7965,4 +8837,276 @@ function consistentToLumped(M::SystemMatrix)
     A = spdiagm(d)
 
     return SystemMatrix(A, M.model, M.test_model, M.problems, M.offsets)
+end
+
+"""
+    rigidRotationMap(mpc_u::MPC, mpc_φ::MPC)
+
+Construct the rigid-body rotational kinematic map between a displacement
+field and a rotation field.
+
+The two MPCs must refer to the same master and slave physical groups.
+
+For a 2D problem,
+
+    u_rot = R * φ
+
+with
+
+    [u_x]   [-Δy]
+    [u_y] = [ Δx] φ
+
+For a 3D problem,
+
+    u_rot = R * φ
+
+with
+
+        [  0    Δz  -Δy ]
+    R = [ -Δz    0    Δx ]
+        [  Δy  -Δx    0  ]
+
+at each slave node.
+
+Only components enabled in both MPC definitions are inserted into the map.
+
+The returned `SystemMatrix` maps the rotation field to the displacement
+field, i.e. its trial space is the rotation field and its test space is the
+displacement field.
+"""
+function rigidRotationMap(mpc_u::MPC, mpc_φ::MPC)
+
+    # ----------------------------------------------------------
+    # Basic compatibility checks
+    # ----------------------------------------------------------
+
+    mpc_u.problem !== nothing ||
+        error(
+            "rigidRotationMap: displacement field must be specified in the MPC."
+        )
+
+    mpc_φ.problem !== nothing ||
+        error(
+            "rigidRotationMap: rotation field must be specified in the MPC."
+        )
+
+    mpc_u.master == mpc_φ.master ||
+        error(
+            "rigidRotationMap: displacement and rotation MPCs must have the same master."
+        )
+
+    mpc_u.slave == mpc_φ.slave ||
+        error(
+            "rigidRotationMap: displacement and rotation MPCs must have the same slave."
+        )
+
+    U = mpc_u.problem
+    Φ = mpc_φ.problem
+
+    U.name == Φ.name ||
+        error(
+            "rigidRotationMap: displacement and rotation fields must belong to the same Gmsh model."
+        )
+
+    U.dim == Φ.dim ||
+        error(
+            "rigidRotationMap: displacement and rotation fields must have the same spatial dimension."
+        )
+
+    is2D = U.dim == 2 && U.pdim == 2 && Φ.pdim == 1
+    is3D = U.dim == 3 && U.pdim == 3 && Φ.pdim == 3
+
+    (is2D || is3D) ||
+        error(
+            "rigidRotationMap: expected either a 2D VectorField/ScalarField " *
+            "or a 3D VectorField/VectorField pair."
+        )
+
+    gmsh.model.setCurrent(U.name)
+
+    # ----------------------------------------------------------
+    # Active MPC components
+    # ----------------------------------------------------------
+
+    function active_components(mpc::MPC, problem::Problem)
+
+        active = trues(problem.pdim)
+
+        comp_map = _bc_component_map(problem)
+        prefix = String(problem.field)
+
+        for (sym, value) in mpc.components
+
+            s = String(sym)
+
+            startswith(s, prefix) ||
+                error(
+                    "rigidRotationMap: unknown MPC component '$sym' " *
+                    "for field $(problem.field)."
+                )
+
+            # Unicode-safe, important e.g. for fieldName=:φ
+            comp = String(chopprefix(s, prefix))
+
+            haskey(comp_map, comp) ||
+                error(
+                    "rigidRotationMap: invalid component '$comp' " *
+                    "for field $(problem.field)."
+                )
+
+            active[comp_map[comp]] = value
+        end
+
+        return active
+    end
+
+    active_u = active_components(mpc_u, U)
+    active_φ = active_components(mpc_φ, Φ)
+
+    # ----------------------------------------------------------
+    # Master and slave nodes
+    # ----------------------------------------------------------
+
+    masterTag = getTagForPhysicalName(mpc_u.master)
+    slaveTag  = getTagForPhysicalName(mpc_u.slave)
+
+    masterNodes, masterCoord =
+        gmsh.model.mesh.getNodesForPhysicalGroup(-1, masterTag)
+
+    slaveNodes, slaveCoord =
+        gmsh.model.mesh.getNodesForPhysicalGroup(-1, slaveTag)
+
+    length(masterNodes) == 1 ||
+        error(
+            "rigidRotationMap: master physical group '$(mpc_u.master)' " *
+            "must contain exactly one node."
+        )
+
+    masterNode = Int(masterNodes[1])
+
+    xm = masterCoord[1]
+    ym = masterCoord[2]
+    zm = masterCoord[3]
+
+    # ----------------------------------------------------------
+    # Sparse rigid-rotation map
+    # ----------------------------------------------------------
+
+    I = Int[]
+    J = Int[]
+    V = Float64[]
+
+    if is2D
+
+        φ_active = active_φ[1]
+
+        if φ_active
+            for (k, node) in enumerate(slaveNodes)
+
+                slaveNode = Int(node)
+
+                slaveNode == masterNode && continue
+
+                x = slaveCoord[3k - 2]
+                y = slaveCoord[3k - 1]
+
+                dx = x - xm
+                dy = y - ym
+
+                φdof = slaveNode
+
+                # ux = -dy * φ
+                if active_u[1] && !iszero(dy)
+
+                    uxdof =
+                        U.pdim * (slaveNode - 1) + 1
+
+                    push!(I, uxdof)
+                    push!(J, φdof)
+                    push!(V, -dy)
+                end
+
+                # uy = +dx * φ
+                if active_u[2] && !iszero(dx)
+
+                    uydof =
+                        U.pdim * (slaveNode - 1) + 2
+
+                    push!(I, uydof)
+                    push!(J, φdof)
+                    push!(V, dx)
+                end
+            end
+        end
+
+    else
+
+        for (k, node) in enumerate(slaveNodes)
+
+            slaveNode = Int(node)
+
+            slaveNode == masterNode && continue
+
+            x = slaveCoord[3k - 2]
+            y = slaveCoord[3k - 1]
+            z = slaveCoord[3k]
+
+            dx = x - xm
+            dy = y - ym
+            dz = z - zm
+
+            # Local map:
+            #
+            #       φx    φy    φz
+            #
+            # ux     0    dz   -dy
+            # uy   -dz     0    dx
+            # uz    dy   -dx     0
+
+            Rd = (
+                ( 0.0,  dz,  -dy),
+                (-dz,  0.0,  dx),
+                ( dy, -dx,  0.0)
+            )
+
+            for i in 1:3
+
+                active_u[i] || continue
+
+                udof =
+                    U.pdim * (slaveNode - 1) + i
+
+                for j in 1:3
+
+                    active_φ[j] || continue
+
+                    value = Rd[i][j]
+
+                    iszero(value) && continue
+
+                    φdof =
+                        Φ.pdim * (slaveNode - 1) + j
+
+                    push!(I, udof)
+                    push!(J, φdof)
+                    push!(V, value)
+                end
+            end
+        end
+    end
+
+    RA = sparse(
+        I,
+        J,
+        V,
+        ndofs(U),
+        ndofs(Φ)
+    )
+
+    # R : Φ -> U
+    return SystemMatrix(
+        RA,
+        Φ,
+        U
+    )
 end

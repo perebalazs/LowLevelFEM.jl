@@ -4,7 +4,7 @@ SetFactory("OpenCASCADE");
 //+
 Rectangle(1) = {0, 0, 0, 1, 1, 0};
 //+
-Point(5) = {1.5, 0.5, 0, 1.0};
+Point(5) = {1.0, 0.5, 0, 1.0};
 //+
 Transfinite Curve {3, 4, 1, 2} = 2 Using Progression 1;
 //+

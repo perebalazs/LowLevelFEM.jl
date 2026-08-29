@@ -2245,6 +2245,172 @@ end
 ###############################################################################
 
 """
+    _nodal_field_from_problem(problem::Problem, data, reference)
+
+Construct a nodal field whose field type and model are determined by
+`problem`.
+
+The time discretization is inherited from `reference`.
+"""
+function _nodal_field_from_problem(
+    problem::Problem,
+    data::AbstractMatrix,
+    reference::Union{ScalarField,VectorField,TensorField}
+    )
+
+    size(data, 1) == problem.non * problem.pdim ||
+        error(
+            "_nodal_field_from_problem: incompatible result size. " *
+            "Expected $(problem.non * problem.pdim) rows, got $(size(data, 1))."
+        )
+
+    C = Matrix{Float64}(data)
+
+    if problem.pdim == 1
+
+        return ScalarField(
+            Matrix{Float64}[],
+            C,
+            reference.t,
+            Int[],
+            reference.nsteps,
+            :scalar,
+            problem
+        )
+
+    elseif problem.pdim == 2
+
+        return VectorField(
+            Matrix{Float64}[],
+            C,
+            reference.t,
+            Int[],
+            reference.nsteps,
+            :v2D,
+            problem
+        )
+
+    elseif problem.pdim == 3
+
+        return VectorField(
+            Matrix{Float64}[],
+            C,
+            reference.t,
+            Int[],
+            reference.nsteps,
+            :v3D,
+            problem
+        )
+
+    elseif problem.pdim == 9
+
+        return TensorField(
+            Matrix{Float64}[],
+            C,
+            reference.t,
+            Int[],
+            reference.nsteps,
+            :e,
+            problem
+        )
+
+    else
+
+        error(
+            "_nodal_field_from_problem: unsupported field dimension " *
+            "pdim=$(problem.pdim)."
+        )
+    end
+end
+
+"""
+    *(A::SystemMatrix, B::Union{ScalarField,VectorField,TensorField})
+
+Apply a field-level system matrix to a nodal field.
+
+The input field must belong to `A.model`. The result belongs to
+`A.test_model`, and its scalar/vector/tensor type is determined from
+the test field.
+
+If the input field is elementwise, it is converted to nodal
+representation before multiplication.
+"""
+function *(
+    A::SystemMatrix,
+    BB::Union{ScalarField,VectorField,TensorField}
+    )
+
+    A.model === nothing &&
+        error(
+            "*(SystemMatrix, Field): block SystemMatrix multiplication " *
+            "with a field is not supported."
+        )
+
+    A.test_model === nothing &&
+        error(
+            "*(SystemMatrix, Field): SystemMatrix has no test field."
+        )
+
+    B = elementsToNodes(BB)
+
+    B.model === A.model ||
+        error(
+            "*(SystemMatrix, Field): incompatible fields. " *
+            "The input field must belong to A.model."
+        )
+
+    size(A.A, 2) == size(B.a, 1) ||
+        error(
+            "*(SystemMatrix, Field): incompatible dimensions " *
+            "$(size(A.A)) and $(size(B.a))."
+        )
+
+    C = A.A * B.a
+
+    return _nodal_field_from_problem(
+        A.test_model,
+        C,
+        B
+    )
+end
+
+"""
+    *(A::Matrix, B::Union{ScalarField,VectorField,TensorField})
+
+Matrix–field multiplication without field-space metadata.
+
+The result has the same field type and model as the input field.
+"""
+function *(
+    A::Matrix,
+    BB::Union{ScalarField,VectorField,TensorField}
+    )
+
+    B = elementsToNodes(BB)
+
+    size(A, 2) == size(B.a, 1) ||
+        error(
+            "*(Matrix, Field): incompatible dimensions " *
+            "$(size(A)) and $(size(B.a))."
+        )
+
+    C = A * B.a
+
+    T = typeof(B)
+
+    return T(
+        Matrix{Float64}[],
+        reshape(C, :, B.nsteps),
+        B.t,
+        Int[],
+        B.nsteps,
+        B.type,
+        B.model
+    )
+end
+
+#=
+"""
     *(A::Union{SystemMatrix,Matrix}, B::Union{ScalarField,VectorField,TensorField})
 
 Matrix–vector multiplication between a system matrix and a nodal vector field.
@@ -2267,6 +2433,7 @@ function *(A::Union{SystemMatrix,Matrix}, BB::Union{ScalarField,VectorField,Tens
     #    error("*(A, B::Union{ScalarField,VectorField,TensorField}): vector field must be nodal with a single time step.")
     #end
 end
+=#
 
 #=
 """
@@ -2494,6 +2661,74 @@ function -(A::SystemMatrix)
         A.test_model,
         A.problems,
         A.offsets
+    )
+end
+
+"""
+    *(A::SystemMatrix, B::SystemMatrix)
+
+Matrix product of two field-level system matrices.
+
+The intermediate trial/test spaces must be identical:
+
+    A.model === B.test_model
+
+If
+
+    A : X -> Y
+    B : Z -> X
+
+then
+
+    A * B : Z -> Y
+
+and the returned matrix has
+
+    model      = B.model
+    test_model = A.test_model
+
+This operation is intended for field-level `SystemMatrix` objects, not
+already assembled multifield block systems.
+"""
+function *(A::SystemMatrix, B::SystemMatrix)
+
+    A.model === nothing &&
+        error(
+            "*(SystemMatrix, SystemMatrix): left operand must be a field-level SystemMatrix."
+        )
+
+    B.model === nothing &&
+        error(
+            "*(SystemMatrix, SystemMatrix): right operand must be a field-level SystemMatrix."
+        )
+
+    A.test_model === nothing &&
+        error(
+            "*(SystemMatrix, SystemMatrix): left operand has no test model."
+        )
+
+    B.test_model === nothing &&
+        error(
+            "*(SystemMatrix, SystemMatrix): right operand has no test model."
+        )
+
+    A.model === B.test_model ||
+        error(
+            "*(SystemMatrix, SystemMatrix): incompatible intermediate fields."
+        )
+
+    size(A.A, 2) == size(B.A, 1) ||
+        error(
+            "*(SystemMatrix, SystemMatrix): incompatible matrix dimensions " *
+            "$(size(A.A)) and $(size(B.A))."
+        )
+
+    C = A.A * B.A
+
+    return SystemMatrix(
+        C,
+        B.model,
+        A.test_model
     )
 end
 
