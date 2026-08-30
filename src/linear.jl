@@ -3149,12 +3149,29 @@ function loadVector(problem, loads; F=nothing)
         fzy = nothing
         fxz = nothing
 
-        # vector field
+        # scalar field
+        if pdim == 1
+            fx = get(rhs_comps, "", nothing)
+
+        # 2D vector field
+        elseif pdim == 2
+            fx = get(rhs_comps, "x", nothing)
+            fy = get(rhs_comps, "y", nothing)
+
+        # 3D vector field
+        elseif pdim == 3
+            fx = get(rhs_comps, "x", nothing)
+            fy = get(rhs_comps, "y", nothing)
+            fz = get(rhs_comps, "z", nothing)
+        end
+
+        #=
         if pdim <= 3
             fx = get(rhs_comps, "x", nothing)
             fy = get(rhs_comps, "y", nothing)
             fz = get(rhs_comps, "z", nothing)
         end
+        =#
 
         # tensor field (column-major)
         if pdim == 9

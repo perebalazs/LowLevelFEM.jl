@@ -95,19 +95,19 @@ function ∇(rr::Union{ScalarField,VectorField,TensorField}; nabla=:grad)
            problem.type == :AxiSymmetric && nabla == :grad
         (:axisymmetric_grad, 9)
     else
-        error("∇_new: unsupported field type, field layout, or operator: " *
+        error("∇: unsupported field type, field layout, or operator: " *
               "$(typeof(r)), $(r.type), nabla=$nabla, problem type=$(problem.type).")
     end
 
     number_of_elements = length(r.numElem)
-    number_of_elements > 0 || error("∇_new: the input field contains no elements.")
+    number_of_elements > 0 || error("∇: the input field contains no elements.")
     values = Vector{Matrix{Float64}}(undef, number_of_elements)
     numElem = copy(r.numElem)
     field_index = Dict{Int,Int}()
     sizehint!(field_index, number_of_elements)
     for (i, elem) in pairs(numElem)
         haskey(field_index, elem) &&
-            error("∇_new: duplicate element tag $elem in the input field.")
+            error("∇: duplicate element tag $elem in the input field.")
         field_index[elem] = i
     end
     processed = falses(number_of_elements)
@@ -143,7 +143,7 @@ function ∇(rr::Union{ScalarField,VectorField,TensorField}; nabla=:grad)
 
             expected_jacobians = 9 * numNodes * nel
             length(jac_all) == expected_jacobians ||
-                error("∇_new: unexpected number of Jacobian entries for element type $et " *
+                error("∇: unexpected number of Jacobian entries for element type $et " *
                       "on entity $etag: $(length(jac_all)) instead of $expected_jacobians.")
 
             @inbounds for ie in 1:nel
@@ -151,7 +151,7 @@ function ∇(rr::Union{ScalarField,VectorField,TensorField}; nabla=:grad)
                 output_index = get(field_index, elem, 0)
                 output_index == 0 && continue
                 processed[output_index] &&
-                    error("∇_new: mesh element $elem was encountered more than once.")
+                    error("∇: mesh element $elem was encountered more than once.")
                 processed[output_index] = true
                 number_processed += 1
 
@@ -298,7 +298,7 @@ function ∇(rr::Union{ScalarField,VectorField,TensorField}; nabla=:grad)
     end
 
     number_processed == number_of_elements ||
-        error("∇_new: processed $number_processed mesh elements, but the input field " *
+        error("∇: processed $number_processed mesh elements, but the input field " *
               "contains $number_of_elements elements.")
 
     if mode === :vector_grad || mode === :axisymmetric_grad

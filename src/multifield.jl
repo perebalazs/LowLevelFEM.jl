@@ -3918,7 +3918,64 @@ function _canonicalize_mpc_rep!(rep::Vector{Int})
     return rep
 end
 
+"""
+    _mpc_master_dofs(P, mpcs)
 
+Return all DOFs belonging to MPC master nodes of field `P`.
+
+A master physical group may contain either a single node or multiple nodes,
+as in periodic constraints. All components are returned, including components
+explicitly disabled in the MPC. This preserves unconstrained master DOFs as
+genuine system DOFs.
+"""
+function _mpc_master_dofs(
+    P::Problem,
+    mpcs::Vector{MPC}
+    )
+
+    gmsh.model.setCurrent(P.name)
+
+    dofs = Int[]
+
+    for c in mpcs
+
+        c.problem === P || continue
+
+        tag =
+            getTagForPhysicalName(c.master)
+
+        nodes, _ =
+            gmsh.model.mesh.getNodesForPhysicalGroup(
+                -1,
+                tag
+            )
+
+        isempty(nodes) &&
+            error(
+                "MPC: master physical group " *
+                "'$(c.master)' contains no nodes."
+            )
+
+        for node0 in nodes
+
+            node = Int(node0)
+
+            for comp in 1:P.pdim
+
+                push!(
+                    dofs,
+                    P.pdim * (node - 1) + comp
+                )
+            end
+        end
+    end
+
+    sort!(unique!(dofs))
+
+    return dofs
+end
+
+#=
 """
     _mpc_master_dofs(P, mpcs)
 
@@ -3965,7 +4022,7 @@ function _mpc_master_dofs(
 
     return dofs
 end
-
+=#
 
 """
     _represented_rows(T)
@@ -9137,3 +9194,87 @@ function collapseMPC(
 
     return out
 end
+
+"""
+    ConstitutiveMatrix(type::Symbol)
+    ConstitutiveMatrix(type::Symbol, mat::Material)
+    ConstitutiveMatrix(type::Symbol, E, ν)
+
+Return the isotropic elastic constitutive matrix for the selected model.
+
+Supported models:
+- `:PlaneStress`
+- `:PlaneStrain`
+- `:Axisymmetric`
+- `:Solid`
+
+Engineering shear strain convention is used.
+"""
+function ConstitutiveMatrix(
+    type::Symbol,
+    E = 2.1e5,
+    ν = 0.3
+)
+    if type === :PlaneStress
+
+        c = E / (1 - ν^2)
+
+        return [
+            c      c*ν    0
+            c*ν    c      0
+            0      0      c*(1-ν)/2
+        ]
+
+    elseif type === :PlaneStrain
+
+        λ = E * ν / ((1 + ν) * (1 - 2ν))
+        μ = E / (2 * (1 + ν))
+
+        return [
+            λ + 2μ   λ         0
+            λ        λ + 2μ    0
+            0        0         μ
+        ]
+
+    elseif type === :Axisymmetric
+
+        λ = E * ν / ((1 + ν) * (1 - 2ν))
+        μ = E / (2 * (1 + ν))
+
+        return [
+            λ + 2μ   λ         λ         0
+            λ        λ + 2μ    λ         0
+            λ        λ         λ + 2μ    0
+            0        0         0         μ
+        ]
+
+    elseif type === :Solid
+
+        λ = E * ν / ((1 + ν) * (1 - 2ν))
+        μ = E / (2 * (1 + ν))
+
+        return [
+            λ + 2μ   λ         λ         0   0   0
+            λ        λ + 2μ    λ         0   0   0
+            λ        λ         λ + 2μ    0   0   0
+            0        0         0         μ   0   0
+            0        0         0         0   μ   0
+            0        0         0         0   0   μ
+        ]
+
+    else
+        error(
+            "ConstitutiveMatrix: unsupported type '$type'. " *
+            "Supported types are :PlaneStress, :PlaneStrain, " *
+            ":Axisymmetric and :Solid."
+        )
+    end
+end
+
+ConstitutiveMatrix(type::Symbol, mat::Material) =
+    ConstitutiveMatrix(type, mat.E, mat.ν)
+
+"""
+    D(args...) = ConstitutiveMatrix(args...)
+"""
+D(args...) = ConstitutiveMatrix(args...)
