@@ -6849,17 +6849,18 @@ function elementsToElements(
             problem
         )
     end
-    targetDimensions == [sourceDim - 1] ||
+    targetDim in (sourceDim, sourceDim - 1) ||
         error(
             "elementsToElements: target physical group " *
-            "\"$onPhysicalGroup\" must have dimension $(sourceDim - 1), " *
-            "one less than the source elements."
+            "\"$onPhysicalGroup\" must have dimension $sourceDim or " *
+            "$(sourceDim - 1)."
         )
 
     # Only sides that occur in the target group need to be retained. This
     # avoids a large dictionary containing every internal source side.
     targetSideKeys = Set{NTuple{5,Int}}()
-    for (targetDimension, entityTag) in targetEntities
+    for entityTag in targetEntities
+        targetDimension = targetDim
         targetTypes, tagsByType, nodeTagsByType =
             gmsh.model.mesh.getElements(targetDimension, entityTag)
 
@@ -7019,7 +7020,8 @@ function elementsToElements(
     Aout = Matrix{Float64}[]
     targetElementTags = Int[]
 
-    for (targetDimension, entityTag) in targetEntities
+    for entityTag in targetEntities
+        targetDimension = targetDim
         targetTypes, tagsByType, nodeTagsByType =
             gmsh.model.mesh.getElements(targetDimension, entityTag)
 
