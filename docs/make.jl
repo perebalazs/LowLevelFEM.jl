@@ -65,7 +65,7 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
         collapselevel = 1,
-        sidebar_sitename = true,
+        sidebar_sitename = false,
         # thresholds are in BYTES (integers)
         size_threshold_warn = 300_000,  # ~293 KiB
         size_threshold = 600_000,       # ~586 KiB
