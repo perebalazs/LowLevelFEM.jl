@@ -71,6 +71,7 @@ makedocs(
         size_threshold = 600_000,       # ~586 KiB
         assets = [
          "assets/plausible.js",
+         "assets/custom.css",
         ]
 
     ),
