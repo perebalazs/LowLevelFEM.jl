@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/src/assets/lowlevelfem-logo.png" alt="LowLevelFEM.jl logo" width="260">
+</p>
+
 [![Build Status](https://github.com/perebalazs/LowLevelFEM.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/perebalazs/LowLevelFEM.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![](https://img.shields.io/badge/docs-dev-blue.svg)](https://perebalazs.github.io/LowLevelFEM.jl/dev)
 [![](https://img.shields.io/badge/docs-stable-blue.svg)](https://perebalazs.github.io/LowLevelFEM.jl/stable)
