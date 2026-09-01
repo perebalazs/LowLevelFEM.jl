@@ -28,7 +28,7 @@ openGeometry
 ## Boundary Conditions and Loads
 
 ```@docs
-displacementConstraint
+isplacementConstraint
 temperatureConstraint
 elasticSupport
 load
@@ -37,7 +37,6 @@ heatSource
 heatConvection
 BoundaryConditionFields
 BoundaryCondition_to_LoadCondition
-MultiPointConstraint
 ```
 
 ## DOF Selection Helpers

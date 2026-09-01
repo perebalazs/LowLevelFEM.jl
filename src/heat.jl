@@ -1611,8 +1611,42 @@ function FDM(
     return TYPE([], TT.a, t, [], length(t), q.type, K.model)
 end
 
-FDM( K::SystemMatrix, C::SystemMatrix, q::Union{ScalarField,VectorField}, TT0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; ϑ = 0.5, support=Vector{BoundaryCondition}()) = 
-    FDM(K, C, q, support, TT0, n, Δt, ϑ=ϑ)
+#FDM( K::SystemMatrix, C::SystemMatrix, q::Union{ScalarField,VectorField}, TT0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; ϑ = 0.5, support=Vector{BoundaryCondition}()) = 
+#    FDM(K, C, q, support, TT0, n, Δt, ϑ=ϑ)
+
+FDM(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    q::Union{ScalarField,VectorField,TensorField},
+    X0::Union{ScalarField,VectorField,TensorField},
+    n::Int,
+    Δt::Float64;
+    ϑ=0.5,
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[]
+    ) =
+    isempty(mpc) ?
+        FDM(
+            K,
+            C,
+            q,
+            support,
+            X0,
+            n,
+            Δt;
+            ϑ=ϑ
+        ) :
+        _FDM_mpc(
+            K,
+            C,
+            q,
+            support,
+            X0,
+            n,
+            Δt;
+            ϑ=ϑ,
+            mpc=mpc
+        )
 
     #=
 function FDM_old(K::SystemMatrix, C::SystemMatrix, q::ScalarField, 
@@ -1711,4 +1745,102 @@ function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type=:SR, n=100, ϑ=
         end
     end
     return x, y
+end
+
+function _FDM_mpc(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    q::Union{ScalarField,VectorField,TensorField},
+    bc::Vector{BoundaryCondition},
+    X0::Union{ScalarField,VectorField,TensorField},
+    n::Int,
+    Δt::Float64;
+    ϑ=0.5,
+    mpc::Vector{MPC}
+    )
+
+    P = K.model
+
+    P.reducedOrder &&
+        error(
+            "FDM: simultaneous single-field reduced-order and MPC " *
+            "transformations are not yet supported."
+        )
+
+    q = elementsToNodes(q)
+    X0 = elementsToNodes(X0)
+
+    rep =
+        mpcRepresentativeMap(
+            P,
+            mpc
+        )
+
+    T, p, full_to_reduced =
+        mpcTransformation(rep)
+
+    Kr = T' * K.A * T
+    Cr = T' * C.A * T
+    qr = T' * q.a
+
+    # Full-space prescribed history
+    ts = collect(0:Δt:(n - 1) * Δt)
+
+    TYPE = typeof(q)
+
+    XD = TYPE(
+        [],
+        zeros(Float64, size(K.A, 1), n),
+        ts,
+        [],
+        n,
+        q.type,
+        P
+    )
+
+    applyBoundaryConditions!(XD, bc)
+
+    fixed =
+        constrainedDoFs(
+            P,
+            bc
+        )
+
+    free_r, fixed_r, xD_r =
+        mpcReducedBCData(
+            full_to_reduced,
+            fixed,
+            XD.a
+        )
+
+    X0r =
+        copy(
+            @view X0.a[p, 1]
+        )
+
+    Xr =
+        _FDM_reduced(
+            Kr,
+            Cr,
+            qr,
+            X0r,
+            xD_r,
+            free_r,
+            fixed_r,
+            n,
+            Δt;
+            ϑ=ϑ
+        )
+
+    X = T * Xr
+
+    return TYPE(
+        [],
+        X,
+        ts,
+        [],
+        n,
+        q.type,
+        P
+    )
 end

@@ -3585,6 +3585,60 @@ function mpcReducedBCData(full_to_reduced, fixed, uD)
     return free_r, fixed_r, uD_r
 end
 
+"""
+    mpcReducedBCData(full_to_reduced, fixed, uD::AbstractMatrix)
+
+Map time-dependent prescribed full-space values to the MPC-reduced space.
+"""
+function mpcReducedBCData(
+    full_to_reduced,
+    fixed,
+    uD::AbstractMatrix
+    )
+
+    nsteps = size(uD, 2)
+
+    free_r, fixed_r, uD1 =
+        mpcReducedBCData(
+            full_to_reduced,
+            fixed,
+            @view(uD[:, 1])
+        )
+
+    uD_r =
+        zeros(
+            Float64,
+            length(uD1),
+            nsteps
+        )
+
+    uD_r[:, 1] .= uD1
+
+    for i in 2:nsteps
+
+        free_i, fixed_i, uDi =
+            mpcReducedBCData(
+                full_to_reduced,
+                fixed,
+                @view(uD[:, i])
+            )
+
+        free_i == free_r ||
+            error(
+                "MPC: reduced free DOFs change between time steps."
+            )
+
+        fixed_i == fixed_r ||
+            error(
+                "MPC: reduced constrained DOFs change between time steps."
+            )
+
+        uD_r[:, i] .= uDi
+    end
+
+    return free_r, fixed_r, uD_r
+end
+
 using SparseArrays
 
 """

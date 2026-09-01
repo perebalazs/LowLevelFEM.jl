@@ -8015,6 +8015,7 @@ function FDM(
         t
     )
 end
+
 #=
 function FDM(
     K::SystemMatrix,
@@ -8225,8 +8226,130 @@ function FDM(
 end
 =#
 
-FDM(K::SystemMatrix, C::SystemMatrix, q::SystemVector, X0::SystemVector, n::Int, Δt::Float64; ϑ=0.5, support=Vector{BoundaryCondition}()) =
-    FDM(K, C, q, support, X0, n, Δt, ϑ=ϑ)
+#FDM(K::SystemMatrix, C::SystemMatrix, q::SystemVector, X0::SystemVector, n::Int, Δt::Float64; ϑ=0.5, support=Vector{BoundaryCondition}()) =
+#    FDM(K, C, q, support, X0, n, Δt, ϑ=ϑ)
+
+FDM(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    q::SystemVector,
+    X0::SystemVector,
+    n::Int,
+    Δt::Float64;
+    ϑ=0.5,
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[]
+    ) =
+    isempty(mpc) ?
+        FDM(
+            K,
+            C,
+            q,
+            support,
+            X0,
+            n,
+            Δt;
+            ϑ=ϑ
+        ) :
+        _FDM_multifield_mpc(
+            K,
+            C,
+            q,
+            support,
+            X0,
+            n,
+            Δt;
+            ϑ=ϑ,
+            mpc=mpc
+        )
+
+function _FDM_multifield_mpc(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    q::SystemVector,
+    bc::Vector{BoundaryCondition},
+    X0::SystemVector,
+    n::Int,
+    Δt::Float64;
+    ϑ=0.5,
+    mpc::Vector{MPC}
+    )
+
+    check_multifield_system_compatibility(K, C)
+
+    problems = K.problems
+    t = collect(0:Δt:(n - 1) * Δt)
+
+    T, R, prunable, protected =
+        _multifield_mpc_transformation(
+            K,
+            mpc
+        )
+
+    _, fixed, xD =
+        multifield_bc_data(
+            K,
+            bc;
+            nsteps=n
+        )
+
+    fixed_mpc, xD_mpc =
+        _multifield_mpc_bc_data(
+            K,
+            mpc,
+            fixed,
+            xD
+        )
+
+    free_r, fixed_r, _ =
+        reduced_bc_data(
+            R,
+            fixed_mpc,
+            @view(xD_mpc[:, 1])
+        )
+
+    xD_r = R * xD_mpc
+
+    Kr = T' * K.A * T
+    Cr = T' * C.A * T
+    qr = T' * q.a
+
+    free_r =
+        _remove_inactive_mpc_dofs(
+            (Kr, Cr),
+            qr,
+            free_r,
+            fixed_r,
+            protected,
+            prunable
+        )
+
+    X0r =
+        R * @view(X0.a[:, 1])
+
+    Xr =
+        _FDM_reduced(
+            Kr,
+            Cr,
+            qr,
+            X0r,
+            xD_r,
+            free_r,
+            fixed_r,
+            n,
+            Δt;
+            ϑ=ϑ
+        )
+
+    X = T * Xr
+
+    return split_multifield_solution(
+        X,
+        problems,
+        K.offsets,
+        t
+    )
+end
 
 """
     constrainedDoFs(K::SystemMatrix, 
@@ -8465,11 +8588,14 @@ Types:
 function smallestEigenValue(
     K::SystemMatrix,
     C::SystemMatrix;
-    support=Vector{BoundaryCondition}()
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[]
     )
 
     K0, C0, _, _ =
-        reduced_system_matrices(K, C, support)
+        isempty(mpc) ?
+            reduced_system_matrices(K, C, support) :
+            reduced_system_matrices(K, C, support, mpc)
 
     ϕ = nothing
     λ = nothing
@@ -8609,11 +8735,14 @@ Types:
 function largestEigenValue(
     K::SystemMatrix,
     C::SystemMatrix;
-    support=Vector{BoundaryCondition}()
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[]
     )
 
     K0, C0, _, _ =
-        reduced_system_matrices(K, C, support)
+        isempty(mpc) ?
+            reduced_system_matrices(K, C, support) :
+            reduced_system_matrices(K, C, support, mpc)
 
     λ, ϕ = Arpack.eigs(
         K0,
@@ -8710,7 +8839,8 @@ function solveEigenFields(
     M::SystemMatrix;
     n=6,
     fmin=0.0,
-    support=Vector{BoundaryCondition}()
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[]
     )
 
     # ----------------------------------------------------------
@@ -8737,11 +8867,18 @@ function solveEigenFields(
     # ----------------------------------------------------------
 
     K0, M0, T, free_r =
-        reduced_system_matrices(
-            K,
-            M,
-            support
-        )
+        isempty(mpc) ?
+            reduced_system_matrices(
+                K,
+                M,
+                support
+            ) :
+            reduced_system_matrices(
+                K,
+                M,
+                support,
+                mpc
+            )
 
     # ----------------------------------------------------------
     # 3) Eigen solve
@@ -9446,3 +9583,553 @@ D(:PlaneStress, 210e3, 0.3)
 
 """  
 D(args...) = ConstitutiveMatrix(args...)
+
+"""
+    mpcReducedBCData(full_to_reduced, fixed, uD::AbstractMatrix)
+
+Map a time history of prescribed full-space values to the MPC-reduced space.
+
+The set of constrained reduced DOFs must remain identical for all time steps.
+"""
+function mpcReducedBCData(
+    full_to_reduced,
+    fixed,
+    uD::AbstractMatrix
+    )
+
+    nsteps = size(uD, 2)
+
+    free_r, fixed_r, uD1 =
+        mpcReducedBCData(
+            full_to_reduced,
+            fixed,
+            @view(uD[:, 1])
+        )
+
+    UDr = zeros(Float64, length(uD1), nsteps)
+    UDr[:, 1] .= uD1
+
+    for i in 2:nsteps
+
+        free_i, fixed_i, uDi =
+            mpcReducedBCData(
+                full_to_reduced,
+                fixed,
+                @view(uD[:, i])
+            )
+
+        free_i == free_r ||
+            error(
+                "MPC: reduced free DOFs change between time steps."
+            )
+
+        fixed_i == fixed_r ||
+            error(
+                "MPC: reduced constrained DOFs change between time steps."
+            )
+
+        UDr[:, i] .= uDi
+    end
+
+    return free_r, fixed_r, UDr
+end
+
+"""
+    _multifield_mpc_bc_data(K, mpcs, fixed, xD::AbstractMatrix)
+
+Map a time history of prescribed multifield values through MPC relations.
+"""
+function _multifield_mpc_bc_data(
+    K::SystemMatrix,
+    mpcs::Vector{MPC},
+    fixed::Vector{Int},
+    xD::AbstractMatrix
+    )
+
+    nsteps = size(xD, 2)
+    ndof = size(xD, 1)
+
+    fixed_new, xD1 =
+        _multifield_mpc_bc_data(
+            K,
+            mpcs,
+            fixed,
+            @view(xD[:, 1])
+        )
+
+    XDnew = zeros(Float64, ndof, nsteps)
+    XDnew[:, 1] .= xD1
+
+    for i in 2:nsteps
+
+        fixed_i, xDi =
+            _multifield_mpc_bc_data(
+                K,
+                mpcs,
+                fixed,
+                @view(xD[:, i])
+            )
+
+        fixed_i == fixed_new ||
+            error(
+                "MPC: constrained multifield DOFs change between time steps."
+            )
+
+        XDnew[:, i] .= xDi
+    end
+
+    return fixed_new, XDnew
+end
+
+"""
+    _multifield_mpc_transformation(K, mpcs)
+
+Construct the global multifield transformation including reduced-order
+interpolation and equality MPC constraints.
+
+Returns
+
+    T, R, prunable, protected
+"""
+function _multifield_mpc_transformation(
+    K::SystemMatrix,
+    mpcs::Vector{MPC}
+    )
+
+    K.problems === nothing &&
+        error(
+            "_multifield_mpc_transformation: K must be a block SystemMatrix."
+        )
+
+    problems = K.problems
+    offsets = K.offsets
+
+    for c in mpcs
+
+        c.problem === nothing &&
+            error(
+                "MPC: in a multifield system every MPC must have an explicit field."
+            )
+
+        any(P -> P === c.problem, problems) ||
+            error(
+                "MPC: constraint refers to a field that is not present in the system."
+            )
+    end
+
+    Tblocks = SparseMatrixCSC{Float64,Int}[]
+    Rblocks = SparseMatrixCSC{Float64,Int}[]
+
+    prunable = Int[]
+    master_full_global = Int[]
+
+    final_offset = 0
+
+    for (i, P) in enumerate(problems)
+
+        local_mpcs =
+            [
+                c for c in mpcs
+                if c.problem === P
+            ]
+
+        Tp, Rp =
+            _base_reduction(
+                P,
+                local_mpcs
+            )
+
+        Tp, Rp =
+            _apply_mpc_to_reduction(
+                Tp,
+                Rp,
+                P,
+                local_mpcs
+            )
+
+        push!(Tblocks, Tp)
+        push!(Rblocks, Rp)
+
+        if !isempty(local_mpcs)
+
+            append!(
+                prunable,
+                final_offset .+
+                collect(1:size(Tp, 2))
+            )
+
+            local_master =
+                _mpc_master_dofs(
+                    P,
+                    local_mpcs
+                )
+
+            append!(
+                master_full_global,
+                offsets[i] .+ local_master
+            )
+        end
+
+        final_offset += size(Tp, 2)
+    end
+
+    T = blockdiag(Tblocks...)
+    R = blockdiag(Rblocks...)
+
+    protected = Int[]
+
+    if !isempty(master_full_global)
+
+        RR = R[:, master_full_global]
+
+        I, _, V = findnz(RR)
+
+        for k in eachindex(I)
+            iszero(V[k]) && continue
+            push!(protected, I[k])
+        end
+
+        sort!(unique!(protected))
+    end
+
+    return T, R, prunable, protected
+end
+
+function _remove_inactive_mpc_dofs(
+    matrices::Tuple,
+    rhs,
+    free::Vector{Int},
+    fixed::Vector{Int},
+    protected::Vector{Int},
+    prunable::Vector{Int}
+    )
+
+    n = size(first(matrices), 1)
+    active = falses(n)
+
+    for A in matrices
+
+        rows = rowvals(A)
+        vals = nonzeros(A)
+
+        for j in axes(A, 2)
+            for k in nzrange(A, j)
+
+                iszero(vals[k]) && continue
+
+                active[j] = true
+                active[rows[k]] = true
+            end
+        end
+    end
+
+    if rhs !== nothing
+
+        for i in 1:n
+            if any(!iszero, @view rhs[i, :])
+                active[i] = true
+            end
+        end
+    end
+
+    active[fixed] .= true
+    active[protected] .= true
+
+    can_prune = falses(n)
+    can_prune[prunable] .= true
+
+    return [
+        i for i in free
+        if !can_prune[i] || active[i]
+    ]
+end
+
+function reduced_system_matrices(
+    K::SystemMatrix,
+    C::SystemMatrix,
+    support::Vector{BoundaryCondition},
+    mpc::Vector{MPC}
+    )
+
+    isempty(mpc) &&
+        return reduced_system_matrices(
+            K,
+            C,
+            support
+        )
+
+    size(K.A) == size(C.A) ||
+        error(
+            "reduced_system_matrices: K and C must have the same size."
+        )
+
+    # ==========================================================
+    # Single field
+    # ==========================================================
+
+    if K.problems === nothing
+
+        P = K.model
+
+        P.reducedOrder &&
+            error(
+                "reduced_system_matrices: simultaneous single-field " *
+                "reduced-order and MPC transformations are not yet supported."
+            )
+
+        rep =
+            mpcRepresentativeMap(
+                P,
+                mpc
+            )
+
+        T, _, full_to_reduced =
+            mpcTransformation(rep)
+
+        fixed =
+            constrainedDoFs(
+                P,
+                support
+            )
+
+        free_r, _, _ =
+            mpcReducedBCData(
+                full_to_reduced,
+                fixed,
+                zeros(Float64, size(K.A, 1))
+            )
+
+        Kr = T' * K.A * T
+        Cr = T' * C.A * T
+
+        return (
+            Kr[free_r, free_r],
+            Cr[free_r, free_r],
+            T,
+            free_r
+        )
+    end
+
+    # ==========================================================
+    # Multifield
+    # ==========================================================
+
+    check_multifield_system_compatibility(K, C)
+
+    T, R, prunable, protected =
+        _multifield_mpc_transformation(
+            K,
+            mpc
+        )
+
+    _, fixed, _ =
+        multifield_bc_data(
+            K,
+            support;
+            nsteps=1
+        )
+
+    fixed_mpc, xD_mpc =
+        _multifield_mpc_bc_data(
+            K,
+            mpc,
+            fixed,
+            zeros(Float64, size(K.A, 1))
+        )
+
+    free_r, fixed_r, _ =
+        reduced_bc_data(
+            R,
+            fixed_mpc,
+            xD_mpc
+        )
+
+    Kr = T' * K.A * T
+    Cr = T' * C.A * T
+
+    free_r =
+        _remove_inactive_mpc_dofs(
+            (Kr, Cr),
+            nothing,
+            free_r,
+            fixed_r,
+            protected,
+            prunable
+        )
+
+    return (
+        Kr[free_r, free_r],
+        Cr[free_r, free_r],
+        T,
+        free_r
+    )
+end
+
+function _FDM_reduced(
+    K::SparseMatrixCSC,
+    C::SparseMatrixCSC,
+    q::AbstractMatrix,
+    X0::AbstractVector,
+    xD::AbstractMatrix,
+    free::Vector{Int},
+    fixed::Vector{Int},
+    n::Int,
+    Δt::Float64;
+    ϑ=0.5
+    )
+
+    nr = size(K, 1)
+
+    X = zeros(Float64, nr, n)
+    X[:, 1] .= X0
+
+    if !isempty(fixed)
+        X[fixed, 1] .= xD[fixed, 1]
+    end
+
+    Kff = K[free, free]
+    Cff = C[free, free]
+
+    Kfc = K[free, fixed]
+    Cfc = C[free, fixed]
+
+    has_fixed = !isempty(fixed)
+
+    if ϑ == 0 && isdiag(Cff)
+
+        d = diag(Cff)
+
+        all(>(0), d) ||
+            error(
+                "FDM: non-positive diagonal entry detected " *
+                "in MPC-reduced Cff."
+            )
+
+        invd = 1.0 ./ d
+
+        for i in 2:n
+
+            qi = size(q, 2) == 1 ? 1 : i - 1
+
+            @views begin
+                qn = q[free, qi]
+                x_n = X[free, i - 1]
+            end
+
+            rhs =
+                qn -
+                Kff * x_n
+
+            if has_fixed
+
+                @views begin
+                    xc_n = xD[fixed, i - 1]
+                    xc_np1 = xD[fixed, i]
+                end
+
+                rhs .-=
+                    Kfc * xc_n +
+                    Cfc * ((xc_np1 - xc_n) ./ Δt)
+            end
+
+            @views X[free, i] .=
+                x_n .+
+                Δt .* invd .* rhs
+
+            if has_fixed
+                @views X[fixed, i] .= xD[fixed, i]
+            end
+        end
+
+    else
+
+        A =
+            Cff +
+            ϑ * Δt * Kff
+
+        B =
+            Cff -
+            (1 - ϑ) * Δt * Kff
+
+        luA = lu(A)
+
+        if has_fixed
+
+            Afc =
+                Cfc +
+                ϑ * Δt * Kfc
+
+            Bfc =
+                Cfc -
+                (1 - ϑ) * Δt * Kfc
+        end
+
+        x_n = copy(@view X[free, 1])
+        x_np1 = similar(x_n)
+        rhs = similar(x_n)
+
+        for i in 2:n
+
+            mul!(rhs, B, x_n)
+
+            if size(q, 2) == 1
+
+                @views rhs .+=
+                    Δt .* q[free, 1]
+
+            else
+
+                @views rhs .+=
+                    Δt .* (
+                        (1 - ϑ) .* q[free, i - 1] .+
+                        ϑ .* q[free, i]
+                    )
+            end
+
+            if has_fixed
+
+                @views begin
+
+                    xc_n =
+                        xD[fixed, i - 1]
+
+                    xc_np1 =
+                        xD[fixed, i]
+
+                    mul!(
+                        rhs,
+                        Afc,
+                        xc_np1,
+                        -1.0,
+                        1.0
+                    )
+
+                    mul!(
+                        rhs,
+                        Bfc,
+                        xc_n,
+                        1.0,
+                        1.0
+                    )
+                end
+            end
+
+            ldiv!(
+                x_np1,
+                luA,
+                rhs
+            )
+
+            @views X[free, i] .= x_np1
+
+            if has_fixed
+                @views X[fixed, i] .= xD[fixed, i]
+            end
+
+            x_n, x_np1 =
+                x_np1, x_n
+        end
+    end
+
+    return X
+end

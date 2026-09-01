@@ -5965,13 +5965,353 @@ function CDM(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}
     return CDM(K, M, C, f, bc, u0, v0, n, Δt)
 end
 
-CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
-    CDM(K, M, C, f, support,  uu0, vv0, n, Δt)
+#CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+#    CDM(K, M, C, f, support,  uu0, vv0, n, Δt)
 
-CDM(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
-    CDM(K, M, f, support,  uu0, vv0, n, Δt)
+#CDM(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+#    CDM(K, M, f, support,  uu0, vv0, n, Δt)
 
-    """
+CDM(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    C::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    support=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[]
+    ) =
+    isempty(mpc) ?
+        CDM(
+            K, M, C, f,
+            support,
+            U0, V0,
+            n, Δt
+        ) :
+        _CDM_mpc(
+            K, M, C, f,
+            support,
+            U0, V0,
+            n, Δt;
+            mpc=mpc
+        )
+
+CDM(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    support=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[]
+    ) =
+    isempty(mpc) ?
+        CDM(
+            K, M, f,
+            support,
+            U0, V0,
+            n, Δt
+        ) :
+        _CDM_mpc(
+            K, M, f,
+            support,
+            U0, V0,
+            n, Δt;
+            mpc=mpc
+        )
+
+function _CDM_reduced(
+    K,
+    M,
+    C,
+    f,
+    U0,
+    V0,
+    uD,
+    free,
+    fixed,
+    n,
+    Δt
+    )
+
+    nr = size(K, 1)
+
+    u = zeros(Float64, nr, n)
+    v = zeros(Float64, nr, n)
+
+    if !isempty(fixed)
+        u[fixed, :] .= uD[fixed, :]
+    end
+
+    u[free, 1] .= U0[free]
+    v[free, 1] .= V0[free]
+
+    if !isempty(fixed)
+
+        if n >= 3
+
+            @views v[fixed, 1] .=
+                (
+                    -3.0 .* u[fixed, 1] .+
+                     4.0 .* u[fixed, 2] .-
+                             u[fixed, 3]
+                ) ./ (2Δt)
+
+        else
+
+            @views v[fixed, 1] .=
+                (
+                    u[fixed, 2] .-
+                    u[fixed, 1]
+                ) ./ Δt
+        end
+
+        for i in 2:n
+
+            @views v[fixed, i] .=
+                (
+                    u[fixed, i] .-
+                    u[fixed, i - 1]
+                ) ./ Δt
+        end
+    end
+
+    Kff = K[free, free]
+    Kfc = K[free, fixed]
+
+    Cff = C[free, free]
+    Cfc = C[free, fixed]
+
+    Mff = M[free, free]
+
+    isdiag(Mff) ||
+        error(
+            "CDM: MPC-reduced mass matrix is not diagonal. " *
+            "Explicit CDM requires a lumped reduced mass matrix."
+        )
+
+    d = diag(Mff)
+
+    all(>(0), d) ||
+        error(
+            "CDM: non-positive diagonal entry in MPC-reduced mass matrix."
+        )
+
+    invd = 1.0 ./ d
+
+    a0 =
+        Mff \ (
+            f[free, 1] -
+            Kff * u[free, 1] -
+            Kfc * u[fixed, 1] -
+            Cff * v[free, 1] -
+            Cfc * v[fixed, 1]
+        )
+
+    u0 =
+        copy(
+            @view u[free, 1]
+        )
+
+    u00 =
+        u0 .-
+        (@view v[free, 1]) .* Δt .+
+        0.5 .* a0 .* Δt^2
+
+    for i in 2:n
+
+        ii =
+            size(f, 2) == 1 ?
+            1 :
+            i - 1
+
+        @views begin
+            uc = u[fixed, i - 1]
+            vc = v[fixed, i - 1]
+        end
+
+        rhs =
+            f[free, ii] -
+            Kfc * uc -
+            Cfc * vc
+
+        Δu = u0 .- u00
+
+        u1 =
+            2.0 .* u0 .-
+            u00 .+
+            invd .* (
+                Δt^2 .* (
+                    rhs -
+                    Kff * u0
+                ) -
+                Δt .* (
+                    Cff * Δu
+                )
+            )
+
+        @views begin
+            u[free, i] .= u1
+            v[free, i] .=
+                (u1 .- u0) ./ Δt
+        end
+
+        u00, u0 = u0, u1
+    end
+
+    return u, v
+end
+
+function _CDM_mpc(
+    K,
+    M,
+    C,
+    f,
+    bc,
+    U0,
+    V0,
+    n,
+    Δt;
+    mpc
+    )
+
+    P = K.model
+
+    P.reducedOrder &&
+        error(
+            "CDM: simultaneous single-field reduced-order and MPC " *
+            "transformations are not yet supported."
+        )
+
+    f  = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+
+    rep =
+        mpcRepresentativeMap(
+            P,
+            mpc
+        )
+
+    T, p, full_to_reduced =
+        mpcTransformation(rep)
+
+    Kr = T' * K.A * T
+    Mr = T' * M.A * T
+    Cr = T' * C.A * T
+    fr = T' * f.a
+
+    ts = collect(0:Δt:(n - 1) * Δt)
+
+    TYPE = typeof(f)
+
+    UD = TYPE(
+        [],
+        zeros(Float64, size(K.A, 1), n),
+        ts,
+        [],
+        n,
+        U0.type,
+        P
+    )
+
+    applyBoundaryConditions!(UD, bc)
+
+    fixed =
+        constrainedDoFs(
+            P,
+            bc
+        )
+
+    free_r, fixed_r, uD_r =
+        mpcReducedBCData(
+            full_to_reduced,
+            fixed,
+            UD.a
+        )
+
+    U0r =
+        copy(
+            @view U0.a[p, 1]
+        )
+
+    V0r =
+        copy(
+            @view V0.a[p, 1]
+        )
+
+    ur, vr =
+        _CDM_reduced(
+            Kr,
+            Mr,
+            Cr,
+            fr,
+            U0r,
+            V0r,
+            uD_r,
+            free_r,
+            fixed_r,
+            n,
+            Δt
+        )
+
+    u = T * ur
+    v = T * vr
+
+    return TYPE(
+        [],
+        u,
+        ts,
+        [],
+        n,
+        U0.type,
+        P
+    ),
+    TYPE(
+        [],
+        v,
+        ts,
+        [],
+        n,
+        V0.type,
+        P
+    )
+end
+
+function _CDM_mpc(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    bc::Vector{BoundaryCondition},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    mpc::Vector{MPC}
+    )
+
+    C = K * 0.0
+    dropzeros!(C.A)
+
+    return _CDM_mpc(
+        K,
+        M,
+        C,
+        f,
+        bc,
+        U0,
+        V0,
+        n,
+        Δt;
+        mpc=mpc
+    )
+end
+
+"""
     HHT(K::SystemMatrix, 
         M::SystemMatrix, 
         f::VectorField, 
@@ -6284,9 +6624,493 @@ function HHT(
            TYPE([], v, t, [], length(t), V0.type, K.model)
 end
 
-HHT(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=BoundaryCondition[], 
-    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
-        HHT(K, M, f, support, uu0, vv0, n, Δt; α=α, δ=δ, γ=γ, β=β)
+#HHT(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=BoundaryCondition[], 
+#    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
+#        HHT(K, M, f, support, uu0, vv0, n, Δt; α=α, δ=δ, γ=γ, β=β)
+
+function HHT(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    support=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[],
+    α=0.0,
+    δ=0.0,
+    γ=0.5 + δ,
+    β=0.25 * (0.5 + γ)^2
+    )
+
+    if isempty(mpc)
+
+        # Existing path remains unchanged.
+        return HHT(
+            K,
+            M,
+            f,
+            support,
+            U0,
+            V0,
+            n,
+            Δt;
+            α=α,
+            δ=δ,
+            γ=γ,
+            β=β
+        )
+    end
+
+    return _HHT_mpc(
+        K,
+        M,
+        f,
+        support,
+        U0,
+        V0,
+        n,
+        Δt;
+        mpc=mpc,
+        α=α,
+        γ=γ,
+        β=β
+    )
+end
+
+"""
+    _HHT_reduced(K, M, f, U0, V0, uD, free, fixed, n, Δt;
+                 α=0.0, γ=0.5, β=0.25)
+
+Integrate a reduced structural dynamic system using the HHT method.
+"""
+function _HHT_reduced(
+    K,
+    M,
+    f,
+    U0,
+    V0,
+    uD,
+    free,
+    fixed,
+    n,
+    Δt;
+    α=0.0,
+    γ=0.5,
+    β=0.25
+    )
+
+    nr = size(K, 1)
+
+    u = zeros(Float64, nr, n)
+    v = zeros(Float64, nr, n)
+
+    # ----------------------------------------------------------
+    # Prescribed displacement history
+    # ----------------------------------------------------------
+
+    if !isempty(fixed)
+        u[fixed, :] .= uD[fixed, :]
+    end
+
+    # Initial conditions on free DOFs
+    u[free, 1] .= U0[free]
+    v[free, 1] .= V0[free]
+
+    dt = Δt
+    dtdt = dt^2
+
+    # Newmark/HHT constants
+    c0 = 1.0 / (β * dtdt)
+    c2 = 1.0 / (β * dt)
+    c3 = 0.5 / β - 1.0
+    c6 = dt * (1.0 - γ)
+    c7 = γ * dt
+
+    has_fix = !isempty(fixed)
+
+    # ----------------------------------------------------------
+    # Matrix blocks
+    # ----------------------------------------------------------
+
+    Kff = K[free, free]
+    Mff = M[free, free]
+
+    if has_fix
+
+        Kfc = K[free, fixed]
+        Mfc = M[free, fixed]
+
+    else
+
+        Kfc = spzeros(length(free), 0)
+        Mfc = spzeros(length(free), 0)
+    end
+
+    # ----------------------------------------------------------
+    # Initial acceleration
+    # ----------------------------------------------------------
+
+    a = zeros(Float64, nr)
+
+    if has_fix
+
+        if n >= 3
+
+            @views begin
+
+                v[fixed, 1] .=
+                    (
+                        -3.0 .* u[fixed, 1] .+
+                         4.0 .* u[fixed, 2] .-
+                                 u[fixed, 3]
+                    ) ./ (2.0 * Δt)
+
+                a[fixed] .=
+                    (
+                        u[fixed, 1] .-
+                        2.0 .* u[fixed, 2] .+
+                               u[fixed, 3]
+                    ) ./ Δt^2
+            end
+
+        else
+
+            @views v[fixed, 1] .=
+                (
+                    u[fixed, 2] .-
+                    u[fixed, 1]
+                ) ./ Δt
+        end
+    end
+
+    rhs0 =
+        copy(
+            @view f[free, 1]
+        )
+
+    if has_fix
+
+        mul!(
+            rhs0,
+            Kfc,
+            @view(u[fixed, 1]),
+            -1.0,
+            1.0
+        )
+
+        mul!(
+            rhs0,
+            Mfc,
+            @view(a[fixed]),
+            -1.0,
+            1.0
+        )
+    end
+
+    mul!(
+        rhs0,
+        Kff,
+        @view(u[free, 1]),
+        -1.0,
+        1.0
+    )
+
+    a[free] .=
+        Mff \ rhs0
+
+    # ----------------------------------------------------------
+    # Effective stiffness
+    # ----------------------------------------------------------
+
+    Aff =
+        (1 + α) * Kff +
+        c0 * Mff
+
+    Afc =
+        (1 + α) * Kfc +
+        c0 * Mfc
+
+    luAff = lu(Aff)
+
+    # ----------------------------------------------------------
+    # Workspaces
+    # ----------------------------------------------------------
+
+    predictor =
+        zeros(Float64, nr)
+
+    rhs_full =
+        zeros(Float64, nr)
+
+    rhs_free =
+        zeros(Float64, length(free))
+
+    u_free_np1 =
+        similar(rhs_free)
+
+    a_np1 =
+        similar(a)
+
+    u_fix_np1 =
+        zeros(Float64, length(fixed))
+
+    # ----------------------------------------------------------
+    # Time stepping
+    # ----------------------------------------------------------
+
+    for i in 2:n
+
+        u_n =
+            @view u[:, i - 1]
+
+        v_n =
+            @view v[:, i - 1]
+
+        u_np1 =
+            @view u[:, i]
+
+        # Newmark predictor
+        @. predictor =
+            c0 * u_n +
+            c2 * v_n +
+            c3 * a
+
+        # M * predictor + α K u_n
+        mul!(
+            rhs_full,
+            M,
+            predictor
+        )
+
+        mul!(
+            rhs_full,
+            K,
+            u_n,
+            α,
+            1.0
+        )
+
+        # HHT-weighted load
+        if size(f, 2) == 1
+
+            @inbounds for j in eachindex(free)
+
+                dof = free[j]
+
+                rhs_free[j] =
+                    rhs_full[dof] +
+                    f[dof, 1]
+            end
+
+        else
+
+            @inbounds for j in eachindex(free)
+
+                dof = free[j]
+
+                rhs_free[j] =
+                    rhs_full[dof] +
+                    (1 + α) * f[dof, i] -
+                    α * f[dof, i - 1]
+            end
+        end
+
+        # Prescribed displacement contribution
+        if has_fix
+
+            @views u_fix_np1 .=
+                u[fixed, i]
+
+            mul!(
+                rhs_free,
+                Afc,
+                u_fix_np1,
+                -1.0,
+                1.0
+            )
+        end
+
+        # Effective solve
+        ldiv!(
+            u_free_np1,
+            luAff,
+            rhs_free
+        )
+
+        @views u[free, i] .=
+            u_free_np1
+
+        # Acceleration
+        @. a_np1 =
+            c0 * (u_np1 - u_n) -
+            c2 * v_n -
+            c3 * a
+
+        # Velocity
+        v_np1 =
+            @view v[:, i]
+
+        @. v_np1 =
+            v_n +
+            c6 * a +
+            c7 * a_np1
+
+        a, a_np1 =
+            a_np1, a
+    end
+
+    return u, v
+end
+
+function _HHT_mpc(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    bc::Vector{BoundaryCondition},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    mpc::Vector{MPC},
+    α=0.0,
+    γ=0.5,
+    β=0.25
+    )
+
+    P = K.model
+
+    P.reducedOrder &&
+        error(
+            "HHT: simultaneous single-field reduced-order and MPC " *
+            "transformations are not yet supported."
+        )
+
+    f  = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+
+    f.nsteps == 1 || f.nsteps == n ||
+        error(
+            "HHT: load vector must contain either 1 or n time steps."
+        )
+
+    rep =
+        mpcRepresentativeMap(
+            P,
+            mpc
+        )
+
+    T, p, full_to_reduced =
+        mpcTransformation(rep)
+
+    # ----------------------------------------------------------
+    # MPC projection
+    # ----------------------------------------------------------
+
+    Kr = T' * K.A * T
+    Mr = T' * M.A * T
+    fr = T' * f.a
+
+    ts =
+        collect(
+            0:Δt:(n - 1) * Δt
+        )
+
+    TYPE = typeof(f)
+
+    # ----------------------------------------------------------
+    # Full-space prescribed displacement history
+    # ----------------------------------------------------------
+
+    UD =
+        TYPE(
+            [],
+            zeros(Float64, size(K.A, 1), n),
+            ts,
+            [],
+            n,
+            U0.type,
+            P
+        )
+
+    applyBoundaryConditions!(
+        UD,
+        bc
+    )
+
+    fixed =
+        constrainedDoFs(
+            P,
+            bc
+        )
+
+    free_r, fixed_r, uD_r =
+        mpcReducedBCData(
+            full_to_reduced,
+            fixed,
+            UD.a
+        )
+
+    # Reduced initial conditions
+    U0r =
+        copy(
+            @view U0.a[p, 1]
+        )
+
+    V0r =
+        copy(
+            @view V0.a[p, 1]
+        )
+
+    # ----------------------------------------------------------
+    # Reduced HHT integration
+    # ----------------------------------------------------------
+
+    ur, vr =
+        _HHT_reduced(
+            Kr,
+            Mr,
+            fr,
+            U0r,
+            V0r,
+            uD_r,
+            free_r,
+            fixed_r,
+            n,
+            Δt;
+            α=α,
+            γ=γ,
+            β=β
+        )
+
+    # ----------------------------------------------------------
+    # Prolongate to full MPC-constrained space
+    # ----------------------------------------------------------
+
+    u = T * ur
+    v = T * vr
+
+    return TYPE(
+        [],
+        u,
+        ts,
+        [],
+        n,
+        U0.type,
+        P
+    ),
+    TYPE(
+        [],
+        v,
+        ts,
+        [],
+        n,
+        V0.type,
+        P
+    )
+end
 
 """
     CDMaccuracyAnalysis(ωₘᵢₙ::Float64, 

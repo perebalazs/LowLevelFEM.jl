@@ -812,3 +812,4 @@ function reduced_bc_data(
 
     return free_r, fixed_r, uD_r
 end
+
