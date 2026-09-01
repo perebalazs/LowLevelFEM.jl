@@ -487,8 +487,8 @@ function _contact_group_elements(
     return elements, edim
 end
 
-function _contact_local_node_matrix(local, dim::Int, num_nodes::Int)
-    data = Float64.(local)
+function _contact_local_node_matrix(localCoord, dim::Int, num_nodes::Int)
+    data = Float64.(localCoord)
 
     if length(data) == dim * num_nodes
         return reshape(data, dim, num_nodes)

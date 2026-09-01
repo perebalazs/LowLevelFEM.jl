@@ -2911,6 +2911,114 @@ function _check_load_keys(problem::Problem, vals::Dict)
     end
 end
 
+"""
+    MultiPointConstraint(; master::String, slave::String,
+                         field=nothing, problem=field, kwargs...)
+    MPC(; master::String, slave::String,
+        field=nothing, problem=field, kwargs...)
+
+Define a multi-point constraint between master and slave physical groups.
+
+`MPC` is a shorthand alias for `MultiPointConstraint`.
+
+The constraint identifies corresponding degrees of freedom on the `master`
+and `slave` physical groups. The constrained components can be selected
+individually using Boolean keyword arguments.
+
+If no component keyword is specified, all components of the associated field
+are constrained.
+
+# Arguments
+
+- `master::String`:
+  Name of the Gmsh physical group containing the master node(s).
+
+- `slave::String`:
+  Name of the Gmsh physical group containing the slave node(s).
+
+# Keyword Arguments
+
+- `field`:
+  Field (`Problem`) to which the constraint belongs. This is required when
+  MPCs are used in multifield systems.
+
+- `problem`:
+  Backward-compatible alias for `field`.
+
+- `kwargs...`:
+  Boolean component selectors. Component names follow the field name and its
+  components, for example `ux`, `uy`, `uz`, `φ`, `φx`, `φy`, `φz`.
+
+  A value of `true` constrains the corresponding component, while `false`
+  leaves it unconstrained.
+
+# Behavior
+
+Two types of coupling are supported.
+
+## Single-master coupling
+
+If the master physical group contains a single node, all selected slave
+degrees of freedom are tied to that master node. This can be used for
+remote-point-type constraints.
+
+## Periodic coupling
+
+If the master and slave physical groups contain multiple nodes, the
+correspondence is obtained from the periodic node mapping stored in the
+Gmsh model.
+
+Periodic pairing must therefore be defined in Gmsh before constructing the
+constraint.
+
+# Examples
+
+Tie all displacement components of a boundary to a remote point:
+
+```julia
+mpc = MPC(
+    master="remote",
+    slave="right",
+    field=U
+)
+```
+
+Constrain only selected components:
+
+```julia
+mpc = MPC(
+    master="remote",
+    slave="right",
+    field=U,
+    ux=true,
+    uy=true,
+    uz=false
+)
+```
+
+Periodic displacement coupling:
+
+```julia
+periodic = MPC(
+    master="right",
+    slave="left",
+    field=U
+)
+
+u = solveField(
+    K,
+    f;
+    support=[bc],
+    mpc=[periodic]
+)
+```
+
+# Notes
+
+MPC relations may be chained. During solution, chained constraints are  
+resolved so that each constrained degree of freedom points directly to its  
+final master degree of freedom.  
+"""
 struct MultiPointConstraint
     master::String
     slave::String
@@ -2930,6 +3038,9 @@ struct MultiPointConstraint
     end
 end
 
+"""
+    Alias for `MultiPointConstraint`
+"""
 const MPC = MultiPointConstraint
 
 function mpcRepresentativeMap(
@@ -6572,36 +6683,121 @@ end
         fromPhysicalGroup::String=""
     )
 
-Transfer an elementwise field directly to the elements of another physical
+Transfer or restrict an elementwise field to the elements of another physical
 group while preserving elementwise discontinuities.
 
-Each target element is matched to a codimension-one side of a source element
-through common primary Gmsh node tags. Values are copied from the matched
-source element without nodal averaging. Target nodes that are not present in
-the matched source element are assigned zero.
+Two operations are supported:
 
-If a target element is adjacent to more than one source element, the transfer
-is ambiguous and an error is thrown. Use `fromPhysicalGroup` to select the
-source side of an internal interface. To average discontinuous values instead,
-use `nodesToElements(elementsToNodes(S); onPhysicalGroup=...)`.
+1. same-dimensional restriction,
+2. transfer to codimension-one boundary or interface elements.
 
-The source and target meshes must be conforming, and the target elements must
-have dimension one less than the source elements.
+No nodal averaging is performed.
+
+# Arguments
+
+- `S`:
+  Elementwise `ScalarField`, `VectorField` or `TensorField`.
+
+# Keyword Arguments
+
+- `onPhysicalGroup::String`:
+  Target Gmsh physical group.
+
+- `fromPhysicalGroup::String=""`:
+  Optional source physical group used to disambiguate codimension-one
+  transfers on internal interfaces.
+
+# Same-dimensional restriction
+
+If the target physical group has the same dimension as the source elements,
+only source elements belonging to the target group are retained.
+
+Supported cases are
+
+```text
+1D -> 1D
+2D -> 2D
+3D -> 3D
+```
+
+The element values are copied directly and their elementwise representation  
+is preserved.
+
+This is useful, for example, when an elementwise result is defined on an  
+entire beam structure but only one beam segment should be extracted.
+
+# Codimension-one transfer
+
+If the target physical group has dimension one less than the source elements,  
+each target element is matched to a side of a source element through common  
+primary Gmsh node tags.
+
+Supported cases are
+
+```text
+1D -> 0D
+2D -> 1D
+3D -> 2D
+```
+
+Values are copied from the matched source element without nodal averaging.  
+Target nodes that are not present in the matched source element are assigned  
+zero.
+
+If a target element is adjacent to more than one eligible source element,  
+the transfer is ambiguous and an error is thrown. Use `fromPhysicalGroup`  
+to select the required source side of an internal interface.
+
+# Returns
+
+A field of the same type as `S` containing values on the target elements.
 
 # Examples
+
+Restrict an elementwise beam result to one beam segment:
+
+```julia
+M_ABC = elementsToElements(
+    M;
+    onPhysicalGroup="ABC"
+)
+```
+
+Transfer a volume field to a boundary surface:
 
 ```julia
 surface_field = elementsToElements(
     volume_field;
     onPhysicalGroup="surface"
 )
+```
 
+Select one side of an internal interface:
+
+```julia
 interface_field = elementsToElements(
     volume_field;
     onPhysicalGroup="interface",
     fromPhysicalGroup="body_1"
 )
 ```
+
+# Notes
+
+The source field must be elementwise.
+
+For codimension-one transfer, the source and target meshes must be conforming.
+
+To obtain nodally averaged values instead of preserving elementwise  
+discontinuities, use
+
+```julia
+nodesToElements(
+    elementsToNodes(S);
+    onPhysicalGroup="..."
+)
+```
+
 """
 function elementsToElements(
     S::Union{ScalarField,VectorField,TensorField};

@@ -751,10 +751,25 @@ SurfaceSymGrad
 build_csc_pattern
 ```
 
+## Constitutive matrices
+
+```@docs
+ConstitutiveMatrix
+D
+```
+
 ## Multifield Solver
 
 ```@docs
 solveField
 solveEigenFields
 reductionMatrices
+```
+
+## Multi-point constraints
+
+```@docs
+MultiPointConstraint
+rigidRotationMap
+collapseMPC
 ```
