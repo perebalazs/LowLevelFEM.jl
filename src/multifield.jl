@@ -9584,6 +9584,7 @@ D(:PlaneStress, 210e3, 0.3)
 """  
 D(args...) = ConstitutiveMatrix(args...)
 
+#=
 """
     mpcReducedBCData(full_to_reduced, fixed, uD::AbstractMatrix)
 
@@ -9633,6 +9634,7 @@ function mpcReducedBCData(
 
     return free_r, fixed_r, UDr
 end
+=#
 
 """
     _multifield_mpc_bc_data(K, mpcs, fixed, xD::AbstractMatrix)

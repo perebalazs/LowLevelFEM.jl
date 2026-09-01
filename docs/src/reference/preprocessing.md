@@ -28,7 +28,7 @@ openGeometry
 ## Boundary Conditions and Loads
 
 ```@docs
-isplacementConstraint
+displacementConstraint
 temperatureConstraint
 elasticSupport
 load
