@@ -3939,7 +3939,10 @@ function _mpc_master_dofs(
 
     for c in mpcs
 
-        c.problem === P || continue
+        if c.problem !== nothing && c.problem !== P
+            continue
+        end
+        #c.problem === P || continue
 
         tag =
             getTagForPhysicalName(c.master)
@@ -4173,12 +4176,124 @@ function _apply_mpc_to_reduction(
 
     _canonicalize_mpc_rep!(rep)
 
+    # ------------------------------------------------------
+    # Fast path for full-order fields
+    # ------------------------------------------------------
+
+    if !P.reducedOrder
+
+        # DOFs represented by the active material space
+        represented = _represented_rows(T)
+        active = findall(represented)
+
+        # Final MPC representatives of all active DOFs
+        roots =
+            sort!(
+                unique(
+                    rep[active]
+                )
+            )
+
+        # Every representative must itself belong to the
+        # active space. Remote masters are already added by
+        # _base_reduction().
+        for root in roots
+            represented[root] ||
+                error(
+                    "MPC: representative DOF $root is outside " *
+                    "the active field space."
+                )
+        end
+
+        # full representative DOF -> reduced DOF
+        root_to_reduced =
+            zeros(
+                Int,
+                length(rep)
+            )
+
+        for (j, root) in enumerate(roots)
+            root_to_reduced[root] = j
+        end
+
+        # Every active full-space DOF gets exactly one
+        # reduced coordinate.
+        J =
+            Vector{Int}(
+                undef,
+                length(active)
+            )
+
+        @inbounds for k in eachindex(active)
+
+            dof = active[k]
+
+            J[k] =
+                root_to_reduced[
+                    rep[dof]
+                ]
+
+            J[k] != 0 ||
+                error(
+                    "MPC: failed to map DOF $dof " *
+                    "to the reduced field space."
+                )
+        end
+
+        nfull = size(T, 1)
+        nred = length(roots)
+
+        # Prolongation:
+        #
+        #     u = Tnew * ur
+        #
+        Tnew =
+            sparse(
+                active,
+                J,
+                ones(Float64, length(active)),
+                nfull,
+                nred
+            )
+
+        # Restriction selects the representative/master value.
+        Rnew =
+            sparse(
+                1:nred,
+                roots,
+                ones(Float64, nred),
+                nred,
+                nfull
+            )
+
+        return Tnew, Rnew
+    end
+
+    represented = _represented_rows(T)
+
     constraints =
         [
             (i, rep[i])
             for i in eachindex(rep)
-            if rep[i] != i
+            if rep[i] != i &&
+            represented[i]
         ]
+    
+    for (slave, master) in constraints
+
+        represented[master] ||
+            error(
+                "MPC: master DOF $master of slave DOF $slave " *
+                "is not represented in the active field space."
+            )
+    end
+
+    #constraints =
+    #    [
+    #        (i, rep[i])
+    #        for i in eachindex(rep)
+    #        if rep[i] != i
+    #    ]
 
     isempty(constraints) && return T, R
 
@@ -4304,6 +4419,82 @@ function _apply_mpc_to_reduction(
     end
 
     return T, R
+end
+
+"""
+    _singlefield_mpc_transformation(P, mpcs)
+
+Construct the active field transformation and apply equality MPCs.
+"""
+function _singlefield_mpc_transformation(
+    P::Problem,
+    mpcs::Vector{MPC}
+    )
+
+    T, R =
+        _base_reduction(
+            P,
+            mpcs
+        )
+
+    T, R =
+        _apply_mpc_to_reduction(
+            T,
+            R,
+            P,
+            mpcs
+        )
+
+    return T, R
+end
+
+function _singlefield_mpc_bc_data(
+    P::Problem,
+    mpcs::Vector{MPC},
+    fixed::Vector{Int},
+    uD::AbstractVector
+    )
+
+    rep =
+        mpcRepresentativeMap(
+            P,
+            mpcs
+        )
+
+    _canonicalize_mpc_rep!(rep)
+
+    fixed_new = Int[]
+    uD_new = zeros(Float64, length(uD))
+
+    assigned =
+        Dict{Int,Float64}()
+
+    for dof in fixed
+
+        master = rep[dof]
+        value = uD[dof]
+
+        if haskey(assigned, master)
+
+            isapprox(
+                assigned[master],
+                value
+            ) ||
+                error(
+                    "MPC: incompatible prescribed values on tied DOFs."
+                )
+
+        else
+
+            assigned[master] = value
+            push!(fixed_new, master)
+            uD_new[master] = value
+        end
+    end
+
+    sort!(unique!(fixed_new))
+
+    return fixed_new, uD_new
 end
 
 """
@@ -9873,20 +10064,11 @@ function reduced_system_matrices(
 
         P = K.model
 
-        P.reducedOrder &&
-            error(
-                "reduced_system_matrices: simultaneous single-field " *
-                "reduced-order and MPC transformations are not yet supported."
-            )
-
-        rep =
-            mpcRepresentativeMap(
+        T, R =
+            _singlefield_mpc_transformation(
                 P,
                 mpc
             )
-
-        T, _, full_to_reduced =
-            mpcTransformation(rep)
 
         fixed =
             constrainedDoFs(
@@ -9894,11 +10076,25 @@ function reduced_system_matrices(
                 support
             )
 
-        free_r, _, _ =
-            mpcReducedBCData(
-                full_to_reduced,
+        uD =
+            zeros(
+                Float64,
+                ndofs(P)
+            )
+
+        fixed_mpc, uD_mpc =
+            _singlefield_mpc_bc_data(
+                P,
+                mpc,
                 fixed,
-                zeros(Float64, size(K.A, 1))
+                uD
+            )
+
+        free_r, _, _ =
+            reduced_bc_data(
+                R,
+                fixed_mpc,
+                uD_mpc
             )
 
         Kr = T' * K.A * T

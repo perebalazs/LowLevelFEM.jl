@@ -1443,6 +1443,268 @@ function solveField(
 
     problem = K.model
 
+    fixed =
+        constrainedDoFs(
+            problem,
+            support
+        )
+
+    u = copy(f)
+
+    fill!(u.a, 0.0)
+
+    applyBoundaryConditions!(
+        u,
+        support
+    )
+
+
+    # ==========================================================
+    # 1) Standard full-order solution without MPC
+    # ==========================================================
+
+    if !problem.reducedOrder &&
+       isempty(mpc)
+
+        free =
+            freeDoFs(
+                problem,
+                support
+            )
+
+        f_kin =
+            K.A[:, fixed] *
+            u.a[fixed, 1]
+
+        rhs =
+            f.a[free, 1] -
+            f_kin[free]
+
+        if iterative
+
+            u.a[free, 1] =
+                cg(
+                    K.A[free, free],
+                    rhs,
+                    Pl=preconditioner,
+                    reltol=reltol,
+                    maxiter=maxiter
+                )
+
+        elseif ordering == false
+
+            u.a[free, 1] =
+                lu(
+                    K.A[free, free],
+                    q=nothing
+                ) \ rhs
+
+        else
+
+            u.a[free, 1] =
+                K.A[free, free] \
+                rhs
+        end
+
+        return u
+    end
+
+
+    # ==========================================================
+    # 2) Transformed solution
+    #
+    # Handles:
+    #
+    #   full-order    + MPC
+    #   reduced-order without MPC
+    #   reduced-order + MPC
+    #
+    # The transformation always maps
+    #
+    #       u = T * ur
+    #
+    # from the final reduced space to the original full
+    # Gmsh DOF space.
+    # ==========================================================
+
+
+    # ----------------------------------------------------------
+    # Base field reduction
+    #
+    # Full-order:
+    #   active material DOFs only
+    #
+    # Reduced-order:
+    #   H1/H2 reduction
+    #
+    # Possible MPC master DOFs are also included where needed.
+    # ----------------------------------------------------------
+
+    T, R =
+        _base_reduction(
+            problem,
+            mpc
+        )
+
+
+    # ----------------------------------------------------------
+    # Apply MPC constraints
+    # ----------------------------------------------------------
+
+    if !isempty(mpc)
+
+        T, R =
+            _apply_mpc_to_reduction(
+                T,
+                R,
+                problem,
+                mpc
+            )
+    end
+
+
+    # ----------------------------------------------------------
+    # Dirichlet boundary conditions
+    #
+    # With MPC:
+    #   prescribed slave values are first transferred to their
+    #   final master DOFs.
+    #
+    # Without MPC:
+    #   ordinary full-space Dirichlet data are used directly.
+    # ----------------------------------------------------------
+
+    if !isempty(mpc)
+
+        fixed_eff, uD_eff =
+            _singlefield_mpc_bc_data(
+                problem,
+                mpc,
+                fixed,
+                @view(u.a[:, 1])
+            )
+
+    else
+
+        fixed_eff = fixed
+        uD_eff = @view(u.a[:, 1])
+    end
+
+
+    # ----------------------------------------------------------
+    # Map full-space Dirichlet conditions to the final
+    # reduced coordinate space.
+    # ----------------------------------------------------------
+
+    free_r, fixed_r, uD_r =
+        reduced_bc_data(
+            R,
+            fixed_eff,
+            uD_eff
+        )
+
+
+    # ----------------------------------------------------------
+    # Galerkin projection
+    #
+    #     Kr = T' * K * T
+    #     fr = T' * f
+    # ----------------------------------------------------------
+
+    KT =
+        K.A * T
+
+    Kr =
+        T' * KT
+
+    fr =
+        T' *
+        @view(f.a[:, 1])
+
+
+    # ----------------------------------------------------------
+    # Reduced unknown vector
+    # ----------------------------------------------------------
+
+    ur =
+        zeros(
+            Float64,
+            size(T, 2)
+        )
+
+
+    # ----------------------------------------------------------
+    # Prescribed values in reduced coordinates
+    # ----------------------------------------------------------
+
+    if !isempty(fixed_r)
+
+        ur[fixed_r] .=
+            uD_r[fixed_r]
+
+        fr .-=
+            Kr[:, fixed_r] *
+            ur[fixed_r]
+    end
+
+
+    # ----------------------------------------------------------
+    # Solve reduced system
+    # ----------------------------------------------------------
+
+    if iterative
+
+        ur[free_r] =
+            cg(
+                Kr[free_r, free_r],
+                fr[free_r],
+                Pl=preconditioner,
+                reltol=reltol,
+                maxiter=maxiter
+            )
+
+    elseif ordering == false
+
+        ur[free_r] =
+            lu(
+                Kr[free_r, free_r],
+                q=nothing
+            ) \
+            fr[free_r]
+
+    else
+
+        ur[free_r] =
+            Kr[free_r, free_r] \
+            fr[free_r]
+    end
+
+
+    # ----------------------------------------------------------
+    # Prolongation to the original full Gmsh DOF space
+    # ----------------------------------------------------------
+
+    u.a[:, 1] .=
+        T * ur
+
+    return u
+end
+
+#=
+function solveField(
+    K::SystemMatrix,
+    f::Union{ScalarField,VectorField,TensorField};
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[],
+    iterative=false,
+    reltol::Real=sqrt(eps()),
+    maxiter::Int=K.model.non * K.model.dim,
+    preconditioner=Identity(),
+    ordering=true
+    )
+
+    problem = K.model
+
     fixed = constrainedDoFs(problem, support)
 
     u = copy(f)
@@ -1494,32 +1756,71 @@ function solveField(
         # Full-order solution with MPC
         # ------------------------------------------------------
 
-        # Build master/slave representative map.
-        rep = mpcRepresentativeMap(problem, mpc)
+        # ------------------------------------------------------
+        # 1) Build the active material-space transformation
+        #
+        # T : reduced active field space -> full Gmsh DOF space
+        # R : full Gmsh DOF space -> reduced active field space
+        #
+        # Only DOFs belonging to problem.material are included,
+        # plus possible MPC master DOFs.
+        # ------------------------------------------------------
 
-        # Kinematic transformation:
-        #
-        #     u = T * ur
-        #
-        T, _, full_to_reduced = mpcTransformation(rep)
+        T, R =
+            _base_reduction(
+                problem,
+                mpc
+            )
 
-        # Galerkin projection:
-        #
-        #     Kr = T' * K * T
-        #     fr = T' * f
-        #
-        KT = K.A * T
-        Kr = T' * KT
-        fr = T' * @view(f.a[:, 1])
+        # ------------------------------------------------------
+        # 2) Apply MPC constraints to the active field space
+        # ------------------------------------------------------
 
-        # Map prescribed values from full DOF space
-        # to MPC-reduced DOF space.
-        free_r, fixed_r, uD_r =
-            mpcReducedBCData(
-                full_to_reduced,
+        T, R =
+            _apply_mpc_to_reduction(
+                T,
+                R,
+                problem,
+                mpc
+            )
+        
+        # ------------------------------------------------------
+        # 3) Move prescribed values from MPC slaves
+        #    to their final master DOFs
+        # ------------------------------------------------------
+        
+        fixed_mpc, uD_mpc =
+            _singlefield_mpc_bc_data(
+                problem,
+                mpc,
                 fixed,
                 @view(u.a[:, 1])
             )
+
+        # ------------------------------------------------------
+        # 4) Map Dirichlet data to the final reduced space
+        # ------------------------------------------------------
+        
+        free_r, fixed_r, uD_r =
+            reduced_bc_data(
+                R,
+                fixed_mpc,
+                uD_mpc
+            )
+
+        # ------------------------------------------------------
+        # 5) Galerkin projection
+        #
+        #     Kr = T' * K * T
+        #     fr = T' * f
+        # ------------------------------------------------------
+
+        KT = K.A * T
+        Kr = T' * KT
+
+        fr =
+            T' *
+            @view(f.a[:, 1])
 
         ur = zeros(Float64, size(T, 2))
 
@@ -1626,110 +1927,6 @@ function solveField(
     end
 
     # Prolongate back to the original full-space field.
-    u.a[:, 1] .= T * ur
-
-    return u
-end
-
-#=
-function solveField(
-    K::SystemMatrix,
-    f::Union{ScalarField,VectorField,TensorField};
-    support::Vector{BoundaryCondition}=BoundaryCondition[],
-    mpc::Vector{MPC}=MPC[],
-    iterative=false,
-    reltol::Real=sqrt(eps()),
-    maxiter::Int=K.model.non * K.model.dim,
-    preconditioner=Identity(),
-    ordering=true
-    )
-
-    problem = K.model
-
-    fixed = constrainedDoFs(problem, support)
-    free = freeDoFs(problem, support)
-
-    u = copy(f)
-    fill!(u.a, 0.0)
-    applyBoundaryConditions!(u, support)
-
-    # ----------------------------------------------------------
-    # Standard full-order solution
-    # ----------------------------------------------------------
-
-    if !problem.reducedOrder
-
-        f_kin = K.A[:, fixed] * u.a[fixed, 1]
-
-        if iterative
-            u.a[free] = cg(
-                K.A[free, free],
-                f.a[free] - f_kin[free],
-                Pl=preconditioner,
-                reltol=reltol,
-                maxiter=maxiter
-            )
-
-        elseif ordering == false
-            u.a[free] =
-                lu(K.A[free, free], q=nothing) \
-                (f.a[free] - f_kin[free])
-
-        else
-            u.a[free] =
-                K.A[free, free] \
-                (f.a[free, 1] - f_kin[free, 1])
-        end
-
-        return u
-    end
-
-    # ----------------------------------------------------------
-    # Reduced-order solution
-    # ----------------------------------------------------------
-
-    T, R = reductionMatrices(problem)
-
-    # Full-space prescribed field -> reduced-space prescribed field
-    free_r, fixed_r, uD_r =
-        reduced_bc_data(R, fixed, @view(u.a[:, 1]))
-
-    # Galerkin projection
-    KT = K.A * T
-    Kr = T' * KT
-
-    fr = T' * @view(f.a[:, 1])
-
-    ur = zeros(Float64, size(T, 2))
-
-    # Reduced Dirichlet values
-    if !isempty(fixed_r)
-        ur[fixed_r] .= uD_r[fixed_r]
-        fr .-= Kr[:, fixed_r] * ur[fixed_r]
-    end
-
-    # Solve reduced system
-    if iterative
-        ur[free_r] = cg(
-            Kr[free_r, free_r],
-            fr[free_r],
-            Pl=preconditioner,
-            reltol=reltol,
-            maxiter=maxiter
-        )
-
-    elseif ordering == false
-        ur[free_r] =
-            lu(Kr[free_r, free_r], q=nothing) \
-            fr[free_r]
-
-    else
-        ur[free_r] =
-            Kr[free_r, free_r] \
-            fr[free_r]
-    end
-
-    # Prolongate back to the original full-space field
     u.a[:, 1] .= T * ur
 
     return u
