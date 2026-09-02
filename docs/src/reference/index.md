@@ -11,7 +11,6 @@ The API reference is grouped by workflow area.
 - [Heat](heat.md)
 - [Poisson](poisson.md)
 - [Postprocessing](postprocessing.md)
-- [Operators and Algebra](../Operators.md)
 - [Extra](extra.md)
 
 All entries below are generated from in-code docstrings via explicit Documenter `@docs` blocks.

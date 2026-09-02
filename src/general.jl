@@ -3038,6 +3038,14 @@ struct MultiPointConstraint
     end
 end
 
+"""
+    MPC
+
+Alias for [`MultiPointConstraint`](@ref).
+
+`MPC` can be used as a shorter name when defining multi-point constraints.
+Both names refer to exactly the same type.
+"""
 const MPC = MultiPointConstraint
 
 function mpcRepresentativeMap(
