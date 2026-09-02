@@ -3038,9 +3038,6 @@ struct MultiPointConstraint
     end
 end
 
-"""
-    Alias for `MultiPointConstraint`
-"""
 const MPC = MultiPointConstraint
 
 function mpcRepresentativeMap(

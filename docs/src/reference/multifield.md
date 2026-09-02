@@ -769,6 +769,7 @@ reductionMatrices
 ## Multi-point constraints
 
 ```@docs
+MultiPointConstraint
 rigidRotationMap
 collapseMPC
 ```
