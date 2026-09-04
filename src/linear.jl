@@ -5255,6 +5255,7 @@ function solveAxialForce(q::VectorField)
     #end
 end
 
+#=
 """
     solveEigenModes(K::SystemMatrix, 
                     M::SystemMatrix; 
@@ -5297,6 +5298,83 @@ function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01, directSolver=false)
     f = sqrt.(abs.(real(ω²))) / 2π
     ϕ1 = real(ϕ)
     return Eigen(f, ϕ1, problem, nothing, nothing)
+end
+=#
+
+"""
+    solveEigenModes(
+        K::SystemMatrix,
+        M::SystemMatrix;
+        n=6,
+        fₘᵢₙ=0.01,
+        support=Vector{BoundaryCondition}(),
+        mpc::Vector{MPC}=MPC[],
+        directSolver=false
+    )
+
+Compute natural frequencies and mode shapes of a single-field structural
+mechanics problem.
+
+The generalized eigenproblem
+
+    K * ϕ = ω² * M * ϕ
+
+is solved by [`solveEigenProblem`](@ref). Dirichlet boundary conditions,
+multi-point constraints and reduced-order transformations are handled
+automatically.
+
+The natural frequencies are
+
+    f = sqrt(ω²) / (2π).
+
+# Returns
+
+An `Eigen` object containing the natural frequencies and mode shapes in the
+original full DOF space.
+"""
+function solveEigenModes(
+    K::SystemMatrix,
+    M::SystemMatrix;
+    n=6,
+    fₘᵢₙ=0.01,
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[],
+    directSolver=false
+    )
+
+    K.problems === nothing ||
+        error(
+            "solveEigenModes: use solveEigenFields for multifield systems."
+        )
+
+    ωₘᵢₙ² =
+        (2π * fₘᵢₙ)^2
+
+    ω², ϕ =
+        solveEigenProblem(
+            K,
+            M;
+            n=n,
+            shift=ωₘᵢₙ²,
+            support=support,
+            mpc=mpc,
+            directSolver=directSolver
+        )
+
+    f =
+        sqrt.(abs.(real(ω²))) ./
+        (2π)
+
+    ϕ =
+        real(ϕ)
+
+    return Eigen(
+        f,
+        ϕ,
+        K.model,
+        nothing,
+        nothing
+    )
 end
 
 """

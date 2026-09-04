@@ -9018,6 +9018,229 @@ end
 =#
 
 """
+    solveEigenProblem(
+        K::SystemMatrix,
+        C::SystemMatrix;
+        n=6,
+        shift=0.0,
+        support=Vector{BoundaryCondition}(),
+        mpc::Vector{MPC}=MPC[],
+        directSolver=false
+    )
+
+Solve the generalized eigenvalue problem
+
+    K * ϕ = λ * C * ϕ
+
+for single-field or multifield systems.
+
+Dirichlet boundary conditions, multi-point constraints and reduced-order
+field transformations are applied before solving the eigenproblem. The
+computed eigenvectors are transformed back to the original full DOF space.
+
+# Keyword Arguments
+
+- `n`: Number of eigenpairs requested from the iterative solver.
+- `shift`: Spectral shift used by the shift-invert eigenvalue solver.
+- `support`: Dirichlet boundary conditions.
+- `mpc`: Multi-point constraints.
+- `directSolver`: If `true`, solve the dense generalized eigenproblem directly.
+
+# Returns
+
+- `λ`: Eigenvalues of the generalized eigenproblem.
+- `ϕ`: Corresponding eigenvectors in the original full DOF space.
+
+# Notes
+
+The function is independent of the physical interpretation of the
+eigenvalues. For structural vibration problems, `solveEigenModes` converts
+the eigenvalues to natural frequencies.
+"""
+function solveEigenProblem(
+    K::SystemMatrix,
+    C::SystemMatrix;
+    n=6,
+    shift=0.0,
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[],
+    directSolver=false
+    )
+
+    # ----------------------------------------------------------
+    # 1) Compatibility
+    # ----------------------------------------------------------
+
+    if K.problems === nothing
+
+        C.problems === nothing ||
+            error(
+                "solveEigenProblem: K and C must both be single-field systems."
+            )
+
+        K.model === C.model ||
+            error(
+                "solveEigenProblem: K and C do not belong to the same model."
+            )
+
+    else
+
+        C.problems === nothing &&
+            error(
+                "solveEigenProblem: K and C must both be multifield systems."
+            )
+
+        check_multifield_system_compatibility(K, C)
+    end
+
+    # ----------------------------------------------------------
+    # 2) Prepare constrained/reduced eigenproblem
+    # ----------------------------------------------------------
+
+    K0, C0, T, free_r =
+        isempty(mpc) ?
+            reduced_system_matrices(
+                K,
+                C,
+                support
+            ) :
+            reduced_system_matrices(
+                K,
+                C,
+                support,
+                mpc
+            )
+
+    # ----------------------------------------------------------
+    # 3) Eigen solve
+    # ----------------------------------------------------------
+
+    if directSolver
+
+        λ, ϕ0 =
+            eigen(
+                Matrix(K0),
+                Matrix(C0)
+            )
+
+    else
+
+        λ, ϕ0 =
+            Arpack.eigs(
+                K0,
+                C0,
+                nev=n,
+                which=:LR,
+                sigma=shift,
+                maxiter=10000
+            )
+    end
+
+    # ----------------------------------------------------------
+    # 4) Reconstruct full-space eigenvectors
+    # ----------------------------------------------------------
+
+    if T === nothing
+
+        # Full-order system: free_r contains the original free DOFs.
+
+        ϕ =
+            zeros(
+                eltype(ϕ0),
+                size(K.A, 1),
+                size(ϕ0, 2)
+            )
+
+        ϕ[free_r, :] .= ϕ0
+
+    else
+
+        # Reduced-order and/or MPC system.
+
+        ϕr =
+            zeros(
+                eltype(ϕ0),
+                size(T, 2),
+                size(ϕ0, 2)
+            )
+
+        ϕr[free_r, :] .= ϕ0
+
+        ϕ = T * ϕr
+    end
+
+    return λ, ϕ
+end
+
+"""
+    solveEigenFields(
+        K::SystemMatrix,
+        M::SystemMatrix;
+        n=6,
+        fmin=0.0,
+        support=Vector{BoundaryCondition}(),
+        mpc::Vector{MPC}=MPC[],
+        directSolver=false
+    )
+
+Compute natural frequencies and field-wise mode shapes of a multifield
+structural system.
+
+The generalized eigenproblem is solved in the constrained and possibly
+reduced space, then the eigenvectors are reconstructed in the original
+full multifield DOF space.
+
+Returns one `Eigen` object for each field.
+"""
+function solveEigenFields(
+    K::SystemMatrix,
+    M::SystemMatrix;
+    n=6,
+    fmin=0.0,
+    support=Vector{BoundaryCondition}(),
+    mpc::Vector{MPC}=MPC[],
+    directSolver=false
+    )
+
+    K.problems === nothing &&
+        error(
+            "solveEigenFields: use solveEigenModes for single-field problems."
+        )
+
+    ω2min =
+        (2π * fmin)^2
+
+    ω², ϕ =
+        solveEigenProblem(
+            K,
+            M;
+            n=n,
+            shift=ω2min,
+            support=support,
+            mpc=mpc,
+            directSolver=directSolver
+        )
+
+    f =
+        sqrt.(abs.(real(ω²))) ./
+        (2π)
+
+    eig_global =
+        Eigen(
+            f,
+            real(ϕ),
+            nothing,
+            K.problems,
+            K.offsets
+        )
+
+    return splitEigenToEigen(
+        eig_global
+    )
+end
+
+#=
+"""
     solveEigenFields(K::SystemMatrix, M::SystemMatrix; support=Vector{BoundaryCondition}(), n=6, fmin=0.0)
 
 Solve eigenproblem for multifield system and return field-wise Eigen objects.
@@ -9154,6 +9377,8 @@ function solveEigenFields(
 
     return splitEigenToEigen(eig_global)
 end
+=#
+
 #=
 function solveEigenFields(
     K::SystemMatrix,
