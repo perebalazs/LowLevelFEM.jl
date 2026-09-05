@@ -93,6 +93,7 @@ export ε
 export ⋅
 
 export solveEigenFields
+export solveEigenProblem
 export consistentToLumped
 export rigidRotationMap, collapseMPC
 

@@ -29,6 +29,7 @@ solveAxialForce
 ## Eigen and Buckling
 
 ```@docs
+solveEigenProblem
 solveEigenModes
 solveBucklingModes
 solveModalAnalysis
