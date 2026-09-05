@@ -8541,7 +8541,7 @@ function showStressResults(q::TensorField; name="StressField", visible=false, sm
     end
 end
 
-function showStrainResults(q::TensorField; name="StrainField", visible=false, ff = 0, factor=0)
+function showStrainResults(q::TensorField; name="StrainField", visible=false, smooth=false, ff = 0, factor=0)
     if q isa TensorField
         showStrainResults(q, :e, name=name, visible=visible, smooth=smooth)
     else
