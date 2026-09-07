@@ -7,6 +7,7 @@ The tutorial covers the complete workflow, including mesh generation, material p
 ## Examples
 
 [Navier-Stokes.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/LinkedIn/Navier-Stokes.ipynb)
+
 [Navier-Stokes-2.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/N-S-static.ipynb)
 
 ## Related
