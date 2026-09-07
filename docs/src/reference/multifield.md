@@ -769,6 +769,22 @@ reductionMatrices
 ## Multi-point constraints
 
 ```@docs
+MultiPointConstraint
 rigidRotationMap
 collapseMPC
+```
+
+### Periodic boundary conditions
+
+Periodic constraints are represented by `MPC` objects. The corresponding
+master/slave node pairing must first be defined in the Gmsh model.
+
+```julia
+periodic = MPC(
+    master="right",
+    slave="left",
+    field=U
+)
+
+u = solveField(K, f; support=[bc], mpc=[periodic])
 ```

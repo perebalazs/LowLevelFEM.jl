@@ -58,8 +58,7 @@ A BibTeX entry is provided in `CITATION.cff`.
   memory-efficient direct CSC assembly by default, while the triplet-based IJV
   method remains available as an option.
 - Mixed-order formulations: algebraic p/(p−1) field reduction for Taylor–Hood-type and other mixed formulations, without changing the underlying Gmsh mesh.
-
-## Installation
+- Multi-point constraints, including remote-point and periodic coupling.
 
 ```julia
 using Pkg
@@ -186,7 +185,6 @@ and the online [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stabl
 
 ## Planned features
 
-* Remote point constraint (like MPC in Ansys)
 * Contact problems (penalty, Lagrange multiplier)
 
 Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome.

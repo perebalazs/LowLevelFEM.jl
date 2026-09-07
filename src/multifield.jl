@@ -9559,21 +9559,22 @@ The master physical group must contain exactly one node.
 # Example
 
 ```julia
-mpc_u = MPC(
-    master="remote",
-    slave="right",
-    field=U
-)
-
-mpc_φ = MPC(
-    master="remote",
-    slave="right",
-    field=Φ
-)
+mpc_u = MPC(master="remote", slave="right", field=U)
+mpc_φ = MPC(master="remote", slave="right", field=Φ)
 
 R = rigidRotationMap(mpc_u, mpc_φ)
 
-u = u0 + R * φ
+Kuφ = Ku * R
+Kφ  = R' * Ku * R
+
+K = SystemMatrix([
+    Ku    Kuφ
+    Kuφ'  Kφ
+])
+
+u, φ = solveField(K, F; support=[bc], mpc=[mpc_u, mpc_φ])
+
+u_phys = u + R * φ
 ```
 
 # Notes
