@@ -6,6 +6,9 @@ It exposes each phase of the workflow as simple functions (mesh → matrices →
 Typical tasks such as strain energy or resultants are one-liners (for example, `U = q' * K * q / 2`).
 The package is suitable not only for classical structural mechanics problems, but also for rapid assembly of general linear PDEs expressed in weak form.
 
+“Low-level” here refers to direct access to finite element fields, operators, matrices, weak forms, and assembly results, rather than to explicit element-loop programming.
+
+
 ![Operator-level FEM workflow in LowLevelFEM](pic/operators_cropped.svg)
 
 *Operator-level finite element workflow in LowLevelFEM.*
@@ -21,6 +24,16 @@ which are assembled into bilinear forms and global system matrices.
 - [Explanations](explanations/index.md)
 - [News](news/index.md)
 
+## Scope and audience
+
+LowLevelFEM targets **engineers and researchers doing rapid prototyping** and transparent finite element development. Its primary goal is not extreme-scale HPC, but a direct and inspectable mapping from weak forms and engineering formulations to working code.
+
+Currently, LowLevelFEM uses Gmsh Lagrange basis functions. Hierarchical, spectral, and NURBS bases are not yet part of the current implementation. In practice this is rarely a limitation for classical structural and thermal engineering problems.
+
+Where a choice exists between mathematical generality and straightforward,
+inspectable formulas, LowLevelFEM favors the latter — consistent with its
+engineering-first, explicit-matrix philosophy described above.
+
 ## Requirements
 
 - Julia 1.x
@@ -32,7 +45,7 @@ If you use LowLevelFEM.jl in academic work, please cite the accompanying JOSS pa
 
 **Balázs Pere (2026).** *LowLevelFEM.jl: A lightweight finite element toolbox in Julia*, Journal of Open Source Software, 11(123), 10096, https://doi.org/10.21105/joss.10096
 
-A BibTeX entry is provided in `CITATION.cff`.
+Citation metadata is provided in `CITATION.cff`.
 
 ## Capabilities
 
@@ -53,12 +66,12 @@ A BibTeX entry is provided in `CITATION.cff`.
 - Visualization and plots: Gmsh-based views for displacements, stresses, strains, heat flux, with animation for dynamics; plot results along user-defined paths; show results on surfaces.
 - Coordinate systems: rotate nodal DOFs with constant or function-defined local coordinate systems (incl. curvilinear).
 - Truss structures (static, transient, modal analysis)
-- **Nonlinear solid mechanics (Total Lagrangian formulation)** Energy-based hyperelasticity with consistent stress and tangent operators, including geometric stiffness and follower loads for large-deformation problems.
-- Weak-form assembly supports shared-memory multithreading. Bilinear forms use
-  memory-efficient direct CSC assembly by default, while the triplet-based IJV
-  method remains available as an option.
+- **Nonlinear solid mechanics (Total Lagrangian formulation):** Energy-based hyperelasticity with consistent stress and tangent operators, including geometric stiffness and follower loads for large-deformation problems.
+- Weak-form assembly supports shared-memory multithreading and memory-efficient direct CSC assembly. The implementation is optimized for fast prototyping and medium-scale research problems rather than extreme-scale distributed-memory simulations. Bilinear forms use memory-efficient direct CSC assembly by default, while the triplet-based IJV method remains available as an option.
 - Mixed-order formulations: algebraic p/(p−1) field reduction for Taylor–Hood-type and other mixed formulations, without changing the underlying Gmsh mesh.
 - Multi-point constraints, including remote-point and periodic coupling.
+
+## Installation
 
 ```julia
 using Pkg
