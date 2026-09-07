@@ -4,9 +4,10 @@ This tutorial demonstrates the numerical solution of the incompressible Navierâ€
 
 The tutorial covers the complete workflow, including mesh generation, material properties, boundary conditions, solving the governing equations, and visualization of the resulting velocity and pressure fields. 
 
-## Example
+## Examples
 
 [Navier-Stokes.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/LinkedIn/Navier-Stokes.ipynb)
+[Navier-Stokes-2.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/N-S-static.ipynb)
 
 ## Related
 

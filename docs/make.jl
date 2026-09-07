@@ -21,8 +21,12 @@ const DOC_PAGES = [
         "Transient Elasticity (2D)" => "tutorials/transient-elasticity-2d.md",
         "Heat Conduction" => "tutorials/heat-conduction.md",
         "Multifield Weak-Form DSL - Navier-Stokes" => "tutorials/multifield-weak-form-dsl.md",
+	"Timoshenko Beam Structures" => "tutorials/timoshenko-beam-structures.md",
         "Displacement Recovery from Strain" => "tutorials/strain-displacement-relation.md",
         "Torsion of a prismatic bar using the Prandtl stress function" => "tutorials/prandtl-stress-function.md",
+	"Gauss's Divergence Theorem" => "tutorials/gauss-theorem.md",
+        "Stokes' Theorem" => "tutorials/stokes-theorem.md",
+        "Space–Time FEM for Elastic Wave Propagation" => "tutorials/space-time-FEM.md",
         "Legacy Example Gallery" => "tutorials/legacy-examples.md",
     ],
     "Manual" => [

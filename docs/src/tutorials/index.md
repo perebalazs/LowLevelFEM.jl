@@ -9,6 +9,7 @@ Tutorials provide scenario-driven workflows for common LowLevelFEM tasks.
 - [Transient Elasticity (2D)](transient-elasticity-2d.md) – Time integration of elastic wave propagation and dynamic response.
 - [Heat Conduction](heat-conduction.md) – Steady-state heat transfer with prescribed temperatures and heat fluxes.
 - [Weak-Form DSL: Navier-Stokes](multifield-weak-form-dsl.md) – Building coupled PDEs directly from their weak form using compound operators.
+- [Timoshenko Beam Structures](timoshenko-beam-structures.md) – Planar Timoshenko beam formulations, including a Gerber beam with MPC-based internal hinges.
 - [Displacement Recovery from Strain](strain-displacement-relation.md) – Reconstructing displacement fields from measured strains using a least-squares approach.
 - [Torsion of a prismatic bar using the Prandtl stress function](prandtl-stress-function.md) – Solving Saint-Venant torsion using the Prandtl stress function formulation.
 - [Gauss's Divergence Theorem](gauss-theorem.md) – Verifying the divergence theorem using surface and volume integration on a solid torus.
