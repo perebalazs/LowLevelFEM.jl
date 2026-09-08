@@ -4,7 +4,12 @@
 #                                                                             #
 ###############################################################################
 
-export contact
+export Contact, contact, updateContact!, contactPenaltyMatrix
+export CONTACT_OPEN, CONTACT_STICK, CONTACT_SLIP
+
+const CONTACT_OPEN  = UInt8(0)
+const CONTACT_STICK = UInt8(1)
+const CONTACT_SLIP  = UInt8(2)
 
 # -----------------------------------------------------------------------------
 # Internal geometric data
@@ -17,7 +22,7 @@ struct _ContactElement
     name::String
     order::Int
     node_tags::Vector{Int}
-    coords::Matrix{Float64}          # 3 × number of element nodes
+    coords::Matrix{Float64}          # 3 × number of element nodes, current configuration
     local_nodes::Matrix{Float64}     # dim × number of element nodes
     bmin::Vector{Float64}
     bmax::Vector{Float64}
@@ -38,8 +43,109 @@ struct _ContactProjection
     x::Vector{Float64}
     N::Vector{Float64}
     normal::Vector{Float64}
+    tangent1::Vector{Float64}
+    tangent2::Union{Nothing,Vector{Float64}}
     gap::Float64
     distance2::Float64
+end
+
+# -----------------------------------------------------------------------------
+# Public contact object
+# -----------------------------------------------------------------------------
+
+"""
+    Contact
+
+Container for one slave-master contact pair.
+
+The contact kinematics are stored in a reduced local contact space: every slave
+contact node contributes `pdim` rows to `G`. In 2D the local ordering is
+`(normal, tangent)`, while in 3D it is `(normal, tangent1, tangent2)`.
+
+Therefore, for `nc` slave contact nodes,
+
+    size(G) == (nc * displacement.pdim, ndofs(displacement))
+
+and the penalty contribution is represented directly by
+
+    Kc = G' * C * G
+
+where `C` is block diagonal in the local contact basis. For isotropic friction
+its local blocks are
+
+    [cn  0 ]                 # 2D
+    [0   ct]
+
+and
+
+    [cn  0   0 ]             # 3D
+    [0   ct  0 ]
+    [0   0   ct]
+
+on active contact points. Inactive blocks are zero.
+
+If a Lagrange multiplier field is supplied, `multiplier_dofs` maps the reduced
+rows of `G` to the corresponding global multiplier DoFs on the slave nodes.
+This mapping is intentionally stored in the `Contact` object; the solver can
+later eliminate inactive multiplier DoFs without changing the contact
+kinematics.
+"""
+mutable struct Contact
+    master::String
+    slave::String
+
+    displacement::Problem
+    multiplier::Union{Nothing,Problem}
+    U::VectorField
+
+    slave_nodes::Vector{Int}
+    master_element_tags::Vector{Int}
+    master_local_coordinates::Vector{Vector{Float64}}
+    master_points::Matrix{Float64}
+
+    gap::ScalarField
+    G::SparseMatrixCSC{Float64,Int}
+    C::SparseMatrixCSC{Float64,Int}
+
+    n::VectorField
+    t1::VectorField
+    t2::Union{Nothing,VectorField}
+
+    active::BitVector
+    state::Vector{UInt8}
+
+    # Local contact-space vectors. They are initialized here and are intended
+    # to hold the converged traction/slip history required by Coulomb friction.
+    traction::Vector{Float64}
+    slip::Vector{Float64}
+
+    cn::Any
+    ct::Any
+    μ::Any
+    cn_values::Vector{Float64}
+    ct_values::Vector{Float64}
+    μ_values::Vector{Float64}
+
+    # Mapping from reduced contact rows to global multiplier DoFs.
+    multiplier_dofs::Vector{Int}
+
+    # Geometry/search options reused by updateContact!.
+    options::NamedTuple
+end
+
+function Base.show(io::IO, c::Contact)
+    nc = length(c.slave_nodes)
+    na = count(c.active)
+    nstick = count(==(CONTACT_STICK), c.state)
+    nslip = count(==(CONTACT_SLIP), c.state)
+
+    print(
+        io,
+        "Contact(\"$(c.slave)\" -> \"$(c.master)\", " *
+        "$nc candidate nodes, $na active, " *
+        "stick=$nstick, slip=$nslip, " *
+        "G=$(size(c.G)), C=$(size(c.C)))"
+    )
 end
 
 # -----------------------------------------------------------------------------
@@ -47,143 +153,78 @@ end
 # -----------------------------------------------------------------------------
 
 """
-    contact(model::Problem, slave::String, master::String; kwargs...)
-        -> gap::ScalarField, G::SystemMatrix, normalVec::VectorField
+    contact(U::VectorField; master, slave, displacement=U.model,
+            LagrangeMultiplierField=nothing, cn=1.0, ct=0.0, μ=0.0,
+            activation_tol=0.0, step=U.nsteps, kwargs...) -> Contact
 
-    contact(model::Problem, test_model::Problem,
-            slave::String, master::String; kwargs...)
-        -> gap::ScalarField, G::SystemMatrix, normalVec::VectorField
+Construct one node-to-manifold contact pair in the current deformed
+configuration.
 
-Construct the geometric quantities required by a frictionless node-to-manifold
-contact formulation.
+The mesh coordinates used by the contact search are
 
-For every node of the `slave` physical group, the closest point on the
-`master` curve or surface is determined. The function returns:
+    x = X + U
 
-- `gap`: signed normal gap as an element-wise `ScalarField` on the slave side,
-- `G`: sparse contact kinematic matrix as a `SystemMatrix`,
-- `normalVec`: contact normal as an element-wise `VectorField` on the slave side.
+for both the slave and master sides. Thus the closest-point projection, normal,
+tangential basis, signed gap and kinematic matrix are all evaluated on the
+current geometry represented by `U`.
 
-The contact matrix satisfies, for each slave node `s`,
+# Arguments
 
-    (G * u)_s = n_s ⋅ (u_s - Σ_a N_a u_a)
+- `U::VectorField`: current displacement field.
+- `master::String`: master physical group.
+- `slave::String`: slave physical group. Contact quantities are discretized on
+  the slave nodes.
+- `displacement::Problem=U.model`: displacement trial field associated with the
+  columns of `G`.
+- `LagrangeMultiplierField::Union{Nothing,Problem}=nothing`: optional vector
+  multiplier field. In 2D it must have two components and in 3D three
+  components. Only the slave-node DoFs are mapped into the reduced contact
+  space.
+- `cn`: normal penalty stiffness. May be a number, `ScalarField`, or function
+  `f(x,y,z)`.
+- `ct`: isotropic tangential penalty stiffness. May be a number,
+  `ScalarField`, or function `f(x,y,z)`. Set `ct=0` for frictionless contact.
+- `μ`: isotropic Coulomb friction coefficient. It is stored in the contact
+  state for the later stick-slip update. May be a number, `ScalarField`, or
+  function `f(x,y,z)`.
+- `activation_tol::Real=0.0`: a point is active when `gap <= activation_tol`.
+- `step::Int=U.nsteps`: displacement time/load step used to construct the
+  current geometry.
 
-where `N_a` are the master-element shape functions evaluated at the closest
-point and `n_s` is the contact normal.
+# Geometry options
 
-With one supplied field, `G.model === G.test_model === model`. This form is
-intended for penalty formulations, e.g.
-
-    gap, G, n = contact(Pu, "slave", "master")
-    Kc = c_n * G' * G
-    Ktot = K + Kc
-
-`G` itself is rectangular: it has one row per global mesh node and one column
-per displacement degree of freedom. Only `G' * G` is square.
-
-With two supplied fields, the second field is interpreted as the scalar
-Lagrange-multiplier field:
-
-    gap, G, n = contact(Pu, Pp, "slave", "master")
-
-and the metadata are
-
-    G.model      === Pu
-    G.test_model === Pp
-
-so `G` and `G'` can be inserted directly into a multifield block system.
-
-# Supported geometry
-
-The master physical group may contain Gmsh Lagrange line, triangle or
-quadrilateral elements of arbitrary order. The slave physical group may be a
-curve or a surface. Consequently the same implementation covers curve-curve,
-curve-surface, surface-curve and surface-surface mappings. A planar 2D contact
-problem is the special case of curve-curve contact in the xy plane.
-
-For a 3D master curve no unique geometric normal exists. In that case the
-contact normal is chosen in the direction from the closest master point to the
-slave point. If the two points coincide, a stable vector perpendicular to the
-curve tangent is used.
-
-# Self-contact
-
-If `slave == master`, self-contact mode is enabled automatically. Master
-elements belonging to the local topological neighbourhood of the current slave
-node are excluded from the closest-point search. This is a one-pass
-node-to-manifold self-contact mapping; reciprocal self-contact constraints are
-not explicitly deduplicated.
-
-# Keyword Arguments
-
-- `normal_sign::Real=1.0`: multiply all contact normals by this value. Use `-1`
-  to reverse the master-side orientation.
+- `normal_sign::Real=1.0`: multiply the master-side contact normal by `+1` or
+  `-1`. The signed gap is `(x_slave - x_master) ⋅ n`.
 - `self_contact::Bool=(slave == master)`: enable local-topology exclusion.
 - `self_exclusion_layers::Int=1`: number of additional node-connected master
-  element layers excluded in self-contact. The elements containing the slave
-  node are always excluded.
-- `aabb_padding::Real=0.05`: relative padding of master-element AABBs. This is
-  useful for curved higher-order elements whose geometry may extend slightly
-  outside the nodal bounding box.
-- `leaf_size::Int=8`: maximum number of elements stored in an AABB-tree leaf.
-- `projection_tol::Real=1e-10`: relative tolerance of the closest-point solver.
-- `projection_maxiter::Int=40`: maximum projected Gauss-Newton iterations for
-  one starting point.
+  element layers excluded in self-contact.
+- `aabb_padding::Real=0.05`: relative AABB padding.
+- `leaf_size::Int=8`: maximum number of elements in an AABB leaf.
+- `projection_tol::Real=1e-10`: closest-point solver tolerance.
+- `projection_maxiter::Int=40`: maximum projected Gauss-Newton iterations.
 
-# Sign convention
+# Notes
 
-For surfaces and planar curves,
+`G` contains all slave candidate nodes, including currently open ones. Contact
+activation is represented by `active` and by zero local blocks in `C`. This is
+useful because the kinematic row layout remains fixed while the active set
+changes.
 
-    gap = (x_slave - x_master) ⋅ n
-
-so a positive gap denotes separation when the master normal points toward the
-slave side. Reverse the convention with `normal_sign=-1`.
+The present file constructs the contact geometry, kinematics, penalty matrix and
+state containers. Solver-side active-set elimination and the nonlinear
+stick-slip iteration are intentionally handled separately.
 """
 function contact(
-    model::Problem,
+    U::VectorField;
+    master::String,
     slave::String,
-    master::String;
-    kwargs...
-    )
-
-    return _contact_impl(
-        model,
-        model,
-        slave,
-        master;
-        lagrange=false,
-        kwargs...
-    )
-end
-
-function contact(
-    model::Problem,
-    test_model::Problem,
-    slave::String,
-    master::String;
-    kwargs...
-    )
-
-    return _contact_impl(
-        model,
-        test_model,
-        slave,
-        master;
-        lagrange=true,
-        kwargs...
-    )
-end
-
-# -----------------------------------------------------------------------------
-# Main implementation
-# -----------------------------------------------------------------------------
-
-function _contact_impl(
-    model::Problem,
-    test_model::Problem,
-    slave::String,
-    master::String;
-    lagrange::Bool,
+    displacement::Problem=U.model,
+    LagrangeMultiplierField::Union{Nothing,Problem}=nothing,
+    cn=1.0,
+    ct=0.0,
+    μ=0.0,
+    activation_tol::Real=0.0,
+    step::Int=U.nsteps,
     normal_sign::Real=1.0,
     self_contact::Bool=(slave == master),
     self_exclusion_layers::Int=1,
@@ -193,7 +234,205 @@ function _contact_impl(
     projection_maxiter::Int=40
     )
 
-    _contact_check_models(model, test_model, lagrange)
+    options = (
+        activation_tol=Float64(activation_tol),
+        normal_sign=Float64(normal_sign),
+        self_contact=self_contact,
+        self_exclusion_layers=self_exclusion_layers,
+        aabb_padding=Float64(aabb_padding),
+        leaf_size=leaf_size,
+        projection_tol=Float64(projection_tol),
+        projection_maxiter=projection_maxiter
+    )
+
+    data = _contact_build_data(
+        U,
+        displacement,
+        LagrangeMultiplierField,
+        slave,
+        master,
+        cn,
+        ct,
+        μ;
+        step=step,
+        options...
+    )
+
+    nrows = size(data.G, 1)
+    state = Vector{UInt8}(undef, length(data.active))
+    @inbounds for i in eachindex(state)
+        state[i] = data.active[i] ? CONTACT_STICK : CONTACT_OPEN
+    end
+
+    return Contact(
+        master,
+        slave,
+        displacement,
+        LagrangeMultiplierField,
+        U,
+        data.slave_nodes,
+        data.master_element_tags,
+        data.master_local_coordinates,
+        data.master_points,
+        data.gap,
+        data.G,
+        data.C,
+        data.n,
+        data.t1,
+        data.t2,
+        data.active,
+        state,
+        zeros(Float64, nrows),
+        zeros(Float64, nrows),
+        cn,
+        ct,
+        μ,
+        data.cn_values,
+        data.ct_values,
+        data.μ_values,
+        data.multiplier_dofs,
+        options
+    )
+end
+
+"""
+    contact(displacement::Problem; kwargs...) -> Contact
+
+Construct contact in the undeformed configuration (`U = 0`).
+"""
+function contact(
+    displacement::Problem;
+    kwargs...
+    )
+
+    U = _contact_zero_displacement(displacement)
+    return contact(U; displacement=displacement, kwargs...)
+end
+
+# Positional compatibility helpers.
+contact(U::VectorField, slave::String, master::String; kwargs...) =
+    contact(U; slave=slave, master=master, kwargs...)
+
+contact(displacement::Problem, slave::String, master::String; kwargs...) =
+    contact(displacement; slave=slave, master=master, kwargs...)
+
+"""
+    updateContact!(c::Contact, U::VectorField; step=U.nsteps) -> Contact
+
+Recompute the current contact geometry, active set, `G` and `C` from a new
+displacement field. The slave-node ordering remains tied to the physical group.
+Existing traction and slip history are preserved when the slave-node set is
+unchanged; traction is cleared on newly open points.
+"""
+function updateContact!(
+    c::Contact,
+    U::VectorField;
+    step::Int=U.nsteps
+    )
+
+    data = _contact_build_data(
+        U,
+        c.displacement,
+        c.multiplier,
+        c.slave,
+        c.master,
+        c.cn,
+        c.ct,
+        c.μ;
+        step=step,
+        c.options...
+    )
+
+    old_nodes = c.slave_nodes
+    old_traction = c.traction
+    old_slip = c.slip
+    old_state = c.state
+    pdim = c.displacement.pdim
+
+    c.U = U
+    c.slave_nodes = data.slave_nodes
+    c.master_element_tags = data.master_element_tags
+    c.master_local_coordinates = data.master_local_coordinates
+    c.master_points = data.master_points
+    c.gap = data.gap
+    c.G = data.G
+    c.C = data.C
+    c.n = data.n
+    c.t1 = data.t1
+    c.t2 = data.t2
+    c.active = data.active
+    c.cn_values = data.cn_values
+    c.ct_values = data.ct_values
+    c.μ_values = data.μ_values
+    c.multiplier_dofs = data.multiplier_dofs
+
+    nrows = size(c.G, 1)
+    c.traction = zeros(Float64, nrows)
+    c.slip = zeros(Float64, nrows)
+    c.state = fill(CONTACT_OPEN, length(c.slave_nodes))
+
+    if old_nodes == c.slave_nodes && length(old_traction) == nrows
+        c.traction .= old_traction
+        c.slip .= old_slip
+
+        @inbounds for i in eachindex(c.slave_nodes)
+            rows = (i - 1) * pdim + 1:i * pdim
+            if c.active[i]
+                # Preserve a previous converged stick/slip state. If the point
+                # has just closed, initialize it as stick.
+                c.state[i] = old_state[i] == CONTACT_OPEN ? CONTACT_STICK : old_state[i]
+            else
+                c.state[i] = CONTACT_OPEN
+                c.traction[rows] .= 0.0
+            end
+        end
+    else
+        @inbounds for i in eachindex(c.slave_nodes)
+            c.state[i] = c.active[i] ? CONTACT_STICK : CONTACT_OPEN
+        end
+    end
+
+    return c
+end
+
+"""
+    contactPenaltyMatrix(c::Contact) -> SystemMatrix
+
+Return the penalty contact contribution
+
+    Kc = G' * C * G
+
+as a `SystemMatrix` associated with the displacement field.
+"""
+function contactPenaltyMatrix(c::Contact)
+    return SystemMatrix(sparse(c.G' * c.C * c.G), c.displacement)
+end
+
+# -----------------------------------------------------------------------------
+# Main construction
+# -----------------------------------------------------------------------------
+
+function _contact_build_data(
+    U::VectorField,
+    displacement::Problem,
+    multiplier::Union{Nothing,Problem},
+    slave::String,
+    master::String,
+    cn,
+    ct,
+    μ;
+    step::Int,
+    activation_tol::Float64,
+    normal_sign::Float64,
+    self_contact::Bool,
+    self_exclusion_layers::Int,
+    aabb_padding::Float64,
+    leaf_size::Int,
+    projection_tol::Float64,
+    projection_maxiter::Int
+    )
+
+    _contact_check_models(U, displacement, multiplier)
 
     self_exclusion_layers >= 0 ||
         error("contact: self_exclusion_layers must be non-negative.")
@@ -210,18 +449,21 @@ function _contact_impl(
     projection_maxiter >= 1 ||
         error("contact: projection_maxiter must be at least one.")
 
-    isfinite(normal_sign) && abs(abs(Float64(normal_sign)) - 1.0) <= 10 * eps(Float64) ||
+    isfinite(normal_sign) && abs(abs(normal_sign) - 1.0) <= 10 * eps(Float64) ||
         error("contact: normal_sign must be either +1 or -1.")
 
-    gmsh.model.setCurrent(model.name)
+    isfinite(activation_tol) ||
+        error("contact: activation_tol must be finite.")
 
-    nodecoords = _contact_node_coordinates(model)
+    gmsh.model.setCurrent(displacement.name)
+
+    nodecoords = _contact_deformed_coordinates(displacement, U; step=step)
 
     slave_elements, slave_dim =
-        _contact_group_elements(model, slave, nodecoords; aabb_padding=0.0)
+        _contact_group_elements(displacement, slave, nodecoords; aabb_padding=0.0)
 
     master_elements, master_dim =
-        _contact_group_elements(model, master, nodecoords; aabb_padding=aabb_padding)
+        _contact_group_elements(displacement, master, nodecoords; aabb_padding=aabb_padding)
 
     slave_dim in (1, 2) ||
         error("contact: slave physical group '$slave' must be a curve or surface.")
@@ -266,9 +508,9 @@ function _contact_impl(
             master_elements,
             xs;
             excluded=ex,
-            normal_sign=Float64(normal_sign),
-            model_dim=model.dim,
-            projection_tol=Float64(projection_tol),
+            normal_sign=normal_sign,
+            model_dim=displacement.dim,
+            projection_tol=projection_tol,
             projection_maxiter=projection_maxiter
         )
 
@@ -282,80 +524,141 @@ function _contact_impl(
         projections[node] = p
     end
 
-    gap = _contact_gap_field(
-        lagrange ? test_model : model,
-        slave_elements,
-        projections
-    )
+    gap = _contact_gap_field(displacement, slave_elements, projections)
+    normalVec = _contact_vector_field(displacement, slave_elements, projections, :normal)
+    tangent1 = _contact_vector_field(displacement, slave_elements, projections, :tangent1)
+    tangent2 = displacement.pdim == 3 ?
+        _contact_vector_field(displacement, slave_elements, projections, :tangent2) : nothing
 
-    normalVec = _contact_normal_field(
-        model,
-        slave_elements,
-        projections
-    )
-
-    Gmat = _contact_matrix(
-        model,
-        test_model,
+    G = _contact_matrix(
+        displacement,
         slave_nodes,
         projections,
-        master_elements;
-        lagrange=lagrange
+        master_elements
     )
 
-    if lagrange
-        G = SystemMatrix(Gmat, model, test_model)
-    else
-        G = SystemMatrix(Gmat, model, model)
+    gap_values = [projections[node].gap for node in slave_nodes]
+    active = BitVector(g <= activation_tol for g in gap_values)
+
+    cn_values = _contact_parameter_values(cn, slave_nodes, nodecoords, displacement; step=step, name="cn")
+    ct_values = _contact_parameter_values(ct, slave_nodes, nodecoords, displacement; step=step, name="ct")
+    μ_values  = _contact_parameter_values(μ,  slave_nodes, nodecoords, displacement; step=step, name="μ")
+
+    any(x -> x < 0.0, cn_values) && error("contact: cn must be non-negative.")
+    any(x -> x < 0.0, ct_values) && error("contact: ct must be non-negative.")
+    any(x -> x < 0.0, μ_values)  && error("contact: μ must be non-negative.")
+
+    C = _contact_stiffness_matrix(
+        displacement.pdim,
+        active,
+        cn_values,
+        ct_values
+    )
+
+    master_element_tags = Vector{Int}(undef, length(slave_nodes))
+    master_local_coordinates = Vector{Vector{Float64}}(undef, length(slave_nodes))
+    master_points = Matrix{Float64}(undef, 3, length(slave_nodes))
+
+    @inbounds for (i, node) in enumerate(slave_nodes)
+        p = projections[node]
+        master_element_tags[i] = p.element_tag
+        master_local_coordinates[i] = copy(p.ξ)
+        master_points[:, i] .= p.x
     end
 
-    return gap, G, normalVec
+    multiplier_dofs = _contact_multiplier_dofs(multiplier, displacement, slave_nodes)
+
+    return (
+        slave_nodes=slave_nodes,
+        master_element_tags=master_element_tags,
+        master_local_coordinates=master_local_coordinates,
+        master_points=master_points,
+        gap=gap,
+        G=G,
+        C=C,
+        n=normalVec,
+        t1=tangent1,
+        t2=tangent2,
+        active=active,
+        cn_values=cn_values,
+        ct_values=ct_values,
+        μ_values=μ_values,
+        multiplier_dofs=multiplier_dofs
+    )
 end
 
 # -----------------------------------------------------------------------------
-# Model and mesh helpers
+# Model and displacement helpers
 # -----------------------------------------------------------------------------
 
-"""
-    _contact_check_models(model, test_model, lagrange)
-
-Validate field dimensions and mesh compatibility required by the contact
-operator.
-"""
 function _contact_check_models(
-    model::Problem,
-    test_model::Problem,
-    lagrange::Bool
+    U::VectorField,
+    displacement::Problem,
+    multiplier::Union{Nothing,Problem}
     )
 
-    model.pdim in (2, 3) ||
+    displacement.pdim in (2, 3) ||
         error(
-            "contact: model must be a 2D or 3D vector displacement field; " *
-            "got pdim=$(model.pdim)."
+            "contact: displacement must be a 2D or 3D vector field; " *
+            "got pdim=$(displacement.pdim)."
         )
 
-    model.name == test_model.name ||
-        error("contact: model and test_model must use the same Gmsh model.")
+    U.model.name == displacement.name ||
+        error("contact: U and displacement must use the same Gmsh model.")
 
-    model.non == test_model.non ||
-        error("contact: model and test_model must use the same mesh nodes.")
+    U.model.non == displacement.non ||
+        error("contact: U and displacement must use the same mesh nodes.")
 
-    if lagrange
-        test_model.pdim == 1 ||
+    U.model.pdim == displacement.pdim ||
+        error(
+            "contact: U and displacement must have the same number of " *
+            "components per node."
+        )
+
+    if multiplier !== nothing
+        multiplier.name == displacement.name ||
             error(
-                "contact: the Lagrange-multiplier test_model must be scalar " *
-                "(pdim == 1)."
+                "contact: LagrangeMultiplierField and displacement must use " *
+                "the same Gmsh model."
+            )
+
+        multiplier.non == displacement.non ||
+            error(
+                "contact: LagrangeMultiplierField and displacement must use " *
+                "the same mesh nodes."
+            )
+
+        multiplier.pdim == displacement.pdim ||
+            error(
+                "contact: the frictional Lagrange multiplier field must have " *
+                "$(displacement.pdim) components per node."
             )
     end
 
     return nothing
 end
 
+function _contact_zero_displacement(problem::Problem)
+    problem.pdim in (2, 3) ||
+        error("contact: zero displacement can only be created for pdim=2 or 3.")
+
+    type = problem.pdim == 2 ? :v2D : :v3D
+    return VectorField(
+        Matrix{Float64}[],
+        zeros(Float64, ndofs(problem), 1),
+        [0.0],
+        Int[],
+        1,
+        type,
+        problem
+    )
+end
+
 """
     _contact_node_coordinates(problem) -> Matrix{Float64}
 
-Return global mesh-node coordinates in a `3 × problem.non` matrix indexed by
-Gmsh node tag.
+Return reference mesh-node coordinates in a `3 × problem.non` matrix indexed
+by Gmsh node tag.
 """
 function _contact_node_coordinates(problem::Problem)
     gmsh.model.setCurrent(problem.name)
@@ -386,11 +689,43 @@ function _contact_node_coordinates(problem::Problem)
 end
 
 """
-    _contact_group_elements(problem, phName, nodecoords; aabb_padding)
-        -> elements, dimension
+    _contact_deformed_coordinates(problem, U; step) -> Matrix{Float64}
 
-Collect curve or surface elements belonging to a physical group.
+Return current coordinates `x = X + U` for contact search and projection.
 """
+function _contact_deformed_coordinates(
+    problem::Problem,
+    U::VectorField;
+    step::Int
+    )
+
+    1 <= step <= U.nsteps ||
+        error("contact: displacement step $step is outside 1:$(U.nsteps).")
+
+    Un = isNodal(U) ? U : elementsToNodes(U)
+
+    size(Un.a, 1) == ndofs(problem) ||
+        error(
+            "contact: nodal displacement contains $(size(Un.a, 1)) values " *
+            "per step, expected $(ndofs(problem))."
+        )
+
+    size(Un.a, 2) >= step ||
+        error("contact: displacement field does not contain step $step.")
+
+    X = _contact_node_coordinates(problem)
+    pdim = problem.pdim
+
+    @inbounds for node in 1:problem.non
+        base = (node - 1) * pdim
+        for c in 1:pdim
+            X[c, node] += Un.a[base + c, step]
+        end
+    end
+
+    return X
+end
+
 function _contact_group_elements(
     problem::Problem,
     phName::String,
@@ -712,7 +1047,8 @@ end
     _contact_project_element(element, xs; ...) -> _ContactProjection
 
 Compute the closest point of `xs` on one master element using projected
-Gauss-Newton iterations in the reference element.
+Gauss-Newton iterations in the reference element. The local contact basis is
+constructed at the converged master point.
 """
 function _contact_project_element(
     element::_ContactElement,
@@ -765,6 +1101,13 @@ function _contact_project_element(
         normal_sign
     )
 
+    tangent1, tangent2 = _contact_tangent_basis(
+        element,
+        best_J,
+        normal,
+        model_dim
+    )
+
     gap = dot(separation, normal)
 
     return _ContactProjection(
@@ -774,6 +1117,8 @@ function _contact_project_element(
         best_x,
         best_N,
         normal,
+        tangent1,
+        tangent2,
         gap,
         best_d2
     )
@@ -956,10 +1301,6 @@ function _contact_project_triangle_reference(u::Float64, v::Float64)
     return best
 end
 
-# -----------------------------------------------------------------------------
-# Contact normal
-# -----------------------------------------------------------------------------
-
 function _contact_normal(
     element::_ContactElement,
     J::Matrix{Float64},
@@ -1074,8 +1415,80 @@ function _contact_self_exclusion_sets(
     return result
 end
 
+
+"""
+    _contact_tangent_basis(element, J, n, model_dim) -> t1, t2
+
+Construct an orthonormal tangential basis associated with the contact normal.
+For 2D contact only `t1` is used and `t2 === nothing`. In 3D the tangential
+response is isotropic, so the particular in-plane orientation is immaterial for
+`C`, while the basis is still stored for slip tracking and post-processing.
+"""
+function _contact_tangent_basis(
+    element::_ContactElement,
+    J::Matrix{Float64},
+    n::Vector{Float64},
+    model_dim::Int
+    )
+
+    if model_dim == 2
+        t = [-n[2], n[1], 0.0]
+        tnorm = norm(t)
+        tnorm > sqrt(eps(Float64)) ||
+            error("contact: failed to construct a planar contact tangent.")
+        t ./= tnorm
+
+        # Keep the tangent consistent with the master parameter direction.
+        if element.dim >= 1
+            a = Vector{Float64}(@view J[:, 1])
+            if norm(a) > sqrt(eps(Float64)) && dot(t, a) < 0
+                t .*= -1.0
+            end
+        end
+
+        return t, nothing
+    end
+
+    # 3D surface: use the first covariant direction and orthogonalize it.
+    if element.dim == 2
+        t1 = Vector{Float64}(@view J[:, 1])
+        t1 .-= dot(t1, n) .* n
+        if norm(t1) <= sqrt(eps(Float64))
+            t1 = Vector{Float64}(@view J[:, 2])
+            t1 .-= dot(t1, n) .* n
+        end
+    else
+        # 3D curve: one tangent is supplied by the curve geometry.
+        t1 = Vector{Float64}(@view J[:, 1])
+        t1 .-= dot(t1, n) .* n
+    end
+
+    t1norm = norm(t1)
+    t1norm > sqrt(eps(Float64)) ||
+        error(
+            "contact: failed to construct the first tangential direction on " *
+            "master element $(element.tag)."
+        )
+    t1 ./= t1norm
+
+    t2 = cross(n, t1)
+    t2norm = norm(t2)
+    t2norm > sqrt(eps(Float64)) ||
+        error(
+            "contact: failed to construct the second tangential direction on " *
+            "master element $(element.tag)."
+        )
+    t2 ./= t2norm
+
+    # Re-orthogonalize t1 against the final n-t2 pair.
+    t1 = cross(t2, n)
+    t1 ./= norm(t1)
+
+    return Vector{Float64}(t1), Vector{Float64}(t2)
+end
+
 # -----------------------------------------------------------------------------
-# LLFEM output objects
+# LLFEM output objects and reduced contact matrices
 # -----------------------------------------------------------------------------
 
 function _contact_gap_field(
@@ -1109,11 +1522,15 @@ function _contact_gap_field(
     )
 end
 
-function _contact_normal_field(
+function _contact_vector_field(
     model::Problem,
     slave_elements::Vector{_ContactElement},
-    projections::Dict{Int,_ContactProjection}
+    projections::Dict{Int,_ContactProjection},
+    component::Symbol
     )
+
+    component in (:normal, :tangent1, :tangent2) ||
+        error("contact: unknown contact vector component '$component'.")
 
     A = Vector{Matrix{Float64}}(undef, length(slave_elements))
     num_elem = Vector{Int}(undef, length(slave_elements))
@@ -1122,10 +1539,20 @@ function _contact_normal_field(
         values = Matrix{Float64}(undef, 3 * length(e.node_tags), 1)
 
         for (a, node) in enumerate(e.node_tags)
-            n = projections[node].normal
-            values[3a - 2, 1] = n[1]
-            values[3a - 1, 1] = n[2]
-            values[3a, 1] = n[3]
+            p = projections[node]
+            v = if component === :normal
+                p.normal
+            elseif component === :tangent1
+                p.tangent1
+            else
+                p.tangent2 === nothing &&
+                    error("contact: tangent2 is not defined for this contact dimension.")
+                p.tangent2
+            end
+
+            values[3a - 2, 1] = v[1]
+            values[3a - 1, 1] = v[2]
+            values[3a, 1] = v[3]
         end
 
         A[i] = values
@@ -1143,65 +1570,72 @@ function _contact_normal_field(
     )
 end
 
+"""
+    _contact_matrix(model, slave_nodes, projections, master_elements)
+
+Build the reduced local contact kinematic operator. For each slave node the row
+ordering is `(n,t)` in 2D and `(n,t1,t2)` in 3D.
+"""
 function _contact_matrix(
     model::Problem,
-    test_model::Problem,
     slave_nodes::Vector{Int},
     projections::Dict{Int,_ContactProjection},
-    master_elements::Vector{_ContactElement};
-    lagrange::Bool
+    master_elements::Vector{_ContactElement}
     )
 
-    nrows = lagrange ? ndofs(test_model) : model.non
-    ncols = ndofs(model)
-
-    lagrange && nrows != model.non &&
-        error(
-            "contact: the Lagrange multiplier field must provide exactly one " *
-            "degree of freedom per mesh node."
-        )
-
     pdim = model.pdim
+    nrows = length(slave_nodes) * pdim
+    ncols = ndofs(model)
 
     Iidx = Int[]
     Jidx = Int[]
     Vval = Float64[]
 
-    # Each slave-node row contains pdim slave coefficients and pdim coefficients
-    # for every node of the corresponding master element.
     estimated = 0
     for node in slave_nodes
         p = projections[node]
-        estimated += pdim * (1 + length(master_elements[p.element_index].node_tags))
+        estimated += pdim * pdim *
+            (1 + length(master_elements[p.element_index].node_tags))
     end
     sizehint!(Iidx, estimated)
     sizehint!(Jidx, estimated)
     sizehint!(Vval, estimated)
 
-    @inbounds for slave_node in slave_nodes
+    @inbounds for (i, slave_node) in enumerate(slave_nodes)
         p = projections[slave_node]
         e = master_elements[p.element_index]
-        row = slave_node
-        n = p.normal
 
-        for c in 1:pdim
-            val = n[c]
-            iszero(val) && continue
-            push!(Iidx, row)
-            push!(Jidx, (slave_node - 1) * pdim + c)
-            push!(Vval, val)
+        basis = if pdim == 2
+            (p.normal, p.tangent1)
+        else
+            p.tangent2 === nothing &&
+                error("contact: missing second tangent in 3D contact.")
+            (p.normal, p.tangent1, p.tangent2)
         end
 
-        for (a, master_node) in enumerate(e.node_tags)
-            Na = p.N[a]
-            iszero(Na) && continue
+        for α in 1:pdim
+            row = (i - 1) * pdim + α
+            q = basis[α]
 
             for c in 1:pdim
-                val = -Na * n[c]
+                val = q[c]
                 iszero(val) && continue
                 push!(Iidx, row)
-                push!(Jidx, (master_node - 1) * pdim + c)
+                push!(Jidx, (slave_node - 1) * pdim + c)
                 push!(Vval, val)
+            end
+
+            for (a, master_node) in enumerate(e.node_tags)
+                Na = p.N[a]
+                iszero(Na) && continue
+
+                for c in 1:pdim
+                    val = -Na * q[c]
+                    iszero(val) && continue
+                    push!(Iidx, row)
+                    push!(Jidx, (master_node - 1) * pdim + c)
+                    push!(Vval, val)
+                end
             end
         end
     end
@@ -1209,4 +1643,118 @@ function _contact_matrix(
     G = sparse(Iidx, Jidx, Vval, nrows, ncols)
     dropzeros!(G)
     return G
+end
+
+function _contact_stiffness_matrix(
+    pdim::Int,
+    active::BitVector,
+    cn::Vector{Float64},
+    ct::Vector{Float64}
+    )
+
+    nc = length(active)
+    length(cn) == nc || error("contact: cn size mismatch.")
+    length(ct) == nc || error("contact: ct size mismatch.")
+
+    nrows = nc * pdim
+    Iidx = Int[]
+    Jidx = Int[]
+    Vval = Float64[]
+    sizehint!(Iidx, nrows)
+    sizehint!(Jidx, nrows)
+    sizehint!(Vval, nrows)
+
+    @inbounds for i in 1:nc
+        active[i] || continue
+
+        row_n = (i - 1) * pdim + 1
+        if !iszero(cn[i])
+            push!(Iidx, row_n)
+            push!(Jidx, row_n)
+            push!(Vval, cn[i])
+        end
+
+        for α in 2:pdim
+            iszero(ct[i]) && continue
+            row_t = (i - 1) * pdim + α
+            push!(Iidx, row_t)
+            push!(Jidx, row_t)
+            push!(Vval, ct[i])
+        end
+    end
+
+    C = sparse(Iidx, Jidx, Vval, nrows, nrows)
+    dropzeros!(C)
+    return C
+end
+
+function _contact_multiplier_dofs(
+    multiplier::Union{Nothing,Problem},
+    displacement::Problem,
+    slave_nodes::Vector{Int}
+    )
+
+    multiplier === nothing && return Int[]
+
+    pdim = displacement.pdim
+    dofs = Vector{Int}(undef, length(slave_nodes) * pdim)
+
+    @inbounds for (i, node) in enumerate(slave_nodes)
+        for α in 1:pdim
+            dofs[(i - 1) * pdim + α] = (node - 1) * pdim + α
+        end
+    end
+
+    return dofs
+end
+
+function _contact_parameter_values(
+    parameter,
+    slave_nodes::Vector{Int},
+    nodecoords::Matrix{Float64},
+    model::Problem;
+    step::Int,
+    name::String
+    )
+
+    values = Vector{Float64}(undef, length(slave_nodes))
+
+    if parameter isa Number
+        value = Float64(parameter)
+        isfinite(value) || error("contact: $name must be finite.")
+        fill!(values, value)
+        return values
+    end
+
+    if parameter isa ScalarField
+        parameter.model.name == model.name ||
+            error("contact: $name ScalarField must use the same Gmsh model.")
+
+        S = isNodal(parameter) ? parameter : elementsToNodes(parameter)
+        sstep = S.nsteps == 1 ? 1 : step
+        1 <= sstep <= S.nsteps ||
+            error("contact: $name ScalarField does not contain step $step.")
+
+        @inbounds for (i, node) in enumerate(slave_nodes)
+            values[i] = S.a[node, sstep]
+            isfinite(values[i]) || error("contact: $name contains a non-finite value.")
+        end
+        return values
+    end
+
+    if parameter isa Function
+        @inbounds for (i, node) in enumerate(slave_nodes)
+            x = nodecoords[1, node]
+            y = nodecoords[2, node]
+            z = nodecoords[3, node]
+            values[i] = Float64(parameter(x, y, z))
+            isfinite(values[i]) || error("contact: $name function returned a non-finite value.")
+        end
+        return values
+    end
+
+    error(
+        "contact: $name must be a Number, ScalarField, or function f(x,y,z); " *
+        "got $(typeof(parameter))."
+    )
 end
