@@ -11,6 +11,7 @@ Transfinite Curve {5} = 10 Using Progression 1;
 //+
 MeshSize {8, 7, 3, 4} = 1;
 //+
+Mesh.ElementOrder=2;
 Mesh 2;
 //+
 Physical Surface("body", 9) = {2, 1};
