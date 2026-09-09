@@ -235,7 +235,7 @@ current configuration.
 - `self_exclusion_layers::Int=1`: number of additional node-connected master
   element layers excluded in self-contact.
 - `aabb_padding::Real=0.05`: relative AABB padding.
-- `leaf_size::Int=8`: maximum number of elements in an AABB leaf.
+- `leaf_size::Int=2`: maximum number of elements in an AABB leaf.
 - `projection_tol::Real=1e-10`: closest-point solver tolerance.
 - `projection_maxiter::Int=40`: maximum projected Gauss-Newton iterations.
 
@@ -260,7 +260,7 @@ function contact(
     self_contact::Bool=(slave == master),
     self_exclusion_layers::Int=1,
     aabb_padding::Real=0.05,
-    leaf_size::Int=8,
+    leaf_size::Int=2,
     projection_tol::Real=1e-10,
     projection_maxiter::Int=40
     )
@@ -1297,14 +1297,14 @@ end
 # -----------------------------------------------------------------------------
 
 """
-    _contact_build_aabb_tree(elements, indices; leaf_size=8)
+    _contact_build_aabb_tree(elements, indices; leaf_size=2)
 
 Build a binary AABB tree over master elements.
 """
 function _contact_build_aabb_tree(
     elements::Vector{_ContactElement},
     indices::Vector{Int};
-    leaf_size::Int=8
+    leaf_size::Int=2
     )
 
     isempty(indices) && error("contact: cannot build an AABB tree from no elements.")
