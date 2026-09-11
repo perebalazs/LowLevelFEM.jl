@@ -1,17 +1,17 @@
 //+
 SetFactory("OpenCASCADE");
 //+
-Rectangle(1) = {0, 0, 0, 10, -2, 0};
+Rectangle(1) = {0.0, 0, 0, 10, -2, 0};
 //+
 Rectangle(2) = {0, 0.1, 0, 10, 2, 0};
 //+
-Transfinite Curve {1} = 11 Using Progression 1;
+Transfinite Curve {1} = 100 Using Progression 1;
 //+
-Transfinite Curve {5} = 10 Using Progression 1;
+Transfinite Curve {5} = 101 Using Progression 1;
 //+
 MeshSize {8, 7, 3, 4} = 1;
 //+
-Mesh.ElementOrder=2;
+Mesh.ElementOrder=1;
 Mesh 2;
 //+
 Physical Surface("body", 9) = {2, 1};

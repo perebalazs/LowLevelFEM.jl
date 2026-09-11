@@ -144,6 +144,7 @@ mutable struct Contact
     master_points::Matrix{Float64}
 
     gap::ScalarField
+    gap_values::Vector{Float64}
     G::SparseMatrixCSC{Float64,Int}
     C::SparseMatrixCSC{Float64,Int}
 
@@ -306,6 +307,7 @@ function contact(
         data.master_local_coordinates,
         data.master_points,
         data.gap,
+        data.gap_values,
         data.G,
         data.C,
         data.n,
@@ -407,6 +409,7 @@ function updateContact!(
     c.master_local_coordinates = data.master_local_coordinates
     c.master_points = data.master_points
     c.gap = data.gap
+    c.gap_values = data.gap_values
     c.G = data.G
     c.C = data.C
     c.n = data.n
@@ -558,6 +561,8 @@ function _contact_build_data(
     sizehint!(projections, length(slave_nodes))
     empty_exclusion = Set{Int}()
 
+    #gap_values = zeros(Float64, length(slave_nodes))
+
     # Prepare optional warm-start lookup tables.  In the normal update path the
     # slave-node ordering is unchanged, so no node dictionary is needed.
     have_previous =
@@ -681,6 +686,7 @@ function _contact_build_data(
         master_local_coordinates=master_local_coordinates,
         master_points=master_points,
         gap=gap,
+        gap_values = gap_values,
         G=G,
         C=C,
         n=normalVec,
@@ -1382,19 +1388,28 @@ function _contact_nearest_projection(
     projection_maxiter::Int,
     previous_element_index::Int=0,
     previous_local_coordinate::Union{Nothing,AbstractVector}=nothing
-    )
+)
 
     best = _ContactSearchResult(0, 0.0, 0.0, Inf)
 
-    # Warm start from the previous contact association.  This does not replace
+    # Store the previous projection separately for diagnostics.
+    previous_u = 0.0
+    previous_v = 0.0
+    previous_d2 = Inf
+
+    # Warm start from the previous contact association. This does not replace
     # the global search: it only supplies a finite initial upper bound for the
-    # branch-and-bound traversal.  Hence a different master element is still
+    # branch-and-bound traversal. Hence a different master element is still
     # selected whenever it gives a smaller distance.
-    if previous_element_index != 0 && previous_local_coordinate !== nothing
+    if previous_element_index != 0 &&
+       previous_local_coordinate !== nothing
+
         element = elements[previous_element_index]
+
         u0 = Float64(previous_local_coordinate[1])
-        v0 = element.dim == 1 || length(previous_local_coordinate) < 2 ?
-            0.0 : Float64(previous_local_coordinate[2])
+        v0 = element.dim == 1 ||
+             length(previous_local_coordinate) < 2 ?
+             0.0 : Float64(previous_local_coordinate[2])
 
         u, v, d2 = _contact_project_from_start!(
             element,
@@ -1411,6 +1426,11 @@ function _contact_nearest_projection(
             best.u = u
             best.v = v
             best.distance2 = d2
+
+            # Save the warm-start result before the global search can overwrite it.
+            previous_u = u
+            previous_v = v
+            previous_d2 = d2
         end
     end
 
@@ -1424,6 +1444,26 @@ function _contact_nearest_projection(
         projection_tol,
         projection_maxiter
     )
+
+    # Temporary diagnostic for master-element switching.
+    if previous_element_index != 0 &&
+       isfinite(previous_d2) &&
+       best.element_index != 0 &&
+       best.element_index != previous_element_index
+
+        d_old = sqrt(previous_d2)
+        d_new = sqrt(best.distance2)
+
+        println(
+            "master switch: ",
+            previous_element_index, " -> ", best.element_index,
+            ", d_old = ", d_old,
+            ", d_new = ", d_new,
+            ", Δd = ", d_old - d_new,
+            ", ξ_old = (", previous_u, ", ", previous_v, ")",
+            ", ξ_new = (", best.u, ", ", best.v, ")"
+        )
+    end
 
     best.element_index == 0 && return nothing
 
