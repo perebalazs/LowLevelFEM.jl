@@ -4,11 +4,13 @@ SetFactory("OpenCASCADE");
 //+
 Box(1) = {0, 0, 0, 10, -2, 10};
 //+
-Box(2) = {0, 0.1, 0, 10, 2, 10};
+Box(2) = {0.2, 0.1, 0.1, 10, 2, 10};
 //+
-MeshSize {12, 11, 10, 9, 14, 13, 15, 16} = 0.7;
+MeshSize {:} = 1;
 //+
-MeshSize {4, 3, 2, 1, 8, 7, 6, 5} = 1;
+MeshSize {10, 9, 13, 14} = 0.4;
+//+
+MeshSize {3,4,7,8} = 0.4;
 //+
 Mesh.ElementOrder=1;
 Mesh 3;

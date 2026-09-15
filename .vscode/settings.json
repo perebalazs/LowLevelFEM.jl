@@ -2,5 +2,6 @@
     "github-actions.workflows.pinned.workflows": [
         ".github/workflows/CI.yml",
         "dynamic/pages/pages-build-deployment"
-    ]
+    ],
+    "julia.executablePath": "julia +1.12.7"
 }

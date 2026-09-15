@@ -4,7 +4,7 @@
 #                                                                             #
 ###############################################################################
 
-export Contact, ContactSet, ContactVector, contact, updateContact!
+export Contact, ContactVector, contact, updateContact!, contactPenaltyMatrix
 export CONTACT_OPEN, CONTACT_STICK, CONTACT_SLIP
 
 const CONTACT_OPEN  = UInt8(0)
@@ -272,43 +272,31 @@ Base.:*(::ContactVector, ::SystemMatrix) =
 """
     Contact
 
-Method-independent kinematic description of one slave-master contact pair.
+Container for one slave-master contact pair.
 
 `U` is the displacement `Problem` defining the global displacement DoFs, while
 `displacement` is the current `VectorField` used to construct the deformed
 geometry `x = X + displacement`.
 
-The contact kinematics are represented in a reduced local contact space. Every
-slave contact node contributes `U.pdim` rows to `G`: `(normal,tangent)` in 2D
-and `(normal,tangent1,tangent2)` in 3D. Thus, for `nc` slave contact nodes,
+The contact kinematics are stored in a reduced local contact space. Every slave
+contact node contributes `U.pdim` rows to `G`: `(normal,tangent)` in 2D and
+`(normal,tangent1,tangent2)` in 3D. Therefore, for `nc` slave contact nodes,
 
     size(G) == (nc * U.pdim, ndofs(U))
 
-with the mapping
+and the penalty contribution has the direct mathematical form
 
-    G : Vu -> Vc
+    Kc = G' * C * G
+    rc = G' * C * g
 
-and `g::ContactVector` living in the same reduced contact space `Vc`.
+where `g::ContactVector` contains the signed normal gap in the reduced contact
+space and `C` is block diagonal in the local contact basis. Isotropic tangential
+behaviour is represented by the same `ct` in both tangential directions in 3D.
+Inactive contact points have zero local blocks in `C`.
 
-`C` is a local contact-space operator constructed from `cn` and `ct`. It is
-kept here because it is useful for penalty and augmented formulations, but no
-contact solution, traction, pressure, stick/slip state, or other derived result
-is stored in `Contact`. Those quantities are intentionally left to the
-algebraic formulation in the calling code.
-
-If a Lagrange multiplier `Problem` is supplied, `E` is an embedding operator
-
-    E : Vc -> Vlambda
-
-that maps reduced contact-space vectors to the multiplier finite-element field.
-Consequently, the multifield coupling and gap residual can be written directly
-as
-
-    Glambda = E * G
-    glambda = E * g
-
-without changing the underlying contact kinematics. Different contact pairs may
-use different multiplier fields.
+If a Lagrange multiplier field is supplied, `multiplier_dofs` maps the reduced
+rows of `G` to the corresponding multiplier DoFs on the slave nodes. This
+mapping is stored for the later `solveField` implementation.
 """
 mutable struct Contact
     master::String
@@ -329,19 +317,23 @@ mutable struct Contact
     G::SystemMatrix
     C::SystemMatrix
 
-    # Optional embedding from the reduced contact space to a multiplier field.
-    E::Union{Nothing,SystemMatrix}
-
     n::VectorField
     t1::VectorField
     t2::Union{Nothing,VectorField}
 
     active::BitVector
+    state::Vector{UInt8}
+
+    # Local contact-space history vectors reserved for the Coulomb update.
+    traction::Vector{Float64}
+    slip::Vector{Float64}
 
     cn::Any
     ct::Any
+    μ::Any
     cn_values::Vector{Float64}
     ct_values::Vector{Float64}
+    μ_values::Vector{Float64}
 
     # Mapping from reduced contact rows to global multiplier DoFs.
     multiplier_dofs::Vector{Int}
@@ -353,82 +345,16 @@ end
 function Base.show(io::IO, c::Contact)
     nc = length(c.slave_nodes)
     na = count(c.active)
-    lm = c.multiplier === nothing ? "" : ", Lagrange multiplier"
+    nstick = count(==(CONTACT_STICK), c.state)
+    nslip = count(==(CONTACT_SLIP), c.state)
 
     print(
         io,
         "Contact(\"$(c.slave)\" -> \"$(c.master)\", " *
-        "$nc candidate nodes, $na active, G=$(size(c.G)), C=$(size(c.C))$lm)"
+        "$nc candidate nodes, $na active, " *
+        "stick=$nstick, slip=$nslip, " *
+        "G=$(size(c.G)), C=$(size(c.C)))"
     )
-end
-
-"""
-    ContactSet(contacts...)
-
-Lightweight container for several independent slave-master contact pairs.
-
-A `ContactSet` does not merge the reduced contact spaces and does not store any
-derived contact result. Each `Contact` keeps its own geometry, `G`, `C`, `g`,
-and optional multiplier embedding `E`. This preserves the field metadata needed
-by multifield Lagrange-multiplier formulations while still allowing penalty or
-augmented contributions to be assembled by ordinary algebra, e.g.
-
-    Kc = sum(c.G' * c.C * c.G for c in contacts)
-    rc = sum(c.G' * c.C * c.g for c in contacts)
-
-For multiplier contact, each pair may use its own multiplier field:
-
-    B1 = contacts[1].E * contacts[1].G
-    B2 = contacts[2].E * contacts[2].G
-
-The resulting field-level `SystemMatrix` objects can then be inserted into a
-multifield block system without losing their `model`/`test_model` metadata.
-"""
-struct ContactSet
-    contacts::Vector{Contact}
-
-    function ContactSet(contacts::Vector{Contact})
-        isempty(contacts) && error("ContactSet: at least one contact pair is required.")
-
-        U = contacts[1].U
-        for (i, c) in enumerate(contacts)
-            c.U === U ||
-                error(
-                    "ContactSet: all contact pairs must use the same displacement " *
-                    "Problem. Pair $i uses a different Problem."
-                )
-        end
-
-        # Accidental duplicate pairs would contribute the same constraint twice.
-        seen = Set{Tuple{String,String}}()
-        for c in contacts
-            pair = (c.slave, c.master)
-            pair in seen &&
-                error(
-                    "ContactSet: duplicate contact pair slave='$(c.slave)', " *
-                    "master='$(c.master)'."
-                )
-            push!(seen, pair)
-        end
-
-        new(contacts)
-    end
-end
-
-ContactSet(c::Contact, cs::Contact...) = ContactSet(Contact[c, cs...])
-ContactSet(cs::AbstractVector{<:Contact}) = ContactSet(Contact[cs...])
-
-Base.length(cs::ContactSet) = length(cs.contacts)
-Base.getindex(cs::ContactSet, i::Int) = cs.contacts[i]
-Base.iterate(cs::ContactSet, state...) = iterate(cs.contacts, state...)
-Base.firstindex(cs::ContactSet) = firstindex(cs.contacts)
-Base.lastindex(cs::ContactSet) = lastindex(cs.contacts)
-Base.eltype(::Type{ContactSet}) = Contact
-
-function Base.show(io::IO, cs::ContactSet)
-    nc = sum(length(c.slave_nodes) for c in cs.contacts)
-    na = sum(count(c.active) for c in cs.contacts)
-    print(io, "ContactSet($(length(cs)) pairs, $nc candidate nodes, $na active)")
 end
 
 # -----------------------------------------------------------------------------
@@ -437,7 +363,7 @@ end
 
 """
     contact(U::Problem; master, slave, displacement=zero_displacement,
-            LagrangeMultiplierField=nothing, cn=1.0, ct=0.0,
+            LagrangeMultiplierField=nothing, cn=1.0, ct=0.0, μ=0.0,
             activation_tol=0.0, step=displacement.nsteps, kwargs...) -> Contact
 
 Construct one node-to-manifold contact pair in the current configuration.
@@ -460,12 +386,13 @@ current configuration.
 - `displacement::VectorField`: current displacement field. If omitted, a zero
   nodal displacement field is used.
 - `LagrangeMultiplierField::Union{Nothing,Problem}=nothing`: optional vector
-  multiplier problem. In 2D it must have two components and in 3D three. If
-  supplied, `Contact.E` maps the reduced contact space to this field.
+  multiplier problem. In 2D it must have two components and in 3D three.
 - `cn`: normal penalty stiffness. It may be a number, `ScalarField`, or
   `f(x,y,z)` function.
 - `ct`: isotropic tangential penalty stiffness. It may be a number,
   `ScalarField`, or `f(x,y,z)` function. Set `ct=0` for frictionless contact.
+- `μ`: isotropic Coulomb friction coefficient reserved for the stick-slip
+  update. It may be a number, `ScalarField`, or `f(x,y,z)` function.
 - `activation_tol::Real=0.0`: a point is active when `gap <= activation_tol`.
 - `step::Int=displacement.nsteps`: displacement step used for the current
   geometry.
@@ -496,6 +423,7 @@ function contact(
     LagrangeMultiplierField::Union{Nothing,Problem}=nothing,
     cn=1.0,
     ct=0.0,
+    μ=0.0,
     activation_tol::Real=0.0,
     step::Int=displacement.nsteps,
     normal_sign::Real=1.0,
@@ -525,10 +453,17 @@ function contact(
         slave,
         master,
         cn,
-        ct;
+        ct,
+        μ;
         step=step,
         options...
     )
+
+    nrows = size(data.G, 1)
+    state = Vector{UInt8}(undef, length(data.active))
+    @inbounds for i in eachindex(state)
+        state[i] = data.active[i] ? CONTACT_STICK : CONTACT_OPEN
+    end
 
     return Contact(
         master,
@@ -545,15 +480,19 @@ function contact(
         data.g,
         data.G,
         data.C,
-        data.E,
         data.n,
         data.t1,
         data.t2,
         data.active,
+        state,
+        zeros(Float64, nrows),
+        zeros(Float64, nrows),
         cn,
         ct,
+        μ,
         data.cn_values,
         data.ct_values,
+        data.μ_values,
         data.multiplier_dofs,
         options
     )
@@ -593,16 +532,12 @@ contact(U::Problem, slave::String, master::String; kwargs...) =
 """
     updateContact!(c::Contact, displacement::VectorField; step=displacement.nsteps)
 
-Recompute the current contact geometry, active set, reduced gap vector `g`,
-kinematic operator `G`, local operator `C`, and optional multiplier embedding
-`E` from a new displacement field.
-
-The previous master element and local coordinates are used as a warm start and
-as an initial upper bound for the exact AABB branch-and-bound search. The search
-remains global and may switch to any closer master element.
-
-No contact traction, pressure, multiplier value, or stick/slip history is
-updated here; those belong to the formulation implemented by the calling code.
+Recompute the current contact geometry, active set, `G` and `C` from a new
+current displacement field. The previous master element and local coordinates
+are used as a warm start and as an initial upper bound for the exact AABB
+branch-and-bound search. The search therefore remains global and may switch to
+any closer master element. Existing traction and slip history arrays are reused
+when the slave-node set is unchanged; traction is cleared on newly open points.
 """
 function updateContact!(
     c::Contact,
@@ -610,6 +545,10 @@ function updateContact!(
     step::Int=displacement.nsteps
     )
 
+    # Keep the previous geometric association as a warm start.  The previous
+    # master element and local coordinates provide a cheap current upper bound
+    # for the exact AABB search; the global search is still performed, so the
+    # result is not restricted to the previous element or its neighbourhood.
     old_nodes = c.slave_nodes
     old_master_element_tags = c.master_element_tags
     old_master_local_coordinates = c.master_local_coordinates
@@ -621,13 +560,18 @@ function updateContact!(
         c.slave,
         c.master,
         c.cn,
-        c.ct;
+        c.ct,
+        c.μ;
         step=step,
         previous_slave_nodes=old_nodes,
         previous_master_element_tags=old_master_element_tags,
         previous_master_local_coordinates=old_master_local_coordinates,
         c.options...
     )
+
+    pdim = c.U.pdim
+    nrows = size(data.G, 1)
+    preserve_history = old_nodes == data.slave_nodes && length(c.traction) == nrows
 
     c.displacement = displacement
     c.slave_nodes = data.slave_nodes
@@ -639,36 +583,53 @@ function updateContact!(
     c.g = data.g
     c.G = data.G
     c.C = data.C
-    c.E = data.E
     c.n = data.n
     c.t1 = data.t1
     c.t2 = data.t2
     c.active = data.active
     c.cn_values = data.cn_values
     c.ct_values = data.ct_values
+    c.μ_values = data.μ_values
     c.multiplier_dofs = data.multiplier_dofs
+
+    if preserve_history
+        # Reuse the existing history arrays.  This avoids three allocations on
+        # every contact update and, more importantly, keeps the history in the
+        # same slave-node ordering.
+        @inbounds for i in eachindex(c.slave_nodes)
+            firstrow = (i - 1) * pdim + 1
+            if c.active[i]
+                c.state[i] = c.state[i] == CONTACT_OPEN ? CONTACT_STICK : c.state[i]
+            else
+                c.state[i] = CONTACT_OPEN
+                for j in 0:pdim-1
+                    c.traction[firstrow + j] = 0.0
+                end
+            end
+        end
+    else
+        c.traction = zeros(Float64, nrows)
+        c.slip = zeros(Float64, nrows)
+        c.state = Vector{UInt8}(undef, length(c.slave_nodes))
+        @inbounds for i in eachindex(c.slave_nodes)
+            c.state[i] = c.active[i] ? CONTACT_STICK : CONTACT_OPEN
+        end
+    end
 
     return c
 end
 
 """
-    updateContact!(cs::ContactSet, displacement::VectorField; step=displacement.nsteps)
+    contactPenaltyMatrix(c::Contact) -> SystemMatrix
 
-Update every contact pair in a `ContactSet` with the same current displacement
-field. Each pair keeps its own master/slave geometry and optional multiplier
-field.
+Return the penalty contact contribution
+
+    Kc = G' * C * G
+
+as a `SystemMatrix` associated with the displacement problem `c.U`.
 """
-function updateContact!(
-    cs::ContactSet,
-    displacement::VectorField;
-    step::Int=displacement.nsteps
-    )
-
-    for c in cs.contacts
-        updateContact!(c, displacement; step=step)
-    end
-
-    return cs
+function contactPenaltyMatrix(c::Contact)
+    return c.G' * c.C * c.G
 end
 
 # -----------------------------------------------------------------------------
@@ -682,7 +643,8 @@ function _contact_build_data(
     slave::String,
     master::String,
     cn,
-    ct;
+    ct,
+    μ;
     step::Int,
     activation_tol::Float64,
     normal_sign::Float64,
@@ -870,8 +832,11 @@ function _contact_build_data(
 
     cn_values = _contact_parameter_values(cn, slave_nodes, nodecoords, U; step=step, name="cn")
     ct_values = _contact_parameter_values(ct, slave_nodes, nodecoords, U; step=step, name="ct")
+    μ_values  = _contact_parameter_values(μ,  slave_nodes, nodecoords, U; step=step, name="μ")
+
     any(x -> x < 0.0, cn_values) && error("contact: cn must be non-negative.")
     any(x -> x < 0.0, ct_values) && error("contact: ct must be non-negative.")
+    any(x -> x < 0.0, μ_values)  && error("contact: μ must be non-negative.")
 
     C0 = _contact_stiffness_matrix(
         U.pdim,
@@ -895,7 +860,6 @@ function _contact_build_data(
     end
 
     multiplier_dofs = _contact_multiplier_dofs(multiplier, U, slave_nodes)
-    E = _contact_multiplier_embedding(multiplier, multiplier_dofs, length(g))
 
     return (
         slave_nodes=slave_nodes,
@@ -907,13 +871,13 @@ function _contact_build_data(
         g=g,
         G=G,
         C=C,
-        E=E,
         n=normalVec,
         t1=tangent1,
         t2=tangent2,
         active=active,
         cn_values=cn_values,
         ct_values=ct_values,
+        μ_values=μ_values,
         multiplier_dofs=multiplier_dofs
     )
 end
@@ -2392,7 +2356,7 @@ end
 Construct an orthonormal tangential basis associated with the contact normal.
 For 2D contact only `t1` is used and `t2 === nothing`. In 3D the tangential
 response is isotropic, so the particular in-plane orientation is immaterial for
-`C`, while the basis is still available for tangential kinematics and post-processing.
+`C`, while the basis is still stored for slip tracking and post-processing.
 """
 function _contact_tangent_basis(
     element::_ContactElement,
@@ -2676,35 +2640,6 @@ function _contact_multiplier_dofs(
     end
 
     return dofs
-end
-
-"""
-    _contact_multiplier_embedding(multiplier, multiplier_dofs, ncontact)
-
-Construct the sparse embedding `E : Vc -> Vlambda` from the reduced contact
-space to a finite-element Lagrange multiplier field. Returns `nothing` when no
-multiplier field is supplied.
-"""
-function _contact_multiplier_embedding(
-    multiplier::Union{Nothing,Problem},
-    multiplier_dofs::Vector{Int},
-    ncontact::Int
-    )
-
-    multiplier === nothing && return nothing
-
-    length(multiplier_dofs) == ncontact ||
-        error(
-            "contact: multiplier embedding size mismatch: " *
-            "$(length(multiplier_dofs)) mapped DoFs for $ncontact contact entries."
-        )
-
-    rows = multiplier_dofs
-    cols = collect(1:ncontact)
-    vals = ones(Float64, ncontact)
-    E0 = sparse(rows, cols, vals, ndofs(multiplier), ncontact)
-
-    return SystemMatrix(E0, nothing, multiplier, nothing, nothing)
 end
 
 function _contact_parameter_values(
