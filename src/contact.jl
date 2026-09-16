@@ -99,6 +99,39 @@ mutable struct _ContactSearchResult
     distance2::Float64
 end
 
+
+# -----------------------------------------------------------------------------
+# Master-side topological entities used only near element boundaries
+# -----------------------------------------------------------------------------
+
+struct _ContactReferenceVertex
+    node::Int
+    local_index::Int
+    ξ::NTuple{2,Float64}
+end
+
+struct _ContactReferenceEdge
+    key::Tuple{Int,Int}
+    node_a::Int
+    node_b::Int
+    ξa::NTuple{2,Float64}
+    ξb::NTuple{2,Float64}
+end
+
+"""
+Connectivity-only topology of the master contact manifold.
+
+The ordinary closest-point path is left unchanged in element interiors.
+This topology is consulted only when a converged projection lies very close
+to a shared master vertex or, in 3D surface contact, to a shared master edge.
+"""
+struct _ContactMasterTopology
+    element_vertices::Vector{Vector{_ContactReferenceVertex}}
+    element_edges::Vector{Vector{_ContactReferenceEdge}}
+    vertex_elements::Dict{Int,Vector{Tuple{Int,_ContactReferenceVertex}}}
+    edge_elements::Dict{Tuple{Int,Int},Vector{Tuple{Int,_ContactReferenceEdge}}}
+end
+
 # -----------------------------------------------------------------------------
 # Reduced contact-space vector
 # -----------------------------------------------------------------------------
@@ -481,6 +514,12 @@ current configuration.
 - `leaf_size::Int=2`: maximum number of elements in an AABB leaf.
 - `projection_tol::Real=1e-10`: closest-point solver tolerance.
 - `projection_maxiter::Int=40`: maximum projected Gauss-Newton iterations.
+- `topology_tol::Real=1e-3`: reference-space distance below which a projection
+  near a shared vertex/edge is replaced by a topologically stable node-to-node
+  or node-to-edge representation. Set to zero to disable this stabilization.
+- `topology_angle::Real=45.0`: maximum angle in degrees between incident master
+  normals for treating a shared vertex/edge as smooth. Sharp geometric
+  corners are therefore left on the ordinary manifold-contact path.
 
 # Performance
 
@@ -504,7 +543,9 @@ function contact(
     aabb_padding::Real=0.05,
     leaf_size::Int=2,
     projection_tol::Real=1e-10,
-    projection_maxiter::Int=40
+    projection_maxiter::Int=40,
+    topology_tol::Real=1e-3,
+    topology_angle::Real=45.0
     )
 
     options = (
@@ -515,7 +556,9 @@ function contact(
         aabb_padding=Float64(aabb_padding),
         leaf_size=leaf_size,
         projection_tol=Float64(projection_tol),
-        projection_maxiter=projection_maxiter
+        projection_maxiter=projection_maxiter,
+        topology_tol=Float64(topology_tol),
+        topology_angle=Float64(topology_angle)
     )
 
     data = _contact_build_data(
@@ -692,6 +735,8 @@ function _contact_build_data(
     leaf_size::Int,
     projection_tol::Float64,
     projection_maxiter::Int,
+    topology_tol::Float64,
+    topology_angle::Float64,
     previous_slave_nodes::Union{Nothing,Vector{Int}}=nothing,
     previous_master_element_tags::Union{Nothing,Vector{Int}}=nothing,
     previous_master_local_coordinates::Union{Nothing,Vector{Vector{Float64}}}=nothing
@@ -713,6 +758,12 @@ function _contact_build_data(
 
     projection_maxiter >= 1 ||
         error("contact: projection_maxiter must be at least one.")
+
+    topology_tol >= 0 ||
+        error("contact: topology_tol must be non-negative.")
+
+    isfinite(topology_angle) && 0.0 <= topology_angle <= 180.0 ||
+        error("contact: topology_angle must be between 0 and 180 degrees.")
 
     isfinite(normal_sign) && abs(abs(normal_sign) - 1.0) <= 10 * eps(Float64) ||
         error("contact: normal_sign must be either +1 or -1.")
@@ -743,6 +794,11 @@ function _contact_build_data(
         error("contact: no finite elements were found in master group '$master'.")
 
     _contact_check_master_element_types(master_elements)
+
+    # Connectivity-only master topology. It is used only for projections that
+    # are already very close to a shared vertex/edge; the ordinary interior
+    # closest-point path is unchanged.
+    master_topology = _contact_master_topology(master_elements)
 
     tree = _contact_build_aabb_tree(
         master_elements,
@@ -831,6 +887,9 @@ function _contact_build_data(
             model_dim=U.dim,
             projection_tol=projection_tol,
             projection_maxiter=projection_maxiter,
+            topology=master_topology,
+            topology_tol=topology_tol,
+            topology_angle=topology_angle,
             previous_element_index=previous_element_index,
             previous_local_coordinate=previous_local_coordinate
         )
@@ -1590,6 +1649,685 @@ end
     return d2
 end
 
+
+# -----------------------------------------------------------------------------
+# Master topology and boundary stabilization
+# -----------------------------------------------------------------------------
+
+function _contact_reference_corners(refkind::UInt8)
+    if refkind == _CONTACT_REF_LINE
+        return [(-1.0, 0.0), (1.0, 0.0)]
+    elseif refkind == _CONTACT_REF_TRI
+        return [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+    elseif refkind == _CONTACT_REF_QUAD
+        return [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+    end
+    error("contact: unknown reference-element kind.")
+end
+
+function _contact_master_topology(elements::Vector{_ContactElement})
+    ne = length(elements)
+    element_vertices = Vector{Vector{_ContactReferenceVertex}}(undef, ne)
+    element_edges = Vector{Vector{_ContactReferenceEdge}}(undef, ne)
+
+    vertex_elements =
+        Dict{Int,Vector{Tuple{Int,_ContactReferenceVertex}}}()
+    edge_elements =
+        Dict{Tuple{Int,Int},Vector{Tuple{Int,_ContactReferenceEdge}}}()
+
+    @inbounds for (ei, e) in enumerate(elements)
+        corners = _contact_reference_corners(e.basis.refkind)
+        vertices = _ContactReferenceVertex[]
+
+        for ξ in corners
+            best_a = 0
+            best_d2 = Inf
+
+            for a in axes(e.local_nodes, 2)
+                u = Float64(e.local_nodes[1, a])
+                v = e.dim == 2 ? Float64(e.local_nodes[2, a]) : 0.0
+                d2 = (u - ξ[1])^2 + (v - ξ[2])^2
+
+                if d2 < best_d2
+                    best_d2 = d2
+                    best_a = a
+                end
+            end
+
+            best_a != 0 && best_d2 <= 1e-12 ||
+                error(
+                    "contact: failed to identify a corner node of master " *
+                    "element $(e.tag)."
+                )
+
+            vertex = _ContactReferenceVertex(
+                e.node_tags[best_a],
+                best_a,
+                ξ
+            )
+            push!(vertices, vertex)
+            push!(
+                get!(
+                    vertex_elements,
+                    vertex.node,
+                    Tuple{Int,_ContactReferenceVertex}[]
+                ),
+                (ei, vertex)
+            )
+        end
+
+        element_vertices[ei] = vertices
+
+        edges = _ContactReferenceEdge[]
+        if e.dim == 2
+            pairs = if e.basis.refkind == _CONTACT_REF_TRI
+                ((1, 2), (2, 3), (3, 1))
+            elseif e.basis.refkind == _CONTACT_REF_QUAD
+                ((1, 2), (2, 3), (3, 4), (4, 1))
+            else
+                ()
+            end
+
+            for (ia, ib) in pairs
+                va = vertices[ia]
+                vb = vertices[ib]
+                key = va.node < vb.node ?
+                    (va.node, vb.node) : (vb.node, va.node)
+
+                edge = _ContactReferenceEdge(
+                    key,
+                    va.node,
+                    vb.node,
+                    va.ξ,
+                    vb.ξ
+                )
+                push!(edges, edge)
+                push!(
+                    get!(
+                        edge_elements,
+                        key,
+                        Tuple{Int,_ContactReferenceEdge}[]
+                    ),
+                    (ei, edge)
+                )
+            end
+        end
+
+        element_edges[ei] = edges
+    end
+
+    return _ContactMasterTopology(
+        element_vertices,
+        element_edges,
+        vertex_elements,
+        edge_elements
+    )
+end
+
+@inline function _contact_reference_segment_projection(
+    u::Float64,
+    v::Float64,
+    a::NTuple{2,Float64},
+    b::NTuple{2,Float64}
+    )
+
+    du = b[1] - a[1]
+    dv = b[2] - a[2]
+    denom = du * du + dv * dv
+    denom > 0.0 || return 0.0, (u - a[1])^2 + (v - a[2])^2
+
+    t = clamp(
+        ((u - a[1]) * du + (v - a[2]) * dv) / denom,
+        0.0,
+        1.0
+    )
+    ur = a[1] + t * du
+    vr = a[2] + t * dv
+    d2 = (u - ur)^2 + (v - vr)^2
+    return t, d2
+end
+
+function _contact_reference_entity(
+    projection::_ContactProjection,
+    topology::_ContactMasterTopology,
+    tol::Float64
+    )
+
+    ei = projection.element_index
+    u = projection.ξ[1]
+    v = length(projection.ξ) == 1 ? 0.0 : projection.ξ[2]
+    tol2 = tol * tol
+
+    # Vertices take precedence over edges.
+    best_vertex = nothing
+    best_d2 = Inf
+    for vertex in topology.element_vertices[ei]
+        d2 = (u - vertex.ξ[1])^2 + (v - vertex.ξ[2])^2
+        if d2 < best_d2
+            best_d2 = d2
+            best_vertex = vertex
+        end
+    end
+
+    if best_vertex !== nothing &&
+       best_d2 <= tol2 &&
+       length(get(topology.vertex_elements, best_vertex.node, Tuple{Int,_ContactReferenceVertex}[])) >= 2
+        return :vertex, best_vertex, 0.0
+    end
+
+    best_edge = nothing
+    best_t = 0.0
+    best_d2 = Inf
+
+    for edge in topology.element_edges[ei]
+        t, d2 = _contact_reference_segment_projection(
+            u, v, edge.ξa, edge.ξb
+        )
+        if d2 < best_d2
+            best_d2 = d2
+            best_t = t
+            best_edge = edge
+        end
+    end
+
+    if best_edge !== nothing &&
+       best_d2 <= tol2 &&
+       length(get(topology.edge_elements, best_edge.key, Tuple{Int,_ContactReferenceEdge}[])) >= 2
+        return :edge, best_edge, best_t
+    end
+
+    return :interior, nothing, 0.0
+end
+
+@inline function _contact_jacobian_weight(
+    element::_ContactElement,
+    J::Matrix{Float64}
+    )
+    if element.dim == 2
+        return norm(cross(@view(J[:, 1]), @view(J[:, 2])))
+    end
+    return norm(@view J[:, 1])
+end
+
+function _contact_average_vertex_normal!(
+    topology::_ContactMasterTopology,
+    elements::Vector{_ContactElement},
+    vertex::_ContactReferenceVertex,
+    xs,
+    workspace::_ContactProjectionWorkspace;
+    normal_sign::Float64,
+    model_dim::Int,
+    angle_cos::Float64
+    )
+
+    incident = get(
+        topology.vertex_elements,
+        vertex.node,
+        Tuple{Int,_ContactReferenceVertex}[]
+    )
+    length(incident) >= 2 || return nothing
+
+    nsum = zeros(Float64, 3)
+    nref = nothing
+
+    for (ei, local_vertex) in incident
+        e = elements[ei]
+
+        # Boundary stabilization is currently defined for planar curve contact
+        # and 3D surface contact. Other dimensional combinations keep the
+        # original manifold projection.
+        if !((model_dim == 2 && e.dim == 1) ||
+             (model_dim == 3 && e.dim == 2))
+            return nothing
+        end
+
+        u = local_vertex.ξ[1]
+        v = local_vertex.ξ[2]
+        _contact_geometry!(workspace, e, u, v)
+
+        separation = [
+            xs[1] - workspace.x[1],
+            xs[2] - workspace.x[2],
+            xs[3] - workspace.x[3]
+        ]
+
+        ni = _contact_normal(
+            e,
+            workspace.J,
+            separation,
+            model_dim,
+            normal_sign
+        )
+
+        if nref === nothing
+            nref = copy(ni)
+        else
+            d = dot(ni, nref)
+            if d < 0.0
+                ni .*= -1.0
+                d = -d
+            end
+            d >= angle_cos || return nothing
+        end
+
+        w = _contact_jacobian_weight(e, workspace.J)
+        isfinite(w) && w > sqrt(eps(Float64)) || continue
+        nsum .+= w .* ni
+    end
+
+    nrm = norm(nsum)
+    nrm > sqrt(eps(Float64)) || return nothing
+    nsum ./= nrm
+
+    # Keep the sign consistent with the first incident normal.
+    if nref !== nothing && dot(nsum, nref) < 0.0
+        nsum .*= -1.0
+    end
+
+    return nsum
+end
+
+function _contact_average_edge_normal!(
+    topology::_ContactMasterTopology,
+    elements::Vector{_ContactElement},
+    edge::_ContactReferenceEdge,
+    canonical_t::Float64,
+    xs,
+    workspace::_ContactProjectionWorkspace;
+    normal_sign::Float64,
+    model_dim::Int,
+    angle_cos::Float64
+    )
+
+    model_dim == 3 || return nothing
+
+    incident = get(
+        topology.edge_elements,
+        edge.key,
+        Tuple{Int,_ContactReferenceEdge}[]
+    )
+    length(incident) >= 2 || return nothing
+
+    nsum = zeros(Float64, 3)
+    nref = nothing
+
+    for (ei, local_edge) in incident
+        e = elements[ei]
+        e.dim == 2 || return nothing
+
+        t = local_edge.node_a == edge.key[1] ?
+            canonical_t : 1.0 - canonical_t
+
+        u = local_edge.ξa[1] +
+            t * (local_edge.ξb[1] - local_edge.ξa[1])
+        v = local_edge.ξa[2] +
+            t * (local_edge.ξb[2] - local_edge.ξa[2])
+
+        _contact_geometry!(workspace, e, u, v)
+
+        separation = [
+            xs[1] - workspace.x[1],
+            xs[2] - workspace.x[2],
+            xs[3] - workspace.x[3]
+        ]
+
+        ni = _contact_normal(
+            e,
+            workspace.J,
+            separation,
+            model_dim,
+            normal_sign
+        )
+
+        if nref === nothing
+            nref = copy(ni)
+        else
+            d = dot(ni, nref)
+            if d < 0.0
+                ni .*= -1.0
+                d = -d
+            end
+            d >= angle_cos || return nothing
+        end
+
+        w = _contact_jacobian_weight(e, workspace.J)
+        isfinite(w) && w > sqrt(eps(Float64)) || continue
+        nsum .+= w .* ni
+    end
+
+    nrm = norm(nsum)
+    nrm > sqrt(eps(Float64)) || return nothing
+    nsum ./= nrm
+
+    if nref !== nothing && dot(nsum, nref) < 0.0
+        nsum .*= -1.0
+    end
+
+    return nsum
+end
+
+function _contact_stable_tangent_basis(
+    n::Vector{Float64},
+    model_dim::Int
+    )
+    if model_dim == 2
+        t1 = [-n[2], n[1], 0.0]
+        t1 ./= norm(t1)
+        return t1, nothing
+    end
+
+    # Deterministic global-axis construction. This avoids inheriting a
+    # tangential direction from whichever adjacent face happened to win the
+    # closest-point search.
+    axis = if abs(n[1]) <= abs(n[2]) && abs(n[1]) <= abs(n[3])
+        [1.0, 0.0, 0.0]
+    elseif abs(n[2]) <= abs(n[3])
+        [0.0, 1.0, 0.0]
+    else
+        [0.0, 0.0, 1.0]
+    end
+
+    t1 = cross(axis, n)
+    t1 ./= norm(t1)
+    t2 = cross(n, t1)
+    t2 ./= norm(t2)
+    return Vector{Float64}(t1), Vector{Float64}(t2)
+end
+
+function _contact_project_edge!(
+    element::_ContactElement,
+    edge::_ContactReferenceEdge,
+    xs,
+    t0::Float64,
+    workspace::_ContactProjectionWorkspace;
+    tol::Float64,
+    maxiter::Int=30
+    )
+
+    t = clamp(t0, 0.0, 1.0)
+    du = edge.ξb[1] - edge.ξa[1]
+    dv = edge.ξb[2] - edge.ξa[2]
+
+    u = edge.ξa[1] + t * du
+    v = edge.ξa[2] + t * dv
+    _contact_geometry!(workspace, element, u, v)
+
+    r = [
+        workspace.x[1] - xs[1],
+        workspace.x[2] - xs[2],
+        workspace.x[3] - xs[3]
+    ]
+    d2 = dot(r, r)
+
+    for _ in 1:maxiter
+        dxdt = [
+            workspace.J[1, 1] * du + workspace.J[1, 2] * dv,
+            workspace.J[2, 1] * du + workspace.J[2, 2] * dv,
+            workspace.J[3, 1] * du + workspace.J[3, 2] * dv
+        ]
+
+        h = dot(dxdt, dxdt)
+        h > eps(Float64) || break
+
+        δt = -dot(dxdt, r) / h
+        abs(δt) <= tol && break
+
+        accepted = false
+        α = 1.0
+
+        for _ in 1:12
+            ttrial = clamp(t + α * δt, 0.0, 1.0)
+            abs(ttrial - t) <= tol && begin
+                t = ttrial
+                accepted = true
+                break
+            end
+
+            utrial = edge.ξa[1] + ttrial * du
+            vtrial = edge.ξa[2] + ttrial * dv
+            _contact_position_trial!(
+                workspace,
+                element,
+                utrial,
+                vtrial
+            )
+
+            rt = [
+                workspace.xtrial[1] - xs[1],
+                workspace.xtrial[2] - xs[2],
+                workspace.xtrial[3] - xs[3]
+            ]
+            d2trial = dot(rt, rt)
+
+            if d2trial <= d2
+                t = ttrial
+                d2 = d2trial
+                accepted = true
+                break
+            end
+
+            α *= 0.5
+        end
+
+        accepted || break
+
+        u = edge.ξa[1] + t * du
+        v = edge.ξa[2] + t * dv
+        _contact_geometry!(workspace, element, u, v)
+
+        r[1] = workspace.x[1] - xs[1]
+        r[2] = workspace.x[2] - xs[2]
+        r[3] = workspace.x[3] - xs[3]
+        d2 = dot(r, r)
+    end
+
+    u = edge.ξa[1] + t * du
+    v = edge.ξa[2] + t * dv
+    return t, u, v, d2
+end
+
+function _contact_vertex_projection(
+    original::_ContactProjection,
+    elements::Vector{_ContactElement},
+    topology::_ContactMasterTopology,
+    vertex::_ContactReferenceVertex,
+    xs,
+    workspace::_ContactProjectionWorkspace;
+    normal_sign::Float64,
+    model_dim::Int,
+    angle_cos::Float64
+    )
+
+    normal = _contact_average_vertex_normal!(
+        topology,
+        elements,
+        vertex,
+        xs,
+        workspace;
+        normal_sign=normal_sign,
+        model_dim=model_dim,
+        angle_cos=angle_cos
+    )
+    normal === nothing && return original
+
+    e = elements[original.element_index]
+    N = zeros(Float64, e.basis.num_nodes)
+    N[vertex.local_index] = 1.0
+
+    x = Vector{Float64}(e.coords[:, vertex.local_index])
+    separation = [
+        xs[1] - x[1],
+        xs[2] - x[2],
+        xs[3] - x[3]
+    ]
+
+    t1, t2 = _contact_stable_tangent_basis(normal, model_dim)
+    gap = dot(separation, normal)
+    d2 = dot(separation, separation)
+
+    ξ = e.dim == 1 ?
+        [vertex.ξ[1]] :
+        [vertex.ξ[1], vertex.ξ[2]]
+
+    return _ContactProjection(
+        original.element_index,
+        e.tag,
+        ξ,
+        x,
+        N,
+        normal,
+        t1,
+        t2,
+        gap,
+        d2
+    )
+end
+
+function _contact_edge_projection(
+    original::_ContactProjection,
+    elements::Vector{_ContactElement},
+    topology::_ContactMasterTopology,
+    edge::_ContactReferenceEdge,
+    t0::Float64,
+    xs,
+    workspace::_ContactProjectionWorkspace;
+    projection_tol::Float64,
+    normal_sign::Float64,
+    model_dim::Int,
+    angle_cos::Float64
+    )
+
+    e = elements[original.element_index]
+    e.dim == 2 && model_dim == 3 || return original
+
+    t, u, v, d2 = _contact_project_edge!(
+        e,
+        edge,
+        xs,
+        t0,
+        workspace;
+        tol=max(projection_tol, 1e-12)
+    )
+
+    # Convert to a canonical edge parameter independent of which incident face
+    # supplied the projection.
+    canonical_t =
+        edge.node_a == edge.key[1] ? t : 1.0 - t
+
+    normal = _contact_average_edge_normal!(
+        topology,
+        elements,
+        edge,
+        canonical_t,
+        xs,
+        workspace;
+        normal_sign=normal_sign,
+        model_dim=model_dim,
+        angle_cos=angle_cos
+    )
+    normal === nothing && return original
+
+    # Refresh the selected element after the averaging loop reused workspace.
+    _contact_geometry!(workspace, e, u, v)
+
+    N = copy(@view workspace.N[1:e.basis.num_nodes])
+    x = copy(workspace.x)
+    J = copy(workspace.J)
+
+    du = edge.ξb[1] - edge.ξa[1]
+    dv = edge.ξb[2] - edge.ξa[2]
+    tangent = [
+        J[1, 1] * du + J[1, 2] * dv,
+        J[2, 1] * du + J[2, 2] * dv,
+        J[3, 1] * du + J[3, 2] * dv
+    ]
+
+    if edge.node_a != edge.key[1]
+        tangent .*= -1.0
+    end
+
+    tangent .-= dot(tangent, normal) .* normal
+    if norm(tangent) <= sqrt(eps(Float64))
+        t1, t2 = _contact_stable_tangent_basis(normal, model_dim)
+    else
+        tangent ./= norm(tangent)
+        t1 = Vector{Float64}(tangent)
+        t2 = cross(normal, t1)
+        t2 ./= norm(t2)
+        t2 = Vector{Float64}(t2)
+    end
+
+    separation = [
+        xs[1] - x[1],
+        xs[2] - x[2],
+        xs[3] - x[3]
+    ]
+    gap = dot(separation, normal)
+
+    return _ContactProjection(
+        original.element_index,
+        e.tag,
+        [u, v],
+        x,
+        N,
+        normal,
+        t1,
+        t2,
+        gap,
+        d2
+    )
+end
+
+function _contact_stabilize_topological_projection(
+    projection::_ContactProjection,
+    elements::Vector{_ContactElement},
+    topology::_ContactMasterTopology,
+    xs,
+    workspace::_ContactProjectionWorkspace;
+    tol::Float64,
+    projection_tol::Float64,
+    normal_sign::Float64,
+    model_dim::Int,
+    angle_cos::Float64
+    )
+
+    kind, entity, t = _contact_reference_entity(
+        projection,
+        topology,
+        tol
+    )
+
+    if kind === :vertex
+        return _contact_vertex_projection(
+            projection,
+            elements,
+            topology,
+            entity,
+            xs,
+            workspace;
+            normal_sign=normal_sign,
+            model_dim=model_dim,
+            angle_cos=angle_cos
+        )
+    elseif kind === :edge
+        return _contact_edge_projection(
+            projection,
+            elements,
+            topology,
+            entity,
+            t,
+            xs,
+            workspace;
+            projection_tol=projection_tol,
+            normal_sign=normal_sign,
+            model_dim=model_dim,
+            angle_cos=angle_cos
+        )
+    end
+
+    return projection
+end
+
 # -----------------------------------------------------------------------------
 # Closest-point search
 # -----------------------------------------------------------------------------
@@ -1604,6 +2342,9 @@ function _contact_nearest_projection(
     model_dim::Int,
     projection_tol::Float64,
     projection_maxiter::Int,
+    topology::_ContactMasterTopology,
+    topology_tol::Float64,
+    topology_angle::Float64,
     previous_element_index::Int=0,
     previous_local_coordinate::Union{Nothing,AbstractVector}=nothing
 )
@@ -1687,7 +2428,7 @@ function _contact_nearest_projection(
 
     best.element_index == 0 && return nothing
 
-    return _contact_finalize_projection(
+    projection = _contact_finalize_projection(
         elements[best.element_index],
         xs,
         best.u,
@@ -1697,6 +2438,21 @@ function _contact_nearest_projection(
         workspace;
         normal_sign=normal_sign,
         model_dim=model_dim
+    )
+
+    topology_tol <= 0 && return projection
+
+    return _contact_stabilize_topological_projection(
+        projection,
+        elements,
+        topology,
+        xs,
+        workspace;
+        tol=topology_tol,
+        projection_tol=projection_tol,
+        normal_sign=normal_sign,
+        model_dim=model_dim,
+        angle_cos=cosd(topology_angle)
     )
 end
 

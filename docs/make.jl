@@ -50,6 +50,7 @@ const DOC_PAGES = [
         "Nonlinear" => "reference/nonlinear.md",
         "Heat" => "reference/heat.md",
         "Poisson (Legacy Single-Field)" => "reference/poisson.md",
+        "Contact" => "reference/contact.md",
         "Postprocessing" => "reference/postprocessing.md",
         "Extra" => "reference/extra.md",
     ],
