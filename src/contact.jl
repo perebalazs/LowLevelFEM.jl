@@ -4,7 +4,7 @@
 #                                                                             #
 ###############################################################################
 
-export Contact, ContactSet, ContactVector, contact, updateContact!
+export Contact, ContactSet, ContactVector, contact, updateContact!, contactMatrix
 export CONTACT_OPEN, CONTACT_STICK, CONTACT_SLIP
 
 const CONTACT_OPEN  = UInt8(0)
@@ -463,6 +463,144 @@ function Base.show(io::IO, cs::ContactSet)
     na = sum(count(c.active) for c in cs.contacts)
     print(io, "ContactSet($(length(cs)) pairs, $nc candidate nodes, $na active)")
 end
+
+
+# -----------------------------------------------------------------------------
+# Contact-space surface operators
+# -----------------------------------------------------------------------------
+
+"""
+    contactMatrix(c::Contact, Cn::SystemMatrix;
+                  tangential=nothing, active=true) -> SystemMatrix
+
+Convert a surface-integrated finite-element operator to the reduced local
+contact space of `c`.
+
+`Cn` is expected to be assembled on the slave manifold from an isotropic
+vector-field bilinear form, for example
+
+    Cn = ∫(U ⋅ cn ⋅ U; Γ=c.slave)
+
+where `U` is the displacement field and `cn` may be a number or a
+`ScalarField`. Since the coefficient is scalar, each Cartesian component of
+`Cn` contains the same scalar slave-surface matrix. `contactMatrix` extracts
+that scalar matrix at `c.slave_nodes` and embeds it into the normal component
+of the reduced contact space.
+
+The returned matrix always has size
+
+    (length(c.slave_nodes) * c.U.pdim,
+     length(c.slave_nodes) * c.U.pdim)
+
+with local ordering `(normal,tangent)` in 2D and
+`(normal,tangent1,tangent2)` in 3D. Tangential component slots therefore remain
+present even for frictionless contact.
+
+An optional tangential surface operator can be supplied as
+
+    Ct = ∫(U ⋅ ct ⋅ U; Γ=c.slave)
+    C  = contactMatrix(c, Cn; tangential=Ct)
+
+The same scalar tangential matrix is embedded into every tangential direction.
+This is suitable for isotropic tangential regularization and provides the
+algebraic structure needed by later friction formulations.
+
+If `active=true` (default), rows and columns belonging to geometrically open
+contact nodes are removed from the numerical operator. This masking is
+necessary because `Contact.G` contains the full kinematic map for every slave
+candidate node; the unilateral active set is not encoded in `G` itself.
+Consequently, when the active set changes during an iteration, `contactMatrix`
+must be called again, but the expensive finite-element surface integral `Cn`
+(and `Ct`, if used) is assembled only once.
+
+Set `active=false` to obtain the unmasked contact-space surface operator. This
+is also the efficient form for repeated nonlinear updates:
+
+    C0 = contactMatrix(c, Cn; active=false)
+
+    updateContact!(c, u)
+    C = contactMatrix(c, C0)
+
+The second call only applies the current active-set mask to the already reduced
+contact-space matrix; no finite-element integration, slave-DoF extraction, or
+component embedding is repeated.
+
+The result acts entirely in the reduced contact space, so it can be used as
+
+    Kc = G' * C * G
+    rc = G' * C * g
+
+with the usual `ContactVector` algebra.
+"""
+function contactMatrix(
+    c::Contact,
+    Cn::SystemMatrix;
+    tangential::Union{Nothing,SystemMatrix}=nothing,
+    active::Bool=true
+    )
+
+    # A matrix already living entirely in the reduced contact space can be
+    # passed back to contactMatrix to apply only the current active-set mask.
+    # This makes it possible to build the surface-integrated operator once:
+    #
+    #     C0 = contactMatrix(c, Cn; active=false)
+    #
+    # and then update only its cheap algebraic mask inside the nonlinear loop:
+    #
+    #     C = contactMatrix(c, C0)
+    #
+    if Cn.model === nothing || Cn.test_model === nothing
+        Cn.model === nothing && Cn.test_model === nothing ||
+            error(
+                "contactMatrix: an already reduced contact-space matrix must " *
+                "have both model and test_model equal to nothing."
+            )
+
+        tangential === nothing ||
+            error(
+                "contactMatrix: tangential must be omitted when the supplied " *
+                "matrix already lives in the reduced contact space."
+            )
+
+        ncontact = length(c.slave_nodes) * c.U.pdim
+        size(Cn.A) == (ncontact, ncontact) ||
+            error(
+                "contactMatrix: reduced contact-space matrix has size " *
+                "$(size(Cn.A)); expected ($ncontact, $ncontact)."
+            )
+
+        C0 = copy(Cn.A)
+        if active
+            C0 = _contact_apply_active_mask(C0, c.active, c.U.pdim)
+        end
+
+        return SystemMatrix(C0, nothing, nothing, nothing, nothing)
+    end
+
+    _contact_check_surface_system_matrix(c, Cn, "normal")
+    tangential === nothing ||
+        _contact_check_surface_system_matrix(c, tangential, "tangential")
+
+    Mn = _contact_extract_surface_scalar_matrix(c, Cn)
+    Mt = tangential === nothing ? nothing :
+        _contact_extract_surface_scalar_matrix(c, tangential)
+
+    C0 = _contact_embed_surface_contact_matrix(Mn, Mt, c.U.pdim)
+
+    if active
+        C0 = _contact_apply_active_mask(C0, c.active, c.U.pdim)
+    end
+
+    return SystemMatrix(C0, nothing, nothing, nothing, nothing)
+end
+
+# Positional convenience form for isotropic tangential stiffness.
+contactMatrix(
+    c::Contact,
+    Cn::SystemMatrix,
+    Ct::SystemMatrix;
+    active::Bool=true
+    ) = contactMatrix(c, Cn; tangential=Ct, active=active)
 
 # -----------------------------------------------------------------------------
 # Public interface
@@ -3369,6 +3507,178 @@ function _contact_matrix(
     G = sparse(Iidx, Jidx, Vval, nrows, ncols)
     dropzeros!(G)
     return G
+end
+
+
+"""
+    _contact_check_surface_system_matrix(c, K, component)
+
+Validate a field-level surface operator supplied to `contactMatrix`.
+"""
+function _contact_check_surface_system_matrix(
+    c::Contact,
+    K::SystemMatrix,
+    component::AbstractString
+    )
+
+    n = ndofs(c.U)
+    size(K.A) == (n, n) ||
+        error(
+            "contactMatrix: the $component surface matrix has size $(size(K.A)); " *
+            "expected ($n, $n) for the displacement Problem."
+        )
+
+    K.model === c.U ||
+        error(
+            "contactMatrix: the $component surface matrix must use the contact " *
+            "displacement Problem on its trial side."
+        )
+
+    K.test_model === c.U ||
+        error(
+            "contactMatrix: the $component surface matrix must use the contact " *
+            "displacement Problem on its test side."
+        )
+
+    return nothing
+end
+
+"""
+    _contact_extract_surface_scalar_matrix(c, K)
+
+Extract the scalar slave-surface matrix from one Cartesian component of an
+isotropic vector-field surface operator and reorder it according to
+`c.slave_nodes`.
+
+For a scalar coefficient in `∫(U ⋅ coefficient ⋅ U)`, all Cartesian component
+blocks are identical. The first Cartesian component is therefore sufficient.
+"""
+function _contact_extract_surface_scalar_matrix(
+    c::Contact,
+    K::SystemMatrix
+    )
+
+    pdim = c.U.pdim
+    nc = length(c.slave_nodes)
+    dofs = Vector{Int}(undef, nc)
+
+    @inbounds for (i, node) in enumerate(c.slave_nodes)
+        dofs[i] = (node - 1) * pdim + 1
+    end
+
+    M = sparse(K.A[dofs, dofs])
+    dropzeros!(M)
+    return M
+end
+
+"""
+    _contact_embed_surface_contact_matrix(Mn, Mt, pdim)
+
+Embed scalar slave-surface matrices into the local reduced contact space.
+`Mn` occupies the normal-normal component block. If `Mt !== nothing`, the same
+matrix is replicated into every tangential component block. No normal-tangent
+coupling is introduced here.
+"""
+function _contact_embed_surface_contact_matrix(
+    Mn,
+    Mt,
+    pdim::Int
+    )
+
+    size(Mn, 1) == size(Mn, 2) ||
+        error("contactMatrix: normal scalar surface matrix must be square.")
+
+    nc = size(Mn, 1)
+
+    if Mt !== nothing
+        size(Mt) == size(Mn) ||
+            error(
+                "contactMatrix: normal and tangential scalar surface matrices " *
+                "must have identical sizes."
+            )
+    end
+
+    In, Jn, Vn = findnz(Mn)
+    nt = Mt === nothing ? 0 : nnz(Mt)
+    estimated = length(Vn) + (pdim - 1) * nt
+
+    Iidx = Int[]
+    Jidx = Int[]
+    Vval = Float64[]
+    sizehint!(Iidx, estimated)
+    sizehint!(Jidx, estimated)
+    sizehint!(Vval, estimated)
+
+    @inbounds for k in eachindex(Vn)
+        i = In[k]
+        j = Jn[k]
+        push!(Iidx, (i - 1) * pdim + 1)
+        push!(Jidx, (j - 1) * pdim + 1)
+        push!(Vval, Float64(Vn[k]))
+    end
+
+    if Mt !== nothing
+        It, Jt, Vt = findnz(Mt)
+
+        @inbounds for α in 2:pdim
+            for k in eachindex(Vt)
+                i = It[k]
+                j = Jt[k]
+                push!(Iidx, (i - 1) * pdim + α)
+                push!(Jidx, (j - 1) * pdim + α)
+                push!(Vval, Float64(Vt[k]))
+            end
+        end
+    end
+
+    ncontact = nc * pdim
+    C = sparse(Iidx, Jidx, Vval, ncontact, ncontact)
+    dropzeros!(C)
+    return C
+end
+
+"""
+    _contact_apply_active_mask(C, active, pdim)
+
+Apply the current nodal contact active set to a reduced contact-space matrix.
+Both rows and columns of an open contact node are suppressed. The operation is
+performed after the slave-surface matrix has been assembled, so the expensive
+finite-element integration does not have to be repeated when the active set
+changes.
+"""
+function _contact_apply_active_mask(
+    C,
+    active::BitVector,
+    pdim::Int
+    )
+
+    ncontact = length(active) * pdim
+    size(C) == (ncontact, ncontact) ||
+        error(
+            "contactMatrix: active-mask size mismatch: contact matrix size " *
+            "$(size(C)), expected ($ncontact, $ncontact)."
+        )
+
+    I, J, V = findnz(C)
+    Iout = Int[]
+    Jout = Int[]
+    Vout = Float64[]
+    sizehint!(Iout, length(V))
+    sizehint!(Jout, length(V))
+    sizehint!(Vout, length(V))
+
+    @inbounds for k in eachindex(V)
+        inode = (I[k] - 1) ÷ pdim + 1
+        jnode = (J[k] - 1) ÷ pdim + 1
+
+        active[inode] && active[jnode] || continue
+
+        push!(Iout, I[k])
+        push!(Jout, J[k])
+        push!(Vout, Float64(V[k]))
+    end
+
+    return sparse(Iout, Jout, Vout, ncontact, ncontact)
 end
 
 function _contact_stiffness_matrix(
