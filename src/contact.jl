@@ -167,7 +167,16 @@ mutable struct ContactVector
 end
 
 ContactVector(a::AbstractVector{<:Real}) = ContactVector(Float64.(a), nothing)
-ContactVector(a::AbstractVector{<:Real}, c::_AbstractContact) = ContactVector(Float64.(a), c)
+ContactVector(a::Vector{Float64}, c::_AbstractContact) =
+    invoke(
+        ContactVector,
+        Tuple{Vector{Float64},Union{Nothing,_AbstractContact}},
+        a,
+        c
+    )
+
+ContactVector(a::AbstractVector{<:Real}, c::_AbstractContact) = ContactVector(Vector{Float64}(a), c)
+#ContactVector(a::AbstractVector{<:Real}, c::_AbstractContact) = ContactVector(Float64.(a), c)
 
 Base.length(g::ContactVector) = length(g.a)
 Base.size(g::ContactVector) = size(g.a)
