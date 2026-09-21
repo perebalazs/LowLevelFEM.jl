@@ -58,9 +58,9 @@ components.
 
 The local ordering is:
 
-| Dimension | Per-node ordering |
-| ---------:| ----------------- |
-| 2D        | `[normal, tangent]` |
+| Dimension | Per-node ordering              |
+| ---------:| ------------------------------ |
+| 2D        | `[normal, tangent]`            |
 | 3D        | `[normal, tangent1, tangent2]` |
 
 Thus the complete ordering is
@@ -236,22 +236,22 @@ is also available.
 
 The most important fields of a `Contact` object are:
 
-| Field | Meaning |
-| ----- | ------- |
-| `gap` | signed normal gap as a `ScalarField` |
-| `gap_values` | signed normal gap values indexed by contact node |
-| `g` | reduced local gap as a `ContactVector` |
-| `G` | kinematic operator `Vu -> Vc` |
-| `C` | local contact-space operator `Vc -> Vc` |
-| `E` | optional embedding `Vc -> Vλ` for multiplier contact |
-| `n` | contact normal as a `VectorField` |
-| `t1` | first tangent direction |
-| `t2` | second tangent direction in 3D |
-| `active` | active contact-point mask |
-| `slave_nodes` | slave node tags |
-| `master_element_tags` | projected master element tags |
-| `master_local_coordinates` | master local coordinates of the projections |
-| `master_points` | projected master points in physical space |
+| Field                      | Meaning                                              |
+| -------------------------- | ---------------------------------------------------- |
+| `gap`                      | signed normal gap as a `ScalarField`                 |
+| `gap_values`               | signed normal gap values indexed by contact node     |
+| `g`                        | reduced local gap as a `ContactVector`               |
+| `G`                        | kinematic operator `Vu -> Vc`                        |
+| `C`                        | local contact-space operator `Vc -> Vc`              |
+| `E`                        | optional embedding `Vc -> Vλ` for multiplier contact |
+| `n`                        | contact normal as a `VectorField`                    |
+| `t1`                       | first tangent direction                              |
+| `t2`                       | second tangent direction in 3D                       |
+| `active`                   | active contact-point mask                            |
+| `slave_nodes`              | slave node tags                                      |
+| `master_element_tags`      | projected master element tags                        |
+| `master_local_coordinates` | master local coordinates of the projections          |
+| `master_points`            | projected master points in physical space            |
 
 The contact object also stores the normal and tangential stiffness definitions
 `cn` and `ct`, together with their evaluated nodal values.
@@ -508,12 +508,12 @@ The master-side closest-point search uses an AABB tree.
 
 The main search options are:
 
-| Keyword | Default | Meaning |
-| ------- | ------: | ------- |
-| `aabb_padding` | `0.05` | relative expansion of master-element AABBs |
-| `leaf_size` | `2` | maximum number of elements in an AABB leaf |
-| `projection_tol` | `1e-10` | closest-point iteration tolerance |
-| `projection_maxiter` | `40` | maximum projected Gauss-Newton iterations |
+| Keyword              | Default | Meaning                                    |
+| -------------------- | -------:| ------------------------------------------ |
+| `aabb_padding`       | `0.05`  | relative expansion of master-element AABBs |
+| `leaf_size`          | `2`     | maximum number of elements in an AABB leaf |
+| `projection_tol`     | `1e-10` | closest-point iteration tolerance          |
+| `projection_maxiter` | `40`    | maximum projected Gauss-Newton iterations  |
 
 Basis information is cached for each master element type. The iterative
 closest-point search uses the cached local polynomial evaluator and reusable
@@ -548,10 +548,10 @@ representation near shared topological features by a stable representation:
 
 The relevant geometry options are:
 
-| Keyword | Default | Meaning |
-| ------- | ------: | ------- |
-| `topology_tol` | `1e-3` | reference-space distance used to detect proximity to a shared edge or vertex |
-| `topology_angle` | `45.0` | maximum angle in degrees between incident normals for treating the feature as smooth |
+| Keyword          | Default | Meaning                                                                              |
+| ---------------- | -------:| ------------------------------------------------------------------------------------ |
+| `topology_tol`   | `1e-3`  | reference-space distance used to detect proximity to a shared edge or vertex         |
+| `topology_angle` | `45.0`  | maximum angle in degrees between incident normals for treating the feature as smooth |
 
 For example:
 
