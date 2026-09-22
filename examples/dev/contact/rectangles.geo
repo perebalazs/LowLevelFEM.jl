@@ -5,9 +5,9 @@ Rectangle(1) = {0.0, 0, 0, 10, -2, 0};
 //+
 Rectangle(2) = {0, 0.1, 0, 10, 2, 0};
 //+
-Transfinite Curve {1} = 50 Using Progression 1;
+Transfinite Curve {1} = 100 Using Progression 1;
 //+
-Transfinite Curve {5} = 51 Using Progression 1;
+Transfinite Curve {5} = 101 Using Progression 1;
 //+
 MeshSize {:} = 0.5;
 //+
