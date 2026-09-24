@@ -21,6 +21,7 @@ Line(2) = {3, 4};
 Transfinite Curve {1} = 2 Using Progression 1;
 Transfinite Curve {2} = 2 Using Progression 1;
 //+
+Mesh.ElementOrder=2;
 Mesh 1;
 //+
 Physical Curve("segment", 2) = {1};

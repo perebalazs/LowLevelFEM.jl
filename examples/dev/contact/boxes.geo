@@ -8,9 +8,9 @@ Box(2) = {0.0, 0.1, 0.0, 10, 2, 10};
 //+
 MeshSize {:} = 0.5;
 //+
-MeshSize {10, 9, 13, 14} = 0.2;
+MeshSize {10, 9, 13, 14} = 0.5;
 //+
-MeshSize {3,4,7,8} = 0.2;
+MeshSize {3,4,7,8} = 0.5;
 //+
 Mesh.ElementOrder=2;
 Mesh 3;
