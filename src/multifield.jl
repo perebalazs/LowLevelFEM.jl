@@ -124,6 +124,10 @@ and used inside weak forms such as
 """
 abstract type AbstractOp end
 
+# Operators may request preservation of structural CSC zeros so a matrix
+# returned by `∫` can be reused safely through `csc_matrix=...`.
+_preserve_csc_pattern(::AbstractOp) = false
+
 """
     IdOp()
 
@@ -6505,7 +6509,7 @@ end
 """
     ∫(t::BilinearTerm; Ω=nothing, Γ=nothing, weight=nothing,
       gauss=:full, threads=:auto, assembly=:csc,
-      csc_matrix=nothing, element_chunk_size=:auto)
+      csc_matrix=nothing, element_chunk_size=:auto, updateFrom=nothing)
 
 Assemble one bilinear term.
 
@@ -6518,6 +6522,10 @@ independent assembly.
 
 Use `assembly=:ijv` for the legacy triplet-based path. `csc_matrix` and
 `element_chunk_size` apply only to direct CSC assembly.
+
+`updateFrom` is forwarded only when supplied. It is intended for specialized
+operators such as `ContactGap`, which can update their geometry from the given
+field immediately before assembly.
 """
 function ∫(t::BilinearTerm;
     Ω=nothing, Γ=nothing, weight=nothing,
@@ -6525,7 +6533,8 @@ function ∫(t::BilinearTerm;
     threads=:auto,
     assembly::Symbol=:csc,
     csc_matrix=nothing,
-    element_chunk_size::Union{Integer,Symbol}=:auto)
+    element_chunk_size::Union{Integer,Symbol}=:auto,
+    updateFrom=nothing)
 
     assembly ∈ (:ijv, :csc) || error(
         "Unsupported matrix assembly mode $assembly. " *
@@ -6545,22 +6554,48 @@ function ∫(t::BilinearTerm;
         _check_domain_dim(Pu, dom)
     end
 
-    K = assemble_operator(
-        t.b.P,
-        t.b.op,
-        t.a.P,
-        t.a.op;
-        coefficient = t.coef,
-        domain = dom,
-        weight = weight,
-        gauss = gauss,
-        assembly = assembly === :csc ? :csc : :matrix,
-        threads=threads,
-        K=csc_matrix,
-        element_chunk_size=element_chunk_size
-    )
+    K = if updateFrom === nothing
+        assemble_operator(
+            t.b.P,
+            t.b.op,
+            t.a.P,
+            t.a.op;
+            coefficient = t.coef,
+            domain = dom,
+            weight = weight,
+            gauss = gauss,
+            assembly = assembly === :csc ? :csc : :matrix,
+            threads=threads,
+            K=csc_matrix,
+            element_chunk_size=element_chunk_size
+        )
+    else
+        assemble_operator(
+            t.b.P,
+            t.b.op,
+            t.a.P,
+            t.a.op;
+            coefficient = t.coef,
+            domain = dom,
+            weight = weight,
+            gauss = gauss,
+            assembly = assembly === :csc ? :csc : :matrix,
+            threads=threads,
+            K=csc_matrix,
+            element_chunk_size=element_chunk_size,
+            updateFrom=updateFrom
+        )
+    end
 
-    assembly === :csc && csc_matrix === nothing && dropzeros!(K.A)
+    preserve_pattern =
+        _preserve_csc_pattern(t.a.op) ||
+        _preserve_csc_pattern(t.b.op)
+
+    assembly === :csc &&
+        csc_matrix === nothing &&
+        !preserve_pattern &&
+        dropzeros!(K.A)
+
     return K
 
 end
@@ -6578,7 +6613,8 @@ function ∫(a::OpApplied, b::OpApplied;
     threads=:auto,
     assembly::Symbol=:csc,
     csc_matrix=nothing,
-    element_chunk_size::Union{Integer,Symbol}=:auto)
+    element_chunk_size::Union{Integer,Symbol}=:auto,
+    updateFrom=nothing)
 
     assembly ∈ (:ijv, :csc) || error(
         "Unsupported matrix assembly mode $assembly. " *
@@ -6598,22 +6634,48 @@ function ∫(a::OpApplied, b::OpApplied;
         _check_domain_dim(Pu, dom)
     end
 
-    K = assemble_operator(
-        b.P,
-        b.op,
-        a.P,
-        a.op;
-        coefficient = 1.0,
-        domain = dom,
-        weight = weight,
-        gauss = gauss,
-        assembly = assembly === :csc ? :csc : :matrix,
-        threads=threads,
-        K=csc_matrix,
-        element_chunk_size=element_chunk_size
-    )
+    K = if updateFrom === nothing
+        assemble_operator(
+            b.P,
+            b.op,
+            a.P,
+            a.op;
+            coefficient = 1.0,
+            domain = dom,
+            weight = weight,
+            gauss = gauss,
+            assembly = assembly === :csc ? :csc : :matrix,
+            threads=threads,
+            K=csc_matrix,
+            element_chunk_size=element_chunk_size
+        )
+    else
+        assemble_operator(
+            b.P,
+            b.op,
+            a.P,
+            a.op;
+            coefficient = 1.0,
+            domain = dom,
+            weight = weight,
+            gauss = gauss,
+            assembly = assembly === :csc ? :csc : :matrix,
+            threads=threads,
+            K=csc_matrix,
+            element_chunk_size=element_chunk_size,
+            updateFrom=updateFrom
+        )
+    end
 
-    assembly === :csc && csc_matrix === nothing && dropzeros!(K.A)
+    preserve_pattern =
+        _preserve_csc_pattern(a.op) ||
+        _preserve_csc_pattern(b.op)
+
+    assembly === :csc &&
+        csc_matrix === nothing &&
+        !preserve_pattern &&
+        dropzeros!(K.A)
+
     return K
 
 end

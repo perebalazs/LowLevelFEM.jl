@@ -121,6 +121,18 @@ struct _ContactMasterTopology
 end
 
 
+
+# -----------------------------------------------------------------------------
+# Gauss-point warm-start state
+# -----------------------------------------------------------------------------
+
+mutable struct _ContactGPWarmStart
+    master_element_tag::Int
+    local_coordinate::Vector{Float64}
+end
+
+_ContactGPWarmStart() = _ContactGPWarmStart(0, [0.0, 0.0])
+
 # -----------------------------------------------------------------------------
 # Contact geometry object
 # -----------------------------------------------------------------------------
@@ -165,6 +177,13 @@ mutable struct Contact
     topology::_ContactMasterTopology
     excluded::Dict{Int,Set{Int}}
     master_tag_to_index::Dict{Int,Int}
+
+    # Warm-start data for Gauss-point closest-point projections. The key is
+    # `(gauss_rule, slave_element_tag)`. The cache survives `updateContact!`
+    # calls because master element tags and slave element tags are stable on a
+    # fixed mesh; tags are remapped to current master-element indices before
+    # every search.
+    gp_warm_start::Dict{Any,Vector{_ContactGPWarmStart}}
 
     options::NamedTuple
 end
@@ -225,6 +244,22 @@ end
 # Local contact constitutive coefficient
 # -----------------------------------------------------------------------------
 
+struct _ContactStiffnessMatrix{Tn,Tt} <: AbstractMatrix{Any}
+    dim::Int
+    cn::Tn
+    ct::Tt
+end
+
+Base.size(D::_ContactStiffnessMatrix) = (D.dim, D.dim)
+Base.IndexStyle(::Type{<:_ContactStiffnessMatrix}) = IndexCartesian()
+
+function Base.getindex(D::_ContactStiffnessMatrix, i::Int, j::Int)
+    1 <= i <= D.dim || throw(BoundsError(D, (i,j)))
+    1 <= j <= D.dim || throw(BoundsError(D, (i,j)))
+    i == j || return 0.0
+    return i == 1 ? D.cn : D.ct
+end
+
 """
     ContactStiffness(C::Contact, cn; ct=0.0)
 
@@ -246,22 +281,6 @@ and in 3D
 `AbstractMatrix`, so it can be inserted directly into the standard LLFEM
 matrix-chain syntax without exposing a Julia matrix literal in user code.
 """
-struct _ContactStiffnessMatrix{Tn,Tt} <: AbstractMatrix{Any}
-    dim::Int
-    cn::Tn
-    ct::Tt
-end
-
-Base.size(D::_ContactStiffnessMatrix) = (D.dim, D.dim)
-Base.IndexStyle(::Type{<:_ContactStiffnessMatrix}) = IndexCartesian()
-
-function Base.getindex(D::_ContactStiffnessMatrix, i::Int, j::Int)
-    1 <= i <= D.dim || throw(BoundsError(D, (i,j)))
-    1 <= j <= D.dim || throw(BoundsError(D, (i,j)))
-    i == j || return 0.0
-    return i == 1 ? D.cn : D.ct
-end
-
 function ContactStiffness(c::Contact, cn; ct=0.0)
     return _ContactStiffnessMatrix(c.U.pdim, cn, ct)
 end
@@ -337,6 +356,11 @@ end
 
 op_outdim(op::ContactGapOp, P::Problem) =
     op.components === :normal ? 1 : P.pdim
+
+# Contact CSC patterns contain structural entries that can be numerically zero
+# for a particular normal orientation or active set. Preserve them so the
+# returned matrix can be reused through `csc_matrix=Kc.A`.
+_preserve_csc_pattern(::ContactGapOp) = true
 
 # -----------------------------------------------------------------------------
 # Contact construction and update
@@ -419,6 +443,7 @@ function contact(
         data.topology,
         data.excluded,
         data.master_tag_to_index,
+        Dict{Any,Vector{_ContactGPWarmStart}}(),
         options
     )
 end
@@ -822,6 +847,139 @@ function _contact_deformed_coordinates(
     end
 
     return X
+end
+
+"""
+    _contact_refresh_element_geometry!(
+        elements,
+        nodecoords;
+        aabb_padding
+    )
+
+Update the current nodal coordinates and bounding boxes of contact elements
+without rebuilding their connectivity, basis cache, or reference topology.
+"""
+function _contact_refresh_element_geometry!(
+    elements::Vector{_ContactElement},
+    nodecoords::Matrix{Float64};
+    aabb_padding::Real
+    )
+
+    padding = Float64(aabb_padding)
+
+    @inbounds for element in elements
+
+        X = element.coords
+        nodes = element.node_tags
+        nn = length(nodes)
+
+        bmin = element.bmin
+        bmax = element.bmax
+
+        bmin[1] = Inf
+        bmin[2] = Inf
+        bmin[3] = Inf
+
+        bmax[1] = -Inf
+        bmax[2] = -Inf
+        bmax[3] = -Inf
+
+        for a in 1:nn
+            node = nodes[a]
+
+            x = nodecoords[1, node]
+            y = nodecoords[2, node]
+            z = nodecoords[3, node]
+
+            X[1, a] = x
+            X[2, a] = y
+            X[3, a] = z
+
+            x < bmin[1] && (bmin[1] = x)
+            y < bmin[2] && (bmin[2] = y)
+            z < bmin[3] && (bmin[3] = z)
+
+            x > bmax[1] && (bmax[1] = x)
+            y > bmax[2] && (bmax[2] = y)
+            z > bmax[3] && (bmax[3] = z)
+        end
+
+        dx = bmax[1] - bmin[1]
+        dy = bmax[2] - bmin[2]
+        dz = bmax[3] - bmin[3]
+
+        diag = sqrt(dx^2 + dy^2 + dz^2)
+        pad = padding * max(diag, eps(Float64))
+
+        bmin[1] -= pad
+        bmin[2] -= pad
+        bmin[3] -= pad
+
+        bmax[1] += pad
+        bmax[2] += pad
+        bmax[3] += pad
+    end
+
+    return nothing
+end
+
+"""
+    _contact_update_geometry!(
+        C,
+        displacement;
+        step=displacement.nsteps
+    )
+
+Update only the deformed contact geometry required by Gauss-point contact
+integration.
+
+Unlike `updateContact!`, this function does not recompute nodal closest-point
+projections, nodal gap values, normals, tangents, or the nodal active set.
+Gauss-point warm-start data are preserved.
+"""
+function _contact_update_geometry!(
+    c::Contact,
+    displacement::VectorField;
+    step::Int=displacement.nsteps
+    )
+
+    _contact_check_models(c.U, displacement, nothing)
+
+    # x = X + u
+    nodecoords =
+        _contact_deformed_coordinates(
+            c.U,
+            displacement;
+            step=step
+        )
+
+    # Update element coordinates in place.
+    _contact_refresh_element_geometry!(
+        c.slave_elements,
+        nodecoords;
+        aabb_padding=0.0
+    )
+
+    _contact_refresh_element_geometry!(
+        c.master_elements,
+        nodecoords;
+        aabb_padding=c.options.aabb_padding
+    )
+
+    # Only the spatial search tree depends on the current coordinates.
+    # Connectivity/topology/exclusion sets remain unchanged.
+    c.tree =
+        _contact_build_aabb_tree(
+            c.master_elements,
+            collect(eachindex(c.master_elements));
+            leaf_size=c.options.leaf_size
+        )
+
+    c.nodecoords = nodecoords
+    c.displacement = displacement
+    c.step = step
+
+    return c
 end
 
 function _contact_group_elements(
@@ -3320,14 +3478,52 @@ function _contact_scatter_block!(I, J, V, Ke, rows, cols)
     return nothing
 end
 
+
+@inline _contact_gauss_cache_key(gauss) =
+    gauss isa Symbol ? gauss : Int(gauss)
+
+function _contact_gp_warm_slots!(
+    c::Contact,
+    slave_element::_ContactElement,
+    gauss,
+    nip::Int
+    )
+
+    key = (_contact_gauss_cache_key(gauss), slave_element.tag)
+    slots = get(c.gp_warm_start, key, nothing)
+
+    if slots === nothing || length(slots) != nip
+        slots = [_ContactGPWarmStart() for _ in 1:nip]
+        c.gp_warm_start[key] = slots
+    end
+
+    return slots
+end
+
 function _contact_projection_at_gp(
     c::Contact,
     slave_element::_ContactElement,
     xs,
-    workspace::_ContactProjectionWorkspace
+    workspace::_ContactProjectionWorkspace,
+    warm_start::Union{Nothing,_ContactGPWarmStart}=nothing
     )
 
     ex = _contact_element_exclusion(c, slave_element)
+
+    previous_element_index = 0
+    previous_local_coordinate = nothing
+
+    if warm_start !== nothing && warm_start.master_element_tag != 0
+        previous_element_index =
+            get(c.master_tag_to_index, warm_start.master_element_tag, 0)
+
+        if previous_element_index != 0 &&
+           (ex === nothing || !(previous_element_index in ex))
+            previous_local_coordinate = warm_start.local_coordinate
+        else
+            previous_element_index = 0
+        end
+    end
 
     p = _contact_nearest_projection(
         c.tree,
@@ -3342,8 +3538,8 @@ function _contact_projection_at_gp(
         topology=c.topology,
         topology_tol=c.options.topology_tol,
         topology_angle=c.options.topology_angle,
-        previous_element_index=0,
-        previous_local_coordinate=nothing
+        previous_element_index=previous_element_index,
+        previous_local_coordinate=previous_local_coordinate
     )
 
     p === nothing &&
@@ -3352,7 +3548,566 @@ function _contact_projection_at_gp(
             "for slave element $(slave_element.tag)."
         )
 
+    if warm_start !== nothing
+        warm_start.master_element_tag = p.element_tag
+        warm_start.local_coordinate[1] = p.ξ[1]
+        warm_start.local_coordinate[2] =
+            length(p.ξ) >= 2 ? p.ξ[2] : 0.0
+    end
+
     return p
+end
+
+
+
+# -----------------------------------------------------------------------------
+# Optimized Gauss-point projection and CSC assembly helpers
+# -----------------------------------------------------------------------------
+
+
+@inline function _contact_resolve_element_chunk_size(
+    nel::Int,
+    num_threads::Int,
+    element_chunk_size
+    )
+
+    chunk =
+        element_chunk_size === :auto ?
+        max(1, min(4096, cld(max(nel, 1), num_threads))) :
+        element_chunk_size isa Integer ? Int(element_chunk_size) :
+        error(
+            "ContactGap integration: element_chunk_size must be " *
+            ":auto or a positive integer."
+        )
+
+    chunk > 0 ||
+        error("ContactGap integration: element_chunk_size must be positive.")
+
+    return chunk
+end
+
+
+function _contact_prepare_gp_projection_data(
+    c::Contact,
+    gauss,
+    threads,
+    element_chunk_size=:auto
+    )
+
+    nel = length(c.slave_elements)
+    num_threads = resolve_num_threads(threads)
+    chunk = _contact_resolve_element_chunk_size(
+        nel,
+        num_threads,
+        element_chunk_size
+    )
+
+    # Gmsh quadrature and basis data depend only on the element type and rule.
+    qcache = Dict{Int,Any}()
+    qdata_by_element = Vector{Any}(undef, nel)
+    warm_by_element = Vector{Any}(undef, nel)
+
+    @inbounds for e in 1:nel
+        element = c.slave_elements[e]
+        qdata = get!(qcache, element.etype) do
+            _contact_quadrature(element, gauss)
+        end
+        qdata_by_element[e] = qdata
+        warm_by_element[e] =
+            _contact_gp_warm_slots!(c, element, gauss, qdata.nip)
+    end
+
+    projections =
+        [Vector{_ContactProjection}(undef, qdata_by_element[e].nip)
+         for e in 1:nel]
+    measures =
+        [Vector{Float64}(undef, qdata_by_element[e].nip)
+         for e in 1:nel]
+
+    all_elements = vcat(c.slave_elements, c.master_elements)
+    workspaces = [
+        _contact_projection_workspace(all_elements)
+        for _ in 1:num_threads
+    ]
+
+    _run_workers(num_threads) do worker
+        ws = workspaces[worker]
+        stride = chunk * num_threads
+
+        for chunk_first in
+            (1 + (worker - 1) * chunk):stride:nel
+
+            chunk_last = min(nel, chunk_first + chunk - 1)
+
+            @inbounds for e in chunk_first:chunk_last
+                element = c.slave_elements[e]
+                qdata = qdata_by_element[e]
+                warm_slots = warm_by_element[e]
+
+                for q in 1:qdata.nip
+                    xs, _, measure =
+                        _contact_slave_geometry_at_gp(element, qdata, q)
+
+                    projections[e][q] =
+                        _contact_projection_at_gp(
+                            c,
+                            element,
+                            xs,
+                            ws,
+                            warm_slots[q]
+                        )
+                    measures[e][q] = measure
+                end
+            end
+        end
+    end
+
+    return qdata_by_element, projections, measures
+end
+
+function _contact_unique_master_indices(projections)
+    ids = Int[]
+    for p in projections
+        push!(ids, p.element_index)
+    end
+    sort!(ids)
+    unique!(ids)
+    return ids
+end
+
+function _contact_finalize_node_csc_pattern(
+    row_nodes_by_col_node::Vector{Vector{Int}},
+    Ps::Problem,
+    Pu::Problem
+    )
+
+    nrows = ndofs(Ps)
+    ncols = ndofs(Pu)
+
+    nrow_nodes, rem_s = divrem(nrows, Ps.pdim)
+    ncol_nodes, rem_u = divrem(ncols, Pu.pdim)
+
+    rem_s == 0 ||
+        error("ContactGap CSC pattern: invalid test-space DoF count.")
+    rem_u == 0 ||
+        error("ContactGap CSC pattern: invalid trial-space DoF count.")
+    length(row_nodes_by_col_node) == ncol_nodes ||
+        error("ContactGap CSC pattern: invalid column-node adjacency size.")
+
+    total_node_nonzeros = 0
+
+    for rows in row_nodes_by_col_node
+        sort!(rows)
+
+        if !isempty(rows)
+            write_pos = 1
+            previous = rows[1]
+
+            @inbounds for read_pos in 2:length(rows)
+                current = rows[read_pos]
+
+                if current != previous
+                    write_pos += 1
+                    rows[write_pos] = current
+                    previous = current
+                end
+            end
+
+            resize!(rows, write_pos)
+        end
+
+        total_node_nonzeros += length(rows)
+    end
+
+    total_nonzeros =
+        Base.Checked.checked_mul(
+            Base.Checked.checked_mul(
+                total_node_nonzeros,
+                Ps.pdim
+            ),
+            Pu.pdim
+        )
+
+    colptr = Vector{Int}(undef, ncols + 1)
+    rowval = Vector{Int}(undef, total_nonzeros)
+
+    position = 1
+
+    @inbounds for col_node in 1:ncol_nodes
+        rows = row_nodes_by_col_node[col_node]
+
+        for comp_u in 1:Pu.pdim
+            col = (col_node - 1) * Pu.pdim + comp_u
+            colptr[col] = position
+
+            for row_node in rows
+                first_row = (row_node - 1) * Ps.pdim
+
+                for comp_s in 1:Ps.pdim
+                    rowval[position] = first_row + comp_s
+                    position += 1
+                end
+            end
+        end
+    end
+
+    colptr[ncols + 1] = position
+
+    return SparseMatrixCSC(
+        nrows,
+        ncols,
+        colptr,
+        rowval,
+        zeros(Float64, total_nonzeros)
+    )
+end
+
+function _contact_build_contact_csc_pattern(
+    c::Contact,
+    projections_by_element,
+    Ps::Problem,
+    Pu::Problem
+    )
+
+    row_nodes_by_col_node = [Int[] for _ in 1:Pu.non]
+
+    @inbounds for e in eachindex(c.slave_elements)
+        slave_element = c.slave_elements[e]
+        slave_nodes = slave_element.node_tags
+
+        for master_index in
+            _contact_unique_master_indices(projections_by_element[e])
+
+            master_nodes = c.master_elements[master_index].node_tags
+            nodes = vcat(slave_nodes, master_nodes)
+
+            for col_node in nodes
+                append!(row_nodes_by_col_node[col_node], nodes)
+            end
+        end
+    end
+
+    return _contact_finalize_node_csc_pattern(
+        row_nodes_by_col_node,
+        Ps,
+        Pu
+    )
+end
+
+function _contact_build_mixed_csc_pattern(
+    c::Contact,
+    projections_by_element,
+    Ps::Problem,
+    Pu::Problem
+    )
+
+    row_nodes_by_col_node = [Int[] for _ in 1:Pu.non]
+
+    @inbounds for e in eachindex(c.slave_elements)
+        slave_element = c.slave_elements[e]
+        slave_nodes = slave_element.node_tags
+
+        for master_index in
+            _contact_unique_master_indices(projections_by_element[e])
+
+            master_nodes = c.master_elements[master_index].node_tags
+            trial_nodes = vcat(slave_nodes, master_nodes)
+
+            for col_node in trial_nodes
+                append!(row_nodes_by_col_node[col_node], slave_nodes)
+            end
+        end
+    end
+
+    return _contact_finalize_node_csc_pattern(
+        row_nodes_by_col_node,
+        Ps,
+        Pu
+    )
+end
+
+@inline function _contact_find_csc_position(
+    rowval::Vector{Int},
+    first::Int,
+    last::Int,
+    row::Int
+    )
+
+    lo = first
+    hi = last
+
+    @inbounds while lo <= hi
+        mid = lo + ((hi - lo) >>> 1)
+        current = rowval[mid]
+
+        if current < row
+            lo = mid + 1
+        elseif current > row
+            hi = mid - 1
+        else
+            return mid
+        end
+    end
+
+    return 0
+end
+
+function _contact_scatter_csc!(
+    nzval::Vector{Float64},
+    colptr::Vector{Int},
+    rowval::Vector{Int},
+    Ke,
+    rows,
+    cols
+    )
+
+    @inbounds for j in eachindex(cols)
+        col = cols[j]
+        first = colptr[col]
+        last = colptr[col + 1] - 1
+
+        for i in eachindex(rows)
+            value = Ke[i, j]
+            iszero(value) && continue
+
+            p = _contact_find_csc_position(
+                rowval,
+                first,
+                last,
+                rows[i]
+            )
+
+            p != 0 || error(
+                "ContactGap CSC pattern no longer covers the current " *
+                "slave-master projection. Reassemble once without " *
+                "`csc_matrix`, then reuse the new pattern."
+            )
+
+            nzval[p] += value
+        end
+    end
+
+    return nothing
+end
+
+function _contact_prepare_csc_buffers(
+    K,
+    pattern_builder,
+    nrows::Int,
+    ncols::Int,
+    num_threads::Int
+    )
+
+    Kcsc =
+        K === nothing ?
+        pattern_builder() :
+        K
+
+    Kcsc isa SparseMatrixCSC{Float64,Int} ||
+        error(
+            "ContactGap CSC assembly requires " *
+            "`SparseMatrixCSC{Float64,Int}` for csc_matrix."
+        )
+
+    size(Kcsc) == (nrows, ncols) ||
+        error(
+            "ContactGap CSC matrix has size $(size(Kcsc)); " *
+            "expected ($(nrows), $(ncols))."
+        )
+
+    nzval_buffers = Vector{Vector{Float64}}(undef, num_threads)
+    nzval_buffers[1] = Kcsc.nzval
+
+    @inbounds for worker in 2:num_threads
+        nzval_buffers[worker] = zeros(Float64, length(Kcsc.nzval))
+    end
+
+    return Kcsc, nzval_buffers
+end
+
+
+function _contact_contact_csc_worker!(
+    c::Contact,
+    op_u::ContactGapOp,
+    op_s::ContactGapOp,
+    coefficient,
+    weight,
+    qdata_by_element,
+    projections_by_element,
+    measures_by_element,
+    nzval::Vector{Float64},
+    colptr::Vector{Int},
+    rowval::Vector{Int},
+    chunk::Int,
+    num_threads::Int,
+    worker::Int
+    )
+
+    nel = length(c.slave_elements)
+    stride = chunk * num_threads
+
+    for chunk_first in
+        (1 + (worker - 1) * chunk):stride:nel
+
+        chunk_last = min(nel, chunk_first + chunk - 1)
+
+        @inbounds for e in chunk_first:chunk_last
+            slave_element = c.slave_elements[e]
+            qdata = qdata_by_element[e]
+
+            for q in 1:qdata.nip
+                p = projections_by_element[e][q]
+
+                _contact_gp_is_active(op_u, p) || continue
+
+                nn = length(slave_element.node_tags)
+                Ns = @view qdata.N[1:nn, q]
+
+                Bu, cols =
+                    _contact_gap_B(
+                        c,
+                        slave_element,
+                        Ns,
+                        p,
+                        op_u.components
+                    )
+                Bs, rows =
+                    _contact_gap_B(
+                        c,
+                        slave_element,
+                        Ns,
+                        p,
+                        op_s.components
+                    )
+
+                Cgp =
+                    _contact_coefficient_at_gp(
+                        coefficient,
+                        slave_element,
+                        Ns,
+                        c.step
+                    )
+                wcoef =
+                    _contact_weight_at_gp(
+                        weight,
+                        slave_element,
+                        Ns,
+                        c.step
+                    )
+                scale =
+                    measures_by_element[e][q] *
+                    qdata.weights[q] *
+                    wcoef
+
+                Ke = _contact_local_bilinear(
+                    Bs,
+                    Cgp,
+                    Bu,
+                    scale
+                )
+
+                _contact_scatter_csc!(
+                    nzval,
+                    colptr,
+                    rowval,
+                    Ke,
+                    rows,
+                    cols
+                )
+            end
+        end
+    end
+
+    return nothing
+end
+
+
+function _contact_mixed_csc_worker!(
+    c::Contact,
+    op_u::ContactGapOp,
+    Ps::Problem,
+    coefficient,
+    weight,
+    qdata_by_element,
+    projections_by_element,
+    measures_by_element,
+    nzval::Vector{Float64},
+    colptr::Vector{Int},
+    rowval::Vector{Int},
+    chunk::Int,
+    num_threads::Int,
+    worker::Int
+    )
+
+    nel = length(c.slave_elements)
+    stride = chunk * num_threads
+
+    for chunk_first in
+        (1 + (worker - 1) * chunk):stride:nel
+
+        chunk_last = min(nel, chunk_first + chunk - 1)
+
+        @inbounds for e in chunk_first:chunk_last
+            slave_element = c.slave_elements[e]
+            qdata = qdata_by_element[e]
+
+            for q in 1:qdata.nip
+                p = projections_by_element[e][q]
+
+                _contact_gp_is_active(op_u, p) || continue
+
+                nn = length(slave_element.node_tags)
+                Ns = @view qdata.N[1:nn, q]
+
+                Bu, cols =
+                    _contact_gap_B(
+                        c,
+                        slave_element,
+                        Ns,
+                        p,
+                        op_u.components
+                    )
+                Bs, rows = _contact_id_B(Ps, slave_element, Ns)
+
+                Cgp =
+                    _contact_coefficient_at_gp(
+                        coefficient,
+                        slave_element,
+                        Ns,
+                        c.step
+                    )
+                wcoef =
+                    _contact_weight_at_gp(
+                        weight,
+                        slave_element,
+                        Ns,
+                        c.step
+                    )
+                scale =
+                    measures_by_element[e][q] *
+                    qdata.weights[q] *
+                    wcoef
+
+                Ke = _contact_local_bilinear(
+                    Bs,
+                    Cgp,
+                    Bu,
+                    scale
+                )
+
+                _contact_scatter_csc!(
+                    nzval,
+                    colptr,
+                    rowval,
+                    Ke,
+                    rows,
+                    cols
+                )
+            end
+        end
+    end
+
+    return nothing
 end
 
 function _contact_check_operator_domain(domain)
@@ -3375,11 +4130,18 @@ end
 """
 Specialized contact-contact assembler used automatically by expressions such as
 
-    ∫(ContactGap(C) ⋅ D ⋅ ContactGap(C))
+    ∫(ContactGap(C) ⋅ D ⋅ ContactGap(C); updateFrom=u)
 
 The contact operator is evaluated directly at slave Gauss points and includes
 both slave and projected master interpolation in the local matrix.
+
+With `assembly=:csc` the matrix is assembled directly into CSC storage with
+worker-local value buffers and parallel reduction. Gauss-point closest-point
+projections are warm-started from the preceding assembly. `updateFrom=u`
+performs exactly one `updateContact!(C, u)` before the Gauss-point projection
+and assembly pass.
 """
+
 function assemble_operator(
     Pu::Problem,
     op_u::ContactGapOp,
@@ -3391,6 +4153,9 @@ function assemble_operator(
     gauss=:full,
     assembly::Symbol=:csc,
     threads=:auto,
+    K=nothing,
+    element_chunk_size::Union{Integer,Symbol}=:auto,
+    updateFrom=nothing,
     kwargs...
     )
 
@@ -3403,35 +4168,159 @@ function assemble_operator(
     assembly in (:csc, :matrix, :ijv, :triplets) ||
         error("ContactGap integration: unsupported assembly mode $assembly.")
 
+    updateFrom === nothing || begin
+        updateFrom isa VectorField ||
+            error("ContactGap integration: updateFrom must be a VectorField.")
+
+        _contact_update_geometry!(c, updateFrom)
+    end
+
     gmsh.model.setCurrent(c.U.name)
 
+    if assembly === :csc
+        num_threads = resolve_num_threads(threads)
+        old_blas_threads = LinearAlgebra.BLAS.get_num_threads()
+
+        try
+            num_threads > 1 && LinearAlgebra.BLAS.set_num_threads(1)
+
+            qdata_by_element, projections_by_element, measures_by_element =
+                _contact_prepare_gp_projection_data(
+                    c,
+                    gauss,
+                    threads,
+                    element_chunk_size
+                )
+
+            Kcsc, nzval_buffers =
+                _contact_prepare_csc_buffers(
+                    K,
+                    () -> _contact_build_contact_csc_pattern(
+                        c,
+                        projections_by_element,
+                        Ps,
+                        Pu
+                    ),
+                    ndofs(Ps),
+                    ndofs(Pu),
+                    num_threads
+                )
+
+            colptr = Kcsc.colptr
+            rowval = Kcsc.rowval
+            chunk = _contact_resolve_element_chunk_size(
+                length(c.slave_elements),
+                num_threads,
+                element_chunk_size
+            )
+
+            _run_workers(num_threads) do worker
+                _contact_contact_csc_worker!(
+                    c,
+                    op_u,
+                    op_s,
+                    coefficient,
+                    weight,
+                    qdata_by_element,
+                    projections_by_element,
+                    measures_by_element,
+                    nzval_buffers[worker],
+                    colptr,
+                    rowval,
+                    chunk,
+                    num_threads,
+                    worker
+                )
+            end
+
+            reduce_csc_buffers!(
+                Kcsc.nzval,
+                nzval_buffers,
+                num_threads
+            )
+
+            return SystemMatrix(Kcsc, Pu, Ps)
+        finally
+            num_threads > 1 &&
+                LinearAlgebra.BLAS.set_num_threads(old_blas_threads)
+        end
+    end
+
+    # Legacy triplet path retained for validation/debugging.
     I = Int[]
     J = Int[]
     V = Float64[]
 
-    workspace = _contact_projection_workspace(vcat(c.slave_elements, c.master_elements))
-    qcache = Dict{Int,Any}()
+    qdata_by_element, projections_by_element, measures_by_element =
+        _contact_prepare_gp_projection_data(
+            c,
+            gauss,
+            1,
+            element_chunk_size
+        )
 
-    for slave_element in c.slave_elements
-        qdata = get!(qcache, slave_element.etype) do
-            _contact_quadrature(slave_element, gauss)
-        end
+    @inbounds for e in eachindex(c.slave_elements)
+        slave_element = c.slave_elements[e]
+        qdata = qdata_by_element[e]
 
         for q in 1:qdata.nip
-            xs, Ns, measure = _contact_slave_geometry_at_gp(slave_element, qdata, q)
-            p = _contact_projection_at_gp(c, slave_element, xs, workspace)
-
+            p = projections_by_element[e][q]
             _contact_gp_is_active(op_u, p) || continue
 
-            Bu, cols = _contact_gap_B(c, slave_element, Ns, p, op_u.components)
-            Bs, rows = _contact_gap_B(c, slave_element, Ns, p, op_s.components)
+            nn = length(slave_element.node_tags)
+            Ns = @view qdata.N[1:nn, q]
 
-            Cgp = _contact_coefficient_at_gp(coefficient, slave_element, Ns, c.step)
-            wcoef = _contact_weight_at_gp(weight, slave_element, Ns, c.step)
-            scale = measure * qdata.weights[q] * wcoef
+            Bu, cols =
+                _contact_gap_B(
+                    c,
+                    slave_element,
+                    Ns,
+                    p,
+                    op_u.components
+                )
+            Bs, rows =
+                _contact_gap_B(
+                    c,
+                    slave_element,
+                    Ns,
+                    p,
+                    op_s.components
+                )
 
-            Ke = _contact_local_bilinear(Bs, Cgp, Bu, scale)
-            _contact_scatter_block!(I, J, V, Ke, rows, cols)
+            Cgp =
+                _contact_coefficient_at_gp(
+                    coefficient,
+                    slave_element,
+                    Ns,
+                    c.step
+                )
+            wcoef =
+                _contact_weight_at_gp(
+                    weight,
+                    slave_element,
+                    Ns,
+                    c.step
+                )
+            scale =
+                measures_by_element[e][q] *
+                qdata.weights[q] *
+                wcoef
+
+            Ke = _contact_local_bilinear(
+                Bs,
+                Cgp,
+                Bu,
+                scale
+            )
+
+            _contact_scatter_block!(
+                I,
+                J,
+                V,
+                Ke,
+                rows,
+                cols
+            )
         end
     end
 
@@ -3439,6 +4328,7 @@ function assemble_operator(
     dropzeros!(A)
     return SystemMatrix(A, Pu, Ps)
 end
+
 
 """
 Specialized mixed assembler for a standard identity test field and a contact-gap
@@ -3449,6 +4339,7 @@ trial operator. It is used automatically by
 and returns a rectangular `SystemMatrix` mapping the displacement field to the
 multiplier test field.
 """
+
 function assemble_operator(
     Pu::Problem,
     op_u::ContactGapOp,
@@ -3460,6 +4351,9 @@ function assemble_operator(
     gauss=:full,
     assembly::Symbol=:csc,
     threads=:auto,
+    K=nothing,
+    element_chunk_size::Union{Integer,Symbol}=:auto,
+    updateFrom=nothing,
     kwargs...
     )
 
@@ -3467,41 +4361,160 @@ function assemble_operator(
     c = op_u.contact
 
     Pu === c.U || error("ContactGap trial Problem must be Contact.U.")
-    Ps.name == c.U.name || error("Multiplier/test Problem must use the same Gmsh model as Contact.U.")
-    Ps.non == c.U.non || error("Multiplier/test Problem must use the same mesh nodes as Contact.U.")
+    Ps.name == c.U.name ||
+        error("Multiplier/test Problem must use the same Gmsh model as Contact.U.")
+    Ps.non == c.U.non ||
+        error("Multiplier/test Problem must use the same mesh nodes as Contact.U.")
 
     assembly in (:csc, :matrix, :ijv, :triplets) ||
         error("ContactGap integration: unsupported assembly mode $assembly.")
 
+    updateFrom === nothing || begin
+        updateFrom isa VectorField ||
+            error("ContactGap integration: updateFrom must be a VectorField.")
+
+        _contact_update_geometry!(c, updateFrom)
+    end
+
     gmsh.model.setCurrent(c.U.name)
 
+    if assembly === :csc
+        num_threads = resolve_num_threads(threads)
+        old_blas_threads = LinearAlgebra.BLAS.get_num_threads()
+
+        try
+            num_threads > 1 && LinearAlgebra.BLAS.set_num_threads(1)
+
+            qdata_by_element, projections_by_element, measures_by_element =
+                _contact_prepare_gp_projection_data(
+                    c,
+                    gauss,
+                    threads,
+                    element_chunk_size
+                )
+
+            Bcsc, nzval_buffers =
+                _contact_prepare_csc_buffers(
+                    K,
+                    () -> _contact_build_mixed_csc_pattern(
+                        c,
+                        projections_by_element,
+                        Ps,
+                        Pu
+                    ),
+                    ndofs(Ps),
+                    ndofs(Pu),
+                    num_threads
+                )
+
+            colptr = Bcsc.colptr
+            rowval = Bcsc.rowval
+            chunk = _contact_resolve_element_chunk_size(
+                length(c.slave_elements),
+                num_threads,
+                element_chunk_size
+            )
+
+            _run_workers(num_threads) do worker
+                _contact_mixed_csc_worker!(
+                    c,
+                    op_u,
+                    Ps,
+                    coefficient,
+                    weight,
+                    qdata_by_element,
+                    projections_by_element,
+                    measures_by_element,
+                    nzval_buffers[worker],
+                    colptr,
+                    rowval,
+                    chunk,
+                    num_threads,
+                    worker
+                )
+            end
+
+            reduce_csc_buffers!(
+                Bcsc.nzval,
+                nzval_buffers,
+                num_threads
+            )
+
+            return SystemMatrix(Bcsc, Pu, Ps)
+        finally
+            num_threads > 1 &&
+                LinearAlgebra.BLAS.set_num_threads(old_blas_threads)
+        end
+    end
+
+    # Legacy triplet path retained for validation/debugging.
     I = Int[]
     J = Int[]
     V = Float64[]
 
-    workspace = _contact_projection_workspace(vcat(c.slave_elements, c.master_elements))
-    qcache = Dict{Int,Any}()
+    qdata_by_element, projections_by_element, measures_by_element =
+        _contact_prepare_gp_projection_data(
+            c,
+            gauss,
+            1,
+            element_chunk_size
+        )
 
-    for slave_element in c.slave_elements
-        qdata = get!(qcache, slave_element.etype) do
-            _contact_quadrature(slave_element, gauss)
-        end
+    @inbounds for e in eachindex(c.slave_elements)
+        slave_element = c.slave_elements[e]
+        qdata = qdata_by_element[e]
 
         for q in 1:qdata.nip
-            xs, Ns, measure = _contact_slave_geometry_at_gp(slave_element, qdata, q)
-            p = _contact_projection_at_gp(c, slave_element, xs, workspace)
-
+            p = projections_by_element[e][q]
             _contact_gp_is_active(op_u, p) || continue
 
-            Bu, cols = _contact_gap_B(c, slave_element, Ns, p, op_u.components)
+            nn = length(slave_element.node_tags)
+            Ns = @view qdata.N[1:nn, q]
+
+            Bu, cols =
+                _contact_gap_B(
+                    c,
+                    slave_element,
+                    Ns,
+                    p,
+                    op_u.components
+                )
             Bs, rows = _contact_id_B(Ps, slave_element, Ns)
 
-            Cgp = _contact_coefficient_at_gp(coefficient, slave_element, Ns, c.step)
-            wcoef = _contact_weight_at_gp(weight, slave_element, Ns, c.step)
-            scale = measure * qdata.weights[q] * wcoef
+            Cgp =
+                _contact_coefficient_at_gp(
+                    coefficient,
+                    slave_element,
+                    Ns,
+                    c.step
+                )
+            wcoef =
+                _contact_weight_at_gp(
+                    weight,
+                    slave_element,
+                    Ns,
+                    c.step
+                )
+            scale =
+                measures_by_element[e][q] *
+                qdata.weights[q] *
+                wcoef
 
-            Ke = _contact_local_bilinear(Bs, Cgp, Bu, scale)
-            _contact_scatter_block!(I, J, V, Ke, rows, cols)
+            Ke = _contact_local_bilinear(
+                Bs,
+                Cgp,
+                Bu,
+                scale
+            )
+
+            _contact_scatter_block!(
+                I,
+                J,
+                V,
+                Ke,
+                rows,
+                cols
+            )
         end
     end
 
@@ -3636,41 +4649,84 @@ function _contact_gap_gauss_field_values(
     ncomp = op.components === :normal ? 1 : c.U.pdim
     pdim = c.U.pdim
 
-    A = Vector{Matrix{Float64}}(undef, length(c.slave_elements))
-    num_elem = Vector{Int}(undef, length(c.slave_elements))
+    # ------------------------------------------------------------------
+    # Global L2 projection on the slave Lagrange space
+    #
+    #     M g_h = b,
+    #
+    #     M = ∫_Γ Nᵀ N dΓ,
+    #     b = ∫_Γ Nᵀ g_q dΓ.
+    #
+    # Only slave-surface nodes are included in the reduced projection
+    # system. Shared nodes therefore receive one common coefficient and the
+    # reconstructed field is C0-continuous across slave element boundaries.
+    # ------------------------------------------------------------------
+
+    slave_nodes = c.slave_nodes
+    nsurf = length(slave_nodes)
+
+    node_to_local = Dict{Int,Int}(
+        node => i for (i, node) in enumerate(slave_nodes)
+    )
+
+    I = Int[]
+    J = Int[]
+    V = Float64[]
+    rhs = zeros(Float64, nsurf, ncomp)
+
+    # Reserve roughly one dense local mass block per slave element. This is
+    # only a hint; mixed element types/orders remain supported.
+    if !isempty(c.slave_elements)
+        nnmax = maximum(length(e.node_tags) for e in c.slave_elements)
+        sizehint!(I, length(c.slave_elements) * nnmax^2)
+        sizehint!(J, length(c.slave_elements) * nnmax^2)
+        sizehint!(V, length(c.slave_elements) * nnmax^2)
+    end
 
     workspace =
         _contact_projection_workspace(vcat(c.slave_elements, c.master_elements))
     qcache = Dict{Int,Any}()
 
-    @inbounds for (ie, slave_element) in enumerate(c.slave_elements)
+    @inbounds for slave_element in c.slave_elements
         qdata = get!(qcache, slave_element.etype) do
             _contact_quadrature(slave_element, gauss)
         end
 
-        accum = zeros(Float64, ncomp)
-        wsum = 0.0
+        nn = length(slave_element.node_tags)
+        local_ids = Vector{Int}(undef, nn)
+        for a in 1:nn
+            node = slave_element.node_tags[a]
+            local_ids[a] = get(node_to_local, node, 0)
+            local_ids[a] != 0 ||
+                error(
+                    "ContactGap Gauss-point projection: slave element " *
+                    "$(slave_element.tag) contains node $node which is not " *
+                    "present in Contact.slave_nodes."
+                )
+        end
+
+        Me = zeros(Float64, nn, nn)
+        be = zeros(Float64, nn, ncomp)
 
         for q in 1:qdata.nip
-            xs, _, measure =
+            xs, Ns, measure =
                 _contact_slave_geometry_at_gp(slave_element, qdata, q)
             p = _contact_projection_at_gp(c, slave_element, xs, workspace)
 
             wq = measure * qdata.weights[q]
-            wsum += wq
 
-            accum[1] += wq * p.gap
+            gq = zeros(Float64, ncomp)
+            gq[1] = p.gap
 
             if op.components === :all
                 dx1 = xs[1] - p.x[1]
                 dx2 = xs[2] - p.x[2]
                 dx3 = xs[3] - p.x[3]
 
-                accum[2] += wq * (
+                gq[2] =
                     dx1 * p.tangent1[1] +
                     dx2 * p.tangent1[2] +
                     dx3 * p.tangent1[3]
-                )
 
                 if pdim == 3
                     p.tangent2 === nothing &&
@@ -3678,67 +4734,98 @@ function _contact_gap_gauss_field_values(
                             "ContactGap Gauss-point evaluation: missing second " *
                             "tangent in 3D contact."
                         )
-                    accum[3] += wq * (
+                    gq[3] =
                         dx1 * p.tangent2[1] +
                         dx2 * p.tangent2[2] +
                         dx3 * p.tangent2[3]
-                    )
                 end
             end
-        end
 
-        wsum > eps(Float64) ||
-            error(
-                "ContactGap Gauss-point evaluation: zero integration measure " *
-                "for slave element $(slave_element.tag)."
-            )
-
-        accum ./= wsum
-
-        nn = length(slave_element.node_tags)
-
-        if op.components === :normal
-            values = Matrix{Float64}(undef, nn, 1)
-            values[:, 1] .= accum[1]
-            A[ie] = values
-        else
-            values = Matrix{Float64}(undef, pdim * nn, 1)
+            # Local mass matrix and right-hand side.
             for a in 1:nn
-                base = (a - 1) * pdim
-                for j in 1:pdim
-                    values[base + j, 1] = accum[j]
+                Na = Ns[a]
+
+                for k in 1:ncomp
+                    be[a, k] += wq * Na * gq[k]
+                end
+
+                for b in 1:nn
+                    Me[a, b] += wq * Na * Ns[b]
                 end
             end
-            A[ie] = values
         end
 
-        num_elem[ie] = slave_element.tag
+        # Scatter the local projection system to the reduced global
+        # slave-surface system.
+        for a in 1:nn
+            ia = local_ids[a]
+
+            for k in 1:ncomp
+                rhs[ia, k] += be[a, k]
+            end
+
+            for b in 1:nn
+                push!(I, ia)
+                push!(J, local_ids[b])
+                push!(V, Me[a, b])
+            end
+        end
+    end
+
+    M = sparse(I, J, V, nsurf, nsurf)
+
+    # The consistent slave-surface mass matrix is symmetric positive definite
+    # when the chosen quadrature sufficiently resolves the Lagrange space.
+    # A failed factorization is therefore a useful indication that a denser
+    # Gauss rule is required (e.g. for high-order elements with :reduced).
+    coeff = try
+        F = cholesky(Symmetric(M))
+        F \ rhs
+    catch err
+        error(
+            "ContactGap Gauss-point L2 projection failed. The slave-surface " *
+            "projection matrix is singular or not positive definite for " *
+            "gauss=$gauss. Use a denser quadrature rule (for example gauss=0, " *
+            "gauss=2, or larger). Original error: $(sprint(showerror, err))"
+        )
     end
 
     if op.components === :normal
+        values = zeros(Float64, c.U.non, 1)
+        for (i, node) in enumerate(slave_nodes)
+            values[node, 1] = coeff[i, 1]
+        end
+
         return ScalarField(
-            A,
-            [;;],
+            Matrix{Float64}[],
+            values,
             [0.0],
-            num_elem,
+            Int[],
             1,
             :scalar,
             c.U
         )
     end
 
+    values = zeros(Float64, ndofs(c.U), 1)
+    for (i, node) in enumerate(slave_nodes)
+        base = (node - 1) * pdim
+        for k in 1:pdim
+            values[base + k, 1] = coeff[i, k]
+        end
+    end
+
     type = pdim == 2 ? :v2D : :v3D
     return VectorField(
-        A,
-        [;;],
+        Matrix{Float64}[],
+        values,
         [0.0],
-        num_elem,
+        Int[],
         1,
         type,
         c.U
     )
 end
-
 
 function _contact_gap_field_values(
     op::ContactGapOp,
@@ -3829,10 +4916,14 @@ as a nodal `ScalarField` for `components=:normal`, or a nodal `VectorField` for
 `components=:all`.
 
 With `gauss=:full`, `gauss=:reduced`, or an integer Gauss-order offset, the gap
-is evaluated at the same slave Gauss points used by contact integration. The
-quadrature values are Jacobian-weighted and averaged per slave element, then
-returned as an elementwise field with a constant value over each element. This
-is useful for postprocessing without high-order nodal interpolation overshoot.
+is evaluated at the same slave Gauss points used by contact integration and
+globally L2-projected onto the continuous slave-side Lagrange space. The result
+is a nodal field whose coefficients solve
+
+    ∫_Γ Nᵀ N dΓ * g_h = ∫_Γ Nᵀ g_q dΓ.
+
+Increasing the Gauss order improves the numerical projection of the generally
+non-polynomial closest-point gap without changing the interpolation order.
 
 For ordinary nodal evaluation `u` is a displacement field and the reference
 coordinates are added internally. Set `absolute=true` only when `u` already
@@ -3878,8 +4969,9 @@ Convenience form equivalent to creating `ContactGap(C; ...)` and immediately
 evaluating it on `u` for postprocessing.
 
 Use `gauss=nothing` for the original nodal field, or specify `gauss=:full`,
-`gauss=:reduced`, or an integer offset (for example `gauss=2`) to return a
-Jacobian-weighted, elementwise Gauss-point average.
+`gauss=:reduced`, or an integer offset (for example `gauss=2`) to evaluate the
+gap at slave Gauss points and globally L2-project it onto the continuous
+slave-side Lagrange space.
 """
 function ContactGap(
     c::Contact,

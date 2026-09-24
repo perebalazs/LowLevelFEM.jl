@@ -12,7 +12,7 @@ MeshSize {10, 9, 13, 14} = 0.5;
 //+
 MeshSize {3,4,7,8} = 0.5;
 //+
-Mesh.ElementOrder=2;
+Mesh.ElementOrder=1;
 Mesh 3;
 //+
 Physical Volume("body", 25) = {1, 2};

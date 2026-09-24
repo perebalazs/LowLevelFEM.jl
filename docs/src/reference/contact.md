@@ -1,15 +1,18 @@
 # Contact API
 
-Contact kinematics and algebraic interface for node-to-manifold contact problems.
+Contact geometry, weak-form operators and post-processing for slave-master contact problems.
 
 ## Overview
 
-LowLevelFEM separates contact geometry and kinematics from the numerical contact
-method. A `Contact` object describes one slave-master contact pair in the current
-configuration and provides the algebraic operators required by penalty,
-Lagrange-multiplier and augmented formulations.
+LowLevelFEM separates contact geometry and search from the numerical contact
+formulation.
 
-The current geometry is evaluated as
+A `Contact` object describes one slave-master contact pair and stores the
+geometry and search state required by contact integration. The actual weak-form
+operator is created by `ContactGap(C)` and can be inserted directly into the
+ordinary LowLevelFEM `∫` syntax.
+
+The current configuration is
 
 ```math
 x = X + u
@@ -17,182 +20,35 @@ x = X + u
 
 on both the slave and master sides.
 
-The contact search determines, for every slave contact node:
-
-- the closest master point,
-- the signed normal gap,
-- the local normal and tangential basis,
-- the active/inactive state,
-- the reduced contact-space kinematic operator.
-
-No contact pressure, traction, multiplier solution, stick/slip state or other
-derived contact result is stored in `Contact`. These quantities are constructed
-explicitly from the supplied operators in the calling code.
-
----
-
-# Reduced contact space
-
-Let
-
-```math
-V_u
-```
-
-denote the global displacement space and
-
-```math
-V_c
-```
-
-the reduced local contact space.
-
-For `nc` slave contact nodes and spatial dimension `pdim`, the reduced contact
-space has
-
-```math
-n_c = nc \, pdim
-```
-
-components.
-
-The local ordering is:
-
-| Dimension | Per-node ordering              |
-| ---------:| ------------------------------ |
-| 2D        | `[normal, tangent]`            |
-| 3D        | `[normal, tangent1, tangent2]` |
-
-Thus the complete ordering is
-
-```text
-2D: [n1, t1, n2, t2, ...]
-3D: [n1, t11, t21, n2, t12, t22, ...]
-```
-
-The normal component is always the first component belonging to a contact node.
-
----
-
-## `ContactVector`
-
-`ContactVector` is an algebraic vector living in the reduced contact space.
-
-It is intentionally different from `ScalarField`, `VectorField` and
-`TensorField`, because its size is determined by the active contact
-discretization rather than by the nodal finite-element field layout.
-
-For example:
+The contact formulation therefore follows the mathematical weak form directly.
+For example, frictionless penalty contact is written as
 
 ```julia
-g = contact.g
+G = ContactGap(C)
+
+Kc = ∫(G ⋅ cn ⋅ G)
 ```
 
-returns the reduced contact gap vector.
-
-The basic contact-space operations include:
-
-```julia
-g1 + g2
-g1 - g2
-α * g
-g / α
-norm(g)
-dot(g1, g2)
-```
-
-A `ContactVector` cannot be added directly to a finite-element field. It must
-first be mapped through an appropriate `SystemMatrix`.
-
-Typical mappings are:
+which corresponds to
 
 ```math
-C : V_c \rightarrow V_c
-```
-
-and
-
-```math
-G^T : V_c \rightarrow V_u.
-```
-
-Therefore
-
-```julia
-C * g
-```
-
-returns another `ContactVector`, while
-
-```julia
-G' * C * g
-```
-
-returns a nodal displacement-space `VectorField`.
-
----
-
-# Contact kinematics
-
-For one contact pair, the kinematic operator is
-
-```math
-G : V_u \rightarrow V_c.
-```
-
-If `ndofs(U)` is the number of displacement degrees of freedom, then
-
-```math
-G \in \mathbb{R}^{(nc\,pdim)\times ndofs(U)}.
-```
-
-The operator maps a global displacement increment to local relative contact
-motion.
-
-In 2D:
-
-```math
-G \, \Delta u
+K_c
 =
-\begin{bmatrix}
-\Delta u_n \\
-\Delta u_t
-\end{bmatrix}
+\int_{\Gamma_c}
+G_q^T c_n G_q \, \mathrm d\Gamma .
 ```
 
-for each slave contact node.
+The contact operator is evaluated directly at slave-side Gauss points. At every
+integration point, LowLevelFEM computes the current slave position, performs a
+closest-point projection onto the master manifold, evaluates the local contact
+basis and constructs the slave-master kinematic operator.
 
-In 3D:
+No reduced `ContactVector` space is exposed in the public API.
 
-```math
-G \, \Delta u
-=
-\begin{bmatrix}
-\Delta u_n \\
-\Delta u_{t_1} \\
-\Delta u_{t_2}
-\end{bmatrix}.
-```
-
-The signed normal gap is
-
-```math
-g_n = (x_s - x_m)\cdot n.
-```
-
-With the default convention:
-
-```math
-g_n > 0
-```
-
-means an open contact point, while
-
-```math
-g_n < 0
-```
-
-means penetration.
+Derived quantities such as penalty pressure, tangential traction, Lagrange
+multipliers, stick/slip state or other constitutive contact results are not
+stored as primary `Contact` data. They are constructed from the contact
+kinematics and the chosen contact law.
 
 ---
 
@@ -201,7 +57,7 @@ means penetration.
 A contact pair is created with
 
 ```julia
-contact_pair = contact(
+C = contact(
     U;
     master="master",
     slave="slave",
@@ -221,7 +77,7 @@ If `displacement` is omitted, a zero displacement field is used.
 The convenience form
 
 ```julia
-contact_pair = contact(
+C = contact(
     u;
     master="master",
     slave="slave"
@@ -230,275 +86,726 @@ contact_pair = contact(
 
 is also available.
 
+The current geometry used by the contact search is always based on
+
+```math
+x = X + u.
+```
+
 ---
 
 ## Main contact data
 
-The most important fields of a `Contact` object are:
+`Contact` is primarily a geometry and search object.
 
-| Field                      | Meaning                                              |
-| -------------------------- | ---------------------------------------------------- |
-| `gap`                      | signed normal gap as a `ScalarField`                 |
-| `gap_values`               | signed normal gap values indexed by contact node     |
-| `g`                        | reduced local gap as a `ContactVector`               |
-| `G`                        | kinematic operator `Vu -> Vc`                        |
-| `C`                        | local contact-space operator `Vc -> Vc`              |
-| `E`                        | optional embedding `Vc -> Vλ` for multiplier contact |
-| `n`                        | contact normal as a `VectorField`                    |
-| `t1`                       | first tangent direction                              |
-| `t2`                       | second tangent direction in 3D                       |
-| `active`                   | active contact-point mask                            |
-| `slave_nodes`              | slave node tags                                      |
-| `master_element_tags`      | projected master element tags                        |
-| `master_local_coordinates` | master local coordinates of the projections          |
-| `master_points`            | projected master points in physical space            |
+Useful public fields include:
 
-The contact object also stores the normal and tangential stiffness definitions
-`cn` and `ct`, together with their evaluated nodal values.
+| Field | Meaning |
+| --- | --- |
+| `master` | master physical group name |
+| `slave` | slave physical group name |
+| `U` | displacement `Problem` |
+| `displacement` | displacement stored in the current contact state |
+| `step` | current displacement step |
+| `slave_nodes` | slave node tags |
+| `master_element_tags` | nodal closest-point master element tags |
+| `master_local_coordinates` | nodal master local coordinates |
+| `master_points` | nodal projected master points |
+| `gap` | nodal signed normal gap as a `ScalarField` |
+| `gap_values` | nodal signed normal gap values |
+| `n` | nodal contact normal as a `VectorField` |
+| `t1` | first nodal tangent direction |
+| `t2` | second nodal tangent direction in 3D |
+| `active` | nodal active-contact mask |
+
+The nodal fields above are refreshed by the full
+
+```julia
+updateContact!(C, u)
+```
+
+operation.
+
+Gauss-point contact integration has its own projection data and warm-start cache.
+It does not require the nodal gap fields to be recomputed at every nonlinear
+iteration.
 
 ---
 
-# Contact-space operator `C`
+# Contact kinematics
 
-The local operator `C` is constructed from the normal and tangential contact
-stiffness values.
+At a slave integration point with local coordinate `ξ`, let
 
-For frictionless penalty contact, use
-
-```julia
-cn = 1.0e6
-ct = 0.0
+```math
+x_s(\xi)
+=
+\sum_a N_a^s(\xi) x_a^s
 ```
 
-or any appropriate problem-dependent stiffness.
+be the current slave position.
 
-Both `cn` and `ct` may be:
+Its closest master point has master local coordinate `η` and
 
-- a scalar number,
-- a `ScalarField`,
-- a function `f(x,y,z)`.
+```math
+x_m(\eta)
+=
+\sum_b N_b^m(\eta) x_b^m .
+```
 
-For isotropic tangential regularization, the same `ct` value is used in each
-local tangential direction.
+The signed normal gap is
+
+```math
+g_n
+=
+(x_s-x_m)\cdot n.
+```
+
+With the default convention,
+
+```math
+g_n > 0
+```
+
+means open contact, while
+
+```math
+g_n < 0
+```
+
+means penetration.
+
+For a frozen current contact geometry,
+
+```math
+\delta g_n
+=
+G_q \, \delta u_e .
+```
+
+In 3D, the full local contact basis may be written as
+
+```math
+Q_q
+=
+\begin{bmatrix}
+n^T \\
+t_1^T \\
+t_2^T
+\end{bmatrix},
+```
+
+and the full local contact operator is formed directly from the slave and
+projected master interpolation:
+
+```math
+G_q
+=
+Q_q
+\begin{bmatrix}
+N_s I & -N_m I
+\end{bmatrix}.
+```
+
+This operator is evaluated directly at Gauss points; no nodal contact matrix is
+interpolated into the weak form.
+
+---
+
+# `ContactGap`
+
+```julia
+ContactGap(C; components=:normal, active=:current)
+```
+
+creates a contact kinematic operator for the LowLevelFEM weak-form DSL.
+
+The default
+
+```julia
+G = ContactGap(C)
+```
+
+is a scalar normal-gap operator.
+
+The full local relative-contact operator is requested with
+
+```julia
+G = ContactGap(C; components=:all)
+```
+
+with local component ordering
+
+| Dimension | Ordering |
+| ---: | --- |
+| 2D | `(normal, tangent)` |
+| 3D | `(normal, tangent1, tangent2)` |
+
+The operator can be used directly in a matrix chain:
+
+```julia
+Kc = ∫(ContactGap(C) ⋅ cn ⋅ ContactGap(C))
+```
+
+or
+
+```julia
+G  = ContactGap(C; components=:all)
+Dc = ContactStiffness(C, cn; ct=ct)
+
+Kc = ∫(G ⋅ Dc ⋅ G)
+```
+
+The slave integration manifold is already stored in `C`, therefore `Γ="slave"`
+is neither necessary nor accepted for `ContactGap` integration.
+
+---
+
+## Active Gauss points
+
+The keyword
+
+```julia
+active=:current
+```
+
+is the default.
+
+In this mode, a Gauss point contributes to the contact integral when its current
+normal gap satisfies
+
+```math
+g_n \le \mathrm{activation\_tol}.
+```
+
+To integrate the entire slave candidate manifold, use
+
+```julia
+G = ContactGap(C; active=:all)
+```
+
+The Gauss-point active policy is evaluated during contact integration. It is
+independent of the stored nodal mask `C.active`, which is only refreshed by a
+full `updateContact!`.
 
 ---
 
 # Penalty formulation
 
-For a penalty formulation, the contact contribution can be written directly
-with the operators supplied by `Contact`.
+For frictionless penalty contact,
+
+```math
+\delta W_c
+=
+\int_{\Gamma_c}
+\delta g_n \, c_n \, g_n \, \mathrm d\Gamma .
+```
+
+The corresponding tangent is
+
+```math
+K_c
+=
+\int_{\Gamma_c}
+G_q^T c_n G_q \, \mathrm d\Gamma .
+```
+
+In LowLevelFEM:
+
+```julia
+G = ContactGap(C)
+
+Kc = ∫(G ⋅ cn ⋅ G)
+```
 
 Let
 
-```math
-g \in V_c,
+```julia
+r = nodePositionVector(U)
 ```
 
-```math
-C : V_c \rightarrow V_c,
-```
-
-and
-
-```math
-G : V_u \rightarrow V_c.
-```
-
-The local contact traction-like vector is
-
-```math
-p = -C g.
-```
-
-The corresponding global contact residual contribution is
-
-```math
-r_c = -G^T p = G^T C g.
-```
-
-The contact tangent is
-
-```math
-K_c = G^T C G.
-```
-
-In LowLevelFEM:
+be the nodal reference-position field. Since `ContactGap` acts on the absolute
+current position `r + u`, the contact residual is
 
 ```julia
-(; G, C, g) = contact_pair
+rc = Kc * (r + u)
+```
 
-p  = -C * g
-rc = -G' * p
-Kc = G' * C * G
+and the total residual is, for example,
 
-r = K * u - f + rc
+```julia
+R = K * u - f + rc
+```
+
+with tangent
+
+```julia
 A = K + Kc
 ```
 
-The algebra therefore follows the mathematical formulation directly, without a
-separate penalty-contact solver wrapper.
+for a frozen current contact geometry.
 
 ---
 
-# Updating the current contact configuration
+## Normal and tangential penalty stiffness
 
-During a nonlinear iteration, update the contact geometry with
-
-```julia
-updateContact!(contact_pair, u)
-```
-
-This recomputes:
-
-- closest-point projections,
-- contact normals and tangents,
-- signed gaps,
-- active contact points,
-- `g`,
-- `G`,
-- `C`,
-- optional multiplier embedding `E`.
-
-The previous master element and local coordinates are reused as a warm start.
-The subsequent AABB search remains global and may select another master element
-if a closer projection is found.
-
-A typical nonlinear penalty loop therefore contains:
+`ContactStiffness` creates a local contact constitutive coefficient without
+requiring an explicit Julia matrix literal.
 
 ```julia
-updateContact!(contact_pair, u_it)
-
-(; G, C, g) = contact_pair
-
-Kc = G' * C * G
-rc = G' * C * g
-
-r = K * u_it - f + rc
-A = K + Kc
+Dc = ContactStiffness(C, cn; ct=ct)
 ```
 
----
-
-# Lagrange-multiplier contact
-
-A vector-valued multiplier `Problem` can be associated with the contact pair:
-
-```julia
-contact_pair = contact(
-    U;
-    master="master",
-    slave="slave",
-    displacement=u,
-    LagrangeMultiplierField=Λ
-)
-```
-
-The multiplier field must have the same local component dimension as the
-contact space:
-
-- 2 components in 2D,
-- 3 components in 3D.
-
-The contact kinematics remain unchanged:
-
-```math
-G : V_u \rightarrow V_c.
-```
-
-An additional embedding operator is provided:
-
-```math
-E : V_c \rightarrow V_\lambda.
-```
-
-This maps the reduced contact quantities into the finite-element multiplier
-field.
-
-The multiplier coupling matrix is therefore
-
-```math
-B = E G,
-```
-
-and the multiplier-space gap residual is
-
-```math
-g_\lambda = E g.
-```
-
-In LowLevelFEM:
-
-```julia
-(; G, g, E) = contact_pair
-
-B  = E * G
-gλ = E * g
-```
-
-These operators can then be used directly in a multifield block system.
-
-For example, the linearized mixed system has the structure
+In 2D it represents
 
 ```math
 \begin{bmatrix}
-K & B^T \\
-B & 0
-\end{bmatrix}
+c_n & 0 \\
+0   & c_t
+\end{bmatrix},
+```
+
+and in 3D
+
+```math
 \begin{bmatrix}
-\Delta u \\
-\Delta \lambda
-\end{bmatrix}
-=
--
-\begin{bmatrix}
-r_u \\
-r_\lambda
+c_n & 0   & 0 \\
+0   & c_t & 0 \\
+0   & 0   & c_t
 \end{bmatrix}.
 ```
 
-The precise active-set or complementarity algorithm is intentionally not part
-of `Contact`.
+It is used with the full contact operator:
+
+```julia
+G = ContactGap(C; components=:all)
+Kc = ∫(G ⋅ ContactStiffness(C, cn; ct=ct) ⋅ G)
+```
+
+Setting
+
+```julia
+ct = 0.0
+```
+
+removes tangential penalty stiffness.
+
+A nonzero `ct` is a tangential penalty regularization. A physical Coulomb
+friction law additionally requires tangential history and a stick/slip
+algorithm.
+
+---
+
+# Updating the current configuration
+
+There are two different update paths.
+
+## Full update
+
+```julia
+updateContact!(C, u)
+```
+
+recomputes the complete nodal contact state, including:
+
+- deformed contact geometry,
+- nodal closest-point projections,
+- nodal master element and local coordinates,
+- nodal projected master points,
+- nodal signed gaps,
+- nodal normals and tangents,
+- nodal active/inactive state.
+
+The previous nodal master element and local coordinates are reused as a warm
+start. The subsequent AABB search remains global and may select another master
+element if a closer projection exists.
+
+Use the full update when the nodal contact fields are needed, especially for
+post-processing.
+
+---
+
+## Lightweight integration update with `updateFrom`
+
+During nonlinear contact iteration, the Gauss-point weak form usually does not
+need the complete nodal contact state.
+
+The contact integral can therefore update only the deformed geometry required by
+Gauss-point projection:
+
+```julia
+Kc = ∫(
+    ContactGap(C) ⋅ cn ⋅ ContactGap(C);
+    updateFrom=u
+)
+```
+
+`updateFrom=u` performs a lightweight geometry update:
+
+```text
+u
+↓
+deformed nodal coordinates
+↓
+slave/master element coordinates
+↓
+master AABB tree
+↓
+Gauss-point projection and assembly
+```
+
+It deliberately does **not** recompute the nodal
+
+```julia
+C.gap
+C.gap_values
+C.n
+C.t1
+C.t2
+C.active
+```
+
+fields.
+
+Gauss-point closest-point projections are warm-started from the preceding
+contact assembly.
+
+Therefore, during a fast nonlinear iteration, do not interpret stored nodal
+contact fields after using only `updateFrom=u`. Call
+
+```julia
+updateContact!(C, u)
+```
+
+when the full nodal state is required.
+
+---
+
+# Assembly options and performance
+
+Contact bilinear forms use the same high-level assembly options as the ordinary
+LowLevelFEM bilinear forms.
+
+The default is direct CSC assembly:
+
+```julia
+Kc = ∫(
+    G ⋅ cn ⋅ G;
+    assembly=:csc,
+    threads=:auto
+)
+```
+
+The contact assembler uses:
+
+- direct CSC storage,
+- worker-local `nzval` buffers,
+- parallel worker execution,
+- parallel reduction,
+- reusable Gauss-point closest-point warm starts,
+- optional reusable CSC sparsity patterns.
+
+The legacy triplet path remains available for validation:
+
+```julia
+Kc_ijv = ∫(
+    G ⋅ cn ⋅ G;
+    assembly=:ijv,
+    threads=1
+)
+```
+
+For debugging, the two paths can be compared numerically.
+
+---
+
+## CSC pattern reuse
+
+The structural contact pattern can be reused between nonlinear iterations when
+the current slave-master connectivity remains covered by the existing pattern.
+
+First assemble normally:
+
+```julia
+Kc = ∫(
+    G ⋅ cn ⋅ G;
+    updateFrom=u,
+    threads=:auto
+)
+
+pattern = copy(Kc.A)
+```
+
+Before every independent reuse, reset the numerical values:
+
+```julia
+fill!(pattern.nzval, 0.0)
+
+Kc = ∫(
+    G ⋅ cn ⋅ G;
+    updateFrom=u,
+    threads=:auto,
+    csc_matrix=pattern
+)
+```
+
+Assembly **adds** to the current `nzval` contents of a supplied pattern, so the
+reset is required.
+
+If the active slave-master connectivity changes in a way not represented by the
+stored pattern, the contact assembler reports that the CSC pattern no longer
+covers the current contact graph. Rebuild the pattern once by assembling without
+`csc_matrix`, then reuse the new pattern.
+
+The optional
+
+```julia
+element_chunk_size=:auto
+```
+
+keyword controls contact-element work partitioning for threaded assembly.
+
+---
+
+# Typical nonlinear penalty loop
+
+A simple relaxed iteration can keep the nodal post-processing update out of the
+inner loop:
+
+```julia
+G = ContactGap(C)
+
+u_it = copy(u0)
+ω = 0.5
+
+Kc = ∫(
+    G ⋅ cn ⋅ G;
+    updateFrom=u_it,
+    gauss=2,
+    threads=:auto
+)
+
+pattern = copy(Kc.A)
+
+for iter in 1:maxiter
+
+    if iter > 1
+        fill!(pattern.nzval, 0.0)
+
+        Kc = ∫(
+            G ⋅ cn ⋅ G;
+            updateFrom=u_it,
+            gauss=2,
+            threads=:auto,
+            csc_matrix=pattern
+        )
+    end
+
+    rc = Kc * (r + u_it)
+    R  = K * u_it - f + rc
+
+    Δu = solveField(
+        K + Kc,
+        -R,
+        support=support_increment
+    )
+
+    u_it = u_it + ω * Δu
+end
+
+u = u_it
+```
+
+After convergence, synchronize the complete nodal contact state once:
+
+```julia
+updateContact!(C, u)
+```
+
+This keeps the inner iteration focused on the Gauss-point contact weak form.
+
+---
+
+# Lagrange-multiplier coupling
+
+The same normal-gap operator can be used in a mixed weak form.
+
+For a scalar normal multiplier field `Λ`,
+
+```julia
+Gn = ContactGap(C)
+
+B = ∫(
+    Λ ⋅ Gn;
+    updateFrom=u
+)
+```
+
+corresponds to
+
+```math
+B
+=
+\int_{\Gamma_c}
+N_\lambda^T G_n \, \mathrm d\Gamma .
+```
+
+The result is a rectangular `SystemMatrix` coupling the displacement trial space
+to the multiplier test space.
+
+The mixed contact assembler uses the same CSC, threading, Gauss-point projection
+and warm-start infrastructure as penalty contact.
+
+The active-set, complementarity or augmented-Lagrangian algorithm remains
+separate from the geometric contact operator.
+
+The legacy `LagrangeMultiplierField` keyword of `contact(...)` is retained only
+for source compatibility; multiplier fields now enter the weak form directly.
 
 ---
 
 # Several contact pairs
 
-Several independent slave-master pairs can be stored in a `ContactSet`:
+Several contact pairs can be stored in a `ContactSet`:
 
 ```julia
-contacts = ContactSet(c1, c2, c3)
+contacts = ContactSet(C1, C2, C3)
 ```
 
-Each `Contact` retains its own reduced contact space and its own `G`, `C`, `g`
-and optional multiplier embedding `E`.
-
-The reduced spaces are not merged automatically.
-
-This is particularly important for multifield multiplier formulations, where
-different contact pairs may use different multiplier fields.
-
-For penalty contact, the global contributions may be assembled directly:
+For penalty contact, each pair contributes its own weak-form matrix:
 
 ```julia
-Kc = sum(c.G' * c.C * c.G for c in contacts)
-rc = sum(c.G' * c.C * c.g for c in contacts)
+Kc =
+    ∫(ContactGap(C1) ⋅ cn1 ⋅ ContactGap(C1); updateFrom=u) +
+    ∫(ContactGap(C2) ⋅ cn2 ⋅ ContactGap(C2); updateFrom=u)
 ```
 
-All pairs can be updated with the same displacement field:
+No reduced contact spaces need to be merged.
+
+The full nodal state of every pair can be updated with
 
 ```julia
 updateContact!(contacts, u)
 ```
 
-For multiplier contact, the coupling operators remain pair-specific:
+when post-processing data are required.
+
+---
+
+# ContactGap post-processing
+
+The same `ContactGap` object can be evaluated on a displacement field.
+
+## Nodal evaluation
 
 ```julia
-B1 = contacts[1].E * contacts[1].G
-B2 = contacts[2].E * contacts[2].G
+gap = ContactGap(C, u)
 ```
 
-This preserves the `model` and `test_model` metadata required by the multifield
-assembly.
+or equivalently
+
+```julia
+G = ContactGap(C)
+gap = G(u)
+```
+
+returns a nodal `ScalarField` for the normal gap.
+
+For the full local contact motion:
+
+```julia
+d = ContactGap(C, u; components=:all)
+```
+
+returns a nodal `VectorField` with local contact components.
+
+The nodal evaluation uses the frozen nodal closest-point projections stored in
+`C`. Therefore call
+
+```julia
+updateContact!(C, u)
+```
+
+first when the contact geometry should correspond to `u`.
+
+---
+
+## Gauss-point L2 projection
+
+For post-processing based on the same slave Gauss-point contact kinematics used
+by the weak form, specify `gauss`:
+
+```julia
+gap = ContactGap(C, u; gauss=2)
+```
+
+The gap is evaluated at slave Gauss points and globally L2-projected onto the
+continuous slave-side Lagrange space.
+
+The projected nodal coefficients satisfy
+
+```math
+\left(
+\int_{\Gamma_s} N^T N \, \mathrm d\Gamma
+\right)
+g_h
+=
+\int_{\Gamma_s} N^T g_q \, \mathrm d\Gamma .
+```
+
+Available Gauss specifications follow the ordinary LowLevelFEM convention:
+
+```julia
+gauss = :full
+gauss = :reduced
+gauss = 0
+gauss = 2
+gauss = 8
+```
+
+Increasing the quadrature order improves the numerical projection of the
+generally non-polynomial closest-point gap; it does not change the interpolation
+order of the projected field.
+
+For all local components:
+
+```julia
+d = ContactGap(
+    C,
+    u;
+    components=:all,
+    gauss=2
+)
+```
+
+returns the globally projected local contact vector as a nodal `VectorField`.
+
+---
+
+## Penalty pressure
+
+Penalty pressure does not require a separate contact-specific result type.
+
+For the sign convention `g_n < 0` in penetration,
+
+```julia
+gap = ContactGap(C, u; gauss=2)
+
+pressure = mapScalarField(
+    g -> max(-cn * g, 0.0),
+    gap
+)
+```
+
+constructs the normal penalty pressure.
+
+For tangential contact, the local tangential components returned by
+
+```julia
+ContactGap(C, u; components=:all, gauss=...)
+```
+
+can later be combined with the selected tangential constitutive or friction law
+to obtain shear traction.
 
 ---
 
@@ -508,55 +815,54 @@ The master-side closest-point search uses an AABB tree.
 
 The main search options are:
 
-| Keyword              | Default | Meaning                                    |
-| -------------------- | -------:| ------------------------------------------ |
-| `aabb_padding`       | `0.05`  | relative expansion of master-element AABBs |
-| `leaf_size`          | `2`     | maximum number of elements in an AABB leaf |
-| `projection_tol`     | `1e-10` | closest-point iteration tolerance          |
-| `projection_maxiter` | `40`    | maximum projected Gauss-Newton iterations  |
+| Keyword | Default | Meaning |
+| --- | ---: | --- |
+| `aabb_padding` | `0.05` | relative expansion of master-element AABBs |
+| `leaf_size` | `2` | maximum number of elements in an AABB leaf |
+| `projection_tol` | `1e-10` | closest-point iteration tolerance |
+| `projection_maxiter` | `40` | maximum projected Gauss-Newton iterations |
 
-Basis information is cached for each master element type. The iterative
-closest-point search uses the cached local polynomial evaluator and reusable
-workspaces, avoiding repeated Gmsh basis-function calls inside the projection
-loop.
+Basis information is cached for each master element type. Standard Lagrange
+basis functions are represented locally by cached polynomial evaluators, which
+avoids repeated Gmsh basis-function calls inside the closest-point iteration.
+
+Gauss-point projection results also keep a warm-start state containing the
+previous master element and master local coordinate.
 
 ---
 
 # Topological stabilization near master boundaries
 
-The ordinary node-to-manifold closest-point path is preserved in element
-interiors.
+The ordinary closest-point path is preserved in element interiors.
 
-Near a shared master vertex or edge, however, two neighboring master elements
-may represent essentially the same physical closest point. Small changes in
-the deformation can then make the projection switch repeatedly between the two
-elements.
+Near a shared master vertex or edge, neighboring master elements may represent
+essentially the same physical closest point. Small deformation changes can then
+make the local representation switch repeatedly.
 
-To reduce this ambiguity, the contact search can replace the ordinary local
-representation near shared topological features by a stable representation:
+The contact search can stabilize projections near shared topological features:
 
 ```text
 2D:
-    element interior -> node-to-segment
-    shared vertex    -> node-to-node
+    element interior -> point-to-segment
+    shared vertex    -> point-to-node
 
 3D:
-    face interior    -> node-to-face
-    shared edge      -> node-to-edge
-    shared vertex    -> node-to-node
+    face interior    -> point-to-face
+    shared edge      -> point-to-edge
+    shared vertex    -> point-to-node
 ```
 
-The relevant geometry options are:
+The relevant options are:
 
-| Keyword          | Default | Meaning                                                                              |
-| ---------------- | -------:| ------------------------------------------------------------------------------------ |
-| `topology_tol`   | `1e-3`  | reference-space distance used to detect proximity to a shared edge or vertex         |
-| `topology_angle` | `45.0`  | maximum angle in degrees between incident normals for treating the feature as smooth |
+| Keyword | Default | Meaning |
+| --- | ---: | --- |
+| `topology_tol` | `1e-3` | reference-space distance used to detect a shared edge or vertex |
+| `topology_angle` | `45.0` | maximum incident-normal angle for treating the feature as smooth |
 
 For example:
 
 ```julia
-contact_pair = contact(
+C = contact(
     U;
     master="master",
     slave="slave",
@@ -571,44 +877,10 @@ Setting
 topology_tol=0.0
 ```
 
-disables this stabilization and leaves the ordinary closest-point path
-unchanged.
+disables this stabilization.
 
-The `topology_angle` criterion prevents smooth-feature stabilization from
-being applied blindly across sharp geometric corners.
-
----
-
-# Active contact points
-
-A contact point is marked active when
-
-```math
-g_n \le \text{activation\_tol}.
-```
-
-The default is
-
-```julia
-activation_tol = 0.0
-```
-
-which corresponds to geometric penetration or exact contact.
-
-A positive activation tolerance may be useful when an algorithm should include
-points that are still separated by a small distance.
-
-The active-state information is available as
-
-```julia
-contact_pair.active
-```
-
-while the signed normal gaps are available directly as
-
-```julia
-contact_pair.gap_values
-```
+The `topology_angle` criterion prevents smooth-feature stabilization from being
+applied blindly across sharp geometric corners.
 
 ---
 
@@ -617,13 +889,13 @@ contact_pair.gap_values
 The signed gap uses the master-side normal:
 
 ```math
-g_n = (x_s - x_m)\cdot n.
+g_n = (x_s-x_m)\cdot n.
 ```
 
 The orientation can be reversed with
 
 ```julia
-normal_sign = -1.0
+normal_sign=-1.0
 ```
 
 when required by the orientation of the master physical group.
@@ -631,10 +903,11 @@ when required by the orientation of the master physical group.
 For example:
 
 ```julia
-contact_pair = contact(
+C = contact(
     U;
     master="master",
     slave="slave",
+    displacement=u,
     normal_sign=-1.0
 )
 ```
@@ -652,14 +925,14 @@ slave == master
 self-contact mode is enabled automatically.
 
 Local master elements connected to the slave point are excluded from the
-closest-point search to prevent the node from projecting onto its own immediate
+closest-point search to prevent projection onto the point's own immediate
 topological neighborhood.
 
 The corresponding options are:
 
 ```julia
-self_contact = true
-self_exclusion_layers = 1
+self_contact=true
+self_exclusion_layers=1
 ```
 
 Additional node-connected master-element layers can be excluded by increasing
@@ -667,61 +940,31 @@ Additional node-connected master-element layers can be excluded by increasing
 
 ---
 
-# Contact quantities and post-processing
-
-`Contact` stores only primitive geometric and algebraic contact information.
-
-Derived quantities should be constructed explicitly from the contact method.
-
-For penalty contact, for example:
-
-```julia
-p = -contact_pair.C * contact_pair.g
-```
-
-For multiplier contact, the multiplier field itself is an independent unknown
-of the mixed problem.
-
-The contact normal and tangent fields are available as:
-
-```julia
-contact_pair.n
-contact_pair.t1
-contact_pair.t2
-```
-
-and the scalar normal gap field as:
-
-```julia
-contact_pair.gap
-```
-
-Ordinary LowLevelFEM post-processing functions can therefore be used after the
-desired contact quantity has been mapped to a standard finite-element field.
-
----
-
 # Design principle
 
-The `Contact` interface deliberately separates three layers:
+The contact API separates four layers:
 
 ```text
-geometry / kinematics
+geometry and search
         ↓
-G, g, n, t1, t2, active
+Contact
+        ↓
+weak-form contact kinematics
+        ↓
+ContactGap(C)
         ↓
 contact formulation
         ↓
-penalty / Lagrange / augmented / friction law
+penalty / multiplier / augmented / friction law
         ↓
-derived results
+post-processing
 ```
 
-This keeps the geometric contact search independent of the numerical contact
-method.
+This keeps closest-point geometry independent of the numerical contact law.
 
-The same contact kinematics can therefore be reused by several formulations
-without changing the closest-point algorithm or the finite-element model.
+The same `ContactGap` operator can therefore be reused in penalty,
+Lagrange-multiplier, augmented and frictional formulations without changing the
+underlying contact search.
 
 ---
 
@@ -730,7 +973,8 @@ without changing the closest-point algorithm or the finite-element model.
 ```@docs
 Contact
 ContactSet
-ContactVector
+ContactGap
+ContactStiffness
 contact
 updateContact!
 ```
