@@ -261,7 +261,7 @@ function Base.getindex(D::_ContactStiffnessMatrix, i::Int, j::Int)
 end
 
 """
-    ContactStiffness(C::Contact, cn; ct=0.0)
+    ContactStiffness(C::Contact; cn, ct=0.0)
 
 Return the local contact constitutive matrix used between two full
 `ContactGap(C; components=:all)` operators.
@@ -281,7 +281,7 @@ and in 3D
 `AbstractMatrix`, so it can be inserted directly into the standard LLFEM
 matrix-chain syntax without exposing a Julia matrix literal in user code.
 """
-function ContactStiffness(c::Contact, cn; ct=0.0)
+function ContactStiffness(c::Contact; cn, ct=0.0)
     return _ContactStiffnessMatrix(c.U.pdim, cn, ct)
 end
 

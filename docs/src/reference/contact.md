@@ -100,23 +100,23 @@ x = X + u.
 
 Useful public fields include:
 
-| Field | Meaning |
-| --- | --- |
-| `master` | master physical group name |
-| `slave` | slave physical group name |
-| `U` | displacement `Problem` |
-| `displacement` | displacement stored in the current contact state |
-| `step` | current displacement step |
-| `slave_nodes` | slave node tags |
-| `master_element_tags` | nodal closest-point master element tags |
-| `master_local_coordinates` | nodal master local coordinates |
-| `master_points` | nodal projected master points |
-| `gap` | nodal signed normal gap as a `ScalarField` |
-| `gap_values` | nodal signed normal gap values |
-| `n` | nodal contact normal as a `VectorField` |
-| `t1` | first nodal tangent direction |
-| `t2` | second nodal tangent direction in 3D |
-| `active` | nodal active-contact mask |
+| Field                      | Meaning                                          |
+| -------------------------- | ------------------------------------------------ |
+| `master`                   | master physical group name                       |
+| `slave`                    | slave physical group name                        |
+| `U`                        | displacement `Problem`                           |
+| `displacement`             | displacement stored in the current contact state |
+| `step`                     | current displacement step                        |
+| `slave_nodes`              | slave node tags                                  |
+| `master_element_tags`      | nodal closest-point master element tags          |
+| `master_local_coordinates` | nodal master local coordinates                   |
+| `master_points`            | nodal projected master points                    |
+| `gap`                      | nodal signed normal gap as a `ScalarField`       |
+| `gap_values`               | nodal signed normal gap values                   |
+| `n`                        | nodal contact normal as a `VectorField`          |
+| `t1`                       | first nodal tangent direction                    |
+| `t2`                       | second nodal tangent direction in 3D             |
+| `active`                   | nodal active-contact mask                        |
 
 The nodal fields above are refreshed by the full
 
@@ -235,10 +235,10 @@ G = ContactGap(C; components=:all)
 
 with local component ordering
 
-| Dimension | Ordering |
-| ---: | --- |
-| 2D | `(normal, tangent)` |
-| 3D | `(normal, tangent1, tangent2)` |
+| Dimension | Ordering                       |
+| ---------:| ------------------------------ |
+| 2D        | `(normal, tangent)`            |
+| 3D        | `(normal, tangent1, tangent2)` |
 
 The operator can be used directly in a matrix chain:
 
@@ -250,7 +250,7 @@ or
 
 ```julia
 G  = ContactGap(C; components=:all)
-Dc = ContactStiffness(C, cn; ct=ct)
+Dc = ContactStiffness(C; cn=cn, ct=ct)
 
 Kc = ∫(G ⋅ Dc ⋅ G)
 ```
@@ -352,7 +352,7 @@ for a frozen current contact geometry.
 requiring an explicit Julia matrix literal.
 
 ```julia
-Dc = ContactStiffness(C, cn; ct=ct)
+Dc = ContactStiffness(C; cn=cn, ct=ct)
 ```
 
 In 2D it represents
@@ -378,7 +378,7 @@ It is used with the full contact operator:
 
 ```julia
 G = ContactGap(C; components=:all)
-Kc = ∫(G ⋅ ContactStiffness(C, cn; ct=ct) ⋅ G)
+Kc = ∫(G ⋅ ContactStiffness(C; cn=cn, ct=ct) ⋅ G)
 ```
 
 Setting
@@ -815,12 +815,12 @@ The master-side closest-point search uses an AABB tree.
 
 The main search options are:
 
-| Keyword | Default | Meaning |
-| --- | ---: | --- |
-| `aabb_padding` | `0.05` | relative expansion of master-element AABBs |
-| `leaf_size` | `2` | maximum number of elements in an AABB leaf |
-| `projection_tol` | `1e-10` | closest-point iteration tolerance |
-| `projection_maxiter` | `40` | maximum projected Gauss-Newton iterations |
+| Keyword              | Default | Meaning                                    |
+| -------------------- | -------:| ------------------------------------------ |
+| `aabb_padding`       | `0.05`  | relative expansion of master-element AABBs |
+| `leaf_size`          | `2`     | maximum number of elements in an AABB leaf |
+| `projection_tol`     | `1e-10` | closest-point iteration tolerance          |
+| `projection_maxiter` | `40`    | maximum projected Gauss-Newton iterations  |
 
 Basis information is cached for each master element type. Standard Lagrange
 basis functions are represented locally by cached polynomial evaluators, which
@@ -854,10 +854,10 @@ The contact search can stabilize projections near shared topological features:
 
 The relevant options are:
 
-| Keyword | Default | Meaning |
-| --- | ---: | --- |
-| `topology_tol` | `1e-3` | reference-space distance used to detect a shared edge or vertex |
-| `topology_angle` | `45.0` | maximum incident-normal angle for treating the feature as smooth |
+| Keyword          | Default | Meaning                                                          |
+| ---------------- | -------:| ---------------------------------------------------------------- |
+| `topology_tol`   | `1e-3`  | reference-space distance used to detect a shared edge or vertex  |
+| `topology_angle` | `45.0`  | maximum incident-normal angle for treating the feature as smooth |
 
 For example:
 
