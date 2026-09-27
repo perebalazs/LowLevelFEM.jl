@@ -66,6 +66,7 @@ Citation metadata is provided in `CITATION.cff`.
 - Weak-form assembly supports shared-memory multithreading and memory-efficient direct CSC assembly. The implementation is optimized for fast prototyping and medium-scale research problems rather than extreme-scale distributed-memory simulations. Bilinear forms use memory-efficient direct CSC assembly by default, while the triplet-based IJV method remains available as an option.
 - Mixed-order formulations: algebraic p/(p−1) field reduction for Taylor–Hood-type and other mixed formulations, without changing the underlying Gmsh mesh.
 - Multi-point constraints, including remote-point and periodic coupling.
+- **Contact mechanics:** frictionless slave–master contact with closest-point detection in the current configuration, `ContactGap` weak-form operator, and penalty or Lagrange-multiplier enforcement; supports 2D/3D formulations, Gauss-point contact integration, reduced-order multiplier spaces, and contact gap/pressure post-processing.
 
 ## Installation
 
@@ -194,7 +195,7 @@ and the online [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stabl
 
 ## Planned features
 
-* Contact problems (penalty, Lagrange multiplier)
+* Spectral Element Method
 
 Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome.
 In case of any issue, please send a [bug report](https://github.com/perebalazs/LowLevelFEM.jl/issues).
