@@ -2667,6 +2667,63 @@ end
 """
     *(A::SystemMatrix, B::SystemMatrix)
 
+Compose two system matrices.
+
+A `Problem` in `model` or `test_model` denotes a finite-element field
+space. `nothing` denotes an anonymous algebraic space, for example the
+reduced contact space.
+
+If
+
+    A : X -> Y
+    B : Z -> X
+
+then
+
+    A * B : Z -> Y
+
+The operation is not defined for assembled multifield block matrices.
+"""
+function *(A::SystemMatrix, B::SystemMatrix)
+
+    # Assembled multifield systems are handled separately.
+    if A.problems !== nothing || B.problems !== nothing
+        error(
+            "*(SystemMatrix, SystemMatrix): multiplication of assembled " *
+            "multifield block systems is not supported."
+        )
+    end
+
+    size(A.A, 2) == size(B.A, 1) ||
+        error(
+            "*(SystemMatrix, SystemMatrix): incompatible matrix dimensions " *
+            "$(size(A.A)) and $(size(B.A))."
+        )
+
+    # Intermediate spaces must agree.
+    #
+    # `nothing === nothing` is intentional: it denotes an anonymous
+    # algebraic space, such as the contact space.
+    A.model === B.test_model ||
+        error(
+            "*(SystemMatrix, SystemMatrix): incompatible intermediate spaces. " *
+            "The trial space of the left operand must equal the test space " *
+            "of the right operand."
+        )
+
+    return SystemMatrix(
+        A.A * B.A,
+        B.model,
+        A.test_model,
+        nothing,
+        nothing
+    )
+end
+
+#=
+"""
+    *(A::SystemMatrix, B::SystemMatrix)
+
 Matrix product of two field-level system matrices.
 
 The intermediate trial/test spaces must be identical:
@@ -2731,6 +2788,7 @@ function *(A::SystemMatrix, B::SystemMatrix)
         A.test_model
     )
 end
+=#
 
 #=
 """
@@ -2828,7 +2886,18 @@ Return the size of the system matrix.
 Equivalent to `size(K.A)`.
 """
 size(K::SystemMatrix) = size(K.A)
+size(K::SystemMatrix, n::Int64) = size(K.A, n)
 
+import LinearAlgebra: norm
+
+"""
+    norm(A::SystemMatrix)
+
+Return the norm of a SystemMatrix.
+
+Equivalent to norm(A.A).
+"""
+norm(A::SystemMatrix) = norm(A.A)
 
 """
     axes(K::SystemMatrix)

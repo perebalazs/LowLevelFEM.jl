@@ -15,4 +15,5 @@ Tutorials provide scenario-driven workflows for common LowLevelFEM tasks.
 - [Gauss's Divergence Theorem](gauss-theorem.md) – Verifying the divergence theorem using surface and volume integration on a solid torus.
 - [Stokes' Theorem](stokes-theorem.md) – Comparing circulation and curl flux using line and surface integration on a spherical octant.
 - [Space–Time FEM for Elastic Wave Propagation](space-time-FEM.md) – Solving a one-dimensional elastic impact problem by treating time as an additional finite-element coordinate.
+- [Contact Mechanics](contact-mechanics.md) – Frictionless contact analysis using penalty and Lagrange-multiplier formulations in two and three dimensions.
 - [Legacy Example Gallery](legacy-examples.md) – Collection of additional examples covering a wide range of finite element applications.

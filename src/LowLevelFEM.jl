@@ -24,6 +24,7 @@ include("nabla.jl")
 include("poisson.jl")
 include("multifield.jl")
 include("constraints.jl")
+include("contact.jl")
 #include("fieldtools.jl")
 #using .FieldTools
 include("extra.jl")

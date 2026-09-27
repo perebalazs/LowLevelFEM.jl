@@ -10,6 +10,7 @@ The API reference is grouped by workflow area.
 - [Nonlinear](nonlinear.md)
 - [Heat](heat.md)
 - [Poisson](poisson.md)
+- [Contact](contact.md)
 - [Postprocessing](postprocessing.md)
 - [Extra](extra.md)
 
