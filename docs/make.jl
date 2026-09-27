@@ -27,6 +27,7 @@ const DOC_PAGES = [
 	"Gauss's Divergence Theorem" => "tutorials/gauss-theorem.md",
         "Stokes' Theorem" => "tutorials/stokes-theorem.md",
         "Space–Time FEM for Elastic Wave Propagation" => "tutorials/space-time-FEM.md",
+	"Contact Mechanics" => "tutorials/contact-mechanics.md",
         "Legacy Example Gallery" => "tutorials/legacy-examples.md",
     ],
     "Manual" => [
