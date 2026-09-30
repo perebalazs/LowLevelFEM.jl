@@ -1202,10 +1202,7 @@ end
     reconstruct_multifield_solution(Xfree, prepared)
 
 Reconstruct all physical fields from the reduced multifield solution.
-
-For a one-field block system, return the field directly for backward
-compatibility. For two or more fields, return a tuple ordered exactly as
-`prepared.problems`.
+The return value is a tuple ordered exactly as `prepared.problems`.
 """
 function reconstruct_multifield_solution(
     Xfree,
@@ -1270,9 +1267,7 @@ function reconstruct_multifield_solution(
         end
     end
 
-    return length(results) == 1 ?
-        results[1] :
-        tuple(results...)
+    return tuple(results...)
 end
 
 function _resolve_solver(
