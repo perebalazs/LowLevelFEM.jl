@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.0"
+julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "5c6fdd4a8faadb3a2540cbd8a13bd040668a938a"
+project_hash = "28af0e9024c6873e1c47a3155052f374a8a74000"
 
 [[deps.ANSIColoredPrinters]]
 git-tree-sha1 = "574baf8110975760d391c710b6341da1afa48d8c"
@@ -434,7 +434,7 @@ version = "1.9.1+0"
 [[deps.LibSSH2_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl", "OpenSSL_jll", "Zlib_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.11.103+0"
+version = "1.11.104+0"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -495,7 +495,7 @@ version = "1.11.0"
 deps = ["Arpack", "IterativeSolvers", "JLD2", "LinearAlgebra", "Polyester", "PrecompileTools", "SparseArrays", "StaticArrays", "gmsh_jll"]
 path = "/home/perebal/Dokumentumok/GitHub/LowLevelFEM.jl/docs/.."
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
-version = "1.13.33"
+version = "1.13.34"
 
     [deps.LowLevelFEM.extensions]
     LowLevelFEMTensorsExt = ["Tensors"]

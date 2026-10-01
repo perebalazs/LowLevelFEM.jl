@@ -73,8 +73,22 @@ solver basis before the linear system is solved.
 `Global` accepts scalar, vector and tensor fields as well as multifield
 `SystemVector`s. It can also be combined with local load terms, for example
 
+## Example
+
 ```julia
 f = f_local + Global(f_gravity)
+```
+
+```julia
+e1 = VectorField(U, "right", [0.0, 1.0, 0.0])
+cs = CoordinateSystem(e1)
+
+u = solveField(
+    K,
+    Global(f);
+    support=support,
+    coordSys=[cs]
+)
 ```
 """
 Global(f::_SolveFieldType) = GlobalField(f)
