@@ -34,7 +34,7 @@ SparseArrays = "1.10.0, 1.11.0, 1.12.0"
 StaticArrays = "1.9.14"
 Tensors = "1"
 gmsh_jll = "4.13, 4.14, 4.15"
-julia = "1"
+julia = "1.10"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
