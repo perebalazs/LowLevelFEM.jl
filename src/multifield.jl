@@ -2209,7 +2209,7 @@ function build_csc_pattern(
             end
 
             resize!(rows, write_pos)
-            sizehint!(rows, write_pos; shrink=true)
+            sizehint!(rows, write_pos)
         end
 
         total_node_nonzeros += length(rows)
