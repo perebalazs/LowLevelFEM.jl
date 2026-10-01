@@ -11,6 +11,4 @@ using Test
     include("test_cube.jl")
     include("test_integration.jl")
     include("test_dsl.jl")
-    include("test_solvefield.jl")
-    include("test_solvefield_multifield.jl")
 end

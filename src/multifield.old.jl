@@ -4628,6 +4628,983 @@ end
 
 
 
+"""
+    solveField(K::SystemMatrix, 
+               F::SystemVector; 
+               support::Vector{BoundaryCondition}=BoundaryCondition[],
+               mpc::Vector{MPC}=MPC[])
+
+single field version:
+
+    solveField(K::SystemMatrix, 
+               f::Union{ScalarField,VectorField,TensorField}; 
+               support::Vector{BoundaryCondition}=BoundaryCondition[],
+               mpc::Vector{MPC}=MPC[],
+               iterative=false, 
+               reltol::Real = sqrt(eps()), 
+               maxiter::Int = K.model.non * K.model.dim, 
+               preconditioner = Identity(), 
+               ordering=true)
+    
+Solve the linear system
+
+    K * x = F
+
+for a multifield finite element problem.
+
+Dirichlet boundary conditions are imposed through
+`BoundaryCondition` objects.
+
+# Arguments
+
+`K`
+
+Global system matrix (`SystemMatrix`).
+
+`F`
+
+Global RHS vector (`SystemVector` or `ScalarField` or `VectorField`)
+
+# Keyword arguments
+
+- `support`:
+  Essential boundary conditions applied to the solution fields.
+
+- `mpc`:
+  Multi-point constraints applied before solving the system. Each MPC may
+  constrain selected components of a field and may represent either
+  single-master coupling or a periodic node pairing.
+
+  In multifield systems, each MPC must specify its associated field.
+
+- `iterative`:
+  If `true`, use an iterative linear solver where supported.
+
+- `reltol`:
+  Relative tolerance of the iterative solver.
+
+- `maxiter`:
+  Maximum number of iterative solver iterations.
+
+- `preconditioner`:
+  Preconditioner used by the iterative solver.
+
+- `ordering`:
+  Enable ordering where supported by the solver path.
+
+# Returns
+
+Tuple of fields corresponding to the Problems stored in `K`.
+
+# Examples
+
+Single-field problem with an MPC:
+
+```julia
+u = solveField(
+    K,
+    f;
+    support=[bc],
+    mpc=[mpc]
+)
+```
+
+Multifield problem:
+
+```julia
+u, φ = solveField(
+    K,
+    F;
+    support=[bc_u, bc_φ],
+    mpc=[mpc_u, mpc_φ]
+)
+```
+
+Periodic coupling uses the same interface:
+
+```julia
+u = solveField(
+    K,
+    f;
+    support=[bc],
+    mpc=[periodic]
+)
+```
+
+"""
+function solveField(
+    K::SystemMatrix,
+    F::SystemVector;
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[]
+    )
+
+    # ----------------------------------------------------------
+    # 1) Consistency checks
+    # ----------------------------------------------------------
+
+    K.problems === nothing &&
+        error("solveField: SystemMatrix is not a block system.")
+
+    F.problems === nothing &&
+        error("solveField: SystemVector is not a block vector.")
+
+    K.problems == F.problems ||
+        error(
+            "solveField: Problem ordering mismatch between K and F."
+        )
+
+    problems = K.problems
+    offsets = K.offsets
+
+    A = K.A
+    b = F.a
+
+    ndof, nsteps = size(b)
+
+    # ----------------------------------------------------------
+    # 2) Boundary-condition data in the original full space
+    # ----------------------------------------------------------
+
+    free, fixed, xDmat =
+        multifield_bc_data(
+            K,
+            support;
+            nsteps=1
+        )
+
+    xD = @view xDmat[:, 1]
+
+    # ==========================================================
+    # Existing path -- no MPC
+    #
+    # Keep this path unchanged to preserve existing behaviour.
+    # ==========================================================
+
+    if isempty(mpc)
+
+        # ------------------------------------------------------
+        # Standard full-order solution
+        # ------------------------------------------------------
+
+        if !any(P.reducedOrder for P in problems)
+
+            x = zeros(Float64, ndof, nsteps)
+
+            A_ff = A[free, free]
+
+            f_kin =
+                A[free, fixed] * xD[fixed]
+
+            for i in 1:nsteps
+
+                x[free, i] =
+                    A_ff \
+                    (b[free, i] - f_kin)
+            end
+
+            if !isempty(fixed)
+                x[fixed, :] .= xD[fixed]
+            end
+
+            return _reconstruct_fields(
+                x,
+                problems,
+                offsets
+            )
+        end
+
+        # ------------------------------------------------------
+        # Existing reduced-order path
+        # ------------------------------------------------------
+
+        Tblocks =
+            Vector{SparseMatrixCSC{Float64,Int}}(
+                undef,
+                length(problems)
+            )
+
+        Rblocks =
+            Vector{SparseMatrixCSC{Float64,Int}}(
+                undef,
+                length(problems)
+            )
+
+        for (i, P) in enumerate(problems)
+
+            if P.reducedOrder
+
+                Tblocks[i],
+                Rblocks[i] =
+                    reductionMatrices(P)
+
+            else
+
+                Tp, Rp =
+                    active_identity(P)
+
+                Tblocks[i] = Tp
+                Rblocks[i] = Rp
+            end
+        end
+
+        T = blockdiag(Tblocks...)
+        Rred = blockdiag(Rblocks...)
+
+        free_r, fixed_r, xD_r =
+            reduced_bc_data(
+                Rred,
+                fixed,
+                xD
+            )
+
+        AT = A * T
+        Kr = T' * AT
+
+        nr = size(T, 2)
+
+        xr =
+            zeros(
+                Float64,
+                nr,
+                nsteps
+            )
+
+        if !isempty(fixed_r)
+            xr[fixed_r, :] .=
+                xD_r[fixed_r]
+        end
+
+        Kr_ff =
+            Kr[free_r, free_r]
+
+        for i in 1:nsteps
+
+            fr =
+                T' * b[:, i]
+
+            if !isempty(fixed_r)
+
+                fr .-=
+                    Kr[:, fixed_r] *
+                    xD_r[fixed_r]
+            end
+
+            xr[free_r, i] =
+                Kr_ff \ fr[free_r]
+        end
+
+        x = T * xr
+
+        return _reconstruct_fields(
+            x,
+            problems,
+            offsets
+        )
+    end
+
+    # ==========================================================
+    # MPC path
+    # ==========================================================
+
+    # Every MPC in a multifield system must identify its field.
+    for c in mpc
+
+        c.problem === nothing &&
+            error(
+                "solveField: in a multifield system every MPC " *
+                "must have an explicit field."
+            )
+
+        any(P -> P === c.problem, problems) ||
+            error(
+                "solveField: MPC refers to a field that is not present " *
+                "in the SystemMatrix."
+            )
+    end
+
+    # ----------------------------------------------------------
+    # 3) Move slave BCs to their final master DOFs
+    # ----------------------------------------------------------
+
+    fixed_mpc, xD_mpc =
+        _multifield_mpc_bc_data(
+            K,
+            mpc,
+            fixed,
+            xD
+        )
+
+    # ----------------------------------------------------------
+    # 4) Build field-level order-reduction + MPC transforms
+    # ----------------------------------------------------------
+
+    Tblocks =
+        SparseMatrixCSC{Float64,Int}[]
+
+    Rblocks =
+        SparseMatrixCSC{Float64,Int}[]
+
+    prunable = Int[]
+    master_full_global = Int[]
+
+    final_offset = 0
+
+    for (i, P) in enumerate(problems)
+
+        local_mpcs =
+            [
+                c for c in mpc
+                if c.problem === P
+            ]
+
+        Tp, Rp =
+            _base_reduction(
+                P,
+                local_mpcs
+            )
+
+        Tp, Rp =
+            _apply_mpc_to_reduction(
+                Tp,
+                Rp,
+                P,
+                local_mpcs
+            )
+
+        push!(Tblocks, Tp)
+        push!(Rblocks, Rp)
+
+        # Only fields participating in MPCs may contain the intentional
+        # auxiliary zero DOFs that are removed below.
+        if !isempty(local_mpcs)
+
+            append!(
+                prunable,
+                final_offset .+
+                collect(1:size(Tp, 2))
+            )
+
+            local_master =
+                _mpc_master_dofs(
+                    P,
+                    local_mpcs
+                )
+
+            append!(
+                master_full_global,
+                offsets[i] .+ local_master
+            )
+        end
+
+        final_offset += size(Tp, 2)
+    end
+
+    T = blockdiag(Tblocks...)
+    Rred = blockdiag(Rblocks...)
+
+    # ----------------------------------------------------------
+    # 5) Dirichlet data in the final reduced/MPC space
+    # ----------------------------------------------------------
+
+    free_r, fixed_r, xD_r =
+        reduced_bc_data(
+            Rred,
+            fixed_mpc,
+            xD_mpc
+        )
+
+    # ----------------------------------------------------------
+    # 6) Galerkin projection
+    # ----------------------------------------------------------
+
+    AT = A * T
+    Kr = T' * AT
+
+    Br = T' * b
+
+    nr = size(T, 2)
+
+    # ----------------------------------------------------------
+    # 7) Protect MPC master DOFs from automatic inactive removal
+    # ----------------------------------------------------------
+
+    protected = Int[]
+
+    if !isempty(master_full_global)
+
+        RR =
+            Rred[:, master_full_global]
+
+        I, _, V = findnz(RR)
+
+        for k in eachindex(I)
+            iszero(V[k]) && continue
+            push!(protected, I[k])
+        end
+
+        sort!(unique!(protected))
+    end
+
+    # ----------------------------------------------------------
+    # 8) Remove intentional algebraically inactive auxiliary DOFs
+    # ----------------------------------------------------------
+
+    free_r =
+        _remove_inactive_mpc_dofs(
+            Kr,
+            Br,
+            free_r,
+            fixed_r,
+            protected,
+            prunable
+        )
+
+    # ----------------------------------------------------------
+    # 9) Solve
+    # ----------------------------------------------------------
+
+    xr =
+        zeros(
+            Float64,
+            nr,
+            nsteps
+        )
+
+    if !isempty(fixed_r)
+
+        xr[fixed_r, :] .=
+            xD_r[fixed_r]
+    end
+
+    Kr_ff =
+        Kr[free_r, free_r]
+
+    for i in 1:nsteps
+
+        fr =
+            copy(@view Br[:, i])
+
+        if !isempty(fixed_r)
+
+            fr .-=
+                Kr[:, fixed_r] *
+                xD_r[fixed_r]
+        end
+
+        xr[free_r, i] =
+            Kr_ff \ fr[free_r]
+    end
+
+    # ----------------------------------------------------------
+    # 10) Prolongate to the original full multifield space
+    # ----------------------------------------------------------
+
+    x = T * xr
+
+    return _reconstruct_fields(
+        x,
+        problems,
+        offsets
+    )
+end
+
+function solveField2(
+    K::SystemMatrix,
+    F::SystemVector;
+    support::Vector{BoundaryCondition}=BoundaryCondition[]
+    )
+
+    # ----------------------------------------------------------
+    # 1) Consistency checks
+    # ----------------------------------------------------------
+
+    K.problems === nothing &&
+        error("solveField: SystemMatrix is not a block system.")
+
+    F.problems === nothing &&
+        error("solveField: SystemVector is not a block vector.")
+
+    K.problems == F.problems ||
+        error("solveField: Problem ordering mismatch between K and F.")
+
+    problems = K.problems
+    offsets = K.offsets
+
+    A = K.A
+    b = F.a
+
+    ndof, nsteps = size(b)
+
+    # ----------------------------------------------------------
+    # 2) Collect global constrained DOFs
+    # ----------------------------------------------------------
+
+    #free = setdiff(1:ndof, fixed)
+    free, fixed, xDmat =
+    multifield_bc_data(K, support; nsteps=1)
+
+    # ----------------------------------------------------------
+    # 3) Prescribed values in the full space
+    # ----------------------------------------------------------
+
+    #xD = zeros(Float64, ndof)
+    xD = @view xDmat[:, 1]
+
+    #for bc in support
+    #    P = bc.problem
+
+    #    idx = findfirst(q -> q === P, problems)
+    #    offset = offsets[idx]
+
+    #    x_local = applyBoundaryConditions(P, [bc])
+    #    local_dofs = constrainedDoFs(P, [bc])
+
+    #    xD[offset .+ local_dofs] .= x_local.a[local_dofs, 1]
+    #end
+
+    # ----------------------------------------------------------
+    # 4) Standard full-order solution
+    # ----------------------------------------------------------
+
+    if !any(P.reducedOrder for P in problems)
+
+        x = zeros(Float64, ndof, nsteps)
+
+        A_ff = A[free, free]
+        f_kin = A[free, fixed] * xD[fixed]
+
+        for i in 1:nsteps
+            x[free, i] =
+                A_ff \ (b[free, i] - f_kin)
+        end
+
+        if !isempty(fixed)
+            x[fixed, :] .= xD[fixed]
+        end
+
+        return _reconstruct_fields(x, problems, offsets)
+    end
+
+    # ----------------------------------------------------------
+    # 5) Build global reduction and restriction matrices
+    # ----------------------------------------------------------
+
+    Tblocks = Vector{SparseMatrixCSC{Float64,Int}}(
+        undef,
+        length(problems)
+    )
+
+    Rblocks = Vector{SparseMatrixCSC{Float64,Int}}(
+        undef,
+        length(problems)
+    )
+
+    for (i, P) in enumerate(problems)
+
+        if P.reducedOrder
+            Tblocks[i], Rblocks[i] = reductionMatrices(P)
+        else
+            #n = ndofs(P)
+
+            #I = spdiagm(0 => ones(Float64, n))
+
+            #Tblocks[i] = I
+            #Rblocks[i] = I
+            Tp, Rp = active_identity(P)
+
+            Tblocks[i] = Tp
+            Rblocks[i] = Rp
+        end
+    end
+
+    T = blockdiag(Tblocks...)
+    R = blockdiag(Rblocks...)
+
+    # ----------------------------------------------------------
+    # 6) Convert Dirichlet data to the reduced space
+    # ----------------------------------------------------------
+
+    free_r, fixed_r, xD_r =
+        reduced_bc_data(R, fixed, xD)
+
+    # ----------------------------------------------------------
+    # 7) Galerkin projection
+    # ----------------------------------------------------------
+
+    AT = A * T
+    Kr = T' * AT
+
+    nr = size(T, 2)
+    xr = zeros(Float64, nr, nsteps)
+
+    if !isempty(fixed_r)
+        xr[fixed_r, :] .= xD_r[fixed_r]
+    end
+
+    Kr_ff = Kr[free_r, free_r]
+
+    # ----------------------------------------------------------
+    # 8) Solve in the reduced space
+    # ----------------------------------------------------------
+
+    for i in 1:nsteps
+
+        fr = T' * b[:, i]
+
+        if !isempty(fixed_r)
+            fr .-= Kr[:, fixed_r] * xD_r[fixed_r]
+        end
+
+        xr[free_r, i] =
+            Kr_ff \ fr[free_r]
+    end
+
+    # ----------------------------------------------------------
+    # 9) Prolongate to the full field representation
+    # ----------------------------------------------------------
+
+    x = T * xr
+
+    return _reconstruct_fields(x, problems, offsets)
+end
+
+#=
+function solveField(
+    K::SystemMatrix,
+    F::SystemVector;
+    support::Vector{BoundaryCondition}=BoundaryCondition[])
+
+    # ----------------------------------------------------------
+    # 1) Consistency checks
+    # ----------------------------------------------------------
+    K.problems === nothing &&
+        error("solveField: SystemMatrix is not a block system.")
+
+    F.problems === nothing &&
+        error("solveField: SystemVector is not a block vector.")
+
+    K.problems == F.problems ||
+        error("solveField: Problem ordering mismatch between K and F.")
+
+    problems = K.problems
+    offsets = K.offsets
+
+    A = K.A
+    b = F.a
+
+    ndof, nsteps = size(b)
+
+    # ----------------------------------------------------------
+    # 2) Collect global constrained DOFs
+    # ----------------------------------------------------------
+    fixed = Int[]
+
+    for bc in support
+
+        P = bc.problem
+        idx = findfirst(q -> q === P, problems)
+
+        idx === nothing &&
+            error("solveField: BC refers to Problem not in system.")
+
+        offset = offsets[idx]
+
+        local_dofs = constrainedDoFs(P, [bc])
+
+        append!(fixed, offset .+ local_dofs)
+    end
+
+    fixed = unique(fixed)
+    sort!(fixed)
+
+    # ----------------------------------------------------------
+    # 3) Define free DOFs
+    # ----------------------------------------------------------
+    all_dofs = collect(1:ndof)
+    free = setdiff(all_dofs, fixed)
+
+    # ----------------------------------------------------------
+    # 4) Reduced system with non-homogeneous BC
+    # ----------------------------------------------------------
+
+    x = zeros(ndof, nsteps)
+    xD = zeros(ndof, 1)
+
+    # fill xD
+    for bc in support
+        P = bc.problem
+        idx = findfirst(q -> q === P, problems)
+        offset = offsets[idx]
+
+        x_local = applyBoundaryConditions(P, [bc])
+        local_dofs = constrainedDoFs(P, [bc])
+
+        xD[offset.+local_dofs, :] .= x_local.a[local_dofs, :]
+    end
+
+    fixed = unique(vcat([offsets[findfirst(q -> q === bc.problem, problems)] .+
+                         constrainedDoFs(bc.problem, [bc])
+                         for bc in support]...))
+
+    free = setdiff(1:ndof, fixed)
+
+    A_ff = A[free, free]
+    for i in 1:nsteps
+        b_f = b[free] - A[free, fixed] * xD[fixed]
+
+        x[free, i] = A_ff \ b_f
+    end
+    x[fixed] = xD[fixed]
+
+    # fixed DOFs remain zero (homogeneous)
+
+    # ----------------------------------------------------------
+    # 5) Reconstruct fields
+    # ----------------------------------------------------------
+    results = Vector{Any}(undef, length(problems))
+
+    for (i, P) in enumerate(problems)
+
+        offset = offsets[i]
+        nloc = ndofs(P)
+
+        xloc = x[offset+1:offset+nloc]
+
+        if P.pdim == 1
+            results[i] = ScalarField([], reshape(xloc, :, nsteps), [0], [], 1, :scalar, P)
+
+        elseif P.pdim == 2 || P.pdim == 3
+            type = P.pdim == 2 ? :v2D : :v3D
+            results[i] = VectorField([], reshape(xloc, :, nsteps), [0], [], 1, type, P)
+
+        elseif P.pdim == 9
+            results[i] = TensorField([], reshape(xloc, :, nsteps), [0], [], 1, :tensor, P)
+
+        else
+            error("solveField: unsupported pdim $(P.pdim).")
+        end
+    end
+
+    if length(results) == 1
+        return results[1]
+    else
+        return tuple(results...)
+    end
+end
+=#
+
+function solveField(
+    Ks::SymmetricSystemMatrix,
+    f::Union{ScalarField,VectorField,TensorField};
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    iterative=false,
+    reltol::Real=sqrt(eps()),
+    maxiter::Int=Ks.parent.model.non * Ks.parent.model.dim,
+    preconditioner=Identity(),
+    ordering=true
+    )
+
+    K = Ks.parent
+    problem = K.model
+
+    # ------------------------------------------------------------------
+    # Full-order path
+    # ------------------------------------------------------------------
+
+    if !problem.reducedOrder
+
+        A = Symmetric(K.A, Ks.uplo)
+
+        fixed = constrainedDoFs(problem, support)
+        free = freeDoFs(problem, support)
+
+        u = copy(f)
+        fill!(u.a, 0.0)
+
+        applyBoundaryConditions!(u, support)
+
+        f_kin = A[:, fixed] * u.a[fixed, 1]
+
+        A_ff = Symmetric(K.A[free, free], Ks.uplo)
+        b_f = f.a[free, 1] - f_kin[free]
+
+        if iterative
+            u.a[free] = cg(
+                A_ff,
+                b_f;
+                Pl=preconditioner,
+                reltol=reltol,
+                maxiter=maxiter
+            )
+        else
+            u.a[free] = A_ff \ b_f
+        end
+
+        return u
+    end
+
+    # ------------------------------------------------------------------
+    # Reduced-order path
+    # ------------------------------------------------------------------
+
+    T, R = reductionMatrices(problem)
+
+    fixed = constrainedDoFs(problem, support)
+
+    uD = copy(f)
+    fill!(uD.a, 0.0)
+    applyBoundaryConditions!(uD, support)
+
+    free_r, fixed_r, uD_r =
+        reduced_bc_data(
+            R,
+            fixed,
+            uD.a[:, 1]
+        )
+
+    # Reduced symmetric system
+    Kr = T' * K.A * T
+    Ar = Symmetric(Kr, Ks.uplo)
+
+    fr = T' * f.a[:, 1]
+
+    ur = zeros(Float64, size(T, 2))
+
+    if !isempty(fixed_r)
+        ur[fixed_r] .= uD_r[fixed_r]
+
+        fr .-= Ar[:, fixed_r] * ur[fixed_r]
+    end
+
+    A_ff = Symmetric(Kr[free_r, free_r], Ks.uplo)
+    b_f = fr[free_r]
+
+    if iterative
+        ur[free_r] = cg(
+            A_ff,
+            b_f;
+            Pl=preconditioner,
+            reltol=reltol,
+            maxiter=maxiter
+        )
+    else
+        ur[free_r] = A_ff \ b_f
+    end
+
+    u = copy(f)
+    u.a[:, 1] .= T * ur
+
+    return u
+end
+#=
+function solveField(
+    Ks::SymmetricSystemMatrix,
+    f::Union{ScalarField,VectorField,TensorField};
+    support::Vector{BoundaryCondition}=BoundaryCondition[],
+    iterative=false,
+    reltol::Real=sqrt(eps()),
+    maxiter::Int=Ks.parent.model.non * Ks.parent.model.dim,
+    preconditioner=Identity(),
+    ordering=true
+    )
+    K = Ks.parent
+    A = Symmetric(K.A, Ks.uplo)
+
+    problem = K.model
+    fixed = constrainedDoFs(problem, support)
+    free = freeDoFs(problem, support)
+
+    u = copy(f)
+    fill!(u.a, 0.0)
+    applyBoundaryConditions!(u, support)
+
+    # Fontos: itt is a Symmetric nézetet kell használni.
+    f_kin = A[:, fixed] * u.a[fixed, 1]
+
+    A_ff = Symmetric(K.A[free, free], Ks.uplo)
+    b_f = f.a[free, 1] - f_kin[free]
+
+    if iterative
+        u.a[free] = cg(
+            A_ff,
+            b_f;
+            Pl=preconditioner,
+            reltol=reltol,
+            maxiter=maxiter
+        )
+    else
+        u.a[free] = A_ff \ b_f
+    end
+
+    return u
+end
+=#
+
+"""
+    _reconstruct_fields(x, problems, offsets)
+
+Reconstruct full-space finite element fields from a global solution matrix.
+"""
+function _reconstruct_fields(x, problems, offsets)
+
+    nsteps = size(x, 2)
+
+    results = Vector{Any}(undef, length(problems))
+
+    for (i, P) in enumerate(problems)
+
+        offset = offsets[i]
+        nloc = ndofs(P)
+
+        xloc = @view x[offset+1:offset+nloc, :]
+
+        if P.pdim == 1
+
+            results[i] = ScalarField(
+                [],
+                Matrix(xloc),
+                [0],
+                [],
+                1,
+                :scalar,
+                P
+            )
+
+        elseif P.pdim == 2 || P.pdim == 3
+
+            type = P.pdim == 2 ? :v2D : :v3D
+
+            results[i] = VectorField(
+                [],
+                Matrix(xloc),
+                [0],
+                [],
+                1,
+                type,
+                P
+            )
+
+        elseif P.pdim == 9
+
+            results[i] = TensorField(
+                [],
+                Matrix(xloc),
+                [0],
+                [],
+                1,
+                :tensor,
+                P
+            )
+
+        else
+            error("solveField: unsupported pdim $(P.pdim).")
+        end
+    end
+
+    return length(results) == 1 ? results[1] : tuple(results...)
+end
+
 ###############################################################
 # Weak form DSL layer for LowLevelFEM
 ###############################################################
