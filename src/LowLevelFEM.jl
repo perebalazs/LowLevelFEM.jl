@@ -89,7 +89,7 @@ export probe_field
         _ = 2.0 / sfA
         _ = log(sfA)
         _ = sqrt(sfA)
-        _ = cbrt(sfA)
+        #_ = cbrt(sfA)
 
         _ = vfA + vfB
         _ = vfA - vfB
@@ -117,7 +117,7 @@ export probe_field
         _ = inv(tfA)
         (_, _) = eigen(tfA)
         _ = sqrt(tfA)
-        _ = cbrt(tfA)
+        #_ = cbrt(tfA)
         _ = log(tfA)
         poissonMatrix(prob)
         advectionMatrix(prob)
