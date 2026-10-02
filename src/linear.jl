@@ -3750,7 +3750,10 @@ function solveDisplacement(K::SystemMatrix, f::VectorField;
     f_kin = K.A[:, fixed] * u.a[fixed]
     #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
     if iterative
-        u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free], Pl=preconditioner, reltol=reltol, maxiter=maxiter)
+        error(
+            "The legacy iterative solver in solveDisplacement is no longer supported. " *
+            "Use solveField(...; solver=:cg) instead."
+        )
     elseif ordering == false
         u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
     else
@@ -3823,7 +3826,7 @@ function solveDisplacement(problem::Problem;
                            iterative=false,
                            reltol::Real = sqrt(eps()),
                            maxiter::Int = problem.non * problem.dim,
-                           preconditioner = Identity(),
+                           preconditioner = :auto,
                            ordering=true)
     if problem.type == :dummy
         return nothing
@@ -3842,7 +3845,10 @@ function solveDisplacement(problem::Problem;
         f_kin = K.A[:, fixed] * u.a[fixed]
         #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
         if iterative
-            u.a[free] = cg(K.A[free,free], f.a[free] - f_kin[free], Pl=preconditioner, reltol=reltol, maxiter=maxiter)
+            error(
+                "The legacy iterative solver in solveDisplacement is no longer supported. " *
+                "Use solveField(...; solver=:cg) instead."
+            )
         elseif ordering == false
             u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
         else
@@ -3876,7 +3882,10 @@ function solveDisplacement(problem::Problem;
         dropzeros!(K.A)
         #u.a .= cholesky(Symmetric(K.A)) \ (f.a - f_kin)
         if iterative
-            u.a .= cg(K.A, f.a - f_kin, Pl=preconditioner, reltol=reltol, maxiter=maxiter)
+            error(
+                "The legacy iterative solver in solveDisplacement is no longer supported. " *
+                "Use solveField(...; solver=:cg) instead."
+            )
         elseif ordering == false
             u.a .= lu(K.A, q=nothing) \ (f.a - f_kin)
         else

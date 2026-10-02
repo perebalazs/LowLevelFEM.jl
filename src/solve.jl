@@ -14,7 +14,6 @@
 
 using LinearAlgebra
 using SparseArrays
-using IterativeSolvers
 
 export Global, solveField
 
@@ -251,26 +250,116 @@ end
 # Linear solver backend
 # =============================================================================
 
+const _ITERATIVE_SOLVERS = (:cg, :gmres)
+const _PRECONDITIONERS = (:auto, :none, :ich, :ilu)
+
+function _require_iterative_solver(::Val{solver}) where solver
+    error(
+        "Solver :$solver requires IterativeSolvers.jl.\n" *
+        "Install it with:\n" *
+        "    ] add IterativeSolvers\n" *
+        "and load it with:\n" *
+        "    using IterativeSolvers"
+    )
+end
+
+function _solve_iterative(
+    ::Val{solver},
+    A,
+    b;
+    preconditioner=nothing,
+    solveroptions=(;)
+) where solver
+    error("Iterative solver :$solver is not available.")
+end
+
+function _build_preconditioner(
+    ::Val{pc},
+    A;
+    preconditioneroptions=(;)
+) where pc
+    package =
+        pc === :ich ? "Preconditioners" :
+        pc === :ilu ? "IncompleteLU" :
+        "the corresponding optional package"
+
+    error(
+        "Preconditioner :$pc requires $package.jl.\n" *
+        "Install and load the package before calling solveField."
+    )
+end
+
 """
-    solve_linear_system(A, B; solver=:backslash, preconditioner=nothing,
-                        reltol=sqrt(eps()), maxiter=size(A, 1))
+    solve_linear_system(
+        A, B;
+        solver=:backslash,
+        preconditioner=:auto,
+        solveroptions=(;),
+        preconditioneroptions=(;)
+    )
 
 Solve `A * X = B` for one or multiple right-hand sides stored columnwise.
 
-Supported solver symbols are `:backslash`, `:auto_symmetric`, `:lu`,
-`:lu_no_ordering`, `:cholesky`, `:qr`, `:cg`, and `:gmres`.
+# Solvers
 
-`:auto_symmetric` first attempts a Cholesky factorization. If the symmetric
-matrix is not positive definite, it automatically falls back to sparse LU.
+Supported solver symbols are `:backslash`, `:auto_symmetric`, `:lu`,
+`:lu_no_ordering`, `:cholesky`, `:ldlt`, `:qr`, `:cg`, and `:gmres`.
+
+`:auto_symmetric` first attempts a Cholesky factorization. If the matrix is not
+positive definite, a warning is emitted and the system is solved with sparse
+LU instead. Explicit `solver=:cholesky` does not fall back to LU.
+
+The iterative solvers `:cg` and `:gmres` are provided through the optional
+`IterativeSolvers.jl` extension.
+
+# Preconditioning
+
+With `preconditioner=:auto`, the default iterative combinations are
+
+- `:cg` + `:ich` for matrices wrapped in `Symmetric` or `Hermitian`;
+- `:gmres` + `:ilu`.
+
+`:ich` is provided by the optional `Preconditioners.jl` extension and `:ilu`
+by the optional `IncompleteLU.jl` extension. Use `preconditioner=:none` to
+disable preconditioning explicitly. A preconstructed preconditioner object may
+also be passed directly through `preconditioner`.
+
+`solveroptions` is a `NamedTuple` of native iterative-solver keyword options.
+The keywords `log`, `Pl`, `Pr`, and `initially_zero` are managed internally by
+LowLevelFEM and must not be supplied. `solveroptions` is rejected for direct
+solvers rather than being ignored silently.
+
+`preconditioneroptions` is a `NamedTuple` forwarded to the selected
+preconditioner backend. It is only meaningful when LowLevelFEM constructs the
+preconditioner from a symbolic choice such as `:ich` or `:ilu`; it is rejected
+for `:none`, preconstructed preconditioners, and direct solvers.
+
+For multiple right-hand sides, the preconditioner is constructed once and
+reused for all columns of `B`.
 """
 function solve_linear_system(
     A,
     B;
     solver=:backslash,
-    preconditioner=nothing,
-    reltol=sqrt(eps()),
-    maxiter=size(A, 1)
+    preconditioner=:auto,
+    solveroptions=(;),
+    preconditioneroptions=(;)
 )
+    _check_solveroptions(solveroptions)
+    _check_preconditioneroptions(preconditioneroptions)
+
+    if !(solver in _ITERATIVE_SOLVERS)
+        isempty(solveroptions) ||
+            error("solveroptions are only supported with iterative solvers.")
+
+        isempty(preconditioneroptions) ||
+            error("preconditioneroptions are only supported with iterative solvers.")
+
+        if !(preconditioner isa Symbol && preconditioner in (:auto, :none))
+            error("Preconditioners are only supported with iterative solvers.")
+        end
+    end
+
     if solver === :backslash
         return A \ B
 
@@ -280,7 +369,10 @@ function solve_linear_system(
             return F \ B
         catch err
             if err isa PosDefException
-                @info "Symmetric system is not positive definite; using LU factorization."
+                @warn(
+                    "Cholesky factorization failed because the symmetric system is not " *
+                    "positive definite. Falling back to LU factorization."
+                )
                 F = lu(sparse(A))
                 return F \ B
             end
@@ -301,54 +393,63 @@ function solve_linear_system(
         F = cholesky(A)
         return F \ B
 
+    elseif solver === :ldlt
+        A isa Union{Symmetric,Hermitian} ||
+            error(
+                "solver=:ldlt requires a symmetric system. " *
+                "Use Symmetric(K) to mark the system as symmetric."
+            )
+
+        F = ldlt(A)
+        return F \ B
+
     elseif solver === :qr
         F = qr(A)
         return F \ B
 
-    elseif solver === :cg
-        X = similar(B)
+    elseif solver in _ITERATIVE_SOLVERS
 
-        for j in axes(B, 2)
-            if preconditioner === nothing
-                X[:, j] = cg(
-                    A,
-                    @view(B[:, j]);
-                    reltol=reltol,
-                    maxiter=maxiter
+        _require_iterative_solver(Val(solver))
+
+        pc = _resolve_preconditioner(
+            A,
+            solver,
+            preconditioner
+        )
+
+        if pc === :none
+            isempty(preconditioneroptions) ||
+                error(
+                    "preconditioneroptions cannot be used with preconditioner=:none."
                 )
-            else
-                X[:, j] = cg(
-                    A,
-                    @view(B[:, j]);
-                    Pl=preconditioner,
-                    reltol=reltol,
-                    maxiter=maxiter
+            P = nothing
+
+        elseif pc isa Symbol
+            P = _build_preconditioner(
+                Val(pc),
+                A;
+                preconditioneroptions=preconditioneroptions
+            )
+
+        else
+            isempty(preconditioneroptions) ||
+                error(
+                    "preconditioneroptions cannot be used when a preconstructed " *
+                    "preconditioner object is supplied."
                 )
-            end
+            P = pc
         end
 
-        return X
-
-    elseif solver === :gmres
         X = similar(B)
 
         for j in axes(B, 2)
-            if preconditioner === nothing
-                X[:, j] = gmres(
-                    A,
-                    @view(B[:, j]);
-                    reltol=reltol,
-                    maxiter=maxiter
-                )
-            else
-                X[:, j] = gmres(
-                    A,
-                    @view(B[:, j]);
-                    Pl=preconditioner,
-                    reltol=reltol,
-                    maxiter=maxiter
-                )
-            end
+            X[:, j] = _solve_iterative(
+                Val(solver),
+                A,
+                @view(B[:, j]);
+                preconditioner=P,
+                solveroptions=solveroptions
+            )
         end
 
         return X
@@ -356,6 +457,29 @@ function solve_linear_system(
     else
         error("Unknown linear solver: $solver.")
     end
+end
+
+function _check_solveroptions(options)
+    options isa NamedTuple ||
+        error("solveroptions must be a NamedTuple.")
+
+    reserved = (:log, :Pl, :Pr, :initially_zero)
+
+    for key in reserved
+        key in keys(options) &&
+            error(
+                "Solver option `$key` is managed internally by solveField."
+            )
+    end
+
+    return nothing
+end
+
+function _check_preconditioneroptions(options)
+    options isa NamedTuple ||
+        error("preconditioneroptions must be a NamedTuple.")
+
+    return nothing
 end
 
 """
@@ -1294,7 +1418,7 @@ function _resolve_solver(
     solver,
     iterative,
     ordering
-)
+    )
     if iterative !== nothing
         iterative isa Bool ||
             error("solveField: `iterative` must be `true`, `false`, or omitted.")
@@ -1318,16 +1442,52 @@ function _resolve_solver(
     return solver === :auto ? default_solver(K) : solver
 end
 
+function _resolve_preconditioner(A, solver, preconditioner)
+    if !(solver in _ITERATIVE_SOLVERS)
+        if preconditioner isa Symbol && preconditioner in (:auto, :none)
+            return :none
+        end
+
+        error(
+            "Preconditioners are only supported with iterative solvers."
+        )
+    end
+
+    # A preconstructed preconditioner object is passed through unchanged.
+    preconditioner isa Symbol || return preconditioner
+
+    preconditioner in _PRECONDITIONERS ||
+        error("Unknown preconditioner: $preconditioner.")
+
+    preconditioner !== :auto && return preconditioner
+
+    if solver === :cg
+        A isa Union{Symmetric,Hermitian} ||
+            error(
+                "Automatic preconditioning for :cg requires a symmetric system. " *
+                "Use Symmetric(K), specify a preconditioner explicitly, " *
+                "or use preconditioner=:none."
+            )
+
+        return :ich
+
+    elseif solver === :gmres
+        return :ilu
+    end
+
+    return :none
+end
+
 function _solve_prepared_system(
     K,
     prepared;
     solver=:auto,
     iterative=nothing,
     ordering=nothing,
-    preconditioner=nothing,
-    reltol=sqrt(eps()),
-    maxiter=size(K isa SymmetricSystemMatrix ? K.parent.A : K.A, 1)
-)
+    preconditioner=:auto,
+    solveroptions=(;),
+    preconditioneroptions=(;)
+    )
     solver0 = _resolve_solver(
         K,
         solver,
@@ -1340,8 +1500,8 @@ function _solve_prepared_system(
         prepared.B;
         solver=solver0,
         preconditioner=preconditioner,
-        reltol=reltol,
-        maxiter=maxiter
+        solveroptions=solveroptions,
+        preconditioneroptions=preconditioneroptions
     )
 end
 
@@ -1351,14 +1511,16 @@ end
 # =============================================================================
 
 """
-    solveField(K, rhs;
-               support=BoundaryCondition[],
-               mpc=MPC[],
-               coordSys=NodalCoordinateSystem[],
-               solver=:auto,
-               preconditioner=nothing,
-               reltol=sqrt(eps()),
-               maxiter=...)
+    solveField(
+        K, rhs;
+        support=BoundaryCondition[],
+        mpc=MPC[],
+        coordSys=NodalCoordinateSystem[],
+        solver=:auto,
+        preconditioner=:auto,
+        solveroptions=(;),
+        preconditioneroptions=(;)
+    )
 
 Solve a linear single-field finite-element system.
 
@@ -1404,11 +1566,53 @@ implemented.
 # Linear solvers
 
 `solver` may be `:auto`, `:backslash`, `:lu`, `:lu_no_ordering`,
-`:cholesky`, `:qr`, `:cg`, or `:gmres`.
+`:cholesky`, `:qr`, `:cg`, `:ldlt`, or `:gmres`.
 
-For an ordinary `SystemMatrix`, `:auto` uses Julia's backslash solver. For a
-`SymmetricSystemMatrix`, `:auto` first attempts Cholesky and falls back to LU
-when the matrix is symmetric but not positive definite.
+For an ordinary `SystemMatrix`, `solver=:auto` uses Julia's sparse backslash
+solver. For `Symmetric(K)`, `:auto` attempts a Cholesky factorization first. If
+the constrained system is not positive definite, a warning is emitted and the
+solve falls back to sparse LU. Explicit `solver=:cholesky` never falls back.
+
+The iterative solvers are optional extensions:
+
+- `solver=:cg` is intended for symmetric positive-definite systems. With
+  `preconditioner=:auto`, a symmetric system uses incomplete Cholesky (`:ich`).
+- `solver=:gmres` is suitable for general nonsymmetric systems. With
+  `preconditioner=:auto`, incomplete LU (`:ilu`) is used.
+
+`IterativeSolvers.jl` must be loaded for `:cg` and `:gmres`. The automatic
+`:ich` and `:ilu` preconditioners additionally require `Preconditioners.jl` and
+`IncompleteLU.jl`, respectively.
+
+Use `preconditioner=:none` to disable preconditioning. Alternatively, a
+preconstructed preconditioner object may be supplied directly.
+
+`solveroptions` is a `NamedTuple` containing native options of the selected
+iterative solver, for example
+
+```julia
+solveroptions=(reltol=1e-8, maxiter=5000)
+```
+
+The options `log`, `Pl`, `Pr`, and `initially_zero` are managed internally by
+LowLevelFEM. `preconditioneroptions` similarly contains options used when
+constructing the selected symbolic preconditioner. These option containers are
+only accepted for iterative solvers, so misspelled or irrelevant solver
+configuration is not ignored silently.
+
+A practical starting point is:
+
+| Problem / matrix type | Suggested solver | Suggested preconditioner |
+|:--|:--|:--|
+| General small or medium sparse system | `:backslash` | none |
+| Symmetric positive-definite system | `:cholesky` or `:cg` | `:ich` for CG |
+| Large linear-elasticity system | `:cg` | `:ich` |
+| General nonsymmetric system | `:gmres` | `:ilu` |
+| Symmetric indefinite / saddle-point system | direct solver | none |
+
+These are starting recommendations rather than automatic classifications.
+LowLevelFEM does not inspect the assembled matrix to choose an iterative method
+for the user.
 
 The legacy keywords `iterative` and `ordering` are still accepted for backward
 compatibility. `iterative=true` selects conjugate gradient; `ordering=false`
@@ -1423,9 +1627,9 @@ function solveField(
     solver=:auto,
     iterative=nothing,
     ordering=nothing,
-    preconditioner=nothing,
-    reltol=sqrt(eps()),
-    maxiter=size(K isa SymmetricSystemMatrix ? K.parent.A : K.A, 1)
+    preconditioner=:auto,
+    solveroptions=(;),
+    preconditioneroptions=(;)
 )
     prepared = prepare_singlefield_system(
         K,
@@ -1442,8 +1646,8 @@ function solveField(
         iterative=iterative,
         ordering=ordering,
         preconditioner=preconditioner,
-        reltol=reltol,
-        maxiter=maxiter
+        solveroptions=solveroptions,
+        preconditioneroptions=preconditioneroptions
     )
 
     return reconstruct_singlefield_solution(
@@ -1454,7 +1658,7 @@ end
 
 
 """
-    solveField(K, F::SystemVector; kwargs...)
+    solveField(K, rhs::SystemVector; kwargs...)
 
 Solve a linear multifield finite-element system.
 
@@ -1474,12 +1678,20 @@ with block-diagonal field-wise coordinate transformation `Q`. MPC relations
 are imposed on local solver components, so deliberately different master and
 slave bases naturally produce rotated periodic relations.
 
-`F` may be a `SystemVector`, `Global(F)`, or a symbolic sum containing local
-and global `SystemVector` contributions. Multiple right-hand sides are
+`rhs` may be a `SystemVector`, `Global(rhs)`, or a symbolic sum containing
+local and global `SystemVector` contributions. Multiple right-hand sides are
 supported.
 
-The solver keywords and backward-compatibility behavior are the same as for
-the single-field method.
+The solver interface is the same as for the single-field method. In
+particular, `solveroptions` contains native options of the selected iterative
+solver and `preconditioneroptions` contains options for a symbolic
+preconditioner constructed by LowLevelFEM.
+
+Mixed and Lagrange-multiplier formulations may produce symmetric indefinite
+saddle-point systems. Such systems are not suitable for Cholesky or CG merely
+because the assembled matrix is symmetric; a direct solver is currently the
+recommended default unless an appropriate specialized iterative method and
+preconditioner are selected explicitly.
 """
 function solveField(
     K::Union{SystemMatrix,SymmetricSystemMatrix},
@@ -1494,10 +1706,10 @@ function solveField(
     solver=:auto,
     iterative=nothing,
     ordering=nothing,
-    preconditioner=nothing,
-    reltol=sqrt(eps()),
-    maxiter=size(K isa SymmetricSystemMatrix ? K.parent.A : K.A, 1)
-)
+    preconditioner=:auto,
+    solveroptions=(;),
+    preconditioneroptions=(;)
+    )
     prepared = prepare_multifield_system(
         K,
         rhs,
@@ -1513,8 +1725,8 @@ function solveField(
         iterative=iterative,
         ordering=ordering,
         preconditioner=preconditioner,
-        reltol=reltol,
-        maxiter=maxiter
+        solveroptions=solveroptions,
+        preconditioneroptions=preconditioneroptions
     )
 
     return reconstruct_multifield_solution(
