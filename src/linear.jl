@@ -3730,7 +3730,7 @@ function solveDisplacement(K::SystemMatrix, f::VectorField;
                            iterative=false,
                            reltol::Real = sqrt(eps()),
                            maxiter::Int = K.model.non * K.model.dim,
-                           preconditioner = Identity(),
+                           preconditioner = :auto,
                            ordering=true)
     type = :null
     if f.type == :v3D
