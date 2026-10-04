@@ -8,6 +8,7 @@
         relerr(a, b) = norm(a - b) / max(norm(b), eps(Float64))
 
         @testset "RHS handling and linear solvers" begin
+            using IterativeSolvers, Preconditioners, IncompleteLU
             structured_box_mesh(n=2)
 
             mat = Material("body")
@@ -76,8 +77,7 @@
                 f1;
                 support=support,
                 solver=:cg,
-                reltol=1e-10,
-                maxiter=size(K.A, 1)
+                solveroptions=(reltol=1e-10, maxiter=size(K.A, 1))
             )
 
             u_gmres = solveField(
@@ -85,8 +85,7 @@
                 f1;
                 support=support,
                 solver=:gmres,
-                reltol=1e-10,
-                maxiter=size(K.A, 1)
+                solveroptions=(reltol=1e-10,maxiter=size(K.A, 1))
             )
 
             @test relerr(u_cg.a, u1.a) < 1e-7
@@ -98,8 +97,7 @@
                 f1;
                 support=support,
                 iterative=true,
-                reltol=1e-10,
-                maxiter=size(K.A, 1)
+                solveroptions=(reltol=1e-10,maxiter=size(K.A, 1))
             )
 
             u_legacy_ordering = solveField(
