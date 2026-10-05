@@ -1,0 +1,10 @@
+.docs-logo {
+    text-align: center;
+}
+
+.docs-logo img {
+    width: 180px !important;
+    height: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+}
