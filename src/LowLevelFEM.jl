@@ -1,7 +1,6 @@
 module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
-using IterativeSolvers
 using StaticArrays
 using Arpack
 using JLD2
@@ -42,19 +41,7 @@ export probe_field
         stiffnessMatrix(prob)
         solveDisplacement(prob)
         solveDisplacement(prob, condensed=true)
-        solveDisplacement(prob, iterative=true)
-        solveDisplacement(prob, condensed=true, iterative=true)
-        solveDisplacement(prob, iterative=true, reltol=0)
-        solveDisplacement(prob, iterative=true, maxiter=0)
-        solveDisplacement(prob, iterative=true, maxiter=0, reltol=0)
-        solveDisplacement(prob, condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
         solveDisplacement(prob, condensed=true)
-        solveDisplacement(prob, iterative=true)
-        solveDisplacement(prob, condensed=true, iterative=true)
-        solveDisplacement(prob, iterative=true, reltol=0)
-        solveDisplacement(prob, iterative=true, maxiter=0)
-        solveDisplacement(prob, iterative=true, maxiter=0, reltol=0)
-        solveDisplacement(prob, condensed=true, iterative=true, maxiter=0, reltol=0, preconditioner=nothing, ordering=true)
         q = VectorField([], [;;], [], [], 0, :dummy, prob)
         T = ScalarField([], [;;], [], [], 0, :dummy, prob)
         solveStress(q)

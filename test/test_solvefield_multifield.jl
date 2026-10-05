@@ -131,8 +131,8 @@
             # Stokes/Navier-Stokes block systems are symmetric but indefinite.
             # :auto must therefore fall back from Cholesky to LU.
             vp_sym = @test_logs (
-                :info,
-                "Symmetric system is not positive definite; using LU factorization."
+                :warn,
+                "Cholesky factorization failed because the symmetric system is not positive definite. Falling back to LU factorization."
             ) solveField(
                 Symmetric(K),
                 F_x;
