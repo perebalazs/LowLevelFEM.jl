@@ -17,10 +17,10 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 gmsh_jll = "630162c2-fc9b-58b3-9910-8442a8a132e6"
 
 [weakdeps]
+Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
 IncompleteLU = "40713840-3770-5561-ab4c-a76e7d0d7895"
 IterativeSolvers = "42fd0dbc-a981-5370-80f2-aaf504508153"
 Preconditioners = "af69fa37-3177-5a40-98ee-561f696e4fcd"
-Tensors = "48a634ad-e948-5137-8d70-aa71f2a747f4"
 
 [extensions]
 LowLevelFEMIncompleteLUExt = "IncompleteLU"
@@ -30,13 +30,13 @@ LowLevelFEMTensorsExt = "Tensors"
 
 [compat]
 Arpack = "0.5"
-IterativeSolvers = "0.9.4"
-Preconditioners = "0.6"
 IncompleteLU = "0.2"
+IterativeSolvers = "0.9.4"
 JLD2 = "0.6"
 LinearAlgebra = "1.10.0, 1.11.0, 1.12.0"
 Polyester = "0.7.18"
 PrecompileTools = "1.2.1"
+Preconditioners = "0.6"
 SparseArrays = "1.10.0, 1.11.0, 1.12.0"
 StaticArrays = "1.9.14"
 Tensors = "1"
@@ -44,7 +44,16 @@ gmsh_jll = "4.13, 4.14, 4.15"
 julia = "1.10"
 
 [extras]
+IncompleteLU = "40713840-3770-5561-ab4c-a76e7d0d7895"
+IterativeSolvers = "42fd0dbc-a981-5370-80f2-aaf504508153"
+Preconditioners = "af69fa37-3177-5a40-98ee-561f696e4fcd"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = [
+    "Test",
+    "IterativeSolvers",
+    "Preconditioners",
+    "IncompleteLU",
+    "Tensors"
+]
