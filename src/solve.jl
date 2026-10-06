@@ -505,9 +505,37 @@ multi-point constraints.
 function field_transformation(
     P::Problem,
     mpc::Vector{MPC}=MPC[]
+    )
+    if P.basis === :spectral
+        P.reducedOrder &&
+            error(
+                "field_transformation: spectral basis and " *
+                "reducedOrder=true cannot currently be combined."
+            )
+
+        isempty(mpc) ||
+            error(
+                "field_transformation: spectral basis combined with " *
+                "MPCs is not yet implemented."
+            )
+
+        return spectralTransformation(P)
+    end
+
+    return _singlefield_mpc_transformation(
+        P,
+        mpc
+    )
+end
+
+#=
+function field_transformation(
+    P::Problem,
+    mpc::Vector{MPC}=MPC[]
 )
     return _singlefield_mpc_transformation(P, mpc)
 end
+=#
 
 """
     singlefield_mpc_bc_data_matrix(P, mpc, fixed, xD)

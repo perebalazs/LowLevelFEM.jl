@@ -508,19 +508,31 @@ struct Problem
     field::Symbol
     rhs_field::Symbol
     reducedOrder::Bool
+    basis::Symbol
     Problem() = new()
-    Problem(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder=false) =
-        new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder)
-    Problem(name, type, dim, pdim, material, thickness, non, geometry, reducedOrder=false) =
-        new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs, reducedOrder)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, field::Symbol, rhs_field::Symbol, reducedOrder::Bool=false, basis::Symbol=:lagrange) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder, basis)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, reducedOrder::Bool=false, basis::Symbol=:lagrange) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs, reducedOrder, basis)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none,
         nameTopSurface=nothing, nameVolume=nothing, dim::Int=3,
         fieldName::Symbol=:unknown, rhsName::Symbol=:rhs,
         field::Symbol=fieldName, rhs_field::Symbol=rhsName,
-        reducedOrder::Bool=false)
+        reducedOrder::Bool=false, basis::Symbol=:lagrange)
         if type == :dummy
-            return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field, reducedOrder)
+            return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field, reducedOrder, basis)
         end
+        basis in (:lagrange, :spectral) ||
+            error(
+                "Problem: basis must be :lagrange or :spectral."
+            )
+
+        basis === :spectral && reducedOrder &&
+            error(
+                "Problem: spectral basis and reducedOrder=true " *
+                "cannot currently be combined."
+            )
+        
         pdim = 3
         dim0 = dim
 
@@ -649,7 +661,7 @@ struct Problem
         if nameTopSurface !== nothing && nameVolume !== nothing
             initialize(geometry, mat, non, field, rhs_field)
         end
-        return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder)
+        return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder, basis)
     end
 end
 
