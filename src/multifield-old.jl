@@ -2651,6 +2651,11 @@ function assemble_operator(
     _nzval_buffers=nothing,
     element_chunk_size::Union{Integer,Symbol}=:auto)
 
+    gauss === :gll && error(
+        "assemble_operator: gauss=:gll must be requested through ∫ for a " *
+        "supported spectral bilinear form."
+    )
+
     direct_csc = assembly === :csc
     num_threads = resolve_num_threads(threads)
 
@@ -5497,7 +5502,10 @@ Weak-form expression composed of operators and coefficients.
 
 `gauss`
 
-`:full` or `:reduced` integration, or `Int` that is a signed number:  the increment of Gauss points relative to `:full`.
+`:full` or `:reduced` integration, or `Int` that is a signed number: the
+increment of Gauss points relative to `:full`. `:gll` requests experimental
+Gauss-Lobatto-Legendre quadrature and is currently supported only for a single
+spectral bilinear term of the form `P ⋅ P`.
 
 # Keyword arguments
 
@@ -5516,6 +5524,11 @@ Boundary physical group name.
 function ∫(
     expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full,
     threads=:auto, assembly::Symbol=:csc)
+
+    gauss === :gll && error(
+        "GLL quadrature currently supports only a single bilinear term of " *
+        "the form P ⋅ P. Weak sums and other WeakExpr forms are not yet implemented."
+    )
 
     _check_scalarfields(expr)
 
@@ -5575,6 +5588,37 @@ function ∫(t::BilinearTerm;
     if dom !== nothing
         gmsh.model.setCurrent(Pu.name)
         _check_domain_dim(Pu, dom)
+    end
+
+    if gauss === :gll
+        assembly === :csc || error(
+            "GLL quadrature currently supports only assembly=:csc."
+        )
+        csc_matrix === nothing || error(
+            "GLL quadrature does not yet support csc_matrix reuse."
+        )
+        updateFrom === nothing || error(
+            "GLL quadrature does not support updateFrom."
+        )
+        element_chunk_size === :auto || error(
+            "GLL quadrature does not yet support element_chunk_size."
+        )
+        t.a.P.basis === :spectral || error(
+            "GLL quadrature requires basis=:spectral on the test field."
+        )
+        t.b.P.basis === :spectral || error(
+            "GLL quadrature requires basis=:spectral on the trial field."
+        )
+        isdefined(@__MODULE__, :spectralIntegral) || error(
+            "GLL quadrature requires spectral.jl to be loaded."
+        )
+
+        return spectralIntegral(
+            t;
+            domain=dom,
+            weight=weight,
+            threads=threads
+        )
     end
 
     K = if updateFrom === nothing
@@ -5638,6 +5682,21 @@ function ∫(a::OpApplied, b::OpApplied;
     csc_matrix=nothing,
     element_chunk_size::Union{Integer,Symbol}=:auto,
     updateFrom=nothing)
+
+    if gauss === :gll
+        return ∫(
+            BilinearTerm(a, 1.0, b);
+            Ω=Ω,
+            Γ=Γ,
+            weight=weight,
+            gauss=:gll,
+            threads=threads,
+            assembly=assembly,
+            csc_matrix=csc_matrix,
+            element_chunk_size=element_chunk_size,
+            updateFrom=updateFrom
+        )
+    end
 
     assembly ∈ (:ijv, :csc) || error(
         "Unsupported matrix assembly mode $assembly. " *
@@ -5704,6 +5763,10 @@ function ∫(a::OpApplied, b::OpApplied;
 end
 
 function ∫(t::LinearTerm; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full, threads=:auto)
+
+    gauss === :gll && error(
+        "GLL quadrature for linear forms is not yet implemented."
+    )
 
     dom = _domain_spec(; Ω=Ω, Γ=Γ)
 
@@ -6432,6 +6495,11 @@ function ∫(expr::CompoundBilinear;
     assembly::Symbol=:csc,
     csc_matrix=nothing,
     element_chunk_size::Union{Integer,Symbol}=:auto)
+
+    gauss === :gll && error(
+        "GLL quadrature for compound or multifield bilinear forms is not yet implemented. " *
+        "Use a single spectral term of the form P ⋅ P."
+    )
 
     assembly ∈ (:ijv, :csc) || error(
         "Unsupported matrix assembly mode $assembly. " *

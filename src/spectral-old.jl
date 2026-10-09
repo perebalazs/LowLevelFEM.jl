@@ -9,6 +9,7 @@
 #      - 2D complete tensor-product Quadrangle elements                       #
 #      - Legendre-Gauss-Lobatto nodal basis                                   #
 #      - homogeneous polynomial order                                         #
+#      - experimental GLL quadrature for the bilinear form P ⋅ P              #
 #                                                                             #
 #  The ordinary LowLevelFEM/Gmsh Lagrange space remains the global storage    #
 #  space. Only the solver-side spectral space is compact.                     #
@@ -2060,5 +2061,570 @@ function spectralTransformation(
             nSpectralDofs,
         inverse_error=
             inverse_error
+    )
+end
+
+
+# =============================================================================
+# Experimental GLL quadrature
+# =============================================================================
+
+"""
+    _sem_restriction_matrix(P, data, numbered)
+
+Construct only the global restriction matrix
+
+    u_spectral = R * u_global
+
+from already prepared spectral mesh data. This helper is used by the GLL
+quadrature path so that the full prolongation matrix does not need to be built
+solely to return an assembled matrix to the ordinary LowLevelFEM storage space.
+"""
+function _sem_restriction_matrix(
+    P::Problem,
+    data,
+    numbered
+)
+    elements = data.elements
+    type_cache = data.type_cache
+    spectral_conn = numbered.connectivity
+
+    nSpectral = numbered.count
+    d = P.pdim
+    nFullDofs = ndofs(P)
+    nSpectralDofs = nSpectral * d
+
+    Rentries =
+        Dict{
+            Tuple{Int,Int},
+            Float64
+        }()
+
+    spectral_seen = falses(nSpectral)
+
+    for ie in eachindex(elements)
+        elem = elements[ie]
+        cache = type_cache[elem.et]
+        sconn = spectral_conn[ie]
+
+        for a in 1:cache.nSem
+            spectral_node = sconn[a]
+
+            spectral_seen[spectral_node] &&
+                continue
+
+            spectral_seen[spectral_node] = true
+
+            for comp in 1:d
+                row =
+                    (spectral_node - 1) * d +
+                    comp
+
+                for b in 1:cache.nFem
+                    global_node =
+                        _sem_global_node(
+                            P,
+                            elem.nodes[b]
+                        )
+
+                    col =
+                        nodeToDof(
+                            P,
+                            global_node,
+                            comp
+                        )
+
+                    _sem_insert_unique!(
+                        Rentries,
+                        row,
+                        col,
+                        cache.Re[a, b]
+                    )
+                end
+            end
+        end
+    end
+
+    R =
+        _sem_sparse_from_dict(
+            Rentries,
+            nSpectralDofs,
+            nFullDofs
+        )
+
+    dropzeros!(R)
+    return R
+end
+
+
+"""
+    _sem_gll_reference_points_3d(P, cache)
+
+Return the local GLL points in the three-coordinate layout expected by Gmsh.
+"""
+function _sem_gll_reference_points_3d(
+    P::Problem,
+    cache
+)
+    points = zeros(Float64, 3 * cache.nSem)
+
+    if P.dim == 1
+        @inbounds for q in 1:cache.nSem
+            points[3q - 2] = cache.ξGLL[q]
+        end
+
+    elseif P.dim == 2
+        @inbounds for q in 1:cache.nSem
+            points[3q - 2] = cache.localGLL[q, 1]
+            points[3q - 1] = cache.localGLL[q, 2]
+        end
+
+    else
+        error(
+            "GLL quadrature: dimension $(P.dim) is not yet implemented. " *
+            "Supported dimensions are 1 and 2."
+        )
+    end
+
+    return points
+end
+
+
+"""
+    _sem_geometry_gradients_at_gll(P, element_type, cache)
+
+Evaluate the original Gmsh geometry basis gradients at the GLL points. The
+returned matrix has one column per GLL point and uses the same `3*numNodes`
+row layout as the ordinary LowLevelFEM element kernel.
+"""
+function _sem_geometry_gradients_at_gll(
+    P::Problem,
+    element_type::Integer,
+    cache
+)
+    points =
+        _sem_gll_reference_points_3d(
+            P,
+            cache
+        )
+
+    ncomp, dfun, _ =
+        gmsh.model.mesh.getBasisFunctions(
+            Int(element_type),
+            points,
+            "GradLagrange"
+        )
+
+    ncomp == 3 ||
+        error(
+            "GLL quadrature: expected three reference-gradient components " *
+            "from Gmsh, got $ncomp."
+        )
+
+    return reshape(
+        Float64.(dfun),
+        3 * cache.nFem,
+        cache.nSem
+    )
+end
+
+
+"""
+    _sem_geometry_measure_at_gll(P, elem, cache, nodeCoord, grad, q)
+
+Return the physical integration measure at GLL point `q` using the original
+high-order Gmsh isoparametric geometry.
+"""
+@inline function _sem_geometry_measure_at_gll(
+    P::Problem,
+    elem,
+    cache,
+    nodeCoord,
+    grad,
+    q::Integer
+)
+    if P.dim == 1
+        dx_dξ = 0.0
+
+        @inbounds for a in 1:cache.nFem
+            x = nodeCoord[elem.nodes[a]][1]
+            dNa_dξ = grad[3a - 2, q]
+            dx_dξ += x * dNa_dξ
+        end
+
+        measure = abs(dx_dξ)
+
+    elseif P.dim == 2
+        dx_dξ = 0.0
+        dx_dη = 0.0
+        dy_dξ = 0.0
+        dy_dη = 0.0
+
+        @inbounds for a in 1:cache.nFem
+            x, y, _ = nodeCoord[elem.nodes[a]]
+
+            dNa_dξ = grad[3a - 2, q]
+            dNa_dη = grad[3a - 1, q]
+
+            dx_dξ += x * dNa_dξ
+            dx_dη += x * dNa_dη
+            dy_dξ += y * dNa_dξ
+            dy_dη += y * dNa_dη
+        end
+
+        measure =
+            abs(
+                dx_dξ * dy_dη -
+                dx_dη * dy_dξ
+            )
+
+    else
+        error(
+            "GLL quadrature: dimension $(P.dim) is not yet implemented."
+        )
+    end
+
+    measure > 0.0 ||
+        error(
+            "GLL quadrature: singular geometry in element $(elem.tag) " *
+            "at local GLL point $q."
+        )
+
+    return measure
+end
+
+
+"""
+    _sem_gll_quadrature_weight(P, cache, q)
+
+Return the reference-domain tensor-product GLL quadrature weight for local
+spectral node `q`.
+"""
+@inline function _sem_gll_quadrature_weight(
+    P::Problem,
+    cache,
+    q::Integer
+)
+    if P.dim == 1
+        return cache.wGLL[q]
+
+    elseif P.dim == 2
+        i = mod(q - 1, cache.n1) + 1
+        j = div(q - 1, cache.n1) + 1
+        return cache.wGLL[i] * cache.wGLL[j]
+
+    else
+        error(
+            "GLL quadrature: dimension $(P.dim) is not yet implemented."
+        )
+    end
+end
+
+
+"""
+    _sem_domain_element_tags(P, domain)
+
+Return the element tags selected by a volume domain. `nothing` means that all
+domain elements of `P` are used. Boundary GLL integration is not yet
+implemented.
+"""
+function _sem_domain_element_tags(
+    P::Problem,
+    domain
+)
+    domain === nothing &&
+        return nothing
+
+    hasproperty(domain, :kind) &&
+    hasproperty(domain, :name) ||
+        error(
+            "GLL quadrature: unsupported domain specification $(typeof(domain))."
+        )
+
+    domain.kind === :Ω ||
+        error(
+            "GLL quadrature is currently implemented only for volume/domain " *
+            "integrals (Ω), not boundary integrals (Γ)."
+        )
+
+    gmsh.model.setCurrent(P.name)
+
+    dimTags =
+        gmsh.model.getEntitiesForPhysicalName(
+            domain.name
+        )
+
+    isempty(dimTags) &&
+        error(
+            "GLL quadrature: physical group \"$(domain.name)\" not found."
+        )
+
+    selected = Set{UInt64}()
+
+    for (edim, etag) in dimTags
+        edim == P.dim ||
+            error(
+                "GLL quadrature: Ω=\"$(domain.name)\" has dimension $edim, " *
+                "but problem.dim=$(P.dim)."
+            )
+
+        _, elemTags, _ =
+            gmsh.model.mesh.getElements(
+                edim,
+                etag
+            )
+
+        for tags in elemTags
+            for tag in tags
+                push!(selected, UInt64(tag))
+            end
+        end
+    end
+
+    isempty(selected) &&
+        error(
+            "GLL quadrature: no elements found in Ω=\"$(domain.name)\"."
+        )
+
+    return selected
+end
+
+
+"""
+    _spectral_gll_mass_matrix(P; domain=nothing)
+
+Assemble the unit-coefficient mass matrix of `P` with GLL quadrature in the
+spectral nodal basis and immediately pull it back to the ordinary LowLevelFEM
+global representation.
+
+The spectral-space matrix is diagonal. The returned `SystemMatrix` generally
+is not diagonal because it is represented in the ordinary Gmsh/Lagrange global
+storage basis:
+
+    M_global = R' * M_GLL * R
+
+The existing solver-side spectral transformation therefore recovers
+`M_GLL` (up to floating-point roundoff) without changing the `solveField` API.
+"""
+function _spectral_gll_mass_matrix(
+    P::Problem;
+    domain=nothing
+)
+    data,
+    numbered =
+        if P.dim == 1
+            data1 = _sem_collect_1d_elements(P)
+            numbered1 =
+                _sem_number_spectral_nodes_1d(
+                    data1.elements,
+                    data1.type_cache,
+                    data1.nodeCoord
+                )
+            data1, numbered1
+
+        elseif P.dim == 2
+            data2 = _sem_collect_2d_quad_elements(P)
+            numbered2 =
+                _sem_number_spectral_nodes_2d(
+                    data2.elements,
+                    data2.type_cache,
+                    data2.nodeCoord
+                )
+            data2, numbered2
+
+        else
+            error(
+                "GLL quadrature: dimension $(P.dim) is not yet implemented. " *
+                "Supported dimensions are 1 and 2."
+            )
+        end
+
+    selected =
+        _sem_domain_element_tags(
+            P,
+            domain
+        )
+
+    if selected !== nothing
+        available =
+            Set(
+                elem.tag for elem in data.elements
+            )
+
+        missing = setdiff(selected, available)
+
+        isempty(missing) ||
+            error(
+                "GLL quadrature: Ω=\"$(domain.name)\" contains elements that " *
+                "are not part of the spectral Problem."
+            )
+    end
+
+    d = P.pdim
+    nSpectralDofs = numbered.count * d
+    diagonal = zeros(Float64, nSpectralDofs)
+
+    grad_cache = Dict{Int,Matrix{Float64}}()
+    integrated_elements = 0
+
+    for ie in eachindex(data.elements)
+        elem = data.elements[ie]
+
+        selected !== nothing &&
+        !(elem.tag in selected) &&
+            continue
+
+        integrated_elements += 1
+
+        cache = data.type_cache[elem.et]
+        sconn = numbered.connectivity[ie]
+
+        grad =
+            get!(grad_cache, elem.et) do
+                _sem_geometry_gradients_at_gll(
+                    P,
+                    elem.et,
+                    cache
+                )
+            end
+
+        @inbounds for q in 1:cache.nSem
+            measure =
+                _sem_geometry_measure_at_gll(
+                    P,
+                    elem,
+                    cache,
+                    data.nodeCoord,
+                    grad,
+                    q
+                )
+
+            w =
+                _sem_gll_quadrature_weight(
+                    P,
+                    cache,
+                    q
+                )
+
+            contribution = measure * w
+            spectral_node = sconn[q]
+            first_dof = (spectral_node - 1) * d
+
+            for comp in 1:d
+                diagonal[first_dof + comp] += contribution
+            end
+        end
+    end
+
+    integrated_elements > 0 ||
+        error(
+            "GLL quadrature: no spectral elements were selected for integration."
+        )
+
+    R =
+        _sem_restriction_matrix(
+            P,
+            data,
+            numbered
+        )
+
+    Mhat =
+        spdiagm(
+            0 => diagonal
+        )
+
+    Mglobal =
+        sparse(
+            transpose(R) *
+            Mhat *
+            R
+        )
+
+    dropzeros!(Mglobal)
+
+    return SystemMatrix(
+        Mglobal,
+        P,
+        P
+    )
+end
+
+
+"""
+    spectralIntegral(term::BilinearTerm; domain=nothing, weight=nothing,
+                     threads=:auto)
+
+Assemble a bilinear form with Gauss-Lobatto-Legendre quadrature.
+
+Current scope is deliberately narrow:
+
+- both test and trial fields must use `basis=:spectral`,
+- test and trial must be the same `Problem` instance,
+- only `Id(P) ⋅ Id(P)` is implemented,
+- only the unit coefficient is implemented,
+- additional `weight` factors are not yet implemented,
+- only volume/domain integration is implemented,
+- supported elements are the same 1D lines and complete 2D tensor-product
+  quadrangles supported by `spectralTransformation`.
+
+The GLL matrix is assembled in the compact spectral space and then immediately
+returned in the ordinary LowLevelFEM global representation so that existing
+solvers and boundary-condition handling remain unchanged.
+"""
+function spectralIntegral(
+    term::BilinearTerm;
+    domain=nothing,
+    weight=nothing,
+    threads=:auto
+)
+    Ps = term.a.P
+    Pu = term.b.P
+
+    Ps.basis === :spectral ||
+        error(
+            "GLL quadrature requires basis=:spectral on the test field."
+        )
+
+    Pu.basis === :spectral ||
+        error(
+            "GLL quadrature requires basis=:spectral on the trial field."
+        )
+
+    Ps === Pu ||
+        error(
+            "GLL quadrature currently supports only P ⋅ P with the same " *
+            "Problem instance on the test and trial sides."
+        )
+
+    term.a.op isa IdOp ||
+        error(
+            "GLL quadrature currently supports only P ⋅ P " *
+            "(identity operator on the test field)."
+        )
+
+    term.b.op isa IdOp ||
+        error(
+            "GLL quadrature currently supports only P ⋅ P " *
+            "(identity operator on the trial field)."
+        )
+
+    term.coef isa Number && isone(term.coef) ||
+        error(
+            "GLL quadrature currently supports only the unit-coefficient " *
+            "bilinear form P ⋅ P."
+        )
+
+    weight === nothing ||
+        error(
+            "GLL quadrature with an additional weight is not yet implemented."
+        )
+
+    # Accepted for API compatibility. The first implementation is serial; the
+    # expensive global transformation/assembly path can be optimized later.
+    _ = threads
+
+    return _spectral_gll_mass_matrix(
+        Pu;
+        domain=domain
     )
 end

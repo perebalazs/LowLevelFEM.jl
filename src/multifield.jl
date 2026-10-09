@@ -4062,6 +4062,69 @@ function _represented_rows(T::SparseMatrixCSC)
 end
 
 """
+    _initialize_reduced_approximation!(P)
+
+Build and cache the intrinsic `p -> p-1` Lagrange transformation of a
+`reducedOrder=true` field. Active full-space DOFs that are not represented by
+`reductionMatrices(P)` (for example remote reference points) are appended once
+as identity coordinates, so solve-specific transformations only need to deal
+with MPC-dependent additions.
+"""
+function _initialize_reduced_approximation!(P::Problem)
+    P.basis === :lagrange ||
+        error(
+            "Internal error: reduced-order cache currently expects " *
+            "basis=:lagrange."
+        )
+
+    P.reducedOrder ||
+        error(
+            "Internal error: reduced-order cache requested for " *
+            "reducedOrder=false."
+        )
+
+    T, R = reductionMatrices(P)
+
+    represented = _represented_rows(T)
+    wanted = sort!(unique(Int.(allDoFs(P))))
+
+    extra = Int[
+        i for i in wanted
+        if !represented[i]
+    ]
+
+    if !isempty(extra)
+        nfull = ndofs(P)
+        nextra = length(extra)
+
+        Te = sparse(
+            extra,
+            1:nextra,
+            ones(Float64, nextra),
+            nfull,
+            nextra
+        )
+
+        Re = sparse(
+            1:nextra,
+            extra,
+            ones(Float64, nextra),
+            nextra,
+            nfull
+        )
+
+        T = hcat(T, Te)
+        R = vcat(R, Re)
+    end
+
+    P.approximation.T = T
+    P.approximation.R = R
+    P.approximation.metadata = nothing
+
+    return P.approximation
+end
+
+"""
     _base_reduction(P, mpcs)
 
 Construct the field-level base transformation before applying MPCs.
@@ -4076,6 +4139,22 @@ function _base_reduction(
     P::Problem,
     mpcs::Vector{MPC}
     )
+
+    if P.basis === :spectral
+        P.reducedOrder &&
+            error(
+                "Approximation: basis=:spectral combined with " *
+                "reducedOrder=true is not yet implemented."
+            )
+
+        isempty(mpcs) ||
+            error(
+                "Approximation: spectral basis combined with MPCs " *
+                "is not yet implemented."
+            )
+
+        return _approximation_matrices(P)
+    end
 
     master_dofs = _mpc_master_dofs(P, mpcs)
 
@@ -4113,8 +4192,8 @@ function _base_reduction(
         return T, R
     end
 
-    # Polynomial-order reduction
-    T, R = reductionMatrices(P)
+    # Polynomial-order reduction is intrinsic to the Problem and cached.
+    T, R = _approximation_matrices(P)
 
     # Remote points and other lower-dimensional active DOFs are not
     # necessarily represented by reductionMatrices().
@@ -6988,13 +7067,13 @@ function FDM(
     problems = K.problems
     t = collect(0:Δt:(n - 1) * Δt)
 
-    has_reduced = any(P.reducedOrder for P in problems)
+    has_approximation = any(_has_approximation(P) for P in problems)
 
     # ==================================================================
-    # FULL-ORDER PATH
+    # FULL-ORDER LAGRANGE PATH
     # ==================================================================
 
-    if !has_reduced
+    if !has_approximation
 
         # ------------------------------------------------------------------
         # 2) BC data
@@ -7144,7 +7223,7 @@ function FDM(
     end
 
     # ==================================================================
-    # REDUCED-ORDER PATH
+    # APPROXIMATION-TRANSFORMED PATH
     # ==================================================================
 
     # ------------------------------------------------------------------
@@ -7164,25 +7243,13 @@ function FDM(
     sizehint!(Rblocks, length(problems))
 
     for P in problems
+        Tp, Rp =
+            _has_approximation(P) ?
+            _base_reduction(P, MPC[]) :
+            active_identity(P)
 
-        if P.reducedOrder
-
-            Tp, Rp = reductionMatrices(P)
-
-            push!(Tblocks, Tp)
-            push!(Rblocks, Rp)
-
-        else
-
-            #Ip = spdiagm(0 => ones(Float64, ndofs(P)))
-
-            #push!(Tblocks, Ip)
-            #push!(Rblocks, Ip)
-            Tp, Rp = active_identity(P)
-
-            push!(Tblocks, Tp)
-            push!(Rblocks, Rp)
-        end
+        push!(Tblocks, Tp)
+        push!(Rblocks, Rp)
     end
 
     T = blockdiag(Tblocks...)
@@ -7737,11 +7804,11 @@ end
 
 Prepare stiffness and capacity/mass matrices for an eigenvalue problem.
 
-If no field uses reduced-order interpolation, the original matrices are
-restricted directly to the free full-space DOFs.
+If no field uses an intrinsic approximation transformation, the original
+matrices are restricted directly to the free full-space DOFs.
 
-If at least one field has `reducedOrder=true`, the system is projected to
-the reduced space using
+If at least one field uses reduced-order interpolation or a non-Lagrange solver
+basis, the system is projected to the corresponding solver space using
 
     Kr = T' * K * T
     Cr = T' * C * T
@@ -7752,7 +7819,7 @@ Returns
 
     K0, C0, T, free_r
 
-where `T === nothing` for a full-order system.
+where `T === nothing` for an ordinary full-order Lagrange system.
 """
 function reduced_system_matrices(
     K::SystemMatrix,
@@ -7779,7 +7846,7 @@ function reduced_system_matrices(
 
         fixed = constrainedDoFs(P, support)
 
-        if !P.reducedOrder
+        if !_has_approximation(P)
 
             free = freeDoFs(P, support)
 
@@ -7791,7 +7858,7 @@ function reduced_system_matrices(
             )
         end
 
-        T, R = reductionMatrices(P)
+        T, R = _base_reduction(P, MPC[])
 
         zero_bc = zeros(Float64, size(R, 2))
 
@@ -7823,7 +7890,7 @@ function reduced_system_matrices(
     _, fixed, _ =
         multifield_bc_data(K, support; nsteps=1)
 
-    if !any(P.reducedOrder for P in problems)
+    if !any(_has_approximation(P) for P in problems)
 
         #free = setdiff(1:size(K.A, 1), fixed)
         free, _, _ = multifield_bc_data(K, support; nsteps=1)
@@ -7843,25 +7910,13 @@ function reduced_system_matrices(
     sizehint!(Rblocks, length(problems))
 
     for P in problems
+        Tp, Rp =
+            _has_approximation(P) ?
+            _base_reduction(P, MPC[]) :
+            active_identity(P)
 
-        if P.reducedOrder
-
-            Tp, Rp = reductionMatrices(P)
-
-            push!(Tblocks, Tp)
-            push!(Rblocks, Rp)
-
-        else
-
-            #I = spdiagm(0 => ones(Float64, ndofs(P)))
-
-            #push!(Tblocks, I)
-            #push!(Rblocks, I)
-            Tp, Rp = active_identity(P)
-
-            push!(Tblocks, Tp)
-            push!(Rblocks, Rp)
-        end
+        push!(Tblocks, Tp)
+        push!(Rblocks, Rp)
     end
 
     T = blockdiag(Tblocks...)
