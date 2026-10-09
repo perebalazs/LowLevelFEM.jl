@@ -851,6 +851,12 @@ end
 # Single-field system preparation and reconstruction
 # =============================================================================
 
+@inline function _shrink_csc!(A::SparseMatrixCSC)
+    sizehint!(A.rowval, length(A.rowval); shrink=true)
+    sizehint!(A.nzval,  length(A.nzval);  shrink=true)
+    return A
+end
+
 """
     _prepare_singlefield_system(K, rhs, support; mpc=MPC[], coordSys=[])
 
@@ -930,7 +936,11 @@ function _prepare_singlefield_system(
         xD_eff
     )
 
-    Kr = T' * A0 * T
+    AT = A0 * T
+    _shrink_csc!(AT)
+    Kr = T' * AT
+    _shrink_csc!(Kr)
+    #Kr = T' * A0 * T
     Br = T' * F0
 
     B = copy(Br[free_r, :])
@@ -1287,7 +1297,11 @@ function prepare_multifield_system(
     # 6) Galerkin projection
     # ----------------------------------------------------------
 
-    Kr = T' * A0 * T
+    AT = A0 * T
+    _shrink_csc!(AT)
+    Kr = T' * AT
+    _shrink_csc!(Kr)
+    #Kr = T' * A0 * T
     Br = T' * F0
 
     # ----------------------------------------------------------
