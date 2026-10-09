@@ -545,7 +545,7 @@ struct Problem
         name, type, dim, pdim, material, thickness, non, geometry,
         field::Symbol, rhs_field::Symbol,
         reducedOrder::Bool=false, basis::Symbol=:lagrange
-    )
+        )
         P = new(
             name, type, dim, pdim, material, thickness, non, geometry,
             field, rhs_field, reducedOrder, basis, ApproximationData()
@@ -556,8 +556,20 @@ struct Problem
 
     function Problem(
         name, type, dim, pdim, material, thickness, non, geometry,
+        field::Symbol, rhs_field::Symbol,
+        reducedOrder::Bool, basis::Symbol, approx::ApproximationData
+        )
+        P = new(
+            name, type, dim, pdim, material, thickness, non, geometry,
+            field, rhs_field, reducedOrder, basis, approx
+        )
+        return P
+    end
+
+    function Problem(
+        name, type, dim, pdim, material, thickness, non, geometry,
         reducedOrder::Bool=false, basis::Symbol=:lagrange
-    )
+        )
         P = new(
             name, type, dim, pdim, material, thickness, non, geometry,
             :unknown, :rhs, reducedOrder, basis, ApproximationData()
@@ -10148,6 +10160,24 @@ function probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step
     return probe(A, coord[1], coord[2], coord[3], step=step)
 end
 
+function _problem_without_approximation(P::Problem)
+    return Problem(
+        P.name,
+        P.type,
+        P.dim,
+        P.pdim,
+        P.material,
+        P.thickness,
+        P.non,
+        P.geometry,
+        P.field,
+        P.rhs_field,
+        P.reducedOrder,
+        P.basis,
+        ApproximationData()
+    )
+end
+
 """
     saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
 
@@ -10161,8 +10191,31 @@ Types:
 - `fileName`: String
 - `variable`: ScalarField, VectorField or TensorField
 """
-function saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
+function saveField(
+    fileName::String,
+    var::Union{ScalarField,VectorField,TensorField}
+    )
+    P = _problem_without_approximation(var.model)
+    T = typeof(var)
+
+    variable = T(
+        var.A,
+        var.a,
+        var.t,
+        var.numElem,
+        var.nsteps,
+        var.type,
+        P
+    )
+
     @save fileName * "-LLF-Data.jld2" variable
+
+    return nothing
+end
+
+function saveField(fileName::String, variable::Number)
+    @save fileName * "-LLF-Data.jld2" variable
+    return nothing
 end
 
 """
