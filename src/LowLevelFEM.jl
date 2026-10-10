@@ -24,6 +24,7 @@ include("poisson.jl")
 include("multifield.jl")
 include("constraints.jl")
 include("solve.jl")
+include("spectral.jl")
 include("contact.jl")
 #include("fieldtools.jl")
 #using .FieldTools
