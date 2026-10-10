@@ -384,27 +384,6 @@ mutable struct Geometry
 end
 
 """
-    ApproximationData()
-
-Mutable cache attached to a [`Problem`](@ref) for solver-space approximation
-transformations. `T` maps solver-space coefficients to the ordinary global
-LowLevelFEM/Gmsh storage space, while `R` maps representable global fields
-back to the solver space. `metadata` stores basis-specific auxiliary data
-(e.g. GLL topology for spectral elements).
-
-For the ordinary full-order Lagrange basis all three fields remain `nothing`,
-so no identity matrix is stored.
-"""
-mutable struct ApproximationData
-    T::Union{Nothing,SparseMatrixCSC{Float64,Int}}
-    R::Union{Nothing,SparseMatrixCSC{Float64,Int}}
-    metadata::Any
-end
-
-ApproximationData() = ApproximationData(nothing, nothing, nothing)
-
-
-"""
     Problem(materials; kwargs...)
 
 Defines a finite element problem on the current Gmsh model.
@@ -435,14 +414,9 @@ materials. It serves as the central object for operator-based formulations.
   Name of the right-hand side field.
 - `reducedOrder::Bool`
 
-  If `true`, the active approximation order is reduced from `p` to `p - 1`,
-  while assembly and field storage remain on the original order-`p` mesh.
-  This option is independent of the solver basis. Default: `false`.
-- `basis::Symbol`
-
-  Solver-space basis. Currently `:lagrange` and `:spectral` are supported.
-  The global LowLevelFEM/Gmsh storage representation remains Lagrange in both
-  cases. Default: `:lagrange`.
+  If `true`, the field is solved in the continuous Lagrange space of
+  polynomial order `p - 1`, while assembly and field storage remain on
+  the original order-`p` mesh. Default: `false`.
 
 ## Problem configuration
 
@@ -491,8 +465,6 @@ materials. It serves as the central object for operator-based formulations.
   Geometry information extracted from Gmsh
 - `material::Vector{Material}`  
   Material definitions assigned to physical groups
-- `approximation::ApproximationData`
-  Cached solver-space transformation and basis-specific auxiliary data.
 
 # Notes
 
@@ -537,57 +509,18 @@ struct Problem
     rhs_field::Symbol
     reducedOrder::Bool
     basis::Symbol
-    approximation::ApproximationData
-
     Problem() = new()
-
-    function Problem(
-        name, type, dim, pdim, material, thickness, non, geometry,
-        field::Symbol, rhs_field::Symbol,
-        reducedOrder::Bool=false, basis::Symbol=:lagrange
-        )
-        P = new(
-            name, type, dim, pdim, material, thickness, non, geometry,
-            field, rhs_field, reducedOrder, basis, ApproximationData()
-        )
-        _initialize_approximation_data!(P)
-        return P
-    end
-
-    function Problem(
-        name, type, dim, pdim, material, thickness, non, geometry,
-        field::Symbol, rhs_field::Symbol,
-        reducedOrder::Bool, basis::Symbol, approx::ApproximationData
-        )
-        P = new(
-            name, type, dim, pdim, material, thickness, non, geometry,
-            field, rhs_field, reducedOrder, basis, approx
-        )
-        return P
-    end
-
-    function Problem(
-        name, type, dim, pdim, material, thickness, non, geometry,
-        reducedOrder::Bool=false, basis::Symbol=:lagrange
-        )
-        P = new(
-            name, type, dim, pdim, material, thickness, non, geometry,
-            :unknown, :rhs, reducedOrder, basis, ApproximationData()
-        )
-        _initialize_approximation_data!(P)
-        return P
-    end
-
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, field::Symbol, rhs_field::Symbol, reducedOrder::Bool=false, basis::Symbol=:lagrange) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder, basis)
+    Problem(name, type, dim, pdim, material, thickness, non, geometry, reducedOrder::Bool=false, basis::Symbol=:lagrange) =
+        new(name, type, dim, pdim, material, thickness, non, geometry, :unknown, :rhs, reducedOrder, basis)
     function Problem(mat; thickness=1.0, type=:Solid, bandwidth=:none,
         nameTopSurface=nothing, nameVolume=nothing, dim::Int=3,
         fieldName::Symbol=:unknown, rhsName::Symbol=:rhs,
         field::Symbol=fieldName, rhs_field::Symbol=rhsName,
         reducedOrder::Bool=false, basis::Symbol=:lagrange)
         if type == :dummy
-            return new(
-                "dummy", :dummy, 0, 0, mat, 0, 0, Geometry(),
-                field, rhs_field, reducedOrder, basis, ApproximationData()
-            )
+            return new("dummy", :dummy, 0, 0, mat, 0, 0, Geometry(), field, rhs_field, reducedOrder, basis)
         end
         basis in (:lagrange, :spectral) ||
             error(
@@ -596,8 +529,8 @@ struct Problem
 
         basis === :spectral && reducedOrder &&
             error(
-                "Problem: basis=:spectral combined with reducedOrder=true " *
-                "is part of the intended API but is not yet implemented."
+                "Problem: spectral basis and reducedOrder=true " *
+                "cannot currently be combined."
             )
         
         pdim = 3
@@ -728,103 +661,9 @@ struct Problem
         if nameTopSurface !== nothing && nameVolume !== nothing
             initialize(geometry, mat, non, field, rhs_field)
         end
-        P = new(
-            name, type, dim, pdim, material, thickness, non, geometry,
-            field, rhs_field, reducedOrder, basis, ApproximationData()
-        )
-
-        _initialize_approximation_data!(P)
-
-        return P
+        return new(name, type, dim, pdim, material, thickness, non, geometry, field, rhs_field, reducedOrder, basis)
     end
 end
-
-"""
-    _has_approximation(P)
-
-Return `true` when `P` uses an intrinsic solver-space approximation
-transformation (reduced polynomial order or a non-Lagrange basis).
-"""
-@inline _has_approximation(P::Problem) =
-    P.reducedOrder || P.basis !== :lagrange
-
-"""
-    _initialize_approximation_data!(P)
-
-Build and cache the intrinsic approximation transformation of `P` when the
-corresponding implementation is already loaded. In a fully loaded
-LowLevelFEM module this is called eagerly by the `Problem` constructor.
-
-The guarded lookup also keeps source include order robust: if a specialized
-builder is defined later during module loading, `_ensure_approximation_data!`
-will initialize the cache before first use.
-"""
-function _initialize_approximation_data!(P::Problem)
-    P.type === :dummy && return P.approximation
-
-    if P.basis === :spectral
-        P.reducedOrder &&
-            error(
-                "Problem: basis=:spectral combined with reducedOrder=true " *
-                "is not yet implemented."
-            )
-
-        if isdefined(@__MODULE__, :_initialize_spectral_approximation!)
-            getfield(@__MODULE__, :_initialize_spectral_approximation!)(P)
-        end
-
-    elseif P.basis === :lagrange
-        if P.reducedOrder &&
-           isdefined(@__MODULE__, :_initialize_reduced_approximation!)
-            getfield(@__MODULE__, :_initialize_reduced_approximation!)(P)
-        end
-
-    else
-        error("Problem: unsupported basis $(P.basis).")
-    end
-
-    return P.approximation
-end
-
-"""
-    _ensure_approximation_data!(P)
-
-Ensure that the intrinsic approximation transformation required by `P` has
-been built and cached. Full-order Lagrange fields intentionally keep an empty
-cache and need no transformation matrix.
-"""
-function _ensure_approximation_data!(P::Problem)
-    _has_approximation(P) || return P.approximation
-
-    if P.approximation.T === nothing || P.approximation.R === nothing
-        _initialize_approximation_data!(P)
-    end
-
-    P.approximation.T === nothing &&
-        error(
-            "Approximation transformation for basis=$(P.basis), " *
-            "reducedOrder=$(P.reducedOrder) is not available."
-        )
-
-    P.approximation.R === nothing &&
-        error(
-            "Approximation restriction for basis=$(P.basis), " *
-            "reducedOrder=$(P.reducedOrder) is not available."
-        )
-
-    return P.approximation
-end
-
-"""
-    _approximation_matrices(P)
-
-Return the cached intrinsic prolongation and restriction matrices of `P`.
-"""
-function _approximation_matrices(P::Problem)
-    data = _ensure_approximation_data!(P)
-    return data.T, data.R
-end
-
 
 
 """
@@ -10160,24 +9999,6 @@ function probe(A::Union{ScalarField,VectorField,TensorField}, name::String; step
     return probe(A, coord[1], coord[2], coord[3], step=step)
 end
 
-function _problem_without_approximation(P::Problem)
-    return Problem(
-        P.name,
-        P.type,
-        P.dim,
-        P.pdim,
-        P.material,
-        P.thickness,
-        P.non,
-        P.geometry,
-        P.field,
-        P.rhs_field,
-        P.reducedOrder,
-        P.basis,
-        ApproximationData()
-    )
-end
-
 """
     saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
 
@@ -10191,31 +10012,8 @@ Types:
 - `fileName`: String
 - `variable`: ScalarField, VectorField or TensorField
 """
-function saveField(
-    fileName::String,
-    var::Union{ScalarField,VectorField,TensorField}
-    )
-    P = _problem_without_approximation(var.model)
-    T = typeof(var)
-
-    variable = T(
-        var.A,
-        var.a,
-        var.t,
-        var.numElem,
-        var.nsteps,
-        var.type,
-        P
-    )
-
+function saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
     @save fileName * "-LLF-Data.jld2" variable
-
-    return nothing
-end
-
-function saveField(fileName::String, variable::Number)
-    @save fileName * "-LLF-Data.jld2" variable
-    return nothing
 end
 
 """

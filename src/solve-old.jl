@@ -498,17 +498,44 @@ default_solver(::SymmetricSystemMatrix) = :auto_symmetric
 """
     field_transformation(P, mpc=MPC[])
 
-Return prolongation and restriction matrices containing the full solver-space
-transformation of a single field. The intrinsic approximation transformation
-(cached reduced-order or spectral basis mapping) is composed with any supported
-multi-point constraints by the common multifield transformation backend.
+Return prolongation and restriction matrices containing the full kinematic
+transformation of a single field, including reduced-order interpolation and
+multi-point constraints.
 """
+function field_transformation(
+    P::Problem,
+    mpc::Vector{MPC}=MPC[]
+    )
+    if P.basis === :spectral
+        P.reducedOrder &&
+            error(
+                "field_transformation: spectral basis and " *
+                "reducedOrder=true cannot currently be combined."
+            )
+
+        isempty(mpc) ||
+            error(
+                "field_transformation: spectral basis combined with " *
+                "MPCs is not yet implemented."
+            )
+
+        return spectralTransformation(P)
+    end
+
+    return _singlefield_mpc_transformation(
+        P,
+        mpc
+    )
+end
+
+#=
 function field_transformation(
     P::Problem,
     mpc::Vector{MPC}=MPC[]
 )
     return _singlefield_mpc_transformation(P, mpc)
 end
+=#
 
 """
     singlefield_mpc_bc_data_matrix(P, mpc, fixed, xD)
@@ -851,12 +878,6 @@ end
 # Single-field system preparation and reconstruction
 # =============================================================================
 
-@inline function _shrink_csc!(A::SparseMatrixCSC)
-    sizehint!(A.rowval, length(A.rowval); shrink=true)
-    sizehint!(A.nzval,  length(A.nzval);  shrink=true)
-    return A
-end
-
 """
     _prepare_singlefield_system(K, rhs, support; mpc=MPC[], coordSys=[])
 
@@ -936,11 +957,7 @@ function _prepare_singlefield_system(
         xD_eff
     )
 
-    AT = A0 * T
-    _shrink_csc!(AT)
-    Kr = T' * AT
-    _shrink_csc!(Kr)
-    #Kr = T' * A0 * T
+    Kr = T' * A0 * T
     Br = T' * F0
 
     B = copy(Br[free_r, :])
@@ -1297,11 +1314,7 @@ function prepare_multifield_system(
     # 6) Galerkin projection
     # ----------------------------------------------------------
 
-    AT = A0 * T
-    _shrink_csc!(AT)
-    Kr = T' * AT
-    _shrink_csc!(Kr)
-    #Kr = T' * A0 * T
+    Kr = T' * A0 * T
     Br = T' * F0
 
     # ----------------------------------------------------------
