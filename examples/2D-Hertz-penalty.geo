@@ -58,9 +58,9 @@ Plane Surface(2) = {2};
 //+
 MeshSize {7, 10, 11, 4, 5, 3, 6} = 10;
 //+
-MeshSize {1, 2, 8, 9} = 0.2;
+MeshSize {1, 2, 8, 9} = 0.1;
 
-Mesh.ElementOrder=2;
+Mesh.ElementOrder=1;
 
 Mesh 2;//+
 Physical Surface("upper", 12) = {2};
