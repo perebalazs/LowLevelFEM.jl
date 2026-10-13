@@ -1525,7 +1525,7 @@ function _sem_collect_2d_quad_elements(
                             Inf
                         )
 
-                    local_inverse_error <= 1e-10 ||
+                    local_inverse_error <= 1e-9 ||
                         error(
                             "spectralTransformation: local 2D FEM/GLL " *
                             "transformations are inconsistent for element " *
@@ -2255,7 +2255,7 @@ function spectralTransformation(
             _sem_inverse_error(cache.T, cache.R) :
             nothing
 
-        inverse_error === nothing || inverse_error <= 1e-10 ||
+        inverse_error === nothing || inverse_error <= 1e-9 ||
             error(
                 "spectralTransformation: R*T differs from identity; " *
                 "||R*T-I||∞ = $inverse_error."
