@@ -56,6 +56,7 @@ coordinate system is active.
 struct NodalCoordinateSystem
     e1::VectorField
     e2::Union{VectorField,Nothing}
+    sig::Float64
 end
 
 """
@@ -94,8 +95,8 @@ Global(f::_SolveFieldType) = GlobalField(f)
 Global(F::SystemVector) = GlobalField(F)
 
 # VectorField-based constructors for local nodal coordinate systems.
-CoordinateSystem(e1::VectorField) = NodalCoordinateSystem(e1, nothing)
-CoordinateSystem(e1::VectorField, e2::VectorField) = NodalCoordinateSystem(e1, e2)
+CoordinateSystem(e1::VectorField; handedness::Symbol=:right) = NodalCoordinateSystem(e1, nothing, handedness == :right ? 1 : handedness ==:left ? -1 : 0)
+CoordinateSystem(e1::VectorField, e2::VectorField; handedness::Symbol=:right) = NodalCoordinateSystem(e1, e2, handedness == :right ? 1 : handedness ==:left ? -1 : 0)
 
 
 # =============================================================================
@@ -668,12 +669,19 @@ function _coordinate_transformation(
         cs.e2.model === P ||
             error("CoordinateSystem: e2 belongs to a different Problem.")
     end
+    if cs.sig == 0
+        error("Handedness of the coordinate system must be :right or :left")
+    end
 
     nodes1 = _coordinate_field_support_nodes(cs.e1)
     isempty(nodes1) && error("CoordinateSystem: e1 has empty support.")
 
     e1n = _coordinate_nodal_field(cs.e1)
     e2n = nothing
+
+    if cs.e2 !== nothing && P.dim == 2
+        error("CoordinateSystem: in 2D only one direction must be given.")
+    end
 
     if cs.e2 !== nothing
         nodes2 = _coordinate_field_support_nodes(cs.e2)
@@ -718,14 +726,20 @@ function _coordinate_transformation(
         e1 ./= n1
 
         if P.dim == 2
-            e2 = [-e1[2], e1[1]]
+            if cs.sig > 0
+                e2 = [-e1[2], e1[1]]
+            else
+                e2 = [e1[2], -e1[1]]
+            end
 
+            #=
             if cs.e2 !== nothing
                 e2ref = _coordinate_direction(e2n, node, P.dim)
-                if norm(e2ref) > tol && dot(e2, e2ref) < 0
+                if norm(e2ref) > tol && dot(e2, e2ref) < 0 && cs.sig > 0
                     e2 .*= -1
                 end
             end
+            =#
 
             Qnode = hcat(e1, e2)
         else
@@ -736,7 +750,8 @@ function _coordinate_transformation(
                 error("CoordinateSystem: first and second directions are parallel at node $node.")
             e2 ./= n2
 
-            e3 = cross(e1, e2)
+            e3 = cs.sig > 0 ? cross(e1, e2) : cross(e2, e1)
+            #e3 = cs.sig * cross(e1, e2)
             n3 = norm(e3)
             n3 > tol ||
                 error("CoordinateSystem: degenerate local basis at node $node.")

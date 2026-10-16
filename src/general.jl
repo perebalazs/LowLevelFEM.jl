@@ -10360,7 +10360,7 @@ Returns `nothing`.
 Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
-function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1)
+function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1, leftRemote::Bool=false, rightRemote::Bool=false)
     if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
@@ -10372,6 +10372,12 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     # --------------------------------------------------
     # Box: origin (0,0,0), size l x l x l
     box = gmsh.model.occ.addRectangle(x0, y0, 0.0, lx, ly)
+    if leftRemote
+        lr = gmsh.model.occ.addPoint(x0, y0 + ly / 2, 0)
+    end
+    if rightRemote
+        rr = gmsh.model.occ.addPoint(x0 + lx, y0 + ly / 2, 0)
+    end
 
     gmsh.model.occ.synchronize()
     #return
@@ -10390,6 +10396,13 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     gmsh.model.addPhysicalGroup(0, [2], -1, "rightbottom")
     gmsh.model.addPhysicalGroup(0, [3], -1, "righttop")
     gmsh.model.addPhysicalGroup(0, [4], -1, "lefttop")
+
+    if leftRemote
+        gmsh.model.addPhysicalGroup(0, [lr], -1, "leftremote")
+    end
+    if rightRemote
+        gmsh.model.addPhysicalGroup(0, [rr], -1, "rightremote")
+    end
 
     # --------------------------------------------------
     # Mesh settings (structured hex mesh)
@@ -10415,6 +10428,20 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     #lc = min(dx, dy)
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc)
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
+
+    T = [
+        1.0, 0.0, 0.0, lx,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    ]
+
+    gmsh.model.mesh.setPeriodic(
+        1,
+        [2],
+        [4],
+        T
+    )
 
     # --------------------------------------------------
     # Generate mesh
@@ -10468,7 +10495,7 @@ Returns `nothing`.
 Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
-function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1)
+function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1, leftRemote::Bool=false, rightRemote::Bool=false)
     if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
@@ -10481,6 +10508,13 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
     # --------------------------------------------------
     # Box: origin (0,0,0), size l x l x l
     box = gmsh.model.occ.addBox(x0, y0, z0, lx, ly, lz)
+    
+    if leftRemote
+        lr = gmsh.model.occ.addPoint(x0, y0 + ly / 2, z0 + lz / 2)
+    end
+    if rightRemote
+        rr = gmsh.model.occ.addPoint(x0 + lx, y0 + ly / 2, z0 + lz / 2)
+    end
 
     gmsh.model.occ.synchronize()
     #return
@@ -10497,6 +10531,13 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
 
     gmsh.model.addPhysicalGroup(3, [1], -1, "body")
 
+    if leftRemote
+        gmsh.model.addPhysicalGroup(0, [lr], -1, "leftremote")
+    end
+    if rightRemote
+        gmsh.model.addPhysicalGroup(0, [rr], -1, "rightremote")
+    end
+
     # --------------------------------------------------
     # Mesh settings (structured hex mesh)
     # --------------------------------------------------
@@ -10506,7 +10547,7 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
 
     #gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
 
-    d = min(dx, dy)
+    d = min(dx, dy, dz)
 
     gmsh.model.mesh.setTransfiniteCurve(9, ceil(lx / d) + 1)
     gmsh.model.mesh.setTransfiniteCurve(10, ceil(lx / d) + 1)
@@ -10540,6 +10581,20 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
     #lc = min(dx, dy, dz)
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc)
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
+
+    T = [
+        1.0, 0.0, 0.0, lx,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    ]
+
+    gmsh.model.mesh.setPeriodic(
+        2,
+        [2],
+        [1],
+        T
+    )
 
     # --------------------------------------------------
     # Generate mesh
