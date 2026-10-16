@@ -10429,6 +10429,11 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc)
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
 
+    # --------------------------------------------------
+    # Generate mesh
+    # --------------------------------------------------
+    gmsh.model.mesh.generate(2)
+
     T = [
         1.0, 0.0, 0.0, lx,
         0.0, 1.0, 0.0, 0.0,
@@ -10442,11 +10447,6 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
         [4],
         T
     )
-
-    # --------------------------------------------------
-    # Generate mesh
-    # --------------------------------------------------
-    gmsh.model.mesh.generate(2)
 
     # --------------------------------------------------
     # Save
@@ -10582,6 +10582,11 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc)
     #gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
 
+    # --------------------------------------------------
+    # Generate mesh
+    # --------------------------------------------------
+    gmsh.model.mesh.generate(3)
+    
     T = [
         1.0, 0.0, 0.0, lx,
         0.0, 1.0, 0.0, 0.0,
@@ -10595,11 +10600,6 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
         [1],
         T
     )
-
-    # --------------------------------------------------
-    # Generate mesh
-    # --------------------------------------------------
-    gmsh.model.mesh.generate(3)
 
     # --------------------------------------------------
     # Save
