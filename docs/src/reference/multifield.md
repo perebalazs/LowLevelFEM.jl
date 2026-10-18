@@ -764,6 +764,7 @@ D
 solveField
 solveEigenFields
 reductionMatrices
+rotateResult
 ```
 
 ## Multi-point constraints
