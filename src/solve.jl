@@ -41,18 +41,6 @@ struct SolveRHS{F}
 end
 
 """
-    NodalCoordinateSystem
-
-Internal representation of a local nodal coordinate-system definition.
-Construct coordinate systems through [`CoordinateSystem`](@ref).
-"""
-struct NodalCoordinateSystem
-    e1::VectorField
-    e2::Union{VectorField,Nothing}
-    sig::Float64
-end
-
-"""
     Global(f)
 
 Mark right-hand-side data as expressed in the global Cartesian coordinate
@@ -86,69 +74,6 @@ u = solveField(
 """
 Global(f::_SolveFieldType) = GlobalField(f)
 Global(F::SystemVector) = GlobalField(F)
-
-"""
-    CoordinateSystem(e1::VectorField; handedness=:right)
-    CoordinateSystem(e1::VectorField, e2::VectorField; handedness=:right)
-
-Define a local orthonormal coordinate system from direction `VectorField`s.
-
-In 2D, only `e1` is supplied. It defines the first local basis direction and
-the second direction is generated automatically. With `handedness=:right`,
-
-```math
-\\mathbf e_2 = (-e_{1y}, e_{1x}),
-```
-
-while `handedness=:left` reverses this direction.
-
-In 3D, both `e1` and `e2` are required. `e1` is normalized, `e2` is
-orthogonalized against `e1` and normalized, and the third direction is formed
-as
-
-```math
-\\mathbf e_3 = \\mathbf e_1 \\times \\mathbf e_2
-```
-
-for `handedness=:right`, or with the cross-product order reversed for
-`handedness=:left`.
-
-The direction fields determine the nodal support on which the coordinate
-system is active. Outside this support the global Cartesian basis is retained.
-Several coordinate systems with disjoint support may be combined, for example
-through the `coordSys` argument of [`solveField`](@ref) or the `toCoordSys`
-argument of [`rotateResult`](@ref).
-
-# Arguments
-
-- `e1::VectorField`: first local basis direction.
-- `e2::VectorField`: second reference direction; required in 3D and not allowed
-  in 2D.
-- `handedness::Symbol`: `:right` (default) or `:left`.
-
-# Notes
-
-The supplied direction fields may vary spatially. They must contain exactly one
-time step and must belong to the same `Problem` as the field on which the
-coordinate system is used.
-"""
-CoordinateSystem(e1::VectorField; handedness::Symbol=:right) =
-    NodalCoordinateSystem(
-        e1,
-        nothing,
-        handedness == :right ? 1 : handedness == :left ? -1 : 0
-    )
-
-CoordinateSystem(
-    e1::VectorField,
-    e2::VectorField;
-    handedness::Symbol=:right
-) = NodalCoordinateSystem(
-    e1,
-    e2,
-    handedness == :right ? 1 : handedness == :left ? -1 : 0
-)
-
 
 # =============================================================================
 # RHS expression handling
@@ -705,7 +630,7 @@ components.
 """
 function _coordinate_transformation(
     P::Problem,
-    cs::NodalCoordinateSystem
+    cs::CoordinateSystem
 )
     P.pdim == P.dim ||
         error("CoordinateSystem requires a vector field with pdim == dim.")
@@ -855,7 +780,7 @@ function _build_coordinate_transformation(
     used_nodes = Set{Int}()
 
     for cs in coordSys
-        cs isa NodalCoordinateSystem ||
+        cs isa CoordinateSystem ||
             error(
                 "Coordinate systems must be created from VectorField " *
                 "directions, e.g. CoordinateSystem(e1, e2)."
@@ -1073,7 +998,7 @@ function _rotate_elementwise_tensor_result(
 end
 
 """
-    rotateResult(result; toCoordSys=NodalCoordinateSystem[])
+    rotateResult(result; toCoordSys=CoordinateSystem[])
 
 Express a vector or second-order tensor result in one or more local coordinate
 systems.
@@ -1148,7 +1073,7 @@ the cylindrical radial direction is undefined on the shaft axis.
 """
 function rotateResult(
     result::VectorField;
-    toCoordSys=NodalCoordinateSystem[]
+    toCoordSys=CoordinateSystem[]
 )
     isempty(toCoordSys) && return VectorField(
         [copy(Ae) for Ae in result.A],
@@ -1173,7 +1098,7 @@ end
 
 function rotateResult(
     result::TensorField;
-    toCoordSys=NodalCoordinateSystem[]
+    toCoordSys=CoordinateSystem[]
 )
     isempty(toCoordSys) && return TensorField(
         [copy(Ae) for Ae in result.A],
@@ -1265,7 +1190,7 @@ function _prepare_singlefield_system(
     rhs,
     support;
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[]
+    coordSys=CoordinateSystem[]
 )
     K = parent_system(K0)
     P = K.model
@@ -1359,7 +1284,7 @@ function prepare_singlefield_system(
     rhs::Union{_SolveFieldType,GlobalField,SolveRHS},
     support::Vector{BoundaryCondition};
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[]
+    coordSys=CoordinateSystem[]
 )
     return _prepare_singlefield_system(
         K,
@@ -1414,7 +1339,7 @@ MPCs, boundary conditions, and unwrapped loads are interpreted in these local
 component bases. `Global(...)` is the explicit exception for right-hand-side
 data supplied in global Cartesian components.
 
-Each `NodalCoordinateSystem` identifies its field through `e1.model`. Fields
+Each `CoordinateSystem` identifies its field through `e1.model`. Fields
 without a local coordinate system receive an identity block. A coordinate
 system may coexist with reduced-order interpolation on another field, but not
 yet on the same field.
@@ -1434,7 +1359,7 @@ function _build_multifield_coordinate_transformation(
     problems = K.problems
 
     for cs in coordSys
-        cs isa NodalCoordinateSystem ||
+        cs isa CoordinateSystem ||
             error(
                 "Coordinate systems must be created from VectorField " *
                 "directions, e.g. CoordinateSystem(e1, e2)."
@@ -1583,7 +1508,7 @@ function prepare_multifield_system(
     rhs,
     support::Vector{BoundaryCondition};
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[]
+    coordSys=CoordinateSystem[]
 )
     K = parent_system(K0)
 
@@ -1915,7 +1840,7 @@ end
         K, rhs;
         support=BoundaryCondition[],
         mpc=MPC[],
-        coordSys=NodalCoordinateSystem[],
+        coordSys=CoordinateSystem[],
         solver=:auto,
         preconditioner=:auto,
         solveroptions=(;),
@@ -2023,7 +1948,7 @@ function solveField(
     rhs::Union{_SolveFieldType,GlobalField,SolveRHS};
     support::Vector{BoundaryCondition}=BoundaryCondition[],
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[],
+    coordSys=CoordinateSystem[],
     solver=:auto,
     iterative=nothing,
     ordering=nothing,
@@ -2102,7 +2027,7 @@ function solveField(
     };
     support::Vector{BoundaryCondition}=BoundaryCondition[],
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[],
+    coordSys=CoordinateSystem[],
     solver=:auto,
     iterative=nothing,
     ordering=nothing,

@@ -9,7 +9,7 @@ export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, elementsToElements
 export projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
-export rotateNodes, CoordinateSystem
+export rotateNodes, CoordinateSystem, Transformation
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
 export plotOnPath, showOnSurface, plotOnBeam
@@ -2776,81 +2776,111 @@ function SystemVector(fields::Vector)
 end
 
 """
-    CoordinateSystem(vec1, vec2)
+    CoordinateSystem(e1::VectorField; handedness=:right)
+    CoordinateSystem(e1::VectorField, e2::VectorField; handedness=:right)
 
-A structure containing the data of a coordinate system.
-- `vec1`: direction of the new x axis.
-- `vec2`: together with `vec1` determine the xy plane
-If the problem is two dimensional, it is enough to give the first two
-elements of `vec1`. Elements of `vec1` and `vec2` can be functions. In
-3D case the functions have three arguments (x, y, and z coordinates),
-otherwise (in 2D case) the number of arguments is two (x and y coordinates).
+Define a local orthonormal coordinate system from direction `VectorField`s.
 
-Types:
-- `vec1`: Vector{Float64}
-- `vec2`: Vector{Float64}
+The direction fields may contain constant or spatially varying components and
+their finite-element support determines where the local coordinate system is
+active. The same `CoordinateSystem` object can be used by [`solveField`](@ref),
+[`rotateResult`](@ref), and [`rotateNodes`](@ref).
+
+In 2D, only `e1` is supplied. It defines the first local basis direction. The
+second direction is generated automatically. For `handedness=:right`,
+
+```math
+\\mathbf e_2 = (-e_{1y}, e_{1x}),
+```
+
+while `handedness=:left` reverses this direction.
+
+In 3D, both `e1` and `e2` are required. `e1` is normalized and `e2` defines the
+local 1-2 plane. During construction of the transformation, `e2` is
+orthogonalized against `e1` and normalized. The third basis direction is
+
+```math
+\\mathbf e_3 = \\mathbf e_1 \\times \\mathbf e_2
+```
+
+for `handedness=:right`, and the cross-product order is reversed for
+`handedness=:left`.
+
+# Arguments
+
+- `e1::VectorField`: first local basis direction.
+- `e2::VectorField`: second reference direction; required in 3D and not allowed
+  in 2D.
+- `handedness::Symbol`: `:right` (default) or `:left`.
+
+# Notes
+
+The direction fields must contain exactly one time step and must belong to the
+same `Problem`. Multiple coordinate systems with disjoint support can be
+combined in `solveField` and `rotateResult`.
 
 # Examples
 
 ```julia
-# 2D case
-nx(x, y) = x
-ny(x, y) = y
-cs = CoordinateSystem([nx, ny])
-Q = rotateNodes(problem, "body", cs)
-q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
-# `q1` is a nodal displacement vector.
-S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
-# `S2` is in Axisymmetric coordinate system.
+# 2D polar basis on a region called "body"
+er = VectorField(U, "body", [(x, y, z) -> x, (x, y, z) -> y, 0.0])
+cs = CoordinateSystem(er)
 
-# 3D case
-n1x(x, y, z) = x
-n1y(x, y, z) = y
-n2x(x, y, z) = -y
-n2y = n1x
-cs = CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
-Q = rotateNodes(problem, "body", cs)
+# 3D cylindrical basis
+ex = VectorField(U, "body", [(x, y, z) -> x, (x, y, z) -> y, 0.0])
+ez = VectorField(U, "body", [0.0, 0.0, 1.0])
+cs = CoordinateSystem(ex, ez)
+
+Q = rotateNodes(U, cs)
 ```
 """
 struct CoordinateSystem
-    vec1::Vector{Float64}
-    vec2::Vector{Float64}
-    vec1f::Vector{Function}
-    vec2f::Vector{Function}
-    i1::Vector{Int64}
-    i2::Vector{Int64}
-    function CoordinateSystem(vect1)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        return new([v1x, v1y, 0], [0, 0, 0], [v1fx, v1fy, f], [f, f, f], [i1x, i1y, 0], [0, 0, 0])
-    end
-    function CoordinateSystem(vect1, vect2)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        i1z = isa(vect1[3], Function) ? 1 : 0
-        i2x = isa(vect2[1], Function) ? 1 : 0
-        i2y = isa(vect2[2], Function) ? 1 : 0
-        i2z = isa(vect2[3], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1z = isa(vect1[3], Function) ? 1 : vect1[3]
-        v2x = isa(vect2[1], Function) ? 1 : vect2[1]
-        v2y = isa(vect2[2], Function) ? 1 : vect2[2]
-        v2z = isa(vect2[3], Function) ? 1 : vect2[3]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        v1fz = isa(vect1[3], Function) ? vect1[3] : f
-        v2fx = isa(vect2[1], Function) ? vect2[1] : f
-        v2fy = isa(vect2[2], Function) ? vect2[2] : f
-        v2fz = isa(vect2[3], Function) ? vect2[3] : f
-        return new([v1x, v1y, v1z], [v2x, v2y, v2z], [v1fx, v1fy, v1fz], [v2fx, v2fy, v2fz], [i1x, i1y, i1z], [i2x, i2y, i2z])
-    end
+    e1::VectorField
+    e2::Union{VectorField,Nothing}
+    sig::Float64
+end
+
+@inline function _coordinate_handedness(handedness::Symbol)
+    handedness === :right && return 1.0
+    handedness === :left  && return -1.0
+    error("CoordinateSystem: handedness must be :right or :left.")
+end
+
+function CoordinateSystem(
+    e1::VectorField;
+    handedness::Symbol=:right
+)
+    dim = e1.model.dim
+
+    dim == 2 ||
+        error(
+            "CoordinateSystem: the one-direction form is only valid in 2D; " *
+            "a second direction field is required in 3D."
+        )
+
+    return CoordinateSystem(
+        e1,
+        nothing,
+        _coordinate_handedness(handedness)
+    )
+end
+
+function CoordinateSystem(
+    e1::VectorField,
+    e2::VectorField;
+    handedness::Symbol=:right
+)
+    e1.model === e2.model ||
+        error("CoordinateSystem: e1 and e2 must belong to the same Problem.")
+
+    e1.model.dim == 3 ||
+        error("CoordinateSystem: in 2D only one direction field must be given.")
+
+    return CoordinateSystem(
+        e1,
+        e2,
+        _coordinate_handedness(handedness)
+    )
 end
 
 """
@@ -8301,123 +8331,71 @@ end
 ∫(s::Union{ScalarField,VectorField,TensorField}) = integrate(s)
 
 """
-    rotateNodes(problem, phName, CoordSys)
+    rotateNodes(problem::Problem, coordSys::CoordinateSystem)
+    rotateNodes(problem::Problem, phName::String, coordSys::CoordinateSystem)
 
-Creates the `T` transformation matrix, which rotates the nodal coordinate system
-of the nodes in `phName` physical group to the coordinate systen defined by `CoordSys`.
-The mesh belongs to `problem`.
+Build the nodal transformation matrix associated with `coordSys`.
 
-Return: `T`
+The returned [`Transformation`](@ref) maps local vector components to global
+Cartesian components at the active nodes. The coordinate system is evaluated
+with the same backend used by [`solveField`](@ref) and [`rotateResult`](@ref).
 
-Types:
-- `problem`: Problem
-- `phName`: String
-- `CoordSys`: CoordinateSystem
-- `T`: SparseMatrix
+In the two-argument form, the active nodes are determined directly by the
+support of the direction fields stored in `coordSys`.
+
+The three-argument form is retained for compatibility with existing
+`rotateNodes` workflows. In this form `phName` is checked against the support of
+the coordinate system; the physical group and the coordinate-system support
+must contain the same mesh nodes.
+
+# Arguments
+
+- `problem::Problem`: finite-element field whose nodal components are transformed.
+- `phName::String`: optional Gmsh physical-group name used to verify the active
+  node set.
+- `coordSys::CoordinateSystem`: local coordinate-system definition.
+
+# Returns
+
+A [`Transformation`](@ref) object `Q` such that
+
+```math
+\\mathbf v_\\mathrm{global} = Q\\,\\mathbf v_\\mathrm{local}.
+```
+
+# Example
+
+```julia
+er = VectorField(U, "body", [(x, y, z) -> x, (x, y, z) -> y, 0.0])
+cs = CoordinateSystem(er)
+Q = rotateNodes(U, cs)
+```
 """
-function rotateNodes(problem, phName, CoordSys)
-    dim = problem.dim
-    non = problem.non
-    dof = non * dim
-    phg = getTagForPhysicalName(phName)
-    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-    nonz = length(nodeTags) * dim * dim + (non - length(nodeTags)) * dim
-    lengthOfIJV = length(nodeTags) * dim * dim + non * dim
-    I = []
-    J = []
-    V = []
-    V = convert(Vector{Float64}, V)
-    sizehint!(I, lengthOfIJV)
-    sizehint!(J, lengthOfIJV)
-    sizehint!(V, lengthOfIJV)
-    vec2 = [0.0, 0.0, 0.0]
-    fn(x,y) = y
-    IJ = 1:dof
-    VV = ones(dof)
-    append!(I, IJ)
-    append!(J, IJ)
-    append!(V, VV)
-    
-    if dim == 3
-        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
-        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
-        e1 = CoordSys.vec1
-        e1 ./= √(dot(e1, e1))
-        I3 = [1 0 0; 0 1 0; 0 0 1]
-        e2 = (I3 - e1 * e1') * CoordSys.vec2
-        e2 ./= √(dot(e2, e2))
-        e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
-        T1 = [e1 e2 e3]
-        
-        if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1 || CoordSys.i1[3] == 1 || CoordSys.i2[1] == 1 || CoordSys.i2[2] == 1 || CoordSys.i2[3] == 1
-            for i in 1:length(nodeTags)
-                x = coord[i * 3 - 2]
-                y = coord[i * 3 - 1]
-                z = coord[i * 3]
-                e1[1] = CoordSys.i1[1] == 1 ? CoordSys.vec1f[1](x, y, z) : CoordSys.vec1[1]
-                e1[2] = CoordSys.i1[2] == 1 ? CoordSys.vec1f[2](x, y, z) : CoordSys.vec1[2]
-                e1[3] = CoordSys.i1[3] == 1 ? CoordSys.vec1f[3](x, y, z) : CoordSys.vec1[3]
-                vec2[1] = CoordSys.i2[1] == 1 ? CoordSys.vec2f[1](x, y, z) : CoordSys.vec2[1]
-                vec2[2] = CoordSys.i2[2] == 1 ? CoordSys.vec2f[2](x, y, z) : CoordSys.vec2[2]
-                vec2[3] = CoordSys.i2[3] == 1 ? CoordSys.vec2f[3](x, y, z) : CoordSys.vec2[3]
-                e1 ./= √(dot(e1, e1))
-                e2 = (I3 - e1 * e1') * vec2
-                e2 ./= √(dot(e2, e2))
-                e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
-                T1 = [e1 e2 e3]
-                Iidx = (nodeTags[i] * 3 - 3) .+ I0
-                Jidx = (nodeTags[i] * 3 - 3) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        else
-            for i in 1:length(nodeTags)
-                Iidx = (nodeTags[i] * 3 - 3) .+ I0
-                Jidx = (nodeTags[i] * 3 - 3) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        end
-    elseif dim == 2
-        I0 = [1, 2, 1, 2]
-        J0 = [1, 1, 2, 2]
-        e1 = CoordSys.vec1[1:2]
-        e1 ./= √(dot(e1, e1))
-        e2 = [-e1[2], e1[1]]
-        T1 = [e1 e2]
-        
-        if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1
-            for i in 1:length(nodeTags)
-                x = coord[i * 3 - 2]
-                y = coord[i * 3 - 1]
-                e1[1] = CoordSys.i1[1] == 1 ? CoordSys.vec1f[1](x, y) : CoordSys.vec1[1]
-                e1[2] = CoordSys.i1[2] == 1 ? CoordSys.vec1f[2](x, y) : CoordSys.vec1[2]
-                e1 ./= √(dot(e1, e1))
-                e2 = [-e1[2], e1[1]]
-                T1 = [e1 e2]
-                Iidx = (nodeTags[i] * 2 - 2) .+ I0
-                Jidx = (nodeTags[i] * 2 - 2) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        else
-            for i in 1:length(nodeTags)
-                Iidx = (nodeTags[i] * 2 - 2) .+ I0
-                Jidx = (nodeTags[i] * 2 - 2) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        end
-    else
-        error("rotateNodes: dimension of the problem is 2 o 3, now it is $dim.")
-    end
-    T = sparse(I, J, V, dof, dof, fn)
-    dropzeros!(T)
-    return Transformation(T, non, dim)
+function rotateNodes(
+    problem::Problem,
+    coordSys::CoordinateSystem
+)
+    Q, _ = _coordinate_transformation(problem, coordSys)
+    return Q
+end
+
+function rotateNodes(
+    problem::Problem,
+    phName::String,
+    coordSys::CoordinateSystem
+)
+    Q, coord_nodes = _coordinate_transformation(problem, coordSys)
+    group_nodes = _nodesOnPhysicalGroup(problem, phName)
+
+    coord_nodes == group_nodes ||
+        error(
+            "rotateNodes: coordinate-system support and physical group " *
+            "'$phName' do not contain the same nodes. " *
+            "Define the CoordinateSystem direction field(s) on '$phName', " *
+            "or use rotateNodes(problem, coordSys)."
+        )
+
+    return Q
 end
 
 """
