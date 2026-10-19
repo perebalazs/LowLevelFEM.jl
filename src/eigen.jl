@@ -184,7 +184,7 @@ function solve_eigen_reduced(
     which::Symbol=:LM,
     solver::Symbol=:auto,
     solveroptions=(;)
-)
+    )
     A, B = prepared.A, prepared.B
     N = size(A, 1)
     1 <= n <= N || error("solveEigen: require 1 <= n <= $N, got n=$n.")
@@ -230,7 +230,12 @@ function solve_eigen_reduced(
         return vals[ix], vecs[:, ix]
     end
 
-    options = merge((; nev=n, which=which, maxiter=10000), solveroptions)
+    options = merge((
+        ; nev=n, 
+        which=which, 
+        maxiter=10000, 
+        explicittransform=:none), 
+        solveroptions)
     if shift !== nothing
         options = merge(options, (; sigma=shift))
     end
