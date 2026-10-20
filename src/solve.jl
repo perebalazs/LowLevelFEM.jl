@@ -855,7 +855,8 @@ function _rotate_nodal_vector_result(
         copy(v.numElem),
         v.nsteps,
         v.type,
-        P
+        P,
+        v.kind
     )
 end
 
@@ -907,7 +908,8 @@ function _rotate_elementwise_vector_result(
         copy(v.numElem),
         v.nsteps,
         v.type,
-        P
+        P,
+        v.kind
     )
 end
 
@@ -942,7 +944,8 @@ function _rotate_nodal_tensor_result(
         copy(A0.numElem),
         A0.nsteps,
         A0.type,
-        P
+        P,
+        A0.kind
     )
 end
 
@@ -993,7 +996,8 @@ function _rotate_elementwise_tensor_result(
         copy(A0.numElem),
         A0.nsteps,
         A0.type,
-        P
+        P,
+        A0.kind
     )
 end
 
@@ -1082,7 +1086,8 @@ function rotateResult(
         copy(result.numElem),
         result.nsteps,
         result.type,
-        result.model
+        result.model,
+        result.kind
     )
 
     Q = _build_coordinate_transformation(result.model, toCoordSys)
@@ -1107,7 +1112,8 @@ function rotateResult(
         copy(result.numElem),
         result.nsteps,
         result.type,
-        result.model
+        result.model,
+        result.kind
     )
 
     Q = _build_coordinate_transformation(result.model, toCoordSys)
@@ -1320,6 +1326,12 @@ function reconstruct_singlefield_solution(
     u = copy(prepared.template)
     u.a .= x_global
 
+    # A field used as a load or initial-guess template may contain eigenmodes.
+    # Solving a new linear system produces an ordinary field, not eigenmodes.
+    if u.kind !== :field
+        return typeof(u)(u.A, u.a, u.t, u.numElem,
+                         u.nsteps, u.type, u.model, :field)
+    end
     return u
 end
 

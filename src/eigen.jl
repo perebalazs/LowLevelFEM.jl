@@ -9,7 +9,7 @@
 # complex eigenvalues/eigenvectors must be preserved.
 ###############################################################################
 
-export solveEigen, solveEigenProblem
+export solveEigen, solveEigenProblem, eigenVector, eigenValue, showEigenResults
 export solveEigenModes, solveEigenFields, solveBucklingModes
 export solveModalAnalysis, solveBuckling
 export smallestEigenValue, largestEigenValue
@@ -462,12 +462,19 @@ end
 """
     solveEigen(A, B; n=6, nev=nothing, shift=nothing, sigma=nothing,
                which=nothing, support=[], mpc=[], coordSys=[],
-               solver=:auto, solveroptions=(;), normalize=:unit, kwargs...)
+               solver=:auto, solveroptions=(;), normalize=:unit,
+               output=:field, part=:real, kwargs...)
 
 Solve `A*ϕ = λ*B*ϕ` for single-field or multifield problems.
 
-The result `(λ, ϕ)` contains exactly `n` pairs, sorted by increasing real
-part of λ (then by imaginary part). Complex eigenpairs are preserved.
+By default return one standard nodal Field per Problem (as `solveField` does),
+with columns representing mode shapes and `field.t` holding the real or imaginary
+parts of the eigenvalues. `part=:real`, `:imag`, or `:both` selects components;
+`:both` returns the two Fields consecutively for each Problem.
+
+With `output=:raw`, return `(λ, ϕ)` with the complete real/complex generalized
+eigenpairs. `part` is ignored in this mode. Eigenpairs are ordered by increasing
+real part of λ (then imaginary part).
 
 # Selection modes
 
@@ -500,9 +507,15 @@ function solveEigen(
     solver::Symbol=:auto,
     solveroptions=(;),
     normalize::Symbol=:unit,
+    output::Symbol=:field,
+    part::Symbol=:real,
     kwargs...
 )
     _eigen_check_choice(:normalize, normalize, (:none, :unit, :mass, :B))
+    _eigen_check_choice(:output, output, (:field, :raw))
+    if output === :field
+        _eigen_check_choice(:part, part, (:real, :imag, :both))
+    end
     if n !== nothing && nev !== nothing
         throw(ArgumentError("solveEigen: use n or nev, not both (n=$n, nev=$nev)."))
     end
@@ -515,7 +528,7 @@ function solveEigen(
             "solveEigen: unknown keyword :$key. Available ARPACK keywords: " *
             join(string.(_EIGEN_ARPACK_OPTIONS), ", ") *
             "; LowLevelFEM options: n, nev, shift, sigma, which, support, " *
-            "mpc, coordSys, solver, normalize, solveroptions."
+            "mpc, coordSys, solver, normalize, output, part, solveroptions."
         ))
     end
     for key in keys(native)
@@ -537,7 +550,194 @@ function solveEigen(
     Bfull = normalize in (:mass, :B) ? _eigen_parent(B).A : nothing
     ϕ = reconstruct_eigenvectors(ϕr, prepared;
         normalize=normalize, Bfull=Bfull)
-    return λ, ϕ
+    output === :raw && return λ, ϕ
+    return _eigen_fields(λ, ϕ, _eigen_parent(A); part=part)
+end
+
+# =============================================================================
+# Field-valued eigenresults (without changing the algebraic eigenvalue solver)
+# =============================================================================
+
+const _EigenFieldType = Union{ScalarField,VectorField,TensorField}
+const _EIGEN_FIELD_KINDS = (:eigen_real, :eigen_imag)
+
+"""
+    _eigen_field(P, modes, eigenvalues, kind)
+
+Wrap a real-valued block of nodal eigenvectors in the standard LowLevelFEM
+Field type for `P`. Each column is one mode and each entry of `t` is the
+corresponding real-valued eigenvalue component (not a physical time).
+"""
+function _eigen_field(P::Problem, modes::AbstractMatrix,
+                      eigenvalues::AbstractVector, kind::Symbol)
+    kind in _EIGEN_FIELD_KINDS || throw(ArgumentError(
+        "eigen field: kind must be :eigen_real or :eigen_imag."))
+    size(modes, 1) == ndofs(P) || throw(DimensionMismatch(
+        "eigen field: $(size(modes,1)) mode DOFs, expected $(ndofs(P)) for field $(P.field)."))
+    size(modes, 2) == length(eigenvalues) || throw(DimensionMismatch(
+        "eigen field: eigenvector column count must equal eigenvalue count."))
+
+    type = P.pdim == 1 ? :scalar :
+           P.pdim == 2 ? :v2D :
+           P.pdim == 3 ? :v3D :
+           P.pdim == 9 ? :tensor :
+           throw(ArgumentError("eigen field: unsupported component count $(P.pdim); expected 1, 2, 3 or 9."))
+
+    T = P.pdim == 1 ? ScalarField :
+        P.pdim in (2, 3) ? VectorField : TensorField
+
+    return T(Matrix{Float64}[], Matrix{Float64}(modes),
+             Float64.(eigenvalues), Int[], length(eigenvalues),
+             type, P, kind)
+end
+
+"""
+    _eigen_fields(λ, ϕ, K; part=:real)
+
+Convert the complete eigenpairs of a single- or multifield SystemMatrix into
+ordinary nodal Fields. `:real` and `:imag` select a component of both eigenvalues
+and eigenvectors; `:both` returns paired real and imaginary Fields in problem
+order: `(ur, ui, vr, vi, ...)`. Normalization must already have been applied to
+the complete complex eigenvectors before this conversion.
+"""
+function _eigen_fields(λ::AbstractVector, ϕ::AbstractMatrix,
+                       K::SystemMatrix; part::Symbol=:real)
+    _eigen_check_choice(:part, part, (:real, :imag, :both))
+    size(ϕ, 1) == size(K.A, 1) || throw(DimensionMismatch(
+        "solveEigen: eigenvector DOFs and SystemMatrix dimension disagree."))
+    size(ϕ, 2) == length(λ) || throw(DimensionMismatch(
+        "solveEigen: eigenvalue and eigenvector counts disagree."))
+
+    problems = K.problems === nothing ? [K.model] : K.problems
+    offsets = K.offsets === nothing ? [0] : K.offsets
+    length(problems) == length(offsets) ||
+        error("solveEigen: multifield Problem/offset metadata are inconsistent.")
+
+    results = _EigenFieldType[]
+    for (i, P) in enumerate(problems)
+        rows = (offsets[i] + 1):(offsets[i] + ndofs(P))
+        if part in (:real, :both)
+            push!(results, _eigen_field(P, real.(@view(ϕ[rows, :])),
+                                        real.(λ), :eigen_real))
+        end
+        if part in (:imag, :both)
+            push!(results, _eigen_field(P, imag.(@view(ϕ[rows, :])),
+                                        imag.(λ), :eigen_imag))
+        end
+    end
+    return length(results) == 1 ? only(results) : tuple(results...)
+end
+
+"""
+    eigenValue(u::Union{ScalarField,VectorField,TensorField}; n=1)
+
+Return the stored real or imaginary part of the `n`-th eigenvalue, as `Float64`.
+Only Fields marked `:eigen_real` or `:eigen_imag` are accepted. For complex
+eigenvalues, use `part=:both` to retain both parts separately.
+"""
+function eigenValue(u::_EigenFieldType; n::Integer=1)
+    u.kind in _EIGEN_FIELD_KINDS || throw(ArgumentError(
+        "eigenValue: this is an ordinary Field (kind=$(u.kind)), not an eigenmode Field."))
+    1 <= n <= u.nsteps || throw(ArgumentError(
+        "eigenValue: n must be between 1 and $(u.nsteps); got $n."))
+    return u.t[n]
+end
+
+"""
+    eigenVector(u::Union{ScalarField,VectorField,TensorField}; n=1)
+
+Extract one mode as a single-step Field of the same type and representation.
+The selected eigenvalue component remains in `t[1]`, and `kind` is preserved.
+"""
+function eigenVector(u::_EigenFieldType; n::Integer=1)
+    u.kind in _EIGEN_FIELD_KINDS || throw(ArgumentError(
+        "eigenVector: expected an eigenmode Field, got kind=$(u.kind)."))
+    1 <= n <= u.nsteps || throw(ArgumentError(
+        "eigenVector: n must be between 1 and $(u.nsteps); got $n."))
+    A = isElementwise(u) ?
+        Matrix{Float64}[copy(@view(Ae[:, n:n])) for Ae in u.A] :
+        Matrix{Float64}[]
+    a = isNodal(u) ? copy(@view(u.a[:, n:n])) : Matrix{Float64}(undef, 0, 0)
+    return typeof(u)(A, a, [u.t[n]], copy(u.numElem),
+                     1, u.type, u.model, u.kind)
+end
+
+"""
+    showEigenResults(u; name=:eigen, visible=false, ff=2, factor=0)
+
+Display the modes of an eigenmode Field in a Gmsh view. Each stored column
+is a mode; its (real-valued) eigenvalue component is shown via the Field's
+`t` data. `ff=1` and `ff=2` display mode shapes as displacements with eigenvalue labels;
+`ff=0` selects an ordinary vector/field view with time labels.
+The default `ff=2` uses eigenvalue labeling and displacement visualization. Returns the Gmsh view tag.
+"""
+function showEigenResults(u::_EigenFieldType;
+                          name=:eigen, visible::Bool=false,
+                          ff::Int=2, factor=0)
+    u.kind in _EIGEN_FIELD_KINDS || throw(ArgumentError(
+        "showEigenResults: expected an eigenmode Field; got kind=$(u.kind)."))
+    ff in (0, 1, 2) || throw(ArgumentError(
+        "showEigenResults: ff must be 0 (ordinary), 1 (modal), or 2 (buckling)."))
+    comp = u isa ScalarField ? :scalar :
+           u isa VectorField ? :vector : :tensor
+    tag = showDoFResults(u, comp;
+        name=string(name), visible=visible, ff=ff, factor=factor)
+    # Show the eigenvalue label also when a single mode is displayed.
+    if ff == 0
+        gmsh.view.option.setNumber(tag, "ShowTime", 1)
+    end
+    return tag
+end
+
+"""
+    showEigenResults(fields::Tuple; name=:eigen, visible=false, ff=2, factor=0)
+
+Create one Gmsh view for each Field in a multifield eigenresult tuple.
+Returns a tuple of view tags in the same order as the input Fields.
+"""
+function showEigenResults(fields::Tuple;
+                          name=:eigen, visible::Bool=false,
+                          ff::Int=2, factor=0)
+    all(u -> u isa _EigenFieldType, fields) ||
+        throw(ArgumentError("showEigenResults: tuple must contain only Field objects."))
+    return tuple((showEigenResults(u;
+        name="$(name) ($(u.model.field), $(u.kind), $i)",
+        visible=visible, ff=ff, factor=factor)
+        for (i, u) in enumerate(fields))...)
+end
+
+"""
+    showModalResults(u::Field; name=:modal, visible=false, ff=1, factor=0)
+
+Render a real eigenmode Field as an undamped vibration mode. The temporary
+Gmsh view displays frequencies `sqrt(λ)/(2π)` rather than `λ`; the input Field
+and its original eigenvalue labels are not modified.
+"""
+function showModalResults(u::_EigenFieldType;
+                          name=:modal, visible::Bool=false,
+                          ff::Int=1, factor=0)
+    u.kind === :eigen_real || throw(ArgumentError(
+        "showModalResults: use a :eigen_real Field containing real ω² eigenvalues."))
+    scale = max(1.0, maximum(abs, u.t))
+    minimum(u.t) >= -1e-10 * scale || throw(ArgumentError(
+        "showModalResults: negative eigenvalues cannot be converted to real frequencies."))
+    freq = sqrt.(max.(u.t, 0.0)) ./ (2π)
+    viewfield = typeof(u)(u.A, u.a, freq, u.numElem, u.nsteps,
+                          u.type, u.model, u.kind)
+    return showEigenResults(viewfield;
+        name=name, visible=visible, ff=ff, factor=factor)
+end
+
+"""
+    showBucklingResults(u::Field; name=:buckling, visible=false, ff=2, factor=0)
+
+Display buckling eigenvectors and their corresponding eigenvalue components.
+"""
+function showBucklingResults(u::_EigenFieldType;
+                            name=:buckling, visible::Bool=false,
+                            ff::Int=2, factor=0)
+    return showEigenResults(u;
+        name=name, visible=visible, ff=ff, factor=factor)
 end
 
 """
@@ -557,6 +757,7 @@ function solveEigenProblem(
     return solveEigen(A, B;
         sigma=shift, which=which,
         solver=directSolver ? :direct : :arpack,
+        output=:raw,
         kwargs...)
 end
 
@@ -612,7 +813,7 @@ function solveEigenModes(
         n=n, shift=(2π*fₘᵢₙ)^2,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=directSolver ? :direct : solver,
-        solveroptions=solveroptions, normalize=normalize)
+        solveroptions=solveroptions, normalize=normalize, output=:raw)
     ω2, modes = _eigen_real_modes(λ, ϕ; context="solveEigenModes")
     minimum(ω2) >= -1e-9 * max(1.0, maximum(abs, ω2)) ||
         error("solveEigenModes: negative eigenvalues detected; use solveEigen to inspect instability.")
@@ -641,7 +842,7 @@ function solveEigenFields(
         n=n, shift=(2π*fmin)^2,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=directSolver ? :direct : solver,
-        solveroptions=solveroptions, normalize=normalize)
+        solveroptions=solveroptions, normalize=normalize, output=:raw)
     ω2, modes = _eigen_real_modes(λ, ϕ; context="solveEigenFields")
     minimum(ω2) >= -1e-9 * max(1.0, maximum(abs, ω2)) ||
         error("solveEigenFields: negative eigenvalues detected; use solveEigen.")
@@ -672,7 +873,7 @@ function solveBucklingModes(
         n=n, sigma=0.0, which=:LM,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=directSolver ? :direct : solver,
-        solveroptions=solveroptions, normalize=:unit)
+        solveroptions=solveroptions, normalize=:unit, output=:raw)
     vals, modes = _eigen_real_modes(λ, ϕ; context="solveBucklingModes")
     return Eigen(vals, modes, K.model, nothing, nothing)
 end
@@ -697,60 +898,129 @@ function splitEigenToEigen(eig::Eigen)
     return tuple(results...)
 end
 
-"""
-    smallestEigenValue(K, C; support=[], mpc=[], coordSys=[])
+# -----------------------------------------------------------------------------
+# Legacy scalar eigenvalue and vibration-period helpers.
+# The full (possibly signed/complex) spectrum is available through
+# solveEigen(...; output=:raw). These wrappers keep the historical Float64
+# return value abs(real(λ)) used by older transient analysis notebooks.
+# -----------------------------------------------------------------------------
 
-Return the generalized eigenvalue closest to zero.
+"""
+    smallestEigenValue(K, C; support=BoundaryCondition[], mpc=MPC[],
+                       coordSys=[], solver=:auto, sigma=1e-8, which=:LR,
+                       solveroptions=(;), kwargs...)
+
+Return the smallest generalized eigenvalue near zero for `K*ϕ = λ*C*ϕ`.
+
+For compatibility with the original implementation, the result is a `Float64`
+containing `abs(real(λ))`. By default ARPACK uses a small numerical shift
+(`sigma=1e-8`, `which=:LR`); if that solve fails numerically, it retries with
+`which=:SM` and no numerical shift. Boundary conditions and MPCs use the same
+reduction as `solveEigen`, for single- and multifield systems.
+
+This legacy wrapper discards the sign and imaginary part of an eigenvalue.
+Use `solveEigen(K, C; output=:raw)` to retain the original eigenvalue.
 """
 function smallestEigenValue(
-    K::SystemMatrix, C::SystemMatrix;
+    K::Union{SystemMatrix,SymmetricSystemMatrix},
+    C::Union{SystemMatrix,SymmetricSystemMatrix};
     support::Vector{BoundaryCondition}=BoundaryCondition[],
-    mpc::Vector{MPC}=MPC[], coordSys=[], solver::Symbol=:auto
+    mpc::Vector{MPC}=MPC[],
+    coordSys=[],
+    solver::Symbol=:auto,
+    sigma::Number=1e-8,
+    which::Symbol=:LR,
+    solveroptions=(;),
+    kwargs...
 )
-    λ, _ = solveEigen(K, C; n=1, sigma=1e-8, which=:LM,
-        support=support, mpc=mpc, coordSys=coordSys,
-        solver=solver, normalize=:none)
-    return only(λ)
+    # Use the raw result: solveEigen now returns Field objects by default.
+    # Forward additional supported ARPACK keywords (e.g. tol, ncv, maxiter).
+    value = try
+        λ, _ = solveEigen(K, C;
+            nev=1, sigma=sigma, which=which,
+            support=support, mpc=mpc, coordSys=coordSys,
+            solver=solver, solveroptions=solveroptions,
+            normalize=:none, output=:raw, kwargs...)
+        only(λ)
+    catch err
+        # Keep the old ARPACK fallback, but do not conceal invalid user options.
+        if solver === :direct ||
+           err isa ArgumentError || err isa DimensionMismatch ||
+           err isa MethodError || which !== :LR || sigma != 1e-8
+            rethrow()
+        end
+        @warn "smallestEigenValue: near-zero shift-invert failed; retrying with which=:SM and no sigma." exception=(err, catch_backtrace())
+        λ, _ = solveEigen(K, C;
+            nev=1, which=:SM,
+            support=support, mpc=mpc, coordSys=coordSys,
+            solver=solver, solveroptions=solveroptions,
+            normalize=:none, output=:raw, kwargs...)
+        only(λ)
+    end
+    return Float64(abs(real(value)))
 end
 
 """
-    largestEigenValue(K, C; support=[], mpc=[], coordSys=[])
+    largestEigenValue(K, C; support=BoundaryCondition[], mpc=MPC[],
+                      coordSys=[], solver=:auto, which=:LM,
+                      solveroptions=(;), kwargs...)
 
-Return the generalized eigenvalue of largest magnitude.
+Return the generalized eigenvalue of largest magnitude for `K*ϕ = λ*C*ϕ`.
+
+The default selection is the original unshifted ARPACK `which=:LM`. Return
+`abs(real(λ))::Float64`, preserving the legacy API. This is intended for real
+positive spectra such as undamped mechanical vibration problems; use the raw
+`solveEigen` result for instability or complex spectral analysis.
 """
 function largestEigenValue(
-    K::SystemMatrix, C::SystemMatrix;
+    K::Union{SystemMatrix,SymmetricSystemMatrix},
+    C::Union{SystemMatrix,SymmetricSystemMatrix};
     support::Vector{BoundaryCondition}=BoundaryCondition[],
-    mpc::Vector{MPC}=MPC[], coordSys=[], solver::Symbol=:auto
+    mpc::Vector{MPC}=MPC[],
+    coordSys=[],
+    solver::Symbol=:auto,
+    which::Symbol=:LM,
+    solveroptions=(;),
+    kwargs...
 )
-    λ, _ = solveEigen(K, C; n=1, which=:LM,
+    λ, _ = solveEigen(K, C;
+        nev=1, which=which,
         support=support, mpc=mpc, coordSys=coordSys,
-        solver=solver, normalize=:none)
-    return only(λ)
+        solver=solver, solveroptions=solveroptions,
+        normalize=:none, output=:raw, kwargs...)
+    return Float64(abs(real(only(λ))))
 end
 
-function _eigen_period(λ)
-    abs(imag(λ)) <= 1e-8 * max(1.0, abs(real(λ))) ||
-        error("Eigenperiod: a complex eigenvalue has no real undamped period.")
-    real(λ) > 0 ||
-        error("Eigenperiod: the eigenvalue must be positive, got $λ.")
-    return 2π / sqrt(real(λ))
+"""
+    largestPeriodTime(K, M; kwargs...)
+
+Return the longest vibration period `2π/sqrt(λmin)` in a real mechanical
+system. Supports the same boundary-condition, MPC and solver keywords as
+`smallestEigenValue`. A zero eigenvalue yields `Inf`, as in the legacy formula.
+"""
+function largestPeriodTime(
+    K::Union{SystemMatrix,SymmetricSystemMatrix},
+    M::Union{SystemMatrix,SymmetricSystemMatrix};
+    kwargs...
+)
+    λmin = smallestEigenValue(K, M; kwargs...)
+    return λmin == 0 ? Inf : 2π / sqrt(λmin)
 end
 
-"""Return the longest undamped vibration period for positive eigenvalues."""
-function largestPeriodTime(K::SystemMatrix, M::SystemMatrix;
-    support::Vector{BoundaryCondition}=BoundaryCondition[],
-    mpc::Vector{MPC}=MPC[], coordSys=[])
-    return _eigen_period(smallestEigenValue(K, M;
-        support=support, mpc=mpc, coordSys=coordSys))
-end
+"""
+    smallestPeriodTime(K, M; kwargs...)
 
-"""Return the shortest undamped vibration period for positive eigenvalues."""
-function smallestPeriodTime(K::SystemMatrix, M::SystemMatrix;
-    support::Vector{BoundaryCondition}=BoundaryCondition[],
-    mpc::Vector{MPC}=MPC[], coordSys=[])
-    return _eigen_period(largestEigenValue(K, M;
-        support=support, mpc=mpc, coordSys=coordSys))
+Return the shortest vibration period `2π/sqrt(λmax)` in a real mechanical
+system. Supports the same boundary-condition, MPC and solver keywords as
+`largestEigenValue`.
+"""
+function smallestPeriodTime(
+    K::Union{SystemMatrix,SymmetricSystemMatrix},
+    M::Union{SystemMatrix,SymmetricSystemMatrix};
+    kwargs...
+)
+    λmax = largestEigenValue(K, M; kwargs...)
+    return λmax == 0 ? Inf : 2π / sqrt(λmax)
 end
 
 # -----------------------------------------------------------------------------
