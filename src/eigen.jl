@@ -165,47 +165,175 @@ function prepare_eigen_system(
     )
 end
 
-"""
-    solve_eigen_reduced(prepared; n=6, shift=0.0, which=:LM,
-                        solver=:auto, solveroptions=(;))
+# ARPACK keyword names supported by its generalized eigs(A, B; ...) API.
+const _EIGEN_ARPACK_OPTIONS = (
+    :nev, :ncv, :which, :tol, :maxiter, :sigma,
+    :ritzvec, :explicittransform, :v0, :check
+)
+const _EIGEN_WHICH_OPTIONS = (:LM, :SM, :LR, :SR, :LI, :SI, :BE)
 
-Solve the prepared generalized eigenproblem. `:direct` returns the selected
-`n` eigenpairs of the dense generalized problem; `:arpack` uses sparse
-shift-invert or ordinary Arnoldi/Lanczos iterations.
+function _eigen_check_choice(name::Symbol, value, choices)
+    value in choices || throw(ArgumentError(
+        "solveEigen: invalid $name=$(repr(value)). " *
+        "Available values: $(join(string.(choices), ", "))."
+    ))
+    return value
+end
 
-When both inputs were marked `Symmetric`, symmetric algorithms are attempted
-only if the reduced mass/metric matrix is positive definite. Indefinite and
-nonsymmetric pairs use the general solver instead.
 """
+    _eigen_selected_indices(λ, n; sigma=nothing, which=:SR, shift=nothing)
+
+Select from an already computed spectrum. In native ARPACK mode, `which`
+refers to the transformed eigenvalues `1/(λ-sigma)` when `sigma` is set.
+For simple threshold mode, select the smallest `λ > shift` by real part.
+The returned indices are always sorted by `(real(λ), imag(λ))`.
+"""
+function _eigen_selected_indices(λ, n::Int;
+    sigma=nothing, which::Symbol=:SR, shift=nothing)
+
+    candidates = [i for i in eachindex(λ)
+                  if isfinite(real(λ[i])) && isfinite(imag(λ[i])) &&
+                     (shift === nothing || real(λ[i]) > shift)]
+
+    if shift !== nothing || (sigma === nothing && which === :SR)
+        order = sort(candidates; by=i -> (real(λ[i]), imag(λ[i])))
+    else
+        # ARPACK's `which` targets the *transformed* spectrum when sigma is set.
+        transformed = sigma === nothing ? λ : 1 ./ (λ .- sigma)
+        if which === :BE
+            small = sort(candidates; by=i -> real(transformed[i]))
+            nlo = fld(n, 2)
+            nhi = n - nlo
+            order = vcat(small[1:min(nlo, length(small))],
+                         reverse(small[max(1, length(small)-nhi+1):end]))
+        else
+            score(i) = which === :LM ? abs(transformed[i]) :
+                       which === :SM ? -abs(transformed[i]) :
+                       which === :LR ? real(transformed[i]) :
+                       which === :SR ? -real(transformed[i]) :
+                       which === :LI ? imag(transformed[i]) :
+                       -imag(transformed[i])  # :SI
+            order = sort(candidates; by=score, rev=true)
+        end
+    end
+
+    length(order) >= n || throw(ArgumentError(
+        "solveEigen: only $(length(order)) eigenvalues satisfy the requested " *
+        "selection; $n requested." *
+        (shift === nothing ? "" : " Try a smaller shift or request fewer modes.")
+    ))
+    selected = order[1:n]
+    return sort(selected; by=i -> (real(λ[i]), imag(λ[i])))
+end
+
+"""
+    solve_eigen_reduced(prepared; n=6, shift=nothing, sigma=nothing,
+                        which=nothing, solver=:auto, solveroptions=(;))
+
+Solve a generalized eigenproblem and return exactly `n` eigenpairs (sorted
+by increasing real part, then imaginary part).
+
+Two mutually exclusive search modes are supported:
+
+- Simple mode: `shift=lower_bound` selects the first `n` real eigenvalues
+  strictly greater than `lower_bound`. For sparse iterative calculation, this
+  is guaranteed only for real symmetric matrices with positive-definite B.
+  ARPACK uses one-sided shift-invert (`sigma≈shift`, `which=:LR`).
+- Native ARPACK mode: `sigma` and `which` retain their original ARPACK
+  meanings. Without `sigma` or `shift`, the default is `which=:SR`, selecting
+  eigenvalues with smallest real part.
+
+Native ARPACK options may be passed via `solveroptions`, and are checked
+before dispatch. ARPACK's `ritzvec=false` is incompatible with this API.
+"""
+function _eigen_nearly_symmetric(M)
+    eltype(M) <: Real || return false
+    scale = opnorm(M, Inf)
+    scale == 0 && return true
+    return opnorm(M - M', Inf) <= 1e-12 * scale
+end
+
 function solve_eigen_reduced(
     prepared;
     n::Int=6,
-    shift=0.0,
-    which::Symbol=:LM,
+    shift=nothing,
+    sigma=nothing,
+    which=nothing,
     solver::Symbol=:auto,
     solveroptions=(;)
-    )
+)
     A, B = prepared.A, prepared.B
     N = size(A, 1)
-    1 <= n <= N || error("solveEigen: require 1 <= n <= $N, got n=$n.")
-    solver in (:auto, :direct, :arpack) ||
-        error("solveEigen: solver must be :auto, :direct, or :arpack.")
-    solveroptions isa NamedTuple ||
-        error("solveEigen: solveroptions must be a NamedTuple.")
+    1 <= n <= N || throw(ArgumentError(
+        "solveEigen: n must be between 1 and $N (received $n)."
+    ))
+    _eigen_check_choice(:solver, solver, (:auto, :direct, :arpack))
+    solveroptions isa NamedTuple || throw(ArgumentError(
+        "solveEigen: solveroptions must be a NamedTuple, e.g. (ncv=40, tol=1e-9)."
+    ))
+    for key in keys(solveroptions)
+        key in _EIGEN_ARPACK_OPTIONS || throw(ArgumentError(
+            "solveEigen: unknown ARPACK option :$key. Available options: " *
+            join(string.(_EIGEN_ARPACK_OPTIONS), ", ") * "."
+        ))
+    end
+    if :nev in keys(solveroptions)
+        solveroptions.nev == n || throw(ArgumentError(
+            "solveEigen: conflicting n=$n and solveroptions.nev=$(solveroptions.nev). " *
+            "Use n or nev to set the number of eigenpairs."
+        ))
+    end
+    if :sigma in keys(solveroptions)
+        (sigma === nothing || isequal(sigma, solveroptions.sigma)) ||
+            throw(ArgumentError("solveEigen: conflicting sigma and solveroptions.sigma."))
+        sigma = solveroptions.sigma
+    end
+    if :which in keys(solveroptions)
+        (which === nothing || isequal(which, solveroptions.which)) ||
+            throw(ArgumentError("solveEigen: conflicting which and solveroptions.which."))
+        which = solveroptions.which
+    end
+    shift === nothing || (shift isa Real && isfinite(shift)) ||
+        throw(ArgumentError("solveEigen: shift must be a finite real lower bound or nothing."))
+    (sigma === nothing || sigma isa Number) ||
+        throw(ArgumentError("solveEigen: sigma must be a number or nothing (ARPACK option)."))
+    !(shift !== nothing && sigma !== nothing) || throw(ArgumentError(
+        "solveEigen: shift and sigma are different search modes; use only one. " *
+        "shift is a lower bound; sigma is the original ARPACK target."
+    ))
+    !(shift !== nothing && which !== nothing) || throw(ArgumentError(
+        "solveEigen: which is a native ARPACK option and cannot accompany shift. " *
+        "Use shift alone, or sigma together with which."
+    ))
+    if which !== nothing
+        _eigen_check_choice(:which, which, _EIGEN_WHICH_OPTIONS)
+    end
+    selection = shift !== nothing ? :threshold : :native
+    arpack_which = selection === :threshold ? :LR :
+                   which === nothing ? (sigma === nothing ? :SR : :LM) : which
 
-    # ARPACK cannot reliably return an almost-complete eigenspectrum;
-    # choose a dense solve automatically for small/reduced problems.
-    chosen = solver === :auto ? (N <= 32 || n >= N - 1 ? :direct : :arpack) : solver
-
-    if chosen === :arpack && n >= N - 1
-        error("solveEigen: ARPACK requires fewer eigenpairs than N-1; use solver=:direct.")
+    for (key, choices) in ((:explicittransform, (:auto, :none, :shiftinvert)),
+                           (:check, (0, 1, 2)))
+        if key in keys(solveroptions)
+            _eigen_check_choice(key, getproperty(solveroptions, key), choices)
+        end
+    end
+    if (:ritzvec in keys(solveroptions)) && solveroptions.ritzvec !== true
+        throw(ArgumentError(
+            "solveEigen: ritzvec must be true because solveEigen returns eigenvectors ϕ."
+        ))
+    end
+    if selection === :threshold && :explicittransform in keys(solveroptions) &&
+       solveroptions.explicittransform !== :none
+        throw(ArgumentError(
+            "solveEigen: shift requires explicittransform=:none; " *
+            "valid values in native ARPACK mode are :none, :auto, :shiftinvert."
+        ))
     end
 
-    # A symmetric pencil requires a positive-definite B to use Hermitian
-    # generalized solvers. A symmetric but indefinite B (e.g. buckling)
-    # must NOT be sent blindly to Lanczos/Cholesky.
-    symmetric = prepared.symmetricA && prepared.symmetricB &&
-                (prepared.uploA == prepared.uploB)
+    symmetric = eltype(A) <: Real && eltype(B) <: Real &&
+                (prepared.symmetricA || _eigen_nearly_symmetric(A)) &&
+                (prepared.symmetricB || _eigen_nearly_symmetric(B))
     if symmetric
         try
             cholesky(Symmetric(B, prepared.uploB))
@@ -213,60 +341,81 @@ function solve_eigen_reduced(
             symmetric = false
         end
     end
+    if arpack_which === :BE && !symmetric
+        throw(ArgumentError(
+            "solveEigen: which=:BE requires real symmetric A and positive-definite B. " *
+            "Available options: $(join(string.(_EIGEN_WHICH_OPTIONS), ", "))."
+        ))
+    end
+    if symmetric && arpack_which in (:LI, :SI)
+        throw(ArgumentError(
+            "solveEigen: which=$arpack_which cannot be used for real symmetric eigenproblems. " *
+            "Choose :LM, :SM, :LR, :SR or :BE."
+        ))
+    end
+
+    chosen = solver === :auto ?
+        (N <= 32 || n >= (symmetric ? N : N-1) ? :direct : :arpack) : solver
+    if selection === :threshold && chosen === :arpack && !symmetric
+        throw(ArgumentError(
+            "solveEigen: iterative shift selection requires real symmetric A and B " *
+            "with positive-definite B. Use Symmetric(A), Symmetric(B), " *
+            "solver=:direct, or native ARPACK sigma/which for nonsymmetric systems."
+        ))
+    end
+    if chosen === :arpack && n > (symmetric ? N-1 : N-2)
+        throw(ArgumentError(
+            "solveEigen: ARPACK supports at most $(symmetric ? N-1 : max(0,N-2)) " *
+            "eigenpairs at this size; use solver=:direct."
+        ))
+    end
 
     AA = symmetric ? Symmetric(A, prepared.uploA) : A
     BB = symmetric ? Symmetric(B, prepared.uploB) : B
 
     if chosen === :direct
-        # One dense solve obtains the full spectrum. Keep complex eigenvalues
-        # intact and select the requested part using the same target logic.
+        nontrivial = [key for key in keys(solveroptions)
+                      if key ∉ (:sigma, :which, :nev)]
+        isempty(nontrivial) || throw(ArgumentError(
+            "solveEigen: ARPACK-only options $(join(string.(nontrivial), ", ")) " *
+            "cannot be used with solver=:direct. Supported direct options: " *
+            "n/nev, shift OR sigma, which, normalize."
+        ))
         vals, vecs = if symmetric
             eigen(Symmetric(Matrix(A), prepared.uploA),
                   Symmetric(Matrix(B), prepared.uploB))
         else
             eigen(Matrix(A), Matrix(B))
         end
-        ix = _eigen_selected_indices(vals, min(n, length(vals)), shift, which)
+        ix = _eigen_selected_indices(vals, n;
+            shift=shift, sigma=sigma, which=arpack_which)
         return vals[ix], vecs[:, ix]
     end
 
-    options = merge((
-        ; nev=n, 
-        which=which, 
-        maxiter=10000, 
-        explicittransform=:none), 
-        solveroptions)
-    if shift !== nothing
-        options = merge(options, (; sigma=shift))
+    # ARPACK requires ritzvec=true: eigenvectors must be returned.
+    opts = merge((;
+        nev=n, which=arpack_which, maxiter=10000,
+        explicittransform=:none, ritzvec=true
+    ), solveroptions)
+    if selection === :threshold
+        # A small offset above the strict bound avoids singular A-shift*B
+        # and places eigenvalues exactly at the bound on the *negative*
+        # side of the shift-invert spectrum. Near-zero numerical noise in
+        # rigid-body modes is then rejected by the one-sided ARPACK search.
+        size_scale = opnorm(A, Inf) / max(opnorm(B, Inf), floatmin(Float64))
+        gap = 64 * eps(Float64) * max(abs(Float64(shift)), size_scale)
+        target = Float64(shift) + max(gap, eps(Float64)*max(1.0, abs(Float64(shift))))
+        opts = merge(opts, (; which=:LR, sigma=target, explicittransform=:none))
+    else
+        opts = merge(opts, (; sigma=sigma, which=arpack_which))
     end
-    result = Arpack.eigs(AA, BB; options...)
+
+    result = Arpack.eigs(AA, BB; opts...)
     λ, ϕ, nconv = result[1], result[2], result[3]
     nconv >= n || error("solveEigen: ARPACK converged only $nconv of $n eigenpairs.")
-    return λ, ϕ
-end
-
-function _eigen_selected_indices(λ, n::Int, shift, which::Symbol)
-    if shift !== nothing
-        # Shift-invert: :LM means eigenvalues closest to the supplied shift.
-        distances = abs.(λ .- shift)
-        ordering = which in (:SM, :SR, :SI) ?
-            sortperm(distances; rev=true) : sortperm(distances)
-    elseif which === :SM
-        ordering = sortperm(abs.(λ))
-    elseif which === :LM
-        ordering = sortperm(abs.(λ); rev=true)
-    elseif which === :SR
-        ordering = sortperm(real.(λ))
-    elseif which === :LR
-        ordering = sortperm(real.(λ); rev=true)
-    elseif which === :SI
-        ordering = sortperm(imag.(λ))
-    elseif which === :LI
-        ordering = sortperm(imag.(λ); rev=true)
-    else
-        error("solveEigen: unknown which=$which.")
-    end
-    return ordering[1:n]
+    ix = _eigen_selected_indices(λ, n;
+        shift=shift, sigma=sigma, which=arpack_which)
+    return λ[ix], ϕ[:, ix]
 end
 
 """
@@ -311,36 +460,80 @@ function reconstruct_eigenvectors(ϕr, prepared; normalize::Symbol=:unit, Bfull=
 end
 
 """
-    solveEigen(A, B; n=6, shift=0.0, which=:LM,
-               support=BoundaryCondition[], mpc=MPC[], coordSys=[],
-               solver=:auto, solveroptions=(;), normalize=:unit)
+    solveEigen(A, B; n=6, nev=nothing, shift=nothing, sigma=nothing,
+               which=nothing, support=[], mpc=[], coordSys=[],
+               solver=:auto, solveroptions=(;), normalize=:unit, kwargs...)
 
-Solve `A*phi = λ*B*phi` for single-field or multifield `SystemMatrix`
-arguments. The result is `(λ, ϕ)` with concrete numerical element types
-(`Vector{Float64}` / `Vector{ComplexF64}` and matching matrices as needed).
-Neither negative eigenvalues nor imaginary parts are discarded.
+Solve `A*ϕ = λ*B*ϕ` for single-field or multifield problems.
 
-The `coordSys` keyword is identical to that of `solveField`, relying on its
-coordinate builders. Spectral basis + MPC remains not implemented.
+The result `(λ, ϕ)` contains exactly `n` pairs, sorted by increasing real
+part of λ (then by imaginary part). Complex eigenpairs are preserved.
+
+# Selection modes
+
+- `shift=lo`: Return the first `n` eigenpairs with `real(λ) > lo`. For ARPACK,
+  this one-sided selection is currently implemented only for real symmetric
+  pencils with positive-definite B. Use `solver=:direct` for other pencils.
+- `sigma=s, which=:LM`: Native ARPACK shift-invert selection; modes on both
+  sides of `s` may be included. `which` and `sigma` retain ARPACK semantics.
+- Neither `shift` nor `sigma`: `which=:SR` by default (smallest real part).
+  For large positive elastic systems, `shift=0.0` is usually faster.
+
+Use `n` or its alias `nev` for the number of eigenpairs. The original ARPACK
+keywords `ncv`, `tol`, `maxiter`, `v0`, `check`, `explicittransform`, `which`
+and `sigma` can be passed directly, or in `solveroptions=(; ...)`.
+`ritzvec=false` is unsupported because eigenvectors are always returned.
+
+Coordinates, boundary conditions and MPCs share the `solveField` reduction.
 """
 function solveEigen(
     A::Union{SystemMatrix,SymmetricSystemMatrix},
     B::Union{SystemMatrix,SymmetricSystemMatrix};
-    n::Int=6,
-    shift=0.0,
-    which::Symbol=:LM,
+    n::Union{Nothing,Int}=nothing,
+    nev::Union{Nothing,Int}=nothing,
+    shift=nothing,
+    sigma=nothing,
+    which=nothing,
     support::Vector{BoundaryCondition}=BoundaryCondition[],
     mpc::Vector{MPC}=MPC[],
     coordSys=[],
     solver::Symbol=:auto,
     solveroptions=(;),
-    normalize::Symbol=:unit
+    normalize::Symbol=:unit,
+    kwargs...
 )
+    _eigen_check_choice(:normalize, normalize, (:none, :unit, :mass, :B))
+    if n !== nothing && nev !== nothing
+        throw(ArgumentError("solveEigen: use n or nev, not both (n=$n, nev=$nev)."))
+    end
+    solveroptions isa NamedTuple || throw(ArgumentError(
+        "solveEigen: solveroptions must be a NamedTuple, e.g. (ncv=40, tol=1e-9)."
+    ))
+    native = (; kwargs...)
+    for key in keys(native)
+        key in _EIGEN_ARPACK_OPTIONS || throw(ArgumentError(
+            "solveEigen: unknown keyword :$key. Available ARPACK keywords: " *
+            join(string.(_EIGEN_ARPACK_OPTIONS), ", ") *
+            "; LowLevelFEM options: n, nev, shift, sigma, which, support, " *
+            "mpc, coordSys, solver, normalize, solveroptions."
+        ))
+    end
+    for key in keys(native)
+        if key in keys(solveroptions) && !isequal(native[key], solveroptions[key])
+            throw(ArgumentError("solveEigen: conflicting :$key in keywords and solveroptions."))
+        end
+    end
+    native = merge(solveroptions, native)
+    amount = n === nothing ? (nev === nothing ? get(native, :nev, 6) : nev) : n
+    amount isa Int || throw(ArgumentError("solveEigen: n/nev must be an integer."))
+    if :nev in keys(native) && amount != native.nev
+        throw(ArgumentError("solveEigen: conflicting n/nev and solveroptions.nev."))
+    end
     prepared = prepare_eigen_system(A, B;
         support=support, mpc=mpc, coordSys=coordSys)
     λ, ϕr = solve_eigen_reduced(prepared;
-        n=n, shift=shift, which=which, solver=solver,
-        solveroptions=solveroptions)
+        n=amount, shift=shift, sigma=sigma, which=which,
+        solver=solver, solveroptions=native)
     Bfull = normalize in (:mass, :B) ? _eigen_parent(B).A : nothing
     ϕ = reconstruct_eigenvectors(ϕr, prepared;
         normalize=normalize, Bfull=Bfull)
@@ -348,18 +541,21 @@ function solveEigen(
 end
 
 """
-    solveEigenProblem(A, B; directSolver=false, kwargs...)
+    solveEigenProblem(A, B; shift=0.0, directSolver=false, kwargs...)
 
-Backward-compatible alias of [`solveEigen`](@ref). Unlike the historical
-implementation the new routine respects `n` also with the direct solver.
+Backward-compatible alias. The historical `shift` means the ARPACK numerical
+shift (`sigma`), *not* the `solveEigen` lower spectral bound.
 """
 function solveEigenProblem(
     A::Union{SystemMatrix,SymmetricSystemMatrix},
     B::Union{SystemMatrix,SymmetricSystemMatrix};
+    shift=0.0,
     directSolver::Bool=false,
+    which::Symbol=:LM,
     kwargs...
 )
     return solveEigen(A, B;
+        sigma=shift, which=which,
         solver=directSolver ? :direct : :arpack,
         kwargs...)
 end
@@ -413,7 +609,7 @@ function solveEigenModes(
     K.problems === nothing ||
         error("solveEigenModes: use solveEigenFields for multifield systems.")
     λ, ϕ = solveEigen(K, M;
-        n=n, shift=(2π*fₘᵢₙ)^2, which=:LM,
+        n=n, shift=(2π*fₘᵢₙ)^2,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=directSolver ? :direct : solver,
         solveroptions=solveroptions, normalize=normalize)
@@ -442,7 +638,7 @@ function solveEigenFields(
     K.problems !== nothing ||
         error("solveEigenFields: use solveEigenModes for single-field systems.")
     λ, ϕ = solveEigen(K, M;
-        n=n, shift=(2π*fmin)^2, which=:LM,
+        n=n, shift=(2π*fmin)^2,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=directSolver ? :direct : solver,
         solveroptions=solveroptions, normalize=normalize)
@@ -473,7 +669,7 @@ function solveBucklingModes(
         error("solveBucklingModes: K and Kg must refer to the same Problem.")
     B = SystemMatrix(-Kg.A, Kg.model)
     λ, ϕ = solveEigen(K, B;
-        n=n, shift=0.0, which=:LM,
+        n=n, sigma=0.0, which=:LM,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=directSolver ? :direct : solver,
         solveroptions=solveroptions, normalize=:unit)
@@ -511,7 +707,7 @@ function smallestEigenValue(
     support::Vector{BoundaryCondition}=BoundaryCondition[],
     mpc::Vector{MPC}=MPC[], coordSys=[], solver::Symbol=:auto
 )
-    λ, _ = solveEigen(K, C; n=1, shift=1e-8, which=:LM,
+    λ, _ = solveEigen(K, C; n=1, sigma=1e-8, which=:LM,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=solver, normalize=:none)
     return only(λ)
@@ -527,7 +723,7 @@ function largestEigenValue(
     support::Vector{BoundaryCondition}=BoundaryCondition[],
     mpc::Vector{MPC}=MPC[], coordSys=[], solver::Symbol=:auto
 )
-    λ, _ = solveEigen(K, C; n=1, shift=nothing, which=:LM,
+    λ, _ = solveEigen(K, C; n=1, which=:LM,
         support=support, mpc=mpc, coordSys=coordSys,
         solver=solver, normalize=:none)
     return only(λ)
