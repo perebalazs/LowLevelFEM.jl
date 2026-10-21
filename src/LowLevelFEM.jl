@@ -2,9 +2,7 @@ module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
 using StaticArrays
-using Arpack
 using JLD2
-using Polyester
 using PrecompileTools: @setup_workload, @compile_workload
 #using Base.Threads
 import gmsh_jll
@@ -24,6 +22,7 @@ include("poisson.jl")
 include("multifield.jl")
 include("constraints.jl")
 include("solve.jl")
+include("eigen.jl")
 include("spectral.jl")
 include("contact.jl")
 #include("fieldtools.jl")
@@ -32,7 +31,7 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-#=
+
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
@@ -196,5 +195,5 @@ end
         end
     end
 end
-=#
+
 end #module

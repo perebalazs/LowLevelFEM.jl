@@ -588,7 +588,7 @@ function stiffnessMatrixSolidParallelNew(problem; elements=[])
                 # minden szál kap egy workspace-et
                 W = [make_ws(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w   = W[tid]
                     Iloc, Jloc, Vloc = Ichunks[tid], Jchunks[tid], Vchunks[tid]
@@ -772,7 +772,7 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
                 # workspace-ek létrehozása
                 W = [make_ws(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w   = W[tid]
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
@@ -1234,7 +1234,7 @@ function stiffnessMatrixAXIParallel(problem; elements=[])
                 # workspace-ek
                 W = [make_ws_axi(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w = W[tid]
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
@@ -2270,7 +2270,7 @@ function massMatrixSolidParallel(problem; elements = [], lumped::Bool = true)
                 rs   = (problem.type == :AxiSymmetric) ? [zeros(numIntPoints) for _ in 1:nt] : Vector{Vector{Float64}}()
                 nnet_s = [zeros(Int, numNodes) for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
                     M1 = M1s[tid]; nn2 = nn2s[tid]; nnet = nnet_s[tid]
@@ -2450,7 +2450,7 @@ function massMatrixSolidParallel0(problem; elements=[], lumped=true)
                 end
                 W = [make_workspace() for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w   = W[tid]
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]

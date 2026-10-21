@@ -15,6 +15,20 @@ export solveModalAnalysis, solveBuckling
 export smallestEigenValue, largestEigenValue
 export smallestPeriodTime, largestPeriodTime
 
+"""
+    _arpack_eigs(A, B; kwargs...)
+
+Solve a generalized eigenvalue problem using the optional Arpack.jl backend.
+"""
+function _arpack_eigs(A, B; kwargs...)
+    error(
+        "solveEigen: the ARPACK solver requires Arpack.jl.\n" *
+        "Install it with `import Pkg; Pkg.add(\"Arpack\")` " *
+        "and load it with `using Arpack`.\n" *
+        "Alternatively, use solver=:direct for small problems."
+    )
+end
+
 # Existing symmetric wrapper retains the owning SystemMatrix metadata.
 _eigen_parent(K::SystemMatrix) = K
 _eigen_parent(K::SymmetricSystemMatrix) = K.parent
@@ -410,7 +424,8 @@ function solve_eigen_reduced(
         opts = merge(opts, (; sigma=sigma, which=arpack_which))
     end
 
-    result = Arpack.eigs(AA, BB; opts...)
+    #result = Arpack.eigs(AA, BB; opts...)
+    result = _arpack_eigs(AA, BB; opts...)
     λ, ϕ, nconv = result[1], result[2], result[3]
     nconv >= n || error("solveEigen: ARPACK converged only $nconv of $n eigenpairs.")
     ix = _eigen_selected_indices(λ, n;
