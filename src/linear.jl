@@ -71,8 +71,8 @@ function stiffnessMatrix(problem; elements=[], forceOneThread=true)
     if problem.type == :AxiSymmetric && Threads.nthreads() == 1
         return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :AxiSymmetric && Threads.nthreads() > 1
-        return stiffnessMatrixAXIParallel(problem, elements=elements)
-        #return stiffnessMatrixAXI(problem, elements=elements)
+        #return stiffnessMatrixAXIParallel(problem, elements=elements)
+        return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :Truss
         return stiffnessMatrixTruss(problem, elements=elements)
     elseif (problem.type != :AxiSymmetric || problem.type != :Truss) && (Threads.nthreads() == 1 || forceOneThread == true || problem.non < 5e4)

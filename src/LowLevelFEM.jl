@@ -31,22 +31,22 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-
+#=
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
         prob = Problem([mat], type = :dummy)
         bc = BoundaryCondition("dummy", ux=0)
         lc = LoadCondition("dummy", ux=0)
-        stiffnessMatrix(prob)
-        solveDisplacement(prob)
-        solveDisplacement(prob, condensed=true)
-        solveDisplacement(prob, condensed=true)
+        #stiffnessMatrix(prob)
+        #solveDisplacement(prob)
+        #solveDisplacement(prob, condensed=true)
+        #solveDisplacement(prob, condensed=true)
         q = VectorField([], [;;], [], [], 0, :dummy, prob)
         T = ScalarField([], [;;], [], [], 0, :dummy, prob)
-        solveStress(q)
-        solveStress(q, DoFResults=true)
-        solveStress(q, T=T, DoFResults=true)
+        #solveStress(q)
+        #solveStress(q, DoFResults=true)
+        #solveStress(q, T=T, DoFResults=true)
         #solvePressure(prob, [], [], 0.0; cav=false, periodicSlave="", periodicMaster="")
         loadVector(prob, [])
 
@@ -106,18 +106,18 @@ export probe_field
         _ = sqrt(tfA)
         #_ = cbrt(tfA)
         _ = log(tfA)
-        poissonMatrix(prob)
-        advectionMatrix(prob)
-        reactionMatrix(prob)
-        gradDivMatrix(prob)
-        symmetricGradientMatrix(prob)
-        curlCurlMatrix(prob)
-        tensorLaplaceMatrix(prob)
-        traceLaplaceMatrix(prob)
-        materialTangentMatrix(prob, F=tfA, C=[;;])
-        initialStressMatrix(prob, S=tfA)
-        internalForceVector(prob, P=tfA)
-        externalTangentFollower(prob, [lc], F=tfA)
+        #poissonMatrix(prob)
+        #advectionMatrix(prob)
+        #reactionMatrix(prob)
+        #gradDivMatrix(prob)
+        #symmetricGradientMatrix(prob)
+        #curlCurlMatrix(prob)
+        #tensorLaplaceMatrix(prob)
+        #traceLaplaceMatrix(prob)
+        #materialTangentMatrix(prob, F=tfA, C=[;;])
+        #initialStressMatrix(prob, S=tfA)
+        #internalForceVector(prob, P=tfA)
+        #externalTangentFollower(prob, [lc], F=tfA)
         loadVector(prob, [], F=tfA)
     end
 end
@@ -195,5 +195,5 @@ end
         end
     end
 end
-
+=#
 end #module

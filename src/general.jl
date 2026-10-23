@@ -8593,7 +8593,7 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     gmsh.view.option.setNumber(uvec, "ShowTime", 0)
     if ff == 0 && length(t) > 1
         gmsh.view.option.setNumber(uvec, "ShowTime", 1)
-    elseif ff == 1 || ff == 2
+    elseif ff == 1 || ff == 2 || q.kind == :eigen_real
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
     end

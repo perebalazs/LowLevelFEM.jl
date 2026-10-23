@@ -955,6 +955,7 @@ end
 Base.show(io::IO, d::DomainSpec) =
     print(io, "$(d.kind)=\"$(d.name)\"")
 
+#=
 function _covers_domain(coef::ScalarField, domain::DomainSpec)
     dimTags = gmsh.model.getEntitiesForPhysicalName(domain.name)
     elems = Int[]
@@ -967,6 +968,23 @@ function _covers_domain(coef::ScalarField, domain::DomainSpec)
     end
 
     return all(e -> e in coef.numElem, elems)
+end
+=#
+
+function _covers_domain(coef::ScalarField, domain::DomainSpec)
+    selected = Set(coef.numElem)
+
+    for (edim, etag) in gmsh.model.getEntitiesForPhysicalName(domain.name)
+        _, elementTags, _ = gmsh.model.mesh.getElements(edim, etag)
+
+        for tags in elementTags
+            for tag in tags
+                tag in selected || return false
+            end
+        end
+    end
+
+    return true
 end
 
 @inline function _build_elemwise_coeff_dict(coef::ScalarField, domain::DomainSpec)
@@ -1068,15 +1086,23 @@ end
 #end
 
 @inline function _coeff_at_gp(
-    pa::Dict{<:Integer,<:AbstractMatrix},
+    pa::Dict{K, V},
     elem::Integer,
-    hcol::AbstractVector)
+    hcol::AbstractVector) where {K<:Integer,V<:AbstractMatrix}
 
     vals = get(pa, Int(elem), nothing)
 
     vals === nothing && return 0.0
 
-    return dot(view(vals, :, 1), hcol)
+    s = 0.0
+
+    @inbounds for i in eachindex(hcol)
+        s += vals[i, 1] * hcol[i]
+    end
+
+    return s
+
+    #return dot(view(vals, :, 1), hcol)
 end
 
 @inline function _coeff_at_gp_old(
@@ -1164,6 +1190,25 @@ function _eval_coefficient_at_gp(Cprep, elem, hgp)
         m, n = size(Cprep)
         W = Matrix{Float64}(undef, m, n)
 
+        @inbounds for I in CartesianIndices(Cprep)
+            cij = Cprep[I]
+
+            if cij isa Number
+                W[I] = Float64(cij)
+
+            elseif cij isa Dict{Int,Matrix{Float64}}
+                # Fast path: concrete coefficient dictionary
+                W[I] = _coeff_at_gp(cij, elem, hgp)
+
+            elseif cij isa AbstractDict
+                # Generic fallback
+                W[I] = _coeff_at_gp(cij, elem, hgp)
+
+            else
+                error("Unsupported prepared coefficient type $(typeof(cij))")
+            end
+        end
+        #=
         for I in CartesianIndices(Cprep)
 
             cij = Cprep[I]
@@ -1175,6 +1220,7 @@ function _eval_coefficient_at_gp(Cprep, elem, hgp)
             end
 
         end
+        =#
 
         return W
     end
@@ -1546,6 +1592,29 @@ mutable struct OperatorWorkspace
     patBsT::MatrixPattern
     patTmp::MatrixPattern
     patCgp::Union{Nothing,MatrixPattern}
+
+    Cgp::Union{Nothing,Matrix{Float64}}
+end
+
+@inline function _eval_coefficient_at_gp!(
+    W::Matrix{Float64},
+    Cprep::AbstractMatrix,
+    elem,
+    hgp
+    )
+    @inbounds for I in CartesianIndices(Cprep)
+        cij = Cprep[I]
+
+        if cij isa Number
+            W[I] = Float64(cij)
+        elseif cij isa Dict{Int,Matrix{Float64}}
+            W[I] = _coeff_at_gp(cij, elem, hgp)
+        else
+            W[I] = _coeff_at_gp(cij, elem, hgp)
+        end
+    end
+
+    return W
 end
 
 """
@@ -1569,7 +1638,7 @@ function OperatorWorkspace(
     out_s::Int,
     ndofs_u::Int,
     ndofs_s::Int
-)
+    )
     Bu = zeros(out_u, ndofs_u)
     Bs = zeros(out_s, ndofs_s)
     tmp = zeros(ndofs_s, out_u)
@@ -1599,6 +1668,7 @@ function OperatorWorkspace(
         patBu,
         patBsT,
         patTmp,
+        nothing,
         nothing
     )
 end
@@ -1876,7 +1946,7 @@ function assemble_element_matrix_with_geometry!(
     Pu::Problem,
     op_s::AbstractOp,
     Ps::Problem
-)
+    )
     invJac = ws.invJac
     ∂h     = ws.∂h
     Bu     = ws.Bu
@@ -1924,11 +1994,38 @@ function assemble_element_matrix_with_geometry!(
             Cgp = _eval_coefficient_chain_at_gp(
                 Cprep, elem, view(h, :, k)
             )
+
+        elseif Cprep isa AbstractMatrix &&
+               !(eltype(Cprep) <: Number)
+
+            W = ws.Cgp
+
+            if W === nothing || size(W) != size(Cprep)
+                W = Matrix{Float64}(undef, size(Cprep)...)
+                ws.Cgp = W
+            end
+
+            Cgp = _eval_coefficient_at_gp!(
+                W, Cprep, elem, view(h, :, k)
+            )
+
         else
             Cgp = _eval_coefficient_at_gp(
                 Cprep, elem, view(h, :, k)
             )
         end
+
+        #=
+        if Cprep isa AbstractVector
+            Cgp = _eval_coefficient_chain_at_gp(
+                Cprep, elem, view(h, :, k)
+            )
+        else
+            Cgp = _eval_coefficient_at_gp(
+                Cprep, elem, view(h, :, k)
+            )
+        end
+        =#
 
         wcoef =
             Wprep === nothing ?
@@ -2960,6 +3057,12 @@ function assemble_operator(
                 DomainSpec(:Ω, String(phName))
    
             Cprep = _prepare_coefficient(coefficient, dom_here)
+            
+            # Unwrap a coefficient chain containing a single factor.
+            if Cprep isa AbstractVector && length(Cprep) == 1
+                Cprep = only(Cprep)
+            end
+            
             Wprep = weight === nothing ? nothing : _prepare_coefficient(weight, dom_here)
    
             dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
