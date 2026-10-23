@@ -15,7 +15,7 @@ import Base.cbrt
 import Base.abs
 import Base.adjoint
 import Base.zero
-export mapScalarField
+export mapScalarField, mapEigenValues
 using StaticArrays
 
 """
@@ -1415,6 +1415,25 @@ function diagm(AA::VectorField)
 end
 
 export ⋅
+
+"""
+    mapEigenValues(f, u::VectorField)
+
+Apply the `f` function to the eigenvalues stored in a vector field.
+
+Return a new field with transformed eigenvalues, preserving
+the eigenvectors, their order, and the field metadata.
+The original field remains unchanged.
+"""
+function mapEigenValues(f, u::VectorField)
+    u.kind in (:eigen_real, :eigen_imag) ||
+        error("mapEigenValues: eigenfield required.")
+
+    v = copy(u)
+    v.t .= f.(u.t)
+
+    return v
+end
 
 ###############################################################################
 #                                                                             #

@@ -31,7 +31,7 @@ include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 export probe_field
-#=
+
 @setup_workload begin
     @compile_workload begin
         mat = material("dummy")
@@ -195,5 +195,5 @@ end
         end
     end
 end
-=#
+
 end #module

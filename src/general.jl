@@ -8577,7 +8577,10 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     end
     
     gmsh.view.option.setNumber(uvec, "GlyphLocation", 2)
-    gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
+    #gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
+    eigenmode = q.kind in (:eigen_real, :eigen_imag)
+    scale = factor != 0 ? factor : (eigenmode ? 1.0 : 0.0)
+    gmsh.view.option.setNumber(uvec, "DisplacementFactor", scale)
     if ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 1)
     else
@@ -8591,12 +8594,31 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
         gmsh.view.option.setNumber(uvec, "Visible", 1)
     end
     gmsh.view.option.setNumber(uvec, "ShowTime", 0)
-    if ff == 0 && length(t) > 1
+    if q.kind == :eigen_real
+    gmsh.view.option.setNumber(uvec, "ShowTime", 6)
+
+    elseif q.kind == :eigen_imag
+        gmsh.view.option.setNumber(uvec, "ShowTime", 7)
+
+    elseif ff == 1 || ff == 2
+        gmsh.view.option.setNumber(uvec, "ShowTime", 6)
+
+    elseif ff == 0 && length(t) > 1
+        gmsh.view.option.setNumber(uvec, "ShowTime", 1)
+
+    else
+        gmsh.view.option.setNumber(uvec, "ShowTime", 0)
+    end
+    if q isa VectorField &&
+        (q.kind in (:eigen_real, :eigen_imag) || ff in (1, 2))
+        gmsh.view.option.setNumber(uvec, "VectorType", 5)
+    end
+    #=if ff == 0 && length(t) > 1
         gmsh.view.option.setNumber(uvec, "ShowTime", 1)
     elseif ff == 1 || ff == 2 || q.kind == :eigen_real
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
-    end
+    end=#
     if factor != 0
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
         gmsh.view.option.setNumber(uvec, "DisplacementFactor", factor)
