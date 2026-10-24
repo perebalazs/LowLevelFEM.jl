@@ -1109,3 +1109,23 @@ function solveBuckling(
     Kg = nonLinearStiffnessMatrix(q)
     return solveBucklingModes(K, Kg; n=n, support=support)
 end
+
+"""
+    getEigenValues(u::VectorField)
+
+Return the eigenvalues stored in a VectorField.
+
+Supports real and imaginary eigenvalue fields.
+"""
+function getEigenValues(u::VectorField)
+    u.kind in (:eigen_real, :eigen_imag) ||
+        error("getEigenValues: argument must be an eigenfield, got $(u.kind).")
+
+    isempty(u.t) &&
+        error("getEigenValues: no eigenvalues found.")
+
+    length(u.t) == u.nsteps ||
+        error("getEigenValues: number of eigenvalues does not match the number of modes.")
+
+    return u.t
+end

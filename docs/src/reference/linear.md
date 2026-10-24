@@ -29,7 +29,6 @@ solveAxialForce
 ## Eigen and Buckling
 
 ```@docs
-getEigenVectors
 getEigenValues
 ```
 

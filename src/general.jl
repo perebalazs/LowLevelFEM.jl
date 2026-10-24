@@ -5291,6 +5291,7 @@ function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8,
 end
 =#
 
+#=
 """
     getEigenVectors(A::TensorField)
 
@@ -5404,6 +5405,7 @@ function getEigenValues(A::VectorField)
         error("getEigenValues(VectorField): data at nodes is not yet implemented.")
     end
 end
+=#
 
 """
     displacementConstraint(name; ux=nothing, uy=nothing, uz=nothing)
