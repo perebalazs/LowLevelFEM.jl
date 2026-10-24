@@ -1168,8 +1168,10 @@ end
 # =============================================================================
 
 @inline function _shrink_csc!(A::SparseMatrixCSC)
-    sizehint!(A.rowval, length(A.rowval); shrink=true)
-    sizehint!(A.nzval,  length(A.nzval);  shrink=true)
+    if VERSION >= v"1.11"
+        sizehint!(A.rowval, length(A.rowval); shrink=true)
+        sizehint!(A.nzval,  length(A.nzval);  shrink=true)
+    end
     return A
 end
 
