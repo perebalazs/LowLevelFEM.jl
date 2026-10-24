@@ -6,6 +6,7 @@ Tutorials provide scenario-driven workflows for common LowLevelFEM tasks.
 
 - [Linear Elasticity (2D)](linear-elasticity-2d.md) – Introduction to static linear elasticity using a structured mesh and Gmsh.
 - [Linear Elasticity (2D axisymmetric)](linear-elasticity-2d-axi.md) – Axisymmetric elasticity analysis with rotationally symmetric geometry.
+- [Linear Buckling and Prestressed Natural Frequencies](buckling-and-prestressed-modes.md) – Linear buckling load factors and the influence of initial stress on natural frequencies of a 3D column.
 - [Transient Elasticity (2D)](transient-elasticity-2d.md) – Time integration of elastic wave propagation and dynamic response.
 - [Heat Conduction](heat-conduction.md) – Steady-state heat transfer with prescribed temperatures and heat fluxes.
 - [Weak-Form DSL: Navier-Stokes](multifield-weak-form-dsl.md) – Building coupled PDEs directly from their weak form using compound operators.
