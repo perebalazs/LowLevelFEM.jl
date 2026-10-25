@@ -15,7 +15,7 @@
 using LinearAlgebra
 using SparseArrays
 
-export Global, solveField
+export Global, solveField, rotateResult
 
 const _SolveFieldType = Union{ScalarField,VectorField,TensorField}
 
@@ -38,24 +38,6 @@ coordinates and partly in global Cartesian coordinates.
 struct SolveRHS{F}
     local_part::Union{Nothing,F}
     global_part::Union{Nothing,F}
-end
-
-"""
-    NodalCoordinateSystem(e1, e2=nothing)
-
-Local coordinate-system definition based on direction `VectorField`s.
-
-`e1` defines the first local basis direction. In 3D, `e2` supplies a second
-reference direction and is orthogonalized against `e1`. In 2D, `e2` is
-optional; the second basis direction is obtained by a 90-degree rotation of
-`e1`, while an optional `e2` can select its sign.
-
-The support of the direction fields determines the nodes on which the local
-coordinate system is active.
-"""
-struct NodalCoordinateSystem
-    e1::VectorField
-    e2::Union{VectorField,Nothing}
 end
 
 """
@@ -92,11 +74,6 @@ u = solveField(
 """
 Global(f::_SolveFieldType) = GlobalField(f)
 Global(F::SystemVector) = GlobalField(F)
-
-# VectorField-based constructors for local nodal coordinate systems.
-CoordinateSystem(e1::VectorField) = NodalCoordinateSystem(e1, nothing)
-CoordinateSystem(e1::VectorField, e2::VectorField) = NodalCoordinateSystem(e1, e2)
-
 
 # =============================================================================
 # RHS expression handling
@@ -653,13 +630,13 @@ components.
 """
 function _coordinate_transformation(
     P::Problem,
-    cs::NodalCoordinateSystem
+    cs::CoordinateSystem
 )
     P.pdim == P.dim ||
-        error("solveField: coordSys requires a vector field with pdim == dim.")
+        error("CoordinateSystem requires a vector field with pdim == dim.")
 
     P.dim in (2, 3) ||
-        error("solveField: coordSys currently supports only 2D and 3D vector fields.")
+        error("CoordinateSystem currently supports only 2D and 3D vector fields.")
 
     cs.e1.model === P ||
         error("CoordinateSystem: e1 belongs to a different Problem.")
@@ -668,12 +645,19 @@ function _coordinate_transformation(
         cs.e2.model === P ||
             error("CoordinateSystem: e2 belongs to a different Problem.")
     end
+    if cs.sig == 0
+        error("Handedness of the coordinate system must be :right or :left")
+    end
 
     nodes1 = _coordinate_field_support_nodes(cs.e1)
     isempty(nodes1) && error("CoordinateSystem: e1 has empty support.")
 
     e1n = _coordinate_nodal_field(cs.e1)
     e2n = nothing
+
+    if cs.e2 !== nothing && P.dim == 2
+        error("CoordinateSystem: in 2D only one direction must be given.")
+    end
 
     if cs.e2 !== nothing
         nodes2 = _coordinate_field_support_nodes(cs.e2)
@@ -718,14 +702,20 @@ function _coordinate_transformation(
         e1 ./= n1
 
         if P.dim == 2
-            e2 = [-e1[2], e1[1]]
+            if cs.sig > 0
+                e2 = [-e1[2], e1[1]]
+            else
+                e2 = [e1[2], -e1[1]]
+            end
 
+            #=
             if cs.e2 !== nothing
                 e2ref = _coordinate_direction(e2n, node, P.dim)
-                if norm(e2ref) > tol && dot(e2, e2ref) < 0
+                if norm(e2ref) > tol && dot(e2, e2ref) < 0 && cs.sig > 0
                     e2 .*= -1
                 end
             end
+            =#
 
             Qnode = hcat(e1, e2)
         else
@@ -736,7 +726,8 @@ function _coordinate_transformation(
                 error("CoordinateSystem: first and second directions are parallel at node $node.")
             e2 ./= n2
 
-            e3 = cross(e1, e2)
+            e3 = cs.sig > 0 ? cross(e1, e2) : cross(e2, e1)
+            #e3 = cs.sig * cross(e1, e2)
             n3 = norm(e3)
             n3 > tol ||
                 error("CoordinateSystem: degenerate local basis at node $node.")
@@ -778,7 +769,7 @@ function _build_coordinate_transformation(
     isempty(coordSys) && return nothing
 
     P.pdim == P.dim ||
-        error("solveField: coordSys requires a vector field with pdim == dim.")
+        error("CoordinateSystem requires a vector field with pdim == dim.")
 
     Q = Transformation(
         spdiagm(0 => ones(Float64, ndofs(P))),
@@ -789,9 +780,9 @@ function _build_coordinate_transformation(
     used_nodes = Set{Int}()
 
     for cs in coordSys
-        cs isa NodalCoordinateSystem ||
+        cs isa CoordinateSystem ||
             error(
-                "solveField: coordSys entries must be created from VectorField " *
+                "Coordinate systems must be created from VectorField " *
                 "directions, e.g. CoordinateSystem(e1, e2)."
             )
 
@@ -800,7 +791,7 @@ function _build_coordinate_transformation(
 
         isempty(overlap) ||
             error(
-                "solveField: overlapping coordinate systems are not supported yet; " *
+                "Overlapping coordinate systems are not supported; " *
                 "$(length(overlap)) node(s) are assigned more than once."
             )
 
@@ -809,6 +800,331 @@ function _build_coordinate_transformation(
     end
 
     return Q
+end
+
+
+# =============================================================================
+# Result transformation to local coordinate systems
+# =============================================================================
+
+@inline function _result_coordinate_block(
+    Q::Transformation,
+    node::Int,
+    dim::Int
+)
+    i0 = (node - 1) * dim
+    dofs = i0 + 1:i0 + dim
+    return Matrix(Q.T[dofs, dofs])
+end
+
+@inline function _result_tensor_basis(Qnode::AbstractMatrix, dim::Int)
+    if dim == 3
+        return Qnode
+    elseif dim == 2
+        Q3 = Matrix{Float64}(I, 3, 3)
+        Q3[1:2, 1:2] .= Qnode
+        return Q3
+    end
+
+    error("rotateResult: only 2D and 3D coordinate systems are supported.")
+end
+
+function _rotate_nodal_vector_result(
+    v::VectorField,
+    Q::Transformation
+)
+    P = v.model
+    dim = P.dim
+    ncomp = v.type == :v2D ? 2 : v.type == :v3D ? 3 : 0
+
+    ncomp == dim ||
+        error(
+            "rotateResult: VectorField component count must match the " *
+            "spatial dimension."
+        )
+
+    size(v.a, 1) == dim * P.non ||
+        error("rotateResult: incompatible nodal VectorField size.")
+
+    a = Q.T' * v.a
+
+    return VectorField(
+        Matrix{Float64}[],
+        Matrix(a),
+        copy(v.t),
+        copy(v.numElem),
+        v.nsteps,
+        v.type,
+        P,
+        v.kind
+    )
+end
+
+function _rotate_elementwise_vector_result(
+    v::VectorField,
+    Q::Transformation
+)
+    P = v.model
+    dim = P.dim
+    ncomp = v.type == :v2D ? 2 : v.type == :v3D ? 3 : 0
+
+    ncomp == dim ||
+        error(
+            "rotateResult: VectorField component count must match the " *
+            "spatial dimension."
+        )
+
+    gmsh.model.setCurrent(P.name)
+
+    A = Vector{Matrix{Float64}}(undef, length(v.A))
+
+    for e in eachindex(v.A)
+        Ae = v.A[e]
+        _, nodeTags, _, _ = gmsh.model.mesh.getElement(v.numElem[e])
+        numNodes = length(nodeTags)
+
+        size(Ae, 1) == dim * numNodes ||
+            error(
+                "rotateResult: incompatible local VectorField size for " *
+                "element $(v.numElem[e])."
+            )
+
+        Be = similar(Ae)
+
+        for (k, nodeTag) in enumerate(nodeTags)
+            node = Int(nodeTag)
+            rows = (k - 1) * dim + 1:k * dim
+            Qnode = _result_coordinate_block(Q, node, dim)
+            Be[rows, :] .= Qnode' * view(Ae, rows, :)
+        end
+
+        A[e] = Be
+    end
+
+    return VectorField(
+        A,
+        [;;],
+        copy(v.t),
+        copy(v.numElem),
+        v.nsteps,
+        v.type,
+        P,
+        v.kind
+    )
+end
+
+function _rotate_nodal_tensor_result(
+    A0::TensorField,
+    Q::Transformation
+)
+    P = A0.model
+    dim = P.dim
+
+    size(A0.a, 1) == 9 * P.non ||
+        error("rotateResult: incompatible nodal TensorField size.")
+
+    a = similar(A0.a)
+
+    for node in 1:P.non
+        rows = 9 * (node - 1) + 1:9 * node
+        Qnode = _result_coordinate_block(Q, node, dim)
+        Q3 = _result_tensor_basis(Qnode, dim)
+
+        for step in 1:A0.nsteps
+            Aglobal = reshape(view(A0.a, rows, step), 3, 3)
+            Alocal = Q3' * Aglobal * Q3
+            a[rows, step] .= vec(Alocal)
+        end
+    end
+
+    return TensorField(
+        Matrix{Float64}[],
+        a,
+        copy(A0.t),
+        copy(A0.numElem),
+        A0.nsteps,
+        A0.type,
+        P,
+        A0.kind
+    )
+end
+
+function _rotate_elementwise_tensor_result(
+    A0::TensorField,
+    Q::Transformation
+)
+    P = A0.model
+    dim = P.dim
+
+    gmsh.model.setCurrent(P.name)
+
+    A = Vector{Matrix{Float64}}(undef, length(A0.A))
+
+    for e in eachindex(A0.A)
+        Ae = A0.A[e]
+        _, nodeTags, _, _ = gmsh.model.mesh.getElement(A0.numElem[e])
+        numNodes = length(nodeTags)
+
+        size(Ae, 1) == 9 * numNodes ||
+            error(
+                "rotateResult: incompatible local TensorField size for " *
+                "element $(A0.numElem[e])."
+            )
+
+        Be = similar(Ae)
+
+        for (k, nodeTag) in enumerate(nodeTags)
+            node = Int(nodeTag)
+            rows = 9 * (k - 1) + 1:9 * k
+            Qnode = _result_coordinate_block(Q, node, dim)
+            Q3 = _result_tensor_basis(Qnode, dim)
+
+            for step in 1:A0.nsteps
+                Aglobal = reshape(view(Ae, rows, step), 3, 3)
+                Alocal = Q3' * Aglobal * Q3
+                Be[rows, step] .= vec(Alocal)
+            end
+        end
+
+        A[e] = Be
+    end
+
+    return TensorField(
+        A,
+        [;;],
+        copy(A0.t),
+        copy(A0.numElem),
+        A0.nsteps,
+        A0.type,
+        P,
+        A0.kind
+    )
+end
+
+"""
+    rotateResult(result; toCoordSys=CoordinateSystem[])
+
+Express a vector or second-order tensor result in one or more local coordinate
+systems.
+
+The coordinate systems are defined with the same [`CoordinateSystem`](@ref)
+objects used by [`solveField`](@ref). Multiple coordinate systems may be
+supplied in `toCoordSys`; their nodal supports must be disjoint. Outside their
+support the result remains expressed in the global Cartesian basis.
+
+For a vector result, if `Q` maps local components to global components,
+
+```math
+\\mathbf v_\\mathrm{local} = Q^T \\mathbf v_\\mathrm{global}.
+```
+
+For a second-order tensor,
+
+```math
+\\mathbf A_\\mathrm{local}
+= Q^T \\mathbf A_\\mathrm{global} Q.
+```
+
+Both nodal and elementwise `VectorField` and `TensorField` representations are
+supported. The storage representation, element support, time grid and number of
+time steps are preserved.
+
+In 2D, the in-plane coordinate transformation is embedded into three
+dimensions with the out-of-plane direction left unchanged when rotating a
+`TensorField`.
+
+# Arguments
+
+- `result`: a `VectorField` or `TensorField` containing global Cartesian
+  components.
+- `toCoordSys`: vector of local coordinate systems created with
+  [`CoordinateSystem`](@ref).
+
+# Returns
+
+A new field of the same concrete type and storage representation as `result`,
+with components expressed in the requested local bases.
+
+# Example
+
+For a circular shaft aligned with the global z axis, cylindrical result
+components can be obtained as
+
+```julia
+er = VectorField(U, "body", [
+    (x, y, z) ->  x,
+    (x, y, z) ->  y,
+    0.0
+])
+
+eφ = VectorField(U, "body", [
+    (x, y, z) -> -y,
+    (x, y, z) ->  x,
+    0.0
+])
+
+cs = CoordinateSystem(er, eφ)
+
+u_cyl = rotateResult(u; toCoordSys=[cs])
+σ_cyl = rotateResult(σ; toCoordSys=[cs])
+
+uφ   = u_cyl[2]
+τφz  = σ_cyl[2, 3]
+```
+
+The coordinate basis must be nondegenerate wherever it is active. For example,
+the cylindrical radial direction is undefined on the shaft axis.
+"""
+function rotateResult(
+    result::VectorField;
+    toCoordSys=CoordinateSystem[]
+)
+    isempty(toCoordSys) && return VectorField(
+        [copy(Ae) for Ae in result.A],
+        copy(result.a),
+        copy(result.t),
+        copy(result.numElem),
+        result.nsteps,
+        result.type,
+        result.model,
+        result.kind
+    )
+
+    Q = _build_coordinate_transformation(result.model, toCoordSys)
+
+    if isNodal(result)
+        return _rotate_nodal_vector_result(result, Q)
+    elseif isElementwise(result)
+        return _rotate_elementwise_vector_result(result, Q)
+    end
+
+    error("rotateResult: VectorField contains neither nodal nor elementwise data.")
+end
+
+function rotateResult(
+    result::TensorField;
+    toCoordSys=CoordinateSystem[]
+)
+    isempty(toCoordSys) && return TensorField(
+        [copy(Ae) for Ae in result.A],
+        copy(result.a),
+        copy(result.t),
+        copy(result.numElem),
+        result.nsteps,
+        result.type,
+        result.model,
+        result.kind
+    )
+
+    Q = _build_coordinate_transformation(result.model, toCoordSys)
+
+    if isNodal(result)
+        return _rotate_nodal_tensor_result(result, Q)
+    elseif isElementwise(result)
+        return _rotate_elementwise_tensor_result(result, Q)
+    end
+
+    error("rotateResult: TensorField contains neither nodal nor elementwise data.")
 end
 
 """
@@ -882,7 +1198,7 @@ function _prepare_singlefield_system(
     rhs,
     support;
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[]
+    coordSys=CoordinateSystem[]
 )
     K = parent_system(K0)
     P = K.model
@@ -976,7 +1292,7 @@ function prepare_singlefield_system(
     rhs::Union{_SolveFieldType,GlobalField,SolveRHS},
     support::Vector{BoundaryCondition};
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[]
+    coordSys=CoordinateSystem[]
 )
     return _prepare_singlefield_system(
         K,
@@ -1012,6 +1328,12 @@ function reconstruct_singlefield_solution(
     u = copy(prepared.template)
     u.a .= x_global
 
+    # A field used as a load or initial-guess template may contain eigenmodes.
+    # Solving a new linear system produces an ordinary field, not eigenmodes.
+    if u.kind !== :field
+        return typeof(u)(u.A, u.a, u.t, u.numElem,
+                         u.nsteps, u.type, u.model, :field)
+    end
     return u
 end
 
@@ -1031,7 +1353,7 @@ MPCs, boundary conditions, and unwrapped loads are interpreted in these local
 component bases. `Global(...)` is the explicit exception for right-hand-side
 data supplied in global Cartesian components.
 
-Each `NodalCoordinateSystem` identifies its field through `e1.model`. Fields
+Each `CoordinateSystem` identifies its field through `e1.model`. Fields
 without a local coordinate system receive an identity block. A coordinate
 system may coexist with reduced-order interpolation on another field, but not
 yet on the same field.
@@ -1051,9 +1373,9 @@ function _build_multifield_coordinate_transformation(
     problems = K.problems
 
     for cs in coordSys
-        cs isa NodalCoordinateSystem ||
+        cs isa CoordinateSystem ||
             error(
-                "solveField: coordSys entries must be created from VectorField " *
+                "Coordinate systems must be created from VectorField " *
                 "directions, e.g. CoordinateSystem(e1, e2)."
             )
 
@@ -1200,7 +1522,7 @@ function prepare_multifield_system(
     rhs,
     support::Vector{BoundaryCondition};
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[]
+    coordSys=CoordinateSystem[]
 )
     K = parent_system(K0)
 
@@ -1532,7 +1854,7 @@ end
         K, rhs;
         support=BoundaryCondition[],
         mpc=MPC[],
-        coordSys=NodalCoordinateSystem[],
+        coordSys=CoordinateSystem[],
         solver=:auto,
         preconditioner=:auto,
         solveroptions=(;),
@@ -1640,7 +1962,7 @@ function solveField(
     rhs::Union{_SolveFieldType,GlobalField,SolveRHS};
     support::Vector{BoundaryCondition}=BoundaryCondition[],
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[],
+    coordSys=CoordinateSystem[],
     solver=:auto,
     iterative=nothing,
     ordering=nothing,
@@ -1719,7 +2041,7 @@ function solveField(
     };
     support::Vector{BoundaryCondition}=BoundaryCondition[],
     mpc::Vector{MPC}=MPC[],
-    coordSys=NodalCoordinateSystem[],
+    coordSys=CoordinateSystem[],
     solver=:auto,
     iterative=nothing,
     ordering=nothing,

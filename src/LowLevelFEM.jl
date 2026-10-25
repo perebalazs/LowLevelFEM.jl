@@ -2,9 +2,7 @@ module LowLevelFEM
 
 using LinearAlgebra, SparseArrays
 using StaticArrays
-using Arpack
 using JLD2
-using Polyester
 using PrecompileTools: @setup_workload, @compile_workload
 #using Base.Threads
 import gmsh_jll
@@ -24,6 +22,7 @@ include("poisson.jl")
 include("multifield.jl")
 include("constraints.jl")
 include("solve.jl")
+include("eigen.jl")
 include("spectral.jl")
 include("contact.jl")
 #include("fieldtools.jl")
@@ -39,15 +38,15 @@ export probe_field
         prob = Problem([mat], type = :dummy)
         bc = BoundaryCondition("dummy", ux=0)
         lc = LoadCondition("dummy", ux=0)
-        stiffnessMatrix(prob)
-        solveDisplacement(prob)
-        solveDisplacement(prob, condensed=true)
-        solveDisplacement(prob, condensed=true)
+        #stiffnessMatrix(prob)
+        #solveDisplacement(prob)
+        #solveDisplacement(prob, condensed=true)
+        #solveDisplacement(prob, condensed=true)
         q = VectorField([], [;;], [], [], 0, :dummy, prob)
         T = ScalarField([], [;;], [], [], 0, :dummy, prob)
-        solveStress(q)
-        solveStress(q, DoFResults=true)
-        solveStress(q, T=T, DoFResults=true)
+        #solveStress(q)
+        #solveStress(q, DoFResults=true)
+        #solveStress(q, T=T, DoFResults=true)
         #solvePressure(prob, [], [], 0.0; cav=false, periodicSlave="", periodicMaster="")
         loadVector(prob, [])
 
@@ -107,18 +106,18 @@ export probe_field
         _ = sqrt(tfA)
         #_ = cbrt(tfA)
         _ = log(tfA)
-        poissonMatrix(prob)
-        advectionMatrix(prob)
-        reactionMatrix(prob)
-        gradDivMatrix(prob)
-        symmetricGradientMatrix(prob)
-        curlCurlMatrix(prob)
-        tensorLaplaceMatrix(prob)
-        traceLaplaceMatrix(prob)
-        materialTangentMatrix(prob, F=tfA, C=[;;])
-        initialStressMatrix(prob, S=tfA)
-        internalForceVector(prob, P=tfA)
-        externalTangentFollower(prob, [lc], F=tfA)
+        #poissonMatrix(prob)
+        #advectionMatrix(prob)
+        #reactionMatrix(prob)
+        #gradDivMatrix(prob)
+        #symmetricGradientMatrix(prob)
+        #curlCurlMatrix(prob)
+        #tensorLaplaceMatrix(prob)
+        #traceLaplaceMatrix(prob)
+        #materialTangentMatrix(prob, F=tfA, C=[;;])
+        #initialStressMatrix(prob, S=tfA)
+        #internalForceVector(prob, P=tfA)
+        #externalTangentFollower(prob, [lc], F=tfA)
         loadVector(prob, [], F=tfA)
     end
 end

@@ -3,11 +3,8 @@ export elasticSupportMatrix
 export loadVector
 export applyBoundaryConditions, applyBoundaryConditions!, applyElasticSupport!
 export solveDisplacement, solveStrain, solveStress, solveAxialForce
-export solveEigenModes, solveBucklingModes
-export solveModalAnalysis, solveBuckling
 export initialDisplacement, initialDisplacement!, initialVelocity, initialVelocity!
 export nodalForce!, nodalAcceleration!
-export largestPeriodTime, smallestPeriodTime, largestEigenValue, smallestEigenValue
 export CDM, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
 export printElasticConstantsTable
 
@@ -74,8 +71,8 @@ function stiffnessMatrix(problem; elements=[], forceOneThread=true)
     if problem.type == :AxiSymmetric && Threads.nthreads() == 1
         return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :AxiSymmetric && Threads.nthreads() > 1
-        return stiffnessMatrixAXIParallel(problem, elements=elements)
-        #return stiffnessMatrixAXI(problem, elements=elements)
+        #return stiffnessMatrixAXIParallel(problem, elements=elements)
+        return stiffnessMatrixAXI(problem, elements=elements)
     elseif problem.type == :Truss
         return stiffnessMatrixTruss(problem, elements=elements)
     elseif (problem.type != :AxiSymmetric || problem.type != :Truss) && (Threads.nthreads() == 1 || forceOneThread == true || problem.non < 5e4)
@@ -591,7 +588,7 @@ function stiffnessMatrixSolidParallelNew(problem; elements=[])
                 # minden szál kap egy workspace-et
                 W = [make_ws(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w   = W[tid]
                     Iloc, Jloc, Vloc = Ichunks[tid], Jchunks[tid], Vchunks[tid]
@@ -775,7 +772,7 @@ function stiffnessMatrixSolidParallel(problem; elements=[])
                 # workspace-ek létrehozása
                 W = [make_ws(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w   = W[tid]
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
@@ -1237,7 +1234,7 @@ function stiffnessMatrixAXIParallel(problem; elements=[])
                 # workspace-ek
                 W = [make_ws_axi(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w = W[tid]
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
@@ -2273,7 +2270,7 @@ function massMatrixSolidParallel(problem; elements = [], lumped::Bool = true)
                 rs   = (problem.type == :AxiSymmetric) ? [zeros(numIntPoints) for _ in 1:nt] : Vector{Vector{Float64}}()
                 nnet_s = [zeros(Int, numNodes) for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
                     M1 = M1s[tid]; nn2 = nn2s[tid]; nnet = nnet_s[tid]
@@ -2453,7 +2450,7 @@ function massMatrixSolidParallel0(problem; elements=[], lumped=true)
                 end
                 W = [make_workspace() for _ in 1:nt]
                 
-                @batch per=thread for j in 1:nloc
+                Threads.@threads :static for j in 1:nloc
                     tid = Threads.threadid()
                     w   = W[tid]
                     Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
@@ -5264,296 +5261,6 @@ function solveAxialForce(q::VectorField)
     #end
 end
 
-#=
-"""
-    solveEigenModes(K::SystemMatrix, 
-                    M::SystemMatrix; 
-                    n=6, 
-                    fₘᵢₙ=0.01, 
-                    directSolver=false)
-
-Solves the eigen frequencies and mode shapes of a problem given by stiffness
-matrix `K` and the mass matrix `M`. `n` is the number of eigenfrequencies to solve,
-and solves the eigenfrequencies greater than `fₘᵢₙ`. Returns the struct of eigenfrequencies
-and eigen modes. Results can be presented by `showModalResults` function.
-                            
-Return: `modes`
-                            
-Types:
-- `K`: SystemMatrix
-- `M`: SystemMatrix
-- `n`: Int64
-- `fₘᵢₙ`: Float64
-- `modes`: Eigen 
-"""
-function solveEigenModes(K, M; n=6, fₘᵢₙ=0.01, directSolver=false)
-    if K.model != M.model
-        error("solveEigenModes: K and M does not belong to the same model.")
-    end
-    problem = K.model
-    ωₘᵢₙ² = (2π * fₘᵢₙ)^2
-    if directSolver
-        ω², ϕ = eigen(Matrix(K.A), Matrix(M.A))
-    else
-        ω², ϕ = Arpack.eigs(K.A, M.A, nev=n, which=:LR, sigma=ωₘᵢₙ², maxiter=10000)
-    end
-    #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
-    #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
-    #end
-    #err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
-    #if err > 1e-3 # || true
-    #    @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
-    #end
-    f = sqrt.(abs.(real(ω²))) / 2π
-    ϕ1 = real(ϕ)
-    return Eigen(f, ϕ1, problem, nothing, nothing)
-end
-=#
-
-"""
-    solveEigenModes(
-        K::SystemMatrix,
-        M::SystemMatrix;
-        n=6,
-        fₘᵢₙ=0.01,
-        support=Vector{BoundaryCondition}(),
-        mpc::Vector{MPC}=MPC[],
-        directSolver=false
-    )
-
-Compute natural frequencies and mode shapes of a single-field structural
-mechanics problem.
-
-The generalized eigenproblem
-
-    K * ϕ = ω² * M * ϕ
-
-is solved by [`solveEigenProblem`](@ref). Dirichlet boundary conditions,
-multi-point constraints and reduced-order transformations are handled
-automatically.
-
-The natural frequencies are
-
-    f = sqrt(ω²) / (2π).
-
-# Returns
-
-An `Eigen` object containing the natural frequencies and mode shapes in the
-original full DOF space.
-"""
-function solveEigenModes(
-    K::SystemMatrix,
-    M::SystemMatrix;
-    n=6,
-    fₘᵢₙ=0.01,
-    support=Vector{BoundaryCondition}(),
-    mpc::Vector{MPC}=MPC[],
-    directSolver=false
-    )
-
-    K.problems === nothing ||
-        error(
-            "solveEigenModes: use solveEigenFields for multifield systems."
-        )
-
-    ωₘᵢₙ² =
-        (2π * fₘᵢₙ)^2
-
-    ω², ϕ =
-        solveEigenProblem(
-            K,
-            M;
-            n=n,
-            shift=ωₘᵢₙ²,
-            support=support,
-            mpc=mpc,
-            directSolver=directSolver
-        )
-
-    f =
-        sqrt.(abs.(real(ω²))) ./
-        (2π)
-
-    ϕ =
-        real(ϕ)
-
-    return Eigen(
-        f,
-        ϕ,
-        K.model,
-        nothing,
-        nothing
-    )
-end
-
-"""
-    solveBucklingModes(K, Knl; n=6)
-                            
-Solves the critical force multipliers and buckling mode shapes of a problem given by stiffness
-matrix `K` and the nonlinear stiffness matrix `Knl`. `n` is the number of buckling modes to solve.
-Returns the struct of critical forces and buckling modes. Results can be presented by `showBucklingResults` function.
-                            
-Return: `modes`
-                            
-Types:
-- `K`: SystemMatrix
-- `Knl`: SystemMatrix
-- `n`: Int64
-- `modes`: Eigen 
-"""
-function solveBucklingModes(K, Knl; n=6)
-    if K.model != Knl.model
-        error("solveBucklingModes: K and Knl does not belong to the same model.")
-    end
-    problem = K.model
-    λ, ϕ = Arpack.eigs(K.A, -Knl.A, nev=n, which=:LR, sigma=0, maxiter=1000)
-    #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
-    #    ω², ϕ = Arpack.eigs(K, M, nev=1, which=:LR, sigma=1.01, maxiter=10000)
-    #end
-    #err = norm(K * ϕ[:,1] - ω²[1] * M * ϕ[:,1]) / norm(K * ϕ[:,1])
-    #if err > 1e-3 # || true
-    #    error("The error in the calculation of the smallest eigenvalue is too large: $err")
-    #end
-    f = abs.(real(λ))
-    ϕ1 = real(ϕ)
-    return Eigen(f, ϕ1, problem, nothing, nothing)
-end
-
-"""
-    solveModalAnalysis(problem::Problem; 
-                       support=Vector{BoundaryCondition}(), 
-                       load=Vector{BoundaryCondition}(), 
-                       n=6, 
-                       fₘᵢₙ=0.00001, 
-                       directSolver=false)
-
-Solves the first `n` eigenfrequencies and the corresponding 
-mode shapes for the `problem`, when `load` and 
-`support` are applied. `load` and `contraints` are optional. 
-Result can be presented by `showModalResults` function. 
-`load` and `support` can be defined by `load` and `displacementConstraint` functions,
-respectively. If `load` are given, it solves the eigenfrequencies of a prestressed structure.
-                            
-Return: `modes`
-                            
-Types:
-- `problem`: Problem
-- `load`: Vector{tuples}
-- `support`: Vector{tuples}
-- `n`: Int64
-- `modes`: Eigen
-"""
-function solveModalAnalysis(problem; support=Vector{BoundaryCondition}(), load=Vector{BoundaryCondition}(), n=6, fₘᵢₙ=0.00001, directSolver=false)
-    if !isa(load, Vector)
-        error("solveModalAnalysis: loads are not arranged in a vector. Put them in [...]")
-    end
-    if !isa(support, Vector)
-        error("solveModalAnalysis: support are not arranged in a vector. Put them in [...]")
-    end
-    all = allDoFs(problem)
-    free = freeDoFs(problem, support)
-    fix = constrainedDoFs(problem, support)
-    dof = problem.pdim * problem.non
-    K = stiffnessMatrix(problem)
-    M = massMatrix(problem)
-    if length(support) == 0
-        ϕ1 = zeros(dof, n)
-        K0 = SystemMatrix(K[all,all], K.model)
-        M0 = SystemMatrix(M[all,all], M.model)
-        mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
-        ϕ1[free,:] .= mod.ϕ
-        return Eigen(mod.f, ϕ1, problem, nothing, nothing)
-    elseif length(load) == 0
-        K0 = SystemMatrix(K[free,free], K.model)
-        M0 = SystemMatrix(M[free,free], M.model)
-        #f = zeros(dof)
-        #applyBoundaryConditions!(problem, K, M, f, support, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
-        nn = length(mod.f)
-        ϕ10 = zeros(dof, nn)
-        ϕ10[free,:] .= mod.ϕ
-        ϕ1 = VectorField([], ϕ10, [0.0], [], 1, :v3D, K.model)
-        applyBoundaryConditions!(ϕ1, support)
-        return Eigen(mod.f, ϕ1.a, problem, nothing, nothing)
-    else
-        ϕ1 = zeros(dof, n)
-        f = loadVector(problem, load)
-        q = solveDisplacement(K, f, support=support)
-        
-        err = 1
-        count = 0
-        while err > 1e-3 && count < 10
-            count += 1
-            q0 = copy(q)
-            Knl = nonLinearStiffnessMatrix(q)
-            q = solveDisplacement(K + Knl, f, support=support)
-            err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
-        end
-        if count == 10
-            @warn("solveModalAnalysis: number of iterations is $count.")
-        end
-        Knl = nonLinearStiffnessMatrix(q)
-        
-        #applyBoundaryConditions!(problem, K, M, Knl, f, support, fix=fₘᵢₙ<1 ? fₘᵢₙ/10 : 0.1)
-        K0 = SystemMatrix((K + Knl)[free,free], K.model)
-        M0 = SystemMatrix(M[free,free], M.model)
-        mod = solveEigenModes(K0, M0, n=n, fₘᵢₙ=fₘᵢₙ, directSolver=directSolver)
-        ϕ1[free,:] .= mod.ϕ
-        applyBoundaryConditions!(VectorField([], ϕ1, [i for i in 1:n], [], n, q.type, q.model), support)
-        return Eigen(mod.f, ϕ1, problem, nothing, nothing)
-    end
-end
-
-"""
-    solveBuckling(problem::Problem; 
-                  load=Vector{BoundaryCondition}(), 
-                  support=Vector{BoundaryCondition}(), 
-                  n=6)
-
-Solves the multipliers for the first `n` critical forces and the corresponding 
-buckling shapes for the instability of the `problem`, when `loads` and 
-`support` are applied. Result can be presented by `showBucklingResults`
-function. `loads` and `support` can be defined by `load` and `displacementConstraint` functions,
-respectively.
-                            
-Return: `buckling`
-                            
-Types:
-- `problem`: Problem
-- `load`: Vector{BoundaryCondition}
-- `support`: Vector{BoundaryCondition}
-- `n`: Int64
-- `buckling`: Eigen 
-"""
-function solveBuckling(problem; load=Vector{BoundaryCondition}(), support=Vector{BoundaryCondition}(), n=6)
-    f = loadVector(problem, load)
-    K = stiffnessMatrix(problem)
-    q = solveDisplacement(K, f, support=support)
-    
-    ϕ = zeros(problem.non * problem.pdim, n)
-    err = 1
-    count = 0
-    while err > 1e-3 && count < 10
-        count += 1
-        q0 = copy(q)
-        Knl = nonLinearStiffnessMatrix(q)
-        q = solveDisplacement(K + Knl, f, support=support)
-        err = sum(abs, q.a - q0.a) / (sum(abs, q0.a) == 0 ? 1 : sum(abs, q0.a))
-    end
-    if count == 10
-        @warn("solveBuckling: number of iterations is $count.")
-    end
-    Knl = nonLinearStiffnessMatrix(q)
-    
-    free = freeDoFs(problem, support)
-    K0 = SystemMatrix(K[free,free], K.model)
-    Knl0 = SystemMatrix(Knl[free,free], K.model)
-    bm = solveBucklingModes(K0, Knl0, n=n)
-    ϕ[free,:] = bm.ϕ
-    applyBoundaryConditions!(VectorField([], ϕ, [i for i in 1:n], [], n, q.type, q.model), support)
-    return Eigen(bm.f, ϕ, problem, nothing, nothing)
-end
-
 """
     initialDisplacement(problem::Problem, 
                         name::String; 
@@ -5654,134 +5361,6 @@ Types:
 function initialVelocity!(u0, name; vx=nothing, vy=nothing, vz=nothing)
     bc = BoundaryCondition(name, ux=vx, uy=vy, uz=vz)
     applyBoundaryConditions!(u0, [bc])
-end
-
-"""
-    largestPeriodTime(K::SystemMatrix, 
-                      M::SystemMatrix; 
-                      support=Vector{BoundaryCondition}())
-
-Solves the largest period of time for a dynamic problem given by stiffness
-matrix `K` and the mass matrix `M`, `bc` is a vector of `BoundaryCondition` where the
-displacement is given.
-                            
-Return: `Δt`
-                            
-Types:
-- `K`: SystemMatrix
-- `M`: SystemMatrix
-- `bc`: Vector{BoundaryCondition}
-- `Δt`: Float64 
-"""
-function largestPeriodTime(K, M; support=Vector{BoundaryCondition}())
-    free = freeDoFs(K.model, support)
-    K0 = K[free,free]
-    M0 = M[free,free]
-    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=0.00001, maxiter=10000)
-    #if real(ω²[1]) > 0.999 && real(ω²[1]) < 1.001
-    #    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LR, sigma=1.01, maxiter=10000)
-    #end
-    err = norm(K0 * ϕ[:,1] - ω²[1] * M0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
-    if err > 1e-3 # || true
-        @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
-    end
-    Δt = 2π / √(abs(real(ω²[1])))
-    return Δt
-end
-
-"""
-    smallestPeriodTime(K::SystemMatrix, 
-                       M::SystemMatrix; 
-                       support=Vector{BoundaryCondition}())
-
-Solves the smallest period of time for a dynamic problem given by stiffness
-matrix `K` and the mass matrix `M`, `support` is a vector of `BoundaryCondition` where the
-displacement is given.
-                            
-Return: `Δt`
-                            
-Types:
-- `K`: SystemMatrix
-- `M`: SystemMatrix
-- `support`: Vector{BoundaryCondition}
-- `Δt`: Float64 
-"""
-function smallestPeriodTime(K, M; support=Vector{BoundaryCondition}())
-    free = freeDoFs(K.model, support)
-    K0 = K[free,free]
-    M0 = M[free,free]
-    ω², ϕ = Arpack.eigs(K0, M0, nev=1, which=:LM, maxiter=100)
-    
-    err = norm(K0 * ϕ[:,1] - ω²[1] * M0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
-    if err > 1e-3 # || true
-        @warn("The error in the calculation of the largest eigenvalue is too large: $err")
-    end
-    Δt = 2π / √(abs(real(ω²[1])))
-    return Δt
-end
-
-"""
-    smallestEigenValue(K::SystemMatrix, 
-                       M::SystemMatrix; 
-                       support=Vector{BoundaryCondition}())
-
-Solves the largest eigenvalue for a transient problem given by stiffness (heat conduction)
-matrix `K` and the mass (heat capacity) matrix `M` (`C`).
-                            
-Return: `λₘₐₓ`
-                            
-Types:
-- `K`: SystemMatrix
-- `M`: SystemMatrix
-- `support`: Vector{BoundaryCondition}
-- `λₘₐₓ`: Float64 
-"""
-
-function smallestEigenValue_old(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
-    free = freeDoFs(K.model, support)
-    K0 = K[free,free]
-    C0 = C[free,free]
-    λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LR, sigma=0.0001, maxiter=10000)
-    if real(λ[1]) > 0.999 && real(λ[1]) < 1.001
-        λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LR, sigma=1.01, maxiter=10000)
-    end
-    err = norm(K0 * ϕ[:,1] - λ[1] * C0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
-    if err > 1e-3 # || true
-        @warn("The error in the calculation of the largest eigenvalue is too large: $err")
-    end
-    λₘₐₓ = abs(real(λ[1]))
-    return λₘₐₓ
-end
-
-"""
-    largestEigenValue(K::SystemMatrix, 
-                      M::SystemMatrix; 
-                      support=Vector{BoundaryCondition}())
-
-Solves the smallest eigenvalue for a transient problem given by stiffness (heat conduction)
-matrix `K` and the mass (heat capacity) matrix `M` (`C`).
-                            
-Return: `λₘᵢₙ`
-                            
-Types:
-- `K`: SystemMatrix
-- `M`: SystemMatrix
-- `support`: Vector{BoundaryCondition}
-- `λₘᵢₙ`: Float64 
-"""
-
-function largestEigenValue_old(K::SystemMatrix, C::SystemMatrix; support=Vector{BoundaryCondition}())
-    free = freeDoFs(K.model, support)
-    K0 = K[free,free]
-    C0 = C[free,free]
-    λ, ϕ = Arpack.eigs(K0, C0, nev=1, which=:LM)
-    
-    err = norm(K0 * ϕ[:,1] - λ[1] * C0 * ϕ[:,1]) / norm(K0 * ϕ[:,1])
-    if err > 1e-3 # || true
-        @warn("The error in the calculation of the smallest eigenvalue is too large: $err")
-    end
-    λₘᵢₙ = abs(real(λ[1]))
-    return λₘᵢₙ
 end
 
 """

@@ -786,14 +786,19 @@ function reduced_bc_data(
     fixed_r = Int[]
     sizehint!(fixed_r, length(fixed))
 
-    @inbounds for ir in 1:nr
+    vals = nonzeros(Rt)
+
+    for ir in 1:nr
         rng = nzrange(Rt, ir)
         isempty(rng) && continue
+
+        scale = maximum(abs(vals[k]) for k in rng)
+        tol = 1e-10 * scale
 
         constrained = true
 
         for k in rng
-            if !fixed_mask[rows[k]]
+            if !fixed_mask[rows[k]] && abs(vals[k]) > tol
                 constrained = false
                 break
             end

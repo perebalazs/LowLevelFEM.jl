@@ -9,7 +9,7 @@ export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, elementsToElements
 export projectTo2D, expandTo3D, isNodal, isElementwise
 export fieldError, resultant, integrate, ∫, normalVector, tangentVector
-export rotateNodes, CoordinateSystem
+export rotateNodes, CoordinateSystem, Transformation
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults
 export plotOnPath, showOnSurface, plotOnBeam
@@ -1491,6 +1491,11 @@ degree of freedom.
 
 ## Stored data
 
+`kind=:field` (default) marks ordinary field data. For `:eigen_real` and
+`:eigen_imag`, columns are eigenmodes and `t` contains the corresponding real
+or imaginary eigenvalue components rather than physical time instants.
+
+
 - `A` : Vector of matrices holding **element-wise** values  
   (`A[e][k,i]` = value at local node `k` of element `e` at time step `i`)
 - `a` : Matrix of **nodal** values  
@@ -1590,8 +1595,11 @@ struct ScalarField <: AbstractField
     nsteps::Int
     type::Symbol
     model::Problem
-    function ScalarField(A0, a0, t0, numElem0, nsteps0, type0, model)
-        return new(A0, a0, t0, numElem0, nsteps0, type0, model)
+    kind::Symbol
+    function ScalarField(A0, a0, t0, numElem0, nsteps0, type0, model, kind::Symbol=:field)
+        kind in (:field, :eigen_real, :eigen_imag) ||
+            throw(ArgumentError("ScalarField: kind must be :field, :eigen_real or :eigen_imag."))
+        return new(A0, a0, t0, numElem0, nsteps0, type0, model, kind)
     end
     function ScalarField(problem::Problem, dataField::Vector; steps=1, tmin=0.0, tmax=tmin+(steps-1))
         gmsh.model.setCurrent(problem.name)
@@ -1668,8 +1676,10 @@ struct ScalarField <: AbstractField
                 A[j][:, i] = s1.A[j][:, step]
             end
         end
-        t = range(start=tmin, stop=tmax, length=steps)
-        ScalarField(A, [;;], t, s1.numElem, steps, s1.type, s1.model)
+        t = s.kind === :field ?
+            collect(range(start=tmin, stop=tmax, length=steps)) :
+            fill(s.t[step], steps)
+        ScalarField(A, [;;], t, s1.numElem, steps, s1.type, s1.model, s.kind)
     end
 end
 
@@ -1693,6 +1703,11 @@ degree of freedom, analogously to `ScalarField`.
 ---
 
 ## Stored data
+
+`kind=:field` (default) marks ordinary field data. For `:eigen_real` and
+`:eigen_imag`, columns are eigenmodes and `t` contains the corresponding real
+or imaginary eigenvalue components rather than physical time instants.
+
 
 - `A` : Vector of matrices holding **element-wise** vector values  
   (`A[e][3k-2:3k, i]` = vector value at local node `k` of element `e`
@@ -1829,8 +1844,11 @@ struct VectorField <: AbstractField
     nsteps::Int
     type::Symbol
     model::Problem
-    function VectorField(A0, a0, t0, numElem0, nsteps0, type0, model)
-        return new(A0, a0, t0, numElem0, nsteps0, type0, model)
+    kind::Symbol
+    function VectorField(A0, a0, t0, numElem0, nsteps0, type0, model, kind::Symbol=:field)
+        kind in (:field, :eigen_real, :eigen_imag) ||
+            throw(ArgumentError("VectorField: kind must be :field, :eigen_real or :eigen_imag."))
+        return new(A0, a0, t0, numElem0, nsteps0, type0, model, kind)
     end
     function VectorField(comps::AbstractVector)
 
@@ -1983,7 +2001,7 @@ struct VectorField <: AbstractField
         #@disp ε0
 
         a = [;;]
-        return new(copy(ε0), a, comps1[1].t, elems, comps1[1].nsteps, :v3D, prob)
+        return new(copy(ε0), a, comps1[1].t, elems, comps1[1].nsteps, :v3D, prob, :field)
     end
 =#
     function VectorField(problem::Problem, dataField)
@@ -2056,7 +2074,7 @@ struct VectorField <: AbstractField
         end
         a = [;;]
         t = [0.0]
-        return new(A, a, t, numElem, nsteps, type, problem)
+        return new(A, a, t, numElem, nsteps, type, problem, :field)
     end
     function VectorField(problem::Problem, phName::String, data::Vector)
         @assert length(data) == 3 "VectorField must have exactly 3 components."
@@ -2121,7 +2139,7 @@ struct VectorField <: AbstractField
         end
         a = [;;]
         t = [0.0]
-        return new(A, a, t, numElem, nsteps, type, problem)
+        return new(A, a, t, numElem, nsteps, type, problem, :field)
     end
     function VectorField(s::VectorField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
         if step > s.nsteps || step < 1
@@ -2135,8 +2153,10 @@ struct VectorField <: AbstractField
                 A[j][:, i] = s1.A[j][:, step]
             end
         end
-        t = range(start=tmin, stop=tmax, length=steps)
-        VectorField(A, [;;], t, s1.numElem, steps, s1.type, s1.model)
+        t = s.kind === :field ?
+            collect(range(start=tmin, stop=tmax, length=steps)) :
+            fill(s.t[step], steps)
+        VectorField(A, [;;], t, s1.numElem, steps, s1.type, s1.model, s.kind)
     end
 end
 
@@ -2159,6 +2179,11 @@ component.
 ---
 
 ## Stored data
+
+`kind=:field` (default) marks ordinary field data. For `:eigen_real` and
+`:eigen_imag`, columns are eigenmodes and `t` contains the corresponding real
+or imaginary eigenvalue components rather than physical time instants.
+
 
 - `A` : Vector of matrices holding **element-wise** tensor values  
   (`A[e][9k-8:9k, i]` = tensor components at local node `k` of element `e`
@@ -2282,8 +2307,11 @@ struct TensorField <: AbstractField
     nsteps::Int
     type::Symbol
     model::Problem
-    function TensorField(A0, a0, t0, numElem0, nsteps0, type0, model)
-        return new(A0, a0, t0, numElem0, nsteps0, type0, model)
+    kind::Symbol
+    function TensorField(A0, a0, t0, numElem0, nsteps0, type0, model, kind::Symbol=:field)
+        kind in (:field, :eigen_real, :eigen_imag) ||
+            throw(ArgumentError("TensorField: kind must be :field, :eigen_real or :eigen_imag."))
+        return new(A0, a0, t0, numElem0, nsteps0, type0, model, kind)
     end
     function TensorField(problem, dataField)
         if !isa(dataField, Vector)
@@ -2409,7 +2437,7 @@ struct TensorField <: AbstractField
         end
         a = [;;]
         t = [0.0]
-        return new(A, a, t, numElem, nsteps, type, problem)
+        return new(A, a, t, numElem, nsteps, type, problem, :field)
     end
     function TensorField(problem::Problem, phName::String, data::Matrix)
         @assert size(data) == (3,3) "TensorField must be a 3×3 matrix."
@@ -2776,81 +2804,111 @@ function SystemVector(fields::Vector)
 end
 
 """
-    CoordinateSystem(vec1, vec2)
+    CoordinateSystem(e1::VectorField; handedness=:right)
+    CoordinateSystem(e1::VectorField, e2::VectorField; handedness=:right)
 
-A structure containing the data of a coordinate system.
-- `vec1`: direction of the new x axis.
-- `vec2`: together with `vec1` determine the xy plane
-If the problem is two dimensional, it is enough to give the first two
-elements of `vec1`. Elements of `vec1` and `vec2` can be functions. In
-3D case the functions have three arguments (x, y, and z coordinates),
-otherwise (in 2D case) the number of arguments is two (x and y coordinates).
+Define a local orthonormal coordinate system from direction `VectorField`s.
 
-Types:
-- `vec1`: Vector{Float64}
-- `vec2`: Vector{Float64}
+The direction fields may contain constant or spatially varying components and
+their finite-element support determines where the local coordinate system is
+active. The same `CoordinateSystem` object can be used by [`solveField`](@ref),
+[`rotateResult`](@ref), and [`rotateNodes`](@ref).
+
+In 2D, only `e1` is supplied. It defines the first local basis direction. The
+second direction is generated automatically. For `handedness=:right`,
+
+```math
+\\mathbf e_2 = (-e_{1y}, e_{1x}),
+```
+
+while `handedness=:left` reverses this direction.
+
+In 3D, both `e1` and `e2` are required. `e1` is normalized and `e2` defines the
+local 1-2 plane. During construction of the transformation, `e2` is
+orthogonalized against `e1` and normalized. The third basis direction is
+
+```math
+\\mathbf e_3 = \\mathbf e_1 \\times \\mathbf e_2
+```
+
+for `handedness=:right`, and the cross-product order is reversed for
+`handedness=:left`.
+
+# Arguments
+
+- `e1::VectorField`: first local basis direction.
+- `e2::VectorField`: second reference direction; required in 3D and not allowed
+  in 2D.
+- `handedness::Symbol`: `:right` (default) or `:left`.
+
+# Notes
+
+The direction fields must contain exactly one time step and must belong to the
+same `Problem`. Multiple coordinate systems with disjoint support can be
+combined in `solveField` and `rotateResult`.
 
 # Examples
 
 ```julia
-# 2D case
-nx(x, y) = x
-ny(x, y) = y
-cs = CoordinateSystem([nx, ny])
-Q = rotateNodes(problem, "body", cs)
-q2 = Q' * q1 # where `q1` is in Cartesian, `q2` is in Axisymmetric coordinate system and
-# `q1` is a nodal displacement vector.
-S2 = Q' * S1 * Q # where `S1` is a stress field in Cartesian coordinate system while
-# `S2` is in Axisymmetric coordinate system.
+# 2D polar basis on a region called "body"
+er = VectorField(U, "body", [(x, y, z) -> x, (x, y, z) -> y, 0.0])
+cs = CoordinateSystem(er)
 
-# 3D case
-n1x(x, y, z) = x
-n1y(x, y, z) = y
-n2x(x, y, z) = -y
-n2y = n1x
-cs = CoordinateSystem([n1x, n1y, 0], [n2x, n2y, 0])
-Q = rotateNodes(problem, "body", cs)
+# 3D cylindrical basis
+ex = VectorField(U, "body", [(x, y, z) -> x, (x, y, z) -> y, 0.0])
+ez = VectorField(U, "body", [0.0, 0.0, 1.0])
+cs = CoordinateSystem(ex, ez)
+
+Q = rotateNodes(U, cs)
 ```
 """
 struct CoordinateSystem
-    vec1::Vector{Float64}
-    vec2::Vector{Float64}
-    vec1f::Vector{Function}
-    vec2f::Vector{Function}
-    i1::Vector{Int64}
-    i2::Vector{Int64}
-    function CoordinateSystem(vect1)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        return new([v1x, v1y, 0], [0, 0, 0], [v1fx, v1fy, f], [f, f, f], [i1x, i1y, 0], [0, 0, 0])
-    end
-    function CoordinateSystem(vect1, vect2)
-        f(x) = 0
-        i1x = isa(vect1[1], Function) ? 1 : 0
-        i1y = isa(vect1[2], Function) ? 1 : 0
-        i1z = isa(vect1[3], Function) ? 1 : 0
-        i2x = isa(vect2[1], Function) ? 1 : 0
-        i2y = isa(vect2[2], Function) ? 1 : 0
-        i2z = isa(vect2[3], Function) ? 1 : 0
-        v1x = isa(vect1[1], Function) ? 1 : vect1[1]
-        v1y = isa(vect1[2], Function) ? 1 : vect1[2]
-        v1z = isa(vect1[3], Function) ? 1 : vect1[3]
-        v2x = isa(vect2[1], Function) ? 1 : vect2[1]
-        v2y = isa(vect2[2], Function) ? 1 : vect2[2]
-        v2z = isa(vect2[3], Function) ? 1 : vect2[3]
-        v1fx = isa(vect1[1], Function) ? vect1[1] : f
-        v1fy = isa(vect1[2], Function) ? vect1[2] : f
-        v1fz = isa(vect1[3], Function) ? vect1[3] : f
-        v2fx = isa(vect2[1], Function) ? vect2[1] : f
-        v2fy = isa(vect2[2], Function) ? vect2[2] : f
-        v2fz = isa(vect2[3], Function) ? vect2[3] : f
-        return new([v1x, v1y, v1z], [v2x, v2y, v2z], [v1fx, v1fy, v1fz], [v2fx, v2fy, v2fz], [i1x, i1y, i1z], [i2x, i2y, i2z])
-    end
+    e1::VectorField
+    e2::Union{VectorField,Nothing}
+    sig::Float64
+end
+
+@inline function _coordinate_handedness(handedness::Symbol)
+    handedness === :right && return 1.0
+    handedness === :left  && return -1.0
+    error("CoordinateSystem: handedness must be :right or :left.")
+end
+
+function CoordinateSystem(
+    e1::VectorField;
+    handedness::Symbol=:right
+)
+    dim = e1.model.dim
+
+    dim == 2 ||
+        error(
+            "CoordinateSystem: the one-direction form is only valid in 2D; " *
+            "a second direction field is required in 3D."
+        )
+
+    return CoordinateSystem(
+        e1,
+        nothing,
+        _coordinate_handedness(handedness)
+    )
+end
+
+function CoordinateSystem(
+    e1::VectorField,
+    e2::VectorField;
+    handedness::Symbol=:right
+)
+    e1.model === e2.model ||
+        error("CoordinateSystem: e1 and e2 must belong to the same Problem.")
+
+    e1.model.dim == 3 ||
+        error("CoordinateSystem: in 2D only one direction field must be given.")
+
+    return CoordinateSystem(
+        e1,
+        e2,
+        _coordinate_handedness(handedness)
+    )
 end
 
 """
@@ -3908,14 +3966,14 @@ import Base:copy
 function copy(A::AbstractField)
     T = typeof(A)
     
-    a = copy(A.A)
+    a = [copy(block) for block in A.A]
     b = copy(A.a)
     c = copy(A.t)
     d = copy(A.numElem)
     e = copy(A.nsteps)
     f = A.type
     g = A.model
-    return T(a, b, c, d, e, f, g)
+    return T(a, b, c, d, e, f, g, A.kind)
 end
 
 import Base:show
@@ -4417,6 +4475,8 @@ Raises an error for any non-scalar indexing:
 - `v[:]`      → ERROR
 
 Only single-component extraction `v[k]` is allowed.
+The extracted component is marked `kind=:field`, since it is not a
+complete eigenvector of the original vector problem.
 """
 function Base.getindex(v::VectorField, k::Int)
     pdim =
@@ -4448,7 +4508,8 @@ function Base.getindex(v::VectorField, k::Int)
             v.numElem,
             v.nsteps,
             :scalar,
-            v.model
+            v.model,
+            :field
         )
     end
 
@@ -4460,7 +4521,8 @@ function Base.getindex(v::VectorField, k::Int)
             v.numElem,
             v.nsteps,
             :scalar,
-            v.model
+            v.model,
+            :field
         )
     end
 
@@ -4555,7 +4617,7 @@ function Base.getindex(T::TensorField, i::Int, j::Int)
             Aout[e] = Ae[block:9:end, :]
         end
 
-        return ScalarField(Aout, [;;], T.t, T.numElem, T.nsteps, :scalar, T.model)
+        return ScalarField(Aout, [;;], T.t, T.numElem, T.nsteps, :scalar, T.model, T.kind)
     end
 
     # --- nodal ---
@@ -4564,7 +4626,7 @@ function Base.getindex(T::TensorField, i::Int, j::Int)
         rows = block:9:9*numNodes
         aout = T.a[rows, :]
 
-        return ScalarField([], aout, T.t, T.numElem, T.nsteps, :scalar, T.model)
+        return ScalarField([], aout, T.t, T.numElem, T.nsteps, :scalar, T.model, T.kind)
     end
 
     error("TensorField: no data in A or a.")
@@ -4926,6 +4988,7 @@ This function is intended for post-processing and visualization
 not for time-accurate integration.
 
 All input Fields must:
+- have `kind=:field`; eigenmode fields cannot be merged on a time axis,
 - have the same number of degrees of freedom,
 - belong to the same model,
 - share the same Field type (ScalarField, VectorField, or TensorField).
@@ -4955,6 +5018,12 @@ post-processing and visualization, not for time-accurate analysis.
 function mergeFields(uu::Vector{<:LowLevelFEM.AbstractField})
     nn = length(uu)
     nn ≥ 1 || error("mergeFields: empty input vector.")
+
+    all(u -> u.kind === :field, uu) ||
+        throw(ArgumentError(
+            "mergeFields: eigenmode fields cannot be merged as time histories " *
+            "because their t values are eigenvalues."
+        ))
 
     u0 = uu[1]
     T = typeof(u0)
@@ -5222,6 +5291,7 @@ function material(name; type=:Hooke, E=2.0e5, ν=0.3, ρ=7.85e-9, k=45, c=4.2e8,
 end
 =#
 
+#=
 """
     getEigenVectors(A::TensorField)
 
@@ -5335,6 +5405,7 @@ function getEigenValues(A::VectorField)
         error("getEigenValues(VectorField): data at nodes is not yet implemented.")
     end
 end
+=#
 
 """
     displacementConstraint(name; ux=nothing, uy=nothing, uz=nothing)
@@ -6759,7 +6830,8 @@ function elementsToNodes(
             Int[],
             nsteps,
             S.type,
-            problem
+            problem,
+            S.kind
         )
 
     # Map each Gmsh element tag to the corresponding position in S.A.
@@ -6858,7 +6930,8 @@ function elementsToNodes(
         Int[],
         nsteps,
         S.type,
-        problem
+        problem,
+        S.kind
     )
 end
 
@@ -6979,7 +7052,8 @@ function nodesToElements(
         numElem,
         nsteps,
         r.type,
-        problem
+        problem,
+        r.kind
     )
 end
 
@@ -7642,7 +7716,8 @@ function elementsToElements(
         targetElementTags,
         S.nsteps,
         S.type,
-        problem
+        problem,
+        :field
     )
 end
 
@@ -8301,123 +8376,71 @@ end
 ∫(s::Union{ScalarField,VectorField,TensorField}) = integrate(s)
 
 """
-    rotateNodes(problem, phName, CoordSys)
+    rotateNodes(problem::Problem, coordSys::CoordinateSystem)
+    rotateNodes(problem::Problem, phName::String, coordSys::CoordinateSystem)
 
-Creates the `T` transformation matrix, which rotates the nodal coordinate system
-of the nodes in `phName` physical group to the coordinate systen defined by `CoordSys`.
-The mesh belongs to `problem`.
+Build the nodal transformation matrix associated with `coordSys`.
 
-Return: `T`
+The returned [`Transformation`](@ref) maps local vector components to global
+Cartesian components at the active nodes. The coordinate system is evaluated
+with the same backend used by [`solveField`](@ref) and [`rotateResult`](@ref).
 
-Types:
-- `problem`: Problem
-- `phName`: String
-- `CoordSys`: CoordinateSystem
-- `T`: SparseMatrix
+In the two-argument form, the active nodes are determined directly by the
+support of the direction fields stored in `coordSys`.
+
+The three-argument form is retained for compatibility with existing
+`rotateNodes` workflows. In this form `phName` is checked against the support of
+the coordinate system; the physical group and the coordinate-system support
+must contain the same mesh nodes.
+
+# Arguments
+
+- `problem::Problem`: finite-element field whose nodal components are transformed.
+- `phName::String`: optional Gmsh physical-group name used to verify the active
+  node set.
+- `coordSys::CoordinateSystem`: local coordinate-system definition.
+
+# Returns
+
+A [`Transformation`](@ref) object `Q` such that
+
+```math
+\\mathbf v_\\mathrm{global} = Q\\,\\mathbf v_\\mathrm{local}.
+```
+
+# Example
+
+```julia
+er = VectorField(U, "body", [(x, y, z) -> x, (x, y, z) -> y, 0.0])
+cs = CoordinateSystem(er)
+Q = rotateNodes(U, cs)
+```
 """
-function rotateNodes(problem, phName, CoordSys)
-    dim = problem.dim
-    non = problem.non
-    dof = non * dim
-    phg = getTagForPhysicalName(phName)
-    nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
-    nonz = length(nodeTags) * dim * dim + (non - length(nodeTags)) * dim
-    lengthOfIJV = length(nodeTags) * dim * dim + non * dim
-    I = []
-    J = []
-    V = []
-    V = convert(Vector{Float64}, V)
-    sizehint!(I, lengthOfIJV)
-    sizehint!(J, lengthOfIJV)
-    sizehint!(V, lengthOfIJV)
-    vec2 = [0.0, 0.0, 0.0]
-    fn(x,y) = y
-    IJ = 1:dof
-    VV = ones(dof)
-    append!(I, IJ)
-    append!(J, IJ)
-    append!(V, VV)
-    
-    if dim == 3
-        I0 = [1, 2, 3, 1, 2, 3, 1, 2, 3]
-        J0 = [1, 1, 1, 2, 2, 2, 3, 3, 3]
-        e1 = CoordSys.vec1
-        e1 ./= √(dot(e1, e1))
-        I3 = [1 0 0; 0 1 0; 0 0 1]
-        e2 = (I3 - e1 * e1') * CoordSys.vec2
-        e2 ./= √(dot(e2, e2))
-        e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
-        T1 = [e1 e2 e3]
-        
-        if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1 || CoordSys.i1[3] == 1 || CoordSys.i2[1] == 1 || CoordSys.i2[2] == 1 || CoordSys.i2[3] == 1
-            for i in 1:length(nodeTags)
-                x = coord[i * 3 - 2]
-                y = coord[i * 3 - 1]
-                z = coord[i * 3]
-                e1[1] = CoordSys.i1[1] == 1 ? CoordSys.vec1f[1](x, y, z) : CoordSys.vec1[1]
-                e1[2] = CoordSys.i1[2] == 1 ? CoordSys.vec1f[2](x, y, z) : CoordSys.vec1[2]
-                e1[3] = CoordSys.i1[3] == 1 ? CoordSys.vec1f[3](x, y, z) : CoordSys.vec1[3]
-                vec2[1] = CoordSys.i2[1] == 1 ? CoordSys.vec2f[1](x, y, z) : CoordSys.vec2[1]
-                vec2[2] = CoordSys.i2[2] == 1 ? CoordSys.vec2f[2](x, y, z) : CoordSys.vec2[2]
-                vec2[3] = CoordSys.i2[3] == 1 ? CoordSys.vec2f[3](x, y, z) : CoordSys.vec2[3]
-                e1 ./= √(dot(e1, e1))
-                e2 = (I3 - e1 * e1') * vec2
-                e2 ./= √(dot(e2, e2))
-                e3 = [e1[2] * e2[3] - e1[3] * e2[2], e1[3] * e2[1] - e1[1] * e2[3], e1[1] * e2[2] - e1[2] * e2[1]]
-                T1 = [e1 e2 e3]
-                Iidx = (nodeTags[i] * 3 - 3) .+ I0
-                Jidx = (nodeTags[i] * 3 - 3) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        else
-            for i in 1:length(nodeTags)
-                Iidx = (nodeTags[i] * 3 - 3) .+ I0
-                Jidx = (nodeTags[i] * 3 - 3) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        end
-    elseif dim == 2
-        I0 = [1, 2, 1, 2]
-        J0 = [1, 1, 2, 2]
-        e1 = CoordSys.vec1[1:2]
-        e1 ./= √(dot(e1, e1))
-        e2 = [-e1[2], e1[1]]
-        T1 = [e1 e2]
-        
-        if CoordSys.i1[1] == 1 || CoordSys.i1[2] == 1
-            for i in 1:length(nodeTags)
-                x = coord[i * 3 - 2]
-                y = coord[i * 3 - 1]
-                e1[1] = CoordSys.i1[1] == 1 ? CoordSys.vec1f[1](x, y) : CoordSys.vec1[1]
-                e1[2] = CoordSys.i1[2] == 1 ? CoordSys.vec1f[2](x, y) : CoordSys.vec1[2]
-                e1 ./= √(dot(e1, e1))
-                e2 = [-e1[2], e1[1]]
-                T1 = [e1 e2]
-                Iidx = (nodeTags[i] * 2 - 2) .+ I0
-                Jidx = (nodeTags[i] * 2 - 2) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        else
-            for i in 1:length(nodeTags)
-                Iidx = (nodeTags[i] * 2 - 2) .+ I0
-                Jidx = (nodeTags[i] * 2 - 2) .+ J0
-                append!(I, Iidx)
-                append!(J, Jidx)
-                append!(V, T1[:])
-            end
-        end
-    else
-        error("rotateNodes: dimension of the problem is 2 o 3, now it is $dim.")
-    end
-    T = sparse(I, J, V, dof, dof, fn)
-    dropzeros!(T)
-    return Transformation(T, non, dim)
+function rotateNodes(
+    problem::Problem,
+    coordSys::CoordinateSystem
+)
+    Q, _ = _coordinate_transformation(problem, coordSys)
+    return Q
+end
+
+function rotateNodes(
+    problem::Problem,
+    phName::String,
+    coordSys::CoordinateSystem
+)
+    Q, coord_nodes = _coordinate_transformation(problem, coordSys)
+    group_nodes = _nodesOnPhysicalGroup(problem, phName)
+
+    coord_nodes == group_nodes ||
+        error(
+            "rotateNodes: coordinate-system support and physical group " *
+            "'$phName' do not contain the same nodes. " *
+            "Define the CoordinateSystem direction field(s) on '$phName', " *
+            "or use rotateNodes(problem, coordSys)."
+        )
+
+    return Q
 end
 
 """
@@ -8556,7 +8579,10 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
     end
     
     gmsh.view.option.setNumber(uvec, "GlyphLocation", 2)
-    gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
+    #gmsh.view.option.setNumber(uvec, "DisplacementFactor", 0)
+    eigenmode = q.kind in (:eigen_real, :eigen_imag)
+    scale = factor != 0 ? factor : (eigenmode ? 1.0 : 0.0)
+    gmsh.view.option.setNumber(uvec, "DisplacementFactor", scale)
     if ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "AdaptVisualizationGrid", 1)
     else
@@ -8570,12 +8596,31 @@ function showDoFResults(q::Union{ScalarField,VectorField,TensorField}, comp::Sym
         gmsh.view.option.setNumber(uvec, "Visible", 1)
     end
     gmsh.view.option.setNumber(uvec, "ShowTime", 0)
-    if ff == 0 && length(t) > 1
-        gmsh.view.option.setNumber(uvec, "ShowTime", 1)
+    if q.kind == :eigen_real
+    gmsh.view.option.setNumber(uvec, "ShowTime", 6)
+
+    elseif q.kind == :eigen_imag
+        gmsh.view.option.setNumber(uvec, "ShowTime", 7)
+
     elseif ff == 1 || ff == 2
         gmsh.view.option.setNumber(uvec, "ShowTime", 6)
+
+    elseif ff == 0 && length(t) > 1
+        gmsh.view.option.setNumber(uvec, "ShowTime", 1)
+
+    else
+        gmsh.view.option.setNumber(uvec, "ShowTime", 0)
+    end
+    if q isa VectorField &&
+        (q.kind in (:eigen_real, :eigen_imag) || ff in (1, 2))
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
     end
+    #=if ff == 0 && length(t) > 1
+        gmsh.view.option.setNumber(uvec, "ShowTime", 1)
+    elseif ff == 1 || ff == 2 || q.kind == :eigen_real
+        gmsh.view.option.setNumber(uvec, "ShowTime", 6)
+        gmsh.view.option.setNumber(uvec, "VectorType", 5)
+    end=#
     if factor != 0
         gmsh.view.option.setNumber(uvec, "VectorType", 5)
         gmsh.view.option.setNumber(uvec, "DisplacementFactor", factor)
@@ -8585,11 +8630,11 @@ end
 
 function showDoFResults(q::Union{ScalarField,VectorField,TensorField}; name=q.type, visible=false, ff = 0, factor=0)
     if q isa ScalarField
-        showDoFResults(q, :scalar, name=name, visible=visible, factor=factor)
+        showDoFResults(q, :scalar, name=name, visible=visible, ff=ff, factor=factor)
     elseif q isa VectorField
-        showDoFResults(q, :vector, name=name, visible=visible, factor=factor)
+        showDoFResults(q, :vector, name=name, visible=visible, ff=ff, factor=factor)
     elseif q isa TensorField
-        showDoFResults(q, :tensor, name=name, visible=visible, factor=factor)
+        showDoFResults(q, :tensor, name=name, visible=visible, ff=ff, factor=factor)
     else
         error("showDoFResults: argument must be a ScalarField, VectorField or TensorField.")
     end
@@ -10182,7 +10227,8 @@ end
     saveField(fileName::String, variable::Union{ScalarField,VectorField,TensorField,Number})
 
 Saves `variable` of type ScalarField, VectorField, or TensorField to a file named `fileName`.
-The name of the file will be complemented with the string "-LLF-Data.jld2"
+The name of the file will be complemented with the string "-LLF-Data.jld2".
+The field `kind` is preserved when saving and loading.
 
 Returns: nothing
 
@@ -10205,7 +10251,8 @@ function saveField(
         var.numElem,
         var.nsteps,
         var.type,
-        P
+        P,
+        var.kind
     )
 
     @save fileName * "-LLF-Data.jld2" variable
@@ -10360,7 +10407,7 @@ Returns `nothing`.
 Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
-function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1)
+function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1, leftRemote::Bool=false, rightRemote::Bool=false)
     if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
@@ -10372,6 +10419,12 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     # --------------------------------------------------
     # Box: origin (0,0,0), size l x l x l
     box = gmsh.model.occ.addRectangle(x0, y0, 0.0, lx, ly)
+    if leftRemote
+        lr = gmsh.model.occ.addPoint(x0, y0 + ly / 2, 0)
+    end
+    if rightRemote
+        rr = gmsh.model.occ.addPoint(x0 + lx, y0 + ly / 2, 0)
+    end
 
     gmsh.model.occ.synchronize()
     #return
@@ -10390,6 +10443,13 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     gmsh.model.addPhysicalGroup(0, [2], -1, "rightbottom")
     gmsh.model.addPhysicalGroup(0, [3], -1, "righttop")
     gmsh.model.addPhysicalGroup(0, [4], -1, "lefttop")
+
+    if leftRemote
+        gmsh.model.addPhysicalGroup(0, [lr], -1, "leftremote")
+    end
+    if rightRemote
+        gmsh.model.addPhysicalGroup(0, [rr], -1, "rightremote")
+    end
 
     # --------------------------------------------------
     # Mesh settings (structured hex mesh)
@@ -10420,6 +10480,20 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     # Generate mesh
     # --------------------------------------------------
     gmsh.model.mesh.generate(2)
+
+    T = [
+        1.0, 0.0, 0.0, lx,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    ]
+
+    gmsh.model.mesh.setPeriodic(
+        1,
+        [2],
+        [4],
+        T
+    )
 
     # --------------------------------------------------
     # Save
@@ -10468,7 +10542,7 @@ Returns `nothing`.
 Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
 """
-function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1)
+function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1, leftRemote::Bool=false, rightRemote::Bool=false)
     if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
@@ -10481,6 +10555,13 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
     # --------------------------------------------------
     # Box: origin (0,0,0), size l x l x l
     box = gmsh.model.occ.addBox(x0, y0, z0, lx, ly, lz)
+    
+    if leftRemote
+        lr = gmsh.model.occ.addPoint(x0, y0 + ly / 2, z0 + lz / 2)
+    end
+    if rightRemote
+        rr = gmsh.model.occ.addPoint(x0 + lx, y0 + ly / 2, z0 + lz / 2)
+    end
 
     gmsh.model.occ.synchronize()
     #return
@@ -10497,6 +10578,13 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
 
     gmsh.model.addPhysicalGroup(3, [1], -1, "body")
 
+    if leftRemote
+        gmsh.model.addPhysicalGroup(0, [lr], -1, "leftremote")
+    end
+    if rightRemote
+        gmsh.model.addPhysicalGroup(0, [rr], -1, "rightremote")
+    end
+
     # --------------------------------------------------
     # Mesh settings (structured hex mesh)
     # --------------------------------------------------
@@ -10506,7 +10594,7 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
 
     #gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
 
-    d = min(dx, dy)
+    d = min(dx, dy, dz)
 
     gmsh.model.mesh.setTransfiniteCurve(9, ceil(lx / d) + 1)
     gmsh.model.mesh.setTransfiniteCurve(10, ceil(lx / d) + 1)
@@ -10545,6 +10633,20 @@ function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n
     # Generate mesh
     # --------------------------------------------------
     gmsh.model.mesh.generate(3)
+    
+    T = [
+        1.0, 0.0, 0.0, lx,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    ]
+
+    gmsh.model.mesh.setPeriodic(
+        2,
+        [2],
+        [1],
+        T
+    )
 
     # --------------------------------------------------
     # Save

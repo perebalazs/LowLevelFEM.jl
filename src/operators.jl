@@ -15,7 +15,7 @@ import Base.cbrt
 import Base.abs
 import Base.adjoint
 import Base.zero
-export mapScalarField
+export mapScalarField, mapEigenValues
 using StaticArrays
 
 """
@@ -342,9 +342,9 @@ function *(A::ScalarField, b::Number)
         @inbounds for i in 1:n
             C[i] = A.A[i] .* b
         end
-        return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+        return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model, A.kind)
     else
-        return ScalarField(A.A, A.a * b, A.t, A.numElem, A.nsteps, A.type, A.model)
+        return ScalarField(A.A, A.a * b, A.t, A.numElem, A.nsteps, A.type, A.model, A.kind)
     end
 end
 
@@ -382,7 +382,7 @@ function /(AA::ScalarField, b::Number)
     @inbounds for i in 1:n
         C[i] = A.A[i] ./ b
     end
-    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+    return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model, A.kind)
 end
 
 """
@@ -1009,9 +1009,9 @@ function *(A::VectorField, b::Number)
         @inbounds for i in 1:n
             C[i] = A.A[i] .* b
         end
-        return VectorField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+        return VectorField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model, A.kind)
     elseif A.a != [;;]
-        return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model)
+        return VectorField([], A.a .* b, A.t, [], A.nsteps, A.type, A.model, A.kind)
     else
         error("*(VectorField, b): internal error")
     end
@@ -1028,9 +1028,9 @@ function /(A::VectorField, b::Number)
         @inbounds for i in 1:n
             C[i] = A.A[i] ./ b
         end
-        return VectorField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
+        return VectorField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model, A.kind)
     elseif A.a != [;;]
-        return VectorField([], A.a ./ b, A.t, [], A.nsteps, A.type, A.model)
+        return VectorField([], A.a ./ b, A.t, [], A.nsteps, A.type, A.model, A.kind)
     else
         error("/(VectorField, b): internal error")
     end
@@ -1416,6 +1416,25 @@ end
 
 export ⋅
 
+"""
+    mapEigenValues(f, u::VectorField)
+
+Apply the `f` function to the eigenvalues stored in a vector field.
+
+Return a new field with transformed eigenvalues, preserving
+the eigenvectors, their order, and the field metadata.
+The original field remains unchanged.
+"""
+function mapEigenValues(f, u::VectorField)
+    u.kind in (:eigen_real, :eigen_imag) ||
+        error("mapEigenValues: eigenfield required.")
+
+    v = copy(u)
+    v.t .= f.(u.t)
+
+    return v
+end
+
 ###############################################################################
 #                                                                             #
 #                      Tensor fields operations                               #
@@ -1783,9 +1802,9 @@ function *(AA::TensorField, b::Number)
         @inbounds for i in 1:n
             C[i] = AA.A[i] .* b
         end
-        return TensorField(C, [;;], AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
+        return TensorField(C, [;;], AA.t, AA.numElem, AA.nsteps, AA.type, AA.model, AA.kind)
     elseif AA.a != [;;]
-        return TensorField(AA.A, AA.a .* b, AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
+        return TensorField(AA.A, AA.a .* b, AA.t, AA.numElem, AA.nsteps, AA.type, AA.model, AA.kind)
     else
         error("*(A::TensorField, b): TensorField type ($(AA.type)) is not yet implemented.")
     end
@@ -1802,9 +1821,9 @@ function /(AA::TensorField, b::Number)
         @inbounds for i in 1:n
             C[i] = AA.A[i] ./ b
         end
-        return TensorField(C, [;;], AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
+        return TensorField(C, [;;], AA.t, AA.numElem, AA.nsteps, AA.type, AA.model, AA.kind)
     elseif AA.a != [;;]
-        return TensorField(AA.A, AA.a ./ b, AA.t, AA.numElem, AA.nsteps, AA.type, AA.model)
+        return TensorField(AA.A, AA.a ./ b, AA.t, AA.numElem, AA.nsteps, AA.type, AA.model, AA.kind)
     else
         error("/(A::TensorField, b): TensorField type ($(AA.type)) is not yet implemented.")
     end

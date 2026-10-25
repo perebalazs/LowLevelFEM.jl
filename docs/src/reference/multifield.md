@@ -761,9 +761,10 @@ D
 ## Multifield Solver
 
 ```@docs
+CoordinateSystem
 solveField
-solveEigenFields
 reductionMatrices
+rotateResult
 ```
 
 ## Multi-point constraints
