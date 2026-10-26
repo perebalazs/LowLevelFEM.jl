@@ -64,3 +64,39 @@ Custom 3D coefficient matrices prepared for the former `SymGrad` order
 `[xx, yy, zz, xy, xz, yz]` need the corresponding row and column permutation:
 `p = [1, 2, 3, 4, 6, 5]; D_new = D_old[p, p]`. Isotropic `D(:Solid, mat)` is
 unchanged by this permutation.
+
+## Tutorial notebook integration checks
+
+The core suite checks small numerical models. Notebook execution is a separate,
+opt-in integration check and does not increase normal `runtests.jl` runtime.
+It uses the existing Julia environment and Python 3's standard library, without
+IJulia, nbconvert, pip packages, or package installation. Run from the package root:
+
+```sh
+python3 test/run_tutorials.py --list
+python3 test/run_tutorials.py
+python3 test/run_tutorials.py buckling_and_prestressed_modes.ipynb
+python3 test/run_tutorials.py --all --timeout 900
+```
+
+The catalog comes from notebook links in `docs/src/tutorials/`. The default run
+covers the plane-stress and coupled-beam tutorials, including postprocessing.
+It adds analytical plane-stress checks and beam equilibrium/constraint checks.
+Other selected notebooks are checked for successful cell execution; additional
+numerical checks can be registered in `tutorial_checks.jl`. `--all` can be
+expensive, especially for 3D contact and curved high-order meshes. Transient
+elasticity and space-time dynamics are explicitly excluded from this scope.
+
+Each notebook runs in a fresh Julia process with notebook-style soft scope,
+fixed RNG seed, copied input assets and a temporary working directory. The
+original notebooks and geometry files are not edited. Cells execute in stored
+order, with original cell numbers in the logs. Only explicit preprocessor,
+postprocessor and `gmsh.fltk.run()` GUI-opening calls are replaced with logged
+headless no-ops; view creation and numerical postprocessing still execute.
+This does not verify the GUI's appearance or behavior.
+
+Failures/timeouts produce a nonzero exit status. Logs, copied inputs and a JSON
+report are retained in the printed temporary report directory, with excluded
+and unselected notebooks listed explicitly. Missing optional packages or stale
+notebook APIs are failures; the runner does not install packages or silently
+skip numerical cells. Use `--julia /path/to/julia` to select an existing runtime.
