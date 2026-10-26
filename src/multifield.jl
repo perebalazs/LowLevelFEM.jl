@@ -229,8 +229,8 @@ Engineering strain components are returned.
       εyy
       εzz
       γxy
-      γxz
-      γyz ]
+      γyz
+      γzx ]
 """
 struct SymGradOp <: AbstractOp end
 
@@ -243,11 +243,12 @@ Represents
 
     div(σ)
 
-where σ is a tensor field stored with
+where σ is stored as a full 3×3 tensor in column-major order, with
 
-    pdim = dim^2
+    pdim = 9
 
-The output is a vector with `dim` components.
+The output is a vector with `dim` components. In 2D, only the in-plane
+tensor block and the x/y derivatives contribute.
 """
 struct TensorDivOp <: AbstractOp end
 
@@ -423,7 +424,7 @@ end
 #end
 
 function op_outdim(::TensorDivOp, P::Problem)
-    @assert P.pdim == P.dim^2 "TensorDivOp requires pdim == dim^2 (full 2nd-order tensor)."
+    @assert P.dim in (2, 3) && P.pdim == 9 "TensorDivOp requires a 2D or 3D tensor field with nine stored components."
     return P.dim
 end
 
@@ -636,7 +637,7 @@ function build_B!(B::AbstractMatrix, ::SymGradOp,
             B[3, coly] = dNx
         end
     else
-        # rows: [εxx, εyy, εzz, γxy, γxz, γyz]
+        # rows: [εxx, εyy, εzz, γxy, γyz, γzx]
         @inbounds for a in 1:numNodes
             colx = (a - 1) * pdim + 1
             coly = (a - 1) * pdim + 2
@@ -653,11 +654,11 @@ function build_B!(B::AbstractMatrix, ::SymGradOp,
             B[4, colx] = dNy          # γxy
             B[4, coly] = dNx
 
-            B[5, colx] = dNz          # γxz
-            B[5, colz] = dNx
+            B[5, coly] = dNz          # γyz
+            B[5, colz] = dNy
 
-            B[6, coly] = dNz          # γyz
-            B[6, colz] = dNy
+            B[6, colx] = dNz          # γzx
+            B[6, colz] = dNx
         end
     end
 
@@ -668,15 +669,14 @@ function build_B!(B::AbstractMatrix, ::TensorDivOp,
     P::Problem, k::Int, h, ∂h, numNodes::Integer)
     fill!(B, 0.0)
     dim = P.dim
-    pdim = P.pdim  # dim^2
+    pdim = P.pdim  # full 3×3 tensor, also in 2D
 
-    # assume tensor component ordering at node:
-    # σ_ij mapped to α = (i-1)*dim + j   (i=row, j=col)
+    # Column-major tensor storage: σ_ij maps to i + 3*(j - 1).
     @inbounds for a in 1:numNodes
         for i in 1:dim
             row = i
             for j in 1:dim
-                col = (a - 1) * pdim + (i - 1) * dim + j
+                col = (a - 1) * pdim + i + 3 * (j - 1)
                 B[row, col] = ∂h[j, (k-1)*numNodes+a]  # ∂/∂x_j
             end
         end

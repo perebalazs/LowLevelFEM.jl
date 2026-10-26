@@ -2,15 +2,25 @@ using LowLevelFEM
 using LinearAlgebra
 using SparseArrays
 using Test
+using Arpack
+using IterativeSolvers, Preconditioners, IncompleteLU
+
+include("helpers.jl")
 
 @testset "LowLevelFEM.jl" begin
-    include("test_fields.jl")
-    include("test_operators.jl")
-    include("test_assembly.jl")
-    include("test_validation.jl")
-    include("test_cube.jl")
-    include("test_integration.jl")
-    include("test_dsl.jl")
-    include("test_solvefield.jl")
-    include("test_solvefield_multifield.jl")
+    @testset "Modern architecture (DSL)" begin
+        include("test_fields.jl")
+        include("test_operators.jl")
+        include("test_weakforms.jl")
+        include("test_multifield.jl")
+        include("test_boundary_conditions.jl")
+        include("test_solvefield.jl")
+        include("test_solveeigen.jl")
+        include("test_contact.jl")
+        include("test_validation.jl")
+    end
+    @testset "Legacy" begin
+        include("legacy/test_legacy_elasticity.jl")
+        include("legacy/test_legacy_compatibility.jl")
+    end
 end

@@ -1,150 +1,215 @@
-# Regression tests for multifield solveField transformations.
+@testset "Single-field boundary conditions and MPC" begin
+    with_test_gmsh() do
+        @testset "MPC remote point" begin
+            structured_rect_mesh(n=2)
 
-@testset "solveField multifield" begin
-    initialized_here = gmsh.isInitialized() == 0
-    initialized_here && gmsh.initialize()
+            remote_tag = gmsh.model.occ.addPoint(1.2, 0.5, 0.0)
+            gmsh.model.occ.synchronize()
+            gmsh.model.addPhysicalGroup(0, [remote_tag], -1, "remote")
 
-    try
-        relerr(a, b) = norm(a - b) / max(norm(b), eps(Float64))
+            gmsh.model.mesh.clear()
+            gmsh.model.mesh.generate(2)
 
-        structured_rect_mesh(
-            lx=2.0,
-            n=2,
-            order=2
-        )
+            mat = Material("body")
+            remote = Material("remote")
 
-        material = Material("body")
-
-        P = Field(
-            [material],
-            type=:ScalarField,
-            fieldName=:p,
-            rhsName=:fp,
-            dim=2,
-            reducedOrder=true
-        )
-
-        V = Field(
-            [material],
-            type=:VectorField,
-            fieldName=:v,
-            rhsName=:fv,
-            dim=2
-        )
-
-        pres = BoundaryCondition(
-            "rightbottom",
-            field=P,
-            p=0.0
-        )
-
-        supp_top = BoundaryCondition(
-            "top",
-            field=V,
-            vx=0.0,
-            vy=0.0
-        )
-
-        supp_bottom = BoundaryCondition(
-            "bottom",
-            field=V,
-            vx=0.0,
-            vy=0.0
-        )
-
-        support = [
-            pres,
-            supp_top,
-            supp_bottom
-        ]
-
-        fv_x = loadVector(
-            V,
-            [LoadCondition("body", fvx=1.0, fvy=0.0)]
-        )
-
-        fp = loadVector(P, [])
-        F_x = SystemVector([fv_x, fp])
-
-        μ = 1.0
-        γ = 1e-1
-
-        A = ∫((SymGrad(V) ⋅ SymGrad(V)) * 2μ)
-        B = ∫(Div(V) ⋅ P)
-        C = 0 * ∫(P ⋅ P)
-        D = ∫(Div(V) ⋅ Div(V) * γ)
-
-        K = SystemMatrix([
-            A + D  B
-            B'     C
-        ])
-
-        @testset "One-field block return type" begin
-            Kblock = SystemMatrix(reshape([A + D], 1, 1))
-            Fblock = SystemVector([fv_x])
-
-            v_block = solveField(
-                Kblock,
-                Fblock;
-                support=[supp_top, supp_bottom]
+            U = Field(
+                [mat, remote],
+                type=:VectorField,
+                dim=2,
+                fieldName=:u,
+                rhsName=:f
             )
 
-            v_single = solveField(
-                A + D,
-                fv_x;
-                support=[supp_top, supp_bottom]
+            C = [
+                2.0 1.0 0.0
+                1.0 2.0 0.0
+                0.0 0.0 1.0
+            ]
+
+            K = ∫(SymGrad(U) ⋅ C ⋅ SymGrad(U), Ω="body")
+            f = ∫(U ⋅ [1.0, 0.0], Γ="right")
+
+            mpc = MPC(
+                master="remote",
+                slave="right",
+                field=U,
+                ux=true,
+                uy=false
             )
 
-            @test v_block isa VectorField
-            @test !(v_block isa Tuple)
-            @test relerr(v_block.a, v_single.a) < 1e-12
+            support = [
+                BoundaryCondition("left", ux=0.0, uy=0.0),
+                BoundaryCondition("remote", uy=0.0)
+            ]
+
+            u = solveField(
+                K,
+                f;
+                support=support,
+                mpc=[mpc]
+            )
+
+            rep = LowLevelFEM.mpcRepresentativeMap(U, [mpc])
+            tied = [i for i in eachindex(rep) if rep[i] != i]
+
+            @test !isempty(tied)
+            @test maximum(
+                abs(u.a[i, 1] - u.a[rep[i], 1])
+                for i in tied
+            ) < 1e-10
+
+            # Non-homogeneous prescribed master value must propagate to slaves.
+            support_nonhom = [
+                BoundaryCondition("left", ux=0.0, uy=0.0),
+                BoundaryCondition("remote", ux=0.01, uy=0.0)
+            ]
+
+            u_nh = solveField(
+                K,
+                0.0 * f;
+                support=support_nonhom,
+                mpc=[mpc]
+            )
+
+            @test maximum(
+                abs(u_nh.a[i, 1] - u_nh.a[rep[i], 1])
+                for i in tied
+            ) < 1e-10
+
+            remote_ux = constrainedDoFs(
+                U,
+                [BoundaryCondition("remote", ux=0.0)]
+            )
+
+            @test length(remote_ux) == 1
+            @test isapprox(
+                u_nh.a[only(remote_ux), 1],
+                0.01;
+                atol=1e-12,
+                rtol=0
+            )
         end
 
-        @testset "Reduced multifield system and symmetric fallback" begin
-            v, p = solveField(
+        @testset "Coordinate systems and Global RHS" begin
+            structured_box_mesh(n=2)
+
+            mat = Material("body")
+            U = Field(
+                [mat],
+                type=:VectorField,
+                dim=3,
+                fieldName=:u
+            )
+
+            K = ∫(ε(U) ⋅ D(:Solid, mat) ⋅ ε(U))
+
+            support = [
+                BoundaryCondition("left", ux=0.0, uy=0.0, uz=0.0)
+            ]
+
+            # 90-degree basis on the right face:
+            # local e1 = global +y, local e2 = global -x.
+            e1 = VectorField(U, "right", [0.0, 1.0, 0.0])
+            e2 = VectorField(U, "right", [-1.0, 0.0, 0.0])
+            cs = CoordinateSystem(e1, e2)
+
+            f_local = ∫(U ⋅ [1.0, 0.0, 0.0], Γ="right")
+            f_global = ∫(U ⋅ [0.0, 1.0, 0.0], Γ="right")
+
+            u_local = solveField(
                 K,
-                F_x;
-                support=support
+                f_local;
+                support=support,
+                coordSys=[cs]
             )
 
-            prepared = LowLevelFEM.prepare_multifield_system(
+            u_global = solveField(
                 K,
-                F_x,
-                support
+                Global(f_global);
+                support=support,
+                coordSys=[cs]
             )
 
-            Xfree = LowLevelFEM.solve_linear_system(
-                prepared.A,
-                prepared.B;
-                solver=:backslash
+            @test relerr(u_local.a, u_global.a) < 1e-12
+
+            # Mixed local/global RHS must obey superposition.
+            f_body_global = ∫(
+                U ⋅ [0.0, 0.0, -1.0],
+                Ω="body"
             )
 
-            residual = norm(
-                prepared.A * Xfree - prepared.B
-            ) / max(norm(prepared.B), eps(Float64))
-
-            @test residual < 1e-9
-            @test size(prepared.T, 2) < size(K.A, 1)
-            @test all(isfinite, v.a)
-            @test all(isfinite, p.a)
-
-            # Stokes/Navier-Stokes block systems are symmetric but indefinite.
-            # :auto must therefore fall back from Cholesky to LU.
-            vp_sym = @test_logs (
-                :warn,
-                "Cholesky factorization failed because the symmetric system is not positive definite. Falling back to LU factorization."
-            ) solveField(
-                Symmetric(K),
-                F_x;
-                support=support
+            u_body = solveField(
+                K,
+                Global(f_body_global);
+                support=support,
+                coordSys=[cs]
             )
 
-            v_sym, p_sym = vp_sym
+            u_mixed = solveField(
+                K,
+                f_local + Global(f_body_global);
+                support=support,
+                coordSys=[cs]
+            )
 
-            @test relerr(v_sym.a, v.a) < 1e-9
-            @test relerr(p_sym.a, p.a) < 1e-8
+            @test relerr(
+                u_mixed.a,
+                u_local.a + u_body.a
+            ) < 1e-10
+
+            # Inclined roller: local ux=0 on a 45-degree basis.
+            e1_45 = VectorField(U, "right", [1.0, 1.0, 0.0])
+            e2_45 = VectorField(U, "right", [-1.0, 1.0, 0.0])
+            cs45 = CoordinateSystem(e1_45, e2_45)
+
+            support45 = [
+                BoundaryCondition("left", ux=0.0, uy=0.0, uz=0.0),
+                BoundaryCondition("right", ux=0.0)
+            ]
+
+            u45 = solveField(
+                K,
+                Global(f_global);
+                support=support45,
+                coordSys=[cs45]
+            )
+
+            right_nodes = LowLevelFEM._nodesOnPhysicalGroup(U, "right")
+            ux_dofs = 3 .* (right_nodes .- 1) .+ 1
+            uy_dofs = 3 .* (right_nodes .- 1) .+ 2
+
+            roller_error = maximum(
+                abs,
+                u45.a[ux_dofs, 1] + u45.a[uy_dofs, 1]
+            )
+
+            scale = maximum(abs, u45.a[:, 1])
+
+            @test roller_error / max(scale, eps(Float64)) < 1e-10
+
+            # A normal-vector based coordinate system must be orthogonal.
+            en = normalVector(U, "right")
+            et = VectorField(U, "right", [0.0, 1.0, 0.0])
+            cs_normal = CoordinateSystem(en, et)
+
+            Q = LowLevelFEM._build_coordinate_transformation(
+                U,
+                [cs_normal]
+            )
+
+            Iq = spdiagm(
+                0 => ones(Float64, size(Q.T, 1))
+            )
+
+            @test norm(Q.T' * Q.T - Iq) / norm(Iq) < 1e-12
         end
+    end
+end
 
+@testset "Multifield boundary conditions and MPC" begin
+    with_test_gmsh() do
+        (; P, V, A, B, C, D, K, fv_x, fp, F_x, pres, supp_top, supp_bottom, support) = stokes_fixture()
         mpc_v = MPC(
             master="rightbottom",
             slave="right",
@@ -200,17 +265,11 @@
 
         cs_v = CoordinateSystem(e1_v)
 
-        fv_global_y = loadVector(
-            V,
-            [LoadCondition("body", fvx=0.0, fvy=1.0)]
-        )
+        fv_global_y = ∫(V ⋅ [0.0, 1.0])
 
         F_global_y = SystemVector([fv_global_y, fp])
 
-        fv_local_e1 = loadVector(
-            V,
-            [LoadCondition("body", fvx=1.0, fvy=0.0)]
-        )
+        fv_local_e1 = ∫(V ⋅ [1.0, 0.0])
 
         F_local_e1 = SystemVector([fv_local_e1, fp])
 
@@ -393,8 +452,5 @@
             @test !isempty(rotation_errors)
             @test maximum(rotation_errors) < 1e-10
         end
-
-    finally
-        initialized_here && gmsh.finalize()
     end
 end
