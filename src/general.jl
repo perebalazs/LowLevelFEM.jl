@@ -941,6 +941,18 @@ This assembles the global block system
 [ Kpu  Kpp ]
 ```
 
+For replacing field and test_field, use:
+
+```julia
+M = SystemMatrix(M, new_field)
+```
+
+or
+
+```julia
+M = SystemMatrix(M, new_field, new_test_field)
+```
+
 corresponding to a two-field problem.  
 """
 struct SystemMatrix
@@ -959,6 +971,17 @@ struct SystemMatrix
         model::Problem,
         test_model::Problem
     ) = new(A, model, test_model, nothing, nothing)
+
+    SystemMatrix(
+        A::SystemMatrix,
+        model::Problem
+    ) = new(A.A, model, model, nothing, nothing)
+
+    SystemMatrix(
+        A::SystemMatrix,
+        model::Problem,
+        test_model::Problem
+    ) = new(A.A, model, test_model, nothing, nothing)
 
     SystemMatrix(
         A::SparseMatrixCSC{Float64},
