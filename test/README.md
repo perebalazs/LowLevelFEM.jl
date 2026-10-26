@@ -100,3 +100,52 @@ report are retained in the printed temporary report directory, with excluded
 and unselected notebooks listed explicitly. Missing optional packages or stale
 notebook APIs are failures; the runner does not install packages or silently
 skip numerical cells. Use `--julia /path/to/julia` to select an existing runtime.
+
+## Precompile latency diagnostics
+
+`src/LowLevelFEM.jl` warms representative DSL workflows on tiny meshes during
+package precompilation: scalar/elastic/compound forms, field coefficients,
+mixed reduced-order systems, MPC/local coordinates, direct eigenmodes, contact
+geometry/assembly and shared field postprocessing. GUI, persistence, transient
+solvers and optional solver/AD package imports are outside this base workload.
+The native Gmsh session is cleaned up in `finally`; importing the cached package
+does not initialize Gmsh or replace an existing model.
+
+Legacy elasticity is a separate guarded workload. To omit it on the next cache
+build, change `_PRECOMPILE_LEGACY = true` to `false` in `src/LowLevelFEM.jl`.
+This is a source-level precompile switch, not a runtime environment variable.
+
+The diagnostic below uses only existing dependencies. Run every scenario in a
+fresh Julia process from the package root:
+
+```sh
+julia --startup-file=no --project=. --threads=2 test/precompile_latency.jl dsl
+julia --startup-file=no --project=. --threads=2 test/precompile_latency.jl mixed
+julia --startup-file=no --project=. --threads=2 test/precompile_latency.jl eigen
+julia --startup-file=no --project=. --threads=2 test/precompile_latency.jl contact
+julia --startup-file=no --project=. --threads=2 test/precompile_latency.jl fields
+julia --startup-file=no --project=. --threads=2 test/precompile_latency.jl legacy
+```
+
+Output includes package load time and per-stage first/second call times, with
+JIT/recompilation counters. Later stages share earlier stages' compiled code;
+compare identical scenario order and Julia flags. These are developer timings,
+not machine-dependent CI pass/fail limits. Optional backends and user-defined
+function types may still require their own first-call compilation.
+
+One local comparison on Julia 1.13.3 with two threads (seconds, first calls):
+
+| Stage | Previous workload | Revised workload |
+| --- | ---: | ---: |
+| Scalar diffusion | 1.195 | 0.013 |
+| ScalarField coefficient | 1.045 | 0.014 |
+| Compound DSL form | 5.576 | 0.023 |
+| Direct eigenmodes | 6.257 | 0.126 |
+| Contact geometry | 5.315 | 0.033 |
+| Contact penalty assembly | 3.144 | 0.081 |
+| Vector gradient | 0.748 | 0.012 |
+
+A forced package cache build was also checked using an isolated temporary
+depot with the existing dependency depot as fallback: 359 s before and 161 s
+after in this local sample. The native image grew from 63.1 MB to 85.2 MB.
+Build times and file sizes are observations, not portability or speed guarantees.

@@ -32,7 +32,7 @@ engineering-first, explicit-matrix philosophy described above.
 
 ## Requirements
 
-- Julia 1.x
+- Julia 1.10+
 - Gmsh C API is bundled via `gmsh_jll` and re-exported as `gmsh` from this package; no separate Gmsh.jl installation is required.
 
 ## Citation
