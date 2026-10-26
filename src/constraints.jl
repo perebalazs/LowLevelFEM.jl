@@ -232,8 +232,8 @@ function reductionMatrices(P::Problem)
                             transpose(
                                 reshape(
                                     funT,
-                                    nLow,
-                                    nHigh
+                                    Int(nLow),
+                                    Int(nHigh)
                                 )
                             )
                         )
@@ -263,8 +263,8 @@ function reductionMatrices(P::Problem)
                             transpose(
                                 reshape(
                                     funR,
-                                    nHigh,
-                                    nLow
+                                    Int(nHigh),
+                                    Int(nLow)
                                 )
                             )
                         )
