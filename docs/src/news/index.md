@@ -24,7 +24,3 @@ If you use **LowLevelFEM.jl** in teaching, research, or a student project and wo
 - [Documentation home](../index.md)
 - [Julia Discourse announcement](https://discourse.julialang.org/t/ann-lowlevelfem-jl-a-lightweight-fem-toolbox-in-julia/)
 - [Project repository](https://github.com/perebalazs/LowLevelFEM.jl)
-
----
-
-📡 **RSS Feed:** [https://perebalazs.github.io/LowLevelFEM.jl/dev/news/feed.xml](https://perebalazs.github.io/LowLevelFEM.jl/dev/news/feed.xml)

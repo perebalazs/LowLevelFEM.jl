@@ -48,21 +48,18 @@ function make_ws_axi(dim::Int, numNodes::Int, numIntPoints::Int, rowsOfB::Int, d
 end
 
 """
-    stiffnessMatrix(problem::Problem; forceOneThread=true)
+    stiffnessMatrix(problem; elements=[], forceOneThread=true) -> SystemMatrix
 
-Solves the stiffness matrix of the `problem`.
+Assemble elastic stiffness through the engineering API for a solid, plane,
+axisymmetric or truss problem. `elements=[]` uses the material-group elements;
+a nonempty list restricts the element tags assembled by the selected kernel.
 
-Returns: `stiffMat`
-
-Types:
-- `problem`: Problem
-- `stiffMat`: SystemMatrix
-
-# Examples
-
-```julia
-K = stiffnessMatrix(problem)
-```
+`forceOneThread=true` keeps the solid path serial. With it disabled, multiple
+Julia threads and at least 50,000 mesh nodes are required for that legacy
+parallel dispatch. Axisymmetric and truss paths select their own kernels.
+The engineering entry point is intended to remain as its current dedicated
+kernels migrate to DSL-backed wrappers. For a direct weak-form formulation,
+use [`SymGrad`](@ref), [`D`](@ref) and [`∫`](@ref).
 """
 function stiffnessMatrix(problem; elements=[], forceOneThread=true)
     if problem.type == :dummy
@@ -1543,6 +1540,11 @@ Types:
 - `problem`: Problem
 - `q`: VectorField
 - `stiffMat`: SystemMatrix
+# Element selection
+
+`elements=[]` assembles the material-group elements. A nonempty list restricts
+the element tags included by the legacy assembly kernel. For a new DSL model,
+select a physical group through `Ω` or `Γ` in [`∫`](@ref).
 """
 function nonLinearStiffnessMatrix(q; elements=[])
     problem = q.model
@@ -5474,6 +5476,13 @@ which keeps the left-hand side diagonal.
 ```
 - The algorithm is purely algebraic and independent of the underlying physics of the field.
 
+# MPC keyword overload
+
+The overload taking initial fields followed by `n, Δt` accepts
+`support=BoundaryCondition[]` and `mpc=MPC[]`. It applies the supplied
+master/slave reduction before time integration; the positional boundary-list
+overload retains the original signature. This is an engineering
+time-integration interface.
 """
 function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarField,VectorField}, 
     bc::Vector{BoundaryCondition}, U0::Union{ScalarField,VectorField}, V0::Union{ScalarField,VectorField}, 
@@ -6093,6 +6102,13 @@ t = 0 : Δt : (n-1)Δt
 Hilber, H. M., Hughes, T. J. R., Taylor, R. L.  
 *Improved numerical dissipation for time integration algorithms in structural dynamics*,  
 Earthquake Engineering & Structural Dynamics, 5(3), 283–292, 1977.
+# MPC keyword overload
+
+The overload taking initial fields followed by `n, Δt` accepts
+`support=BoundaryCondition[]` and `mpc=MPC[]`. It applies the supplied
+master/slave reduction before time integration; the positional boundary-list
+overload retains the original signature. This is an engineering
+time-integration interface.
 """
 function HHT(
     K::SystemMatrix,
@@ -6887,7 +6903,7 @@ end
 """
     HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
                             
-Gives some functions (graphs) for accuracy analysis of the HHT-α method[^1]. 
+Gives some functions (graphs) for accuracy analysis of the HHT-α method described by [`HHT`](@ref).
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
 **Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
 following values:
@@ -6896,7 +6912,7 @@ following values:
 - `:PE`: period error
 For details see [^2] and [^3]. 
 `n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
-see [^1]. If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
+see [`HHT`](@ref). If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
 Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
                             
 [^2]: Belytschko, Ted, and Thomas JR, Hughes: *Computational methods for 

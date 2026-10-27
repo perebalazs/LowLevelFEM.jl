@@ -1,4 +1,9 @@
-# Examples
+# Engineering Examples
+
+These examples use the problem-oriented engineering API. Its function names
+are intended to remain as the assembly backend migrates to DSL-based wrappers.
+The [DSL first problem](getting-started/first-problem.md) and
+[current tutorials](tutorials/index.md) show direct weak-form workflows too.
 
 ## 2D Cantilever
 

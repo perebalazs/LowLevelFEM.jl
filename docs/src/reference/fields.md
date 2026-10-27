@@ -1,34 +1,54 @@
-# Fields API
+# Fields and Storage API
 
-Field containers and common field-level utilities.
+```@meta
+CurrentModule = LowLevelFEM
+```
 
-## Field Construction and Storage
+Lowercase constructors create nodal values; uppercase constructors normally
+create element-wise values. Both are finite-element fields associated with a
+`Problem`. Inspect the representation rather than inferring it from a variable
+name. See [Nodal vs Element Fields](../explanations/nodal-vs-element-fields.md).
+
+## Containers and construction
 
 ```@docs
+ScalarField
+VectorField
+TensorField
 field
 scalarField
 vectorField
 tensorField
+```
+
+## Access, conversion and restriction
+
+`f[i]` selects a vector component; `T[i,j]` selects a tensor component. These
+are scalar fields. For column/mode selection use the documented constructor or
+[eigenVector](solution.md), not the component indexing syntax.
+
+```@docs
+DoFs
+isNodal
+isElementwise
+elementsToNodes
+nodesToElements
+elementsToElements
 mergeFields
+projectTo2D
+expandTo3D
+```
+
+## Persistence
+
+```@docs
 saveField
 loadField
 isSaved
 ```
 
-## Field Access and Conversion
+## Related topics
 
-```@docs
-DoFs
-elementsToNodes
-nodesToElements
-elementsToElements
-isNodal
-isElementwise
-```
-
-## Field Differential Helpers
-
-```@docs
-∂x
-∂t
-```
+- [Field algebra](operators.md): arithmetic, contractions, invariants and tensor functions.
+- [Field calculus](field-calculus.md): derivatives of computed fields.
+- [Solution](solution.md): `SystemMatrix`, `SystemVector`, `solveField` and `solveEigen`.

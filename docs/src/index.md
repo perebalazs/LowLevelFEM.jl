@@ -19,7 +19,8 @@ which are assembled into bilinear forms and global system matrices.
 - [Getting Started](getting-started/index.md)
 - [Tutorials](tutorials/index.md)
 - [Manual](manual/index.md)
-- [API Reference](reference/index.md)
+- [API Reference by task](reference/index.md): preprocessing, fields, calculus, assembly, solution and postprocessing
+- [Engineering API, DSL and legacy assembly](reference/legacy.md)
 - [Explanations](explanations/index.md)
 - [News](news/index.md)
 
@@ -27,7 +28,10 @@ which are assembled into bilinear forms and global system matrices.
 
 LowLevelFEM targets **engineers and researchers doing rapid prototyping** and transparent finite element development. Its primary goal is not extreme-scale HPC, but a direct and inspectable mapping from weak forms and engineering formulations to working code.
 
-Currently, LowLevelFEM uses Gmsh Lagrange basis functions. Hierarchical, spectral, and NURBS bases are not yet part of the current implementation. In practice this is rarely a limitation for classical structural and thermal engineering problems.
+Field storage uses Gmsh Lagrange basis functions. An experimental spectral solver
+basis is available for line and complete quadrangle elements; see
+[spectral transformations and current restrictions](reference/solution.md).
+Hierarchical and NURBS bases are not part of the current implementation.
 
 Where a choice exists between mathematical generality and straightforward,
 inspectable formulas, LowLevelFEM favors the latter — consistent with its
@@ -80,6 +84,13 @@ Pkg.add("LowLevelFEM")
 
 ## Quick Start
 
+Choose the engineering workflow below for a standard mechanical problem, or
+start with the [DSL first problem](getting-started/first-problem.md) for explicit
+weak-form assembly. The engineering function names will remain while their
+internal assembly is migrated to the DSL engine.
+
+### Engineering workflow
+
 ```julia
 using LowLevelFEM
 
@@ -104,7 +115,7 @@ openPostProcessor()
 
 Note: physical group names in your geometry (created in Gmsh) must match the strings used above (e.g., `"body"`, `"left"`, `"right"`).
 
-### An alternative solution (instead of `u = ...`, `S = ...`)
+### Explicit matrices with the engineering API
 
 ```julia
 K = stiffnessMatrix(prob)
@@ -121,10 +132,10 @@ I = TensorField(prob, "body", [1 0 0; 0 1 0; 0 0 1])
 S = E / (1 + ν) * (A + ν / (1 - 2ν) * trace(A) * I)
 ```
 
-### Operator-level weak-form assembly
+### Modern weak-form assembly
 
-For custom PDEs and multifield formulations, the finite element operator can
-also be assembled directly from its weak form. Differential operators and
+For new engineering models, custom PDEs and multifield formulations, assemble
+the finite element operator directly from its weak form. Differential operators and
 coefficient matrices remain explicit, allowing the formulation to be inspected,
 modified and combined without implementing a dedicated solver.
 
@@ -198,7 +209,7 @@ and the online [documentation](https://perebalazs.github.io/LowLevelFEM.jl/stabl
 
 ## Planned features
 
-* Spectral Element Method
+* Extension of spectral element support beyond the currently supported line and quadrangle cases
 
 Any [suggestions](https://github.com/perebalazs/LowLevelFEM.jl/discussions) are welcome.
 In case of any issue, please send a [bug report](https://github.com/perebalazs/LowLevelFEM.jl/issues).

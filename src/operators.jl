@@ -319,6 +319,12 @@ function -(A::ScalarField, B::ScalarField)
     end
 end
 
+"""
+    -(A::ScalarField)
+
+Negate scalar values on the field's element support. Nodal data are converted
+to element-wise values; all columns are retained.
+"""
 function -(A::ScalarField)
     return A * (-1)
 end
@@ -616,10 +622,28 @@ operations such as `abs`, `+`, `-`, `log`, `sqrt`, etc.
     return ScalarField(C, [;;], A.t, A.numElem, A.nsteps, A.type, A.model)
 end
 
+"""
+    adjoint(f::ScalarField)
+
+Return the scalar field unchanged. This real-valued field adjoint is an
+algebraic convention and does not transpose its storage matrix.
+"""
 adjoint(f::ScalarField) = f
 
+"""
+    zero(a::ScalarField)
+
+Return an element-wise zero field on `a`'s support and columns, using
+[`mapScalarField`](@ref).
+"""
 zero(a::ScalarField) = mapScalarField(x->0, a)
 
+"""
+    ^(a::ScalarField, b::Number)
+
+Raise each scalar field value to `b`, returning element-wise data. Real-valued
+storage requires the chosen power to be defined as a real value.
+"""
 function ^(a::ScalarField, b::Number)
     return mapScalarField((x)->x^b, a)
 end
@@ -876,6 +900,14 @@ function /(BB::VectorField, AA::ScalarField)
     return VectorField(C, [;;], B.t, num, B.nsteps, BB.type, B.model)
 end
 
+"""
+    +(A::VectorField, B::VectorField)
+
+Add compatible vector fields. Element-wise addition matches element tags,
+adding on the shared support and retaining singly present elements. Field
+layout and column counts must agree. The nodal path requires compatible nodal
+DOF dimensions.
+"""
 function +(A::VectorField, B::VectorField)
     if isElementwise(A) && isElementwise(B)
         if A.type == B.type
@@ -937,6 +969,12 @@ function +(A::VectorField, B::VectorField)
     end
 end
 
+"""
+    -(A::VectorField, B::VectorField)
+
+Subtract compatible vector fields with the support/layout rules of vector
+addition, retaining the appropriate sign on elements present only in `B`.
+"""
 function -(A::VectorField, B::VectorField)
     if isElementwise(A) && isElementwise(B)
         if A.type == B.type
@@ -998,10 +1036,21 @@ function -(A::VectorField, B::VectorField)
     end
 end
 
+"""
+    -(A::VectorField)
+
+Return the vector field scaled by `-1`, preserving its representation.
+"""
 function -(A::VectorField)
     return A * (-1)
 end
 
+"""
+    *(A::VectorField, b::Number)
+
+Scale every stored vector component and column by a number. Both nodal and
+element-wise representations are supported.
+"""
 function *(A::VectorField, b::Number)
     if isElementwise(A)
         n = length(A.A)
@@ -1017,10 +1066,21 @@ function *(A::VectorField, b::Number)
     end
 end
 
+"""
+    *(b::Number, A::VectorField)
+
+Scale a vector field by a number; equivalent to `A*b`.
+"""
 function *(b::Number, A::VectorField)
     return A * b
 end
 
+"""
+    /(A::VectorField, b::Number)
+
+Divide every vector component by a number, preserving nodal or element-wise
+storage. Choose a nonzero divisor for finite results.
+"""
 function /(A::VectorField, b::Number)
     if isElementwise(A)
         n = length(A.A)
@@ -1036,6 +1096,14 @@ function /(A::VectorField, b::Number)
     end
 end
 
+"""
+    dot(A::VectorField, B::VectorField) -> ScalarField
+
+Compute the pointwise inner product of three-component (`:v3D`) vector fields
+on their intersecting element support. Nodal inputs are converted to element
+values; column counts must agree. Use `expandTo3D` for two-component nodal
+vector layouts before applying this operation.
+"""
 function dot(AA::VectorField, BB::VectorField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     B = isNodal(BB) ? nodesToElements(BB) : BB
@@ -1144,10 +1212,23 @@ function ⋅(AA::VectorField, BB::VectorField)
 end
 =#
 
+"""
+    *(A::VectorField, B::VectorField) -> ScalarField
+
+Compatibility notation for `dot(A,B)`, with the same three-component and
+support requirements. Use `A ∘ B` for a dyadic product.
+"""
 function *(A::VectorField, B::VectorField)
     return dot(A, B)
 end
 
+"""
+    ∘(A::VectorField, B::VectorField) -> TensorField
+
+Compute the pointwise dyadic tensor `Aᵢ*Bⱼ` on the intersecting element support
+of three-component vectors. Inputs are converted to element-wise storage and
+must have matching column counts. Tensor entries are stored column-major.
+"""
 function ∘(AA::VectorField, BB::VectorField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     B = isNodal(BB) ? nodesToElements(BB) : BB
@@ -1578,6 +1659,12 @@ function ⋅(AA::TensorField, BB::TensorField)
     return ScalarField(C, [;;], A.t, num, A.nsteps, :scalar, A.model)
 end
 
+"""
+    +(A::TensorField, B::TensorField) -> TensorField
+
+Add stored 3×3 tensor entries. Nodal inputs are converted to element-wise
+storage. Operands must have matching element support/order and columns.
+"""
 function +(AA::TensorField, BB::TensorField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     B = isNodal(BB) ? nodesToElements(BB) : BB
@@ -1622,6 +1709,12 @@ function +(AA::TensorField, BB::TensorField)
     return TensorField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
 end
 
+"""
+    -(A::TensorField, B::TensorField) -> TensorField
+
+Subtract tensor entries with the support and storage requirements of tensor
+addition. No symmetry or constitutive interpretation is imposed.
+"""
 function -(AA::TensorField, BB::TensorField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     B = isNodal(BB) ? nodesToElements(BB) : BB
@@ -1666,10 +1759,22 @@ function -(AA::TensorField, BB::TensorField)
     return TensorField(C, [;;], A.t, num, A.nsteps, A.type, A.model)
 end
 
+"""
+    -(A::TensorField)
+
+Return all tensor components scaled by `-1`.
+"""
 function -(A::TensorField)
     return A * (-1)
 end
 
+"""
+    *(A::TensorField, b::VectorField) -> VectorField
+
+Evaluate the matrix-vector product `A*b` at element nodes. The vector must
+use three Cartesian components; columns must agree. Nodal data are converted
+to element-wise values and the intersecting element support is used.
+"""
 function *(AA::TensorField, BB::VectorField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     b = isNodal(BB) ? nodesToElements(BB) : BB
@@ -1734,6 +1839,13 @@ function *(AA::TensorField, BB::VectorField)
     return VectorField(C, [;;], A.t, num, A.nsteps, b.type, A.model)
 end
 
+"""
+    *(b::VectorField, A::TensorField) -> VectorField
+
+Evaluate the row-vector/tensor product `bᵀ*A`, storing its three components
+as a vector field. The same three-component, column and intersecting-support
+requirements apply as for `A*b`.
+"""
 function *(BB::VectorField, AA::TensorField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     b = isNodal(BB) ? nodesToElements(BB) : BB
@@ -1795,6 +1907,12 @@ function *(BB::VectorField, AA::TensorField)
     return VectorField(C, [;;], A.t, num, A.nsteps, b.type, A.model)
 end
 
+"""
+    *(A::TensorField, b::Number)
+
+Scale all tensor entries by a number, retaining their current representation
+and columns.
+"""
 function *(AA::TensorField, b::Number)
     if isElementwise(AA)
         n = length(AA.A)
@@ -1810,10 +1928,21 @@ function *(AA::TensorField, b::Number)
     end
 end
 
+"""
+    *(b::Number, A::TensorField)
+
+Scale a tensor field by a number; equivalent to `A*b`.
+"""
 function *(b::Number, AA::TensorField)
     return AA * b
 end
 
+"""
+    /(A::TensorField, b::Number)
+
+Divide every tensor entry by a number. Choose a nonzero divisor for finite
+results; no tensor inverse is computed.
+"""
 function /(AA::TensorField, b::Number)
     if isElementwise(AA)
         n = length(AA.A)
@@ -1829,6 +1958,13 @@ function /(AA::TensorField, b::Number)
     end
 end
 
+"""
+    *(s::ScalarField, A::TensorField) -> TensorField
+
+Scale each 3×3 tensor by the scalar value at the same element node and column.
+Inputs are converted to element-wise data and combined on intersecting support;
+column counts must agree.
+"""
 function *(AA::ScalarField, BB::TensorField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     B = isNodal(BB) ? nodesToElements(BB) : BB
@@ -1880,10 +2016,22 @@ function *(AA::ScalarField, BB::TensorField)
     return TensorField(C, [;;], B.t, num, B.nsteps, B.type, B.model)
 end
 
+"""
+    *(A::TensorField, s::ScalarField) -> TensorField
+
+Pointwise scalar scaling of tensor values, equivalent to `s*A`.
+"""
 function *(BB::TensorField, AA::ScalarField)
     return AA * BB
 end
 
+"""
+    /(A::TensorField, s::ScalarField) -> TensorField
+
+Divide each tensor by scalar values on the common element support, converting
+nodal inputs to element-wise data. Column counts must agree; choose nonzero
+scalar values for finite results.
+"""
 function /(BB::TensorField, AA::ScalarField)
     A = isNodal(AA) ? nodesToElements(AA) : AA
     B = isNodal(BB) ? nodesToElements(BB) : BB
@@ -2137,6 +2285,18 @@ function inv(AA::TensorField)
     return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
+"""
+    eigen(A::TensorField) -> values::VectorField, vectors::TensorField
+
+Compute a local 3×3 eigensystem at every element node and stored column.
+Nodal input is converted to element-wise data. Eigenvalues are sorted in
+descending order and eigenvectors are normalized and stored as tensor columns.
+The real-valued result containers require real eigenvalues/eigenvectors;
+complex local eigensystems are unsupported. Symmetry is not imposed.
+
+This is a tensor/principal-value operation. Use [`solveEigen`](@ref) for a
+global finite-element generalized eigenproblem.
+"""
 function eigen(AA::TensorField)
     if AA.A == []
         A = nodesToElements(AA)
@@ -2176,6 +2336,14 @@ function eigen(AA::TensorField)
     end
 end
 
+"""
+    sqrt(A::TensorField) -> TensorField
+
+Apply Julia's matrix square root to each 3×3 tensor at element nodes, converting
+nodal input first. This is a matrix function, not entry-wise square root.
+Results must be representable in the real-valued field storage; matrices whose
+square root is complex are unsupported.
+"""
 function sqrt(AA::TensorField)
     A = AA.A == [] ? nodesToElements(AA) : AA
 
@@ -2203,6 +2371,14 @@ function sqrt(AA::TensorField)
     return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
+"""
+    cbrt(A::TensorField) -> TensorField
+
+Apply Julia's real matrix cube root to each local 3×3 tensor after converting
+nodal input to element-wise storage. This is a matrix function, not entry-wise
+cube root. The resulting local matrices must fit real-valued field storage;
+Julia's matrix-function restrictions apply.
+"""
 function cbrt(AA::TensorField)
     A = AA.A == [] ? nodesToElements(AA) : AA
 
@@ -2230,6 +2406,13 @@ function cbrt(AA::TensorField)
     return TensorField(C, [;;], A.t, A.numElem, A.nsteps, :e, A.model)
 end
 
+"""
+    log(A::TensorField) -> TensorField
+
+Apply the matrix logarithm to each local 3×3 tensor, converting nodal data to
+element-wise storage first. This is not entry-wise logarithm. A complex result
+cannot be stored in the real-valued field container.
+"""
 function log(AA::TensorField)
     A = AA.A == [] ? nodesToElements(AA) : AA
 
@@ -2597,9 +2780,19 @@ Scalar multiplication of a system matrix.
 function *(A::SystemMatrix, b::Number)
     SystemMatrix(A.A * b, A.model, A.test_model, A.problems, A.offsets)
 end
+"""
+    *(b::Number, A::SystemMatrix)
+
+Scale the sparse entries of a system matrix, preserving its field metadata.
+"""
 function *(b::Number, A::SystemMatrix)
     SystemMatrix(A.A * b, A.model, A.test_model, A.problems, A.offsets)
 end
+"""
+    /(A::SystemMatrix, b::Number)
+
+Scale sparse system entries by `inv(b)`, retaining trial/test or block metadata.
+"""
 function /(A::SystemMatrix, b::Number)
     SystemMatrix(A.A / b, A.model, A.test_model, A.problems, A.offsets)
 end
@@ -2647,6 +2840,12 @@ function +(A::SystemMatrix, B::SystemMatrix)
     )
 end
 
+"""
+    -(A::SystemMatrix, B::SystemMatrix)
+
+Subtract compatible sparse systems. Trial/test field associations and block
+ordering must be consistent.
+"""
 function -(A::SystemMatrix, B::SystemMatrix)
 
     if _same_csc_pattern(A.A, B.A)
@@ -2669,6 +2868,11 @@ function -(A::SystemMatrix, B::SystemMatrix)
     )
 end
 
+"""
+    -(A::SystemMatrix)
+
+Negate sparse entries while preserving field metadata.
+"""
 function -(A::SystemMatrix)
 
     C = copy(A.A)
@@ -2849,6 +3053,12 @@ import SparseArrays: sparse
 Transpose / adjoint of a system matrix.
 """
 transpose(K::SystemMatrix) = SystemMatrix(sparse(transpose(K.A)), K.test_model, K.model, K.problems, K.offsets)
+"""
+    adjoint(K::SystemMatrix)
+
+Return a sparse adjoint matrix with trial/test metadata exchanged. The numeric
+array is materialized rather than retained as a lazy adjoint wrapper.
+"""
 adjoint(K::SystemMatrix)   = SystemMatrix(sparse(adjoint(K.A)), K.test_model, K.model, K.problems, K.offsets)
 
 
@@ -2905,6 +3115,11 @@ Return the size of the system matrix.
 Equivalent to `size(K.A)`.
 """
 size(K::SystemMatrix) = size(K.A)
+"""
+    size(K::SystemMatrix, n::Int64)
+
+Return dimension `n` of the underlying sparse array.
+"""
 size(K::SystemMatrix, n::Int64) = size(K.A, n)
 
 import LinearAlgebra: norm
@@ -2944,8 +3159,23 @@ end
 
 #import Base.*
 
+"""
+    *(u::Union{ScalarField,VectorField,TensorField}, K::SystemMatrix)
+
+Start a field/matrix bilinear contraction. Complete it with a compatible field
+`v` as `u*K*v` (or the real-field adjoint notation) to evaluate `uᵀ*K*v` for
+each stored column. The intermediate object is not a solution field.
+"""
 *(u::Union{ScalarField,VectorField,TensorField}, K::SystemMatrix) = LeftAppliedMatrix(u, K)
 
+"""
+    *(left_applied_matrix, v::Union{ScalarField,VectorField,TensorField})
+
+Complete a bilinear field/matrix contraction such as `u*K*v`. Both fields are
+converted to nodal storage. Return one number for a single column, otherwise a
+vector with one scalar contraction per column. Dimensions and column counts
+must match the matrix.
+"""
 function *(tmp::LeftAppliedMatrix, v0::Union{ScalarField,VectorField,TensorField})
     u = elementsToNodes(tmp.u)
     v = elementsToNodes(v0)
@@ -2978,6 +3208,12 @@ end
 #                                                                             #
 ###############################################################################
 
+"""
+    *(A::Transformation, B::Transformation) -> Transformation
+
+Compose nodal transformation matrices. Node counts and component dimensions
+must match; return a new sparse transformation.
+"""
 function *(A::Transformation, B::Transformation)
     if A.non != B.non || A.dim != B.dim
         error("*(A::Transformation, B::Transformation): size missmatch non = $(A.non) ≠ $(B.non), dim = $(A.dim) ≠ $(B.dim).")
@@ -2985,6 +3221,13 @@ function *(A::Transformation, B::Transformation)
     return Transformation(dropzeros(A.T * B.T), A.non, A.dim)
 end
 
+"""
+    *(A::Transformation, v::VectorField) -> VectorField
+
+Apply the global nodal transformation to all vector columns. Element-wise
+input is first projected to nodes. Transformation and vector DOF counts must
+match; return nodal values.
+"""
 function *(A::Transformation, BB::VectorField)
     if BB.A != []
         B = elementsToNodes(BB)
@@ -3006,6 +3249,13 @@ function *(A::Transformation, BB::VectorField)
     end
 end
 
+"""
+    *(v::VectorField, A::Transformation) -> VectorField
+
+Right-apply a nodal transformation to the vector's row representation,
+equivalent to transforming nodal columns by `A.T'`. Element input is converted
+to nodal storage; DOF dimensions must agree.
+"""
 function *(BB::VectorField, A::Transformation)
     if BB.A != []
         B = elementsToNodes(BB)
@@ -3027,6 +3277,14 @@ function *(BB::VectorField, A::Transformation)
     end
 end
 
+"""
+    *(A::Transformation, T::TensorField) -> TensorField
+
+Apply the transformation to each tensor column-space direction using the
+implemented nodal tensor transformation. Element-wise input is projected to
+nodes; compatible three-component geometry and tensor storage are required.
+For result basis changes use [`rotateResult`](@ref).
+"""
 function *(A::Transformation, BB::TensorField)
     if BB.A != []
         B = elementsToNodes(BB)
@@ -3084,6 +3342,13 @@ function *(A::Transformation, BB::TensorField)
     end
 end
 
+"""
+    *(T::TensorField, A::Transformation) -> TensorField
+
+Right-apply the nodal transformation to tensor values after conversion to
+nodal storage. See [`rotateResult`](@ref) for complete local-basis result
+conversion and its supported layouts.
+"""
 function *(BB::TensorField, A::Transformation)
     if BB.A != []
         B = elementsToNodes(BB)
@@ -3141,14 +3406,32 @@ function *(BB::TensorField, A::Transformation)
     end
 end
 
+"""
+    transpose(A::Transformation) -> Transformation
+
+Transpose the sparse transformation, preserving node count and dimension.
+"""
 function transpose(A::Transformation)
     return Transformation(transpose(A.T), A.non, A.dim)
 end
 
+"""
+    adjoint(A::Transformation) -> Transformation
+
+Return the adjoint nodal transformation (equivalent to transpose for these
+real-valued matrices).
+"""
 function adjoint(A::Transformation)
     return Transformation(adjoint(A.T), A.non, A.dim)
 end
 
+"""
+    *(A::Transformation, K::SystemMatrix) -> SystemMatrix
+
+Left-multiply sparse system entries by `A.T`, retaining the system's field
+associations. The caller is responsible for compatible dimensions and basis
+interpretation.
+"""
 function *(A::Transformation, B::SystemMatrix)
     n = size(B.A, 1)
     non = A.non
@@ -3160,6 +3443,12 @@ function *(A::Transformation, B::SystemMatrix)
     end
 end
 
+"""
+    *(K::SystemMatrix, A::Transformation) -> SystemMatrix
+
+Right-multiply sparse system entries by `A.T`, retaining the system's field
+associations. This numerical transformation does not rebind field descriptors.
+"""
 function *(B::SystemMatrix, A::Transformation)
     n = size(B.A, 1)
     non = A.non

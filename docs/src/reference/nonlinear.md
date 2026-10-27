@@ -1,6 +1,13 @@
-# Nonlinear API
+# Legacy Nonlinear Assembly API
 
-Nonlinear mechanics, stress/tangent operators, and follower-load tangents.
+```@meta
+CurrentModule = LowLevelFEM
+```
+
+Dedicated total-Lagrangian assembly, stress and follower-load routines retained
+for compatibility. Modern [constitutive response and tensor conversion](constitutive.md)
+and [DSL nonlinear formulations](../tutorials/nonlinear-large-deformation.md)
+are documented separately.
 
 ## Kinematics and Constitutive Terms
 
@@ -24,12 +31,9 @@ internalForceVector
 showDeformationResults
 ```
 
-## Hyperelastic stress and tangent matrix for DSL
+## Legacy derivative helpers
 
 ```@docs
-IIPiolaKirchhoff
-tangentMatrix
-energyMaterial
-tensorToMatrix
-tensorToVector
+∇_old
+grad_xy
 ```

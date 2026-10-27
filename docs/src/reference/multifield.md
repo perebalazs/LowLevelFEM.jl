@@ -1,4 +1,8 @@
-# Multifield API
+# Weak Forms, Operators and Multifield Assembly
+
+```@meta
+CurrentModule = LowLevelFEM
+```
 
 Weak-form DSL and multifield assembly interface.
 
@@ -28,7 +32,9 @@ be a scalar field.
 | 3D        | `Grad(P)` | `3`  | `[p,x, p,y, p,z]`  |
 | 1D/2D/3D  | `Id(P)`   | `1`  | `[p]`              |
 
-`Div(P)`, `Curl(P)` and `SymGrad(P)` are not defined for scalar fields.
+For scalar fields in 2D/3D, use `Grad` rather than `Div`, `Curl` or
+`SymGrad`. With `dim=pdim=1`, `Div` and `SymGrad` reduce to the single
+axial derivative; `Curl` has no supported 1D interpretation.
 
 ---
 
@@ -731,7 +737,6 @@ Grad
 Div
 Curl
 SymGrad
-ε
 Id
 TensorDiv
 Adv
@@ -753,24 +758,17 @@ build_csc_pattern
 
 ## Constitutive matrices
 
-```@docs
-ConstitutiveMatrix
-D
-```
+See [Constitutive models](constitutive.md).
 
 ## Multifield Solver
 
-```@docs
-CoordinateSystem
-solveField
-reductionMatrices
-rotateResult
-```
+See [SystemMatrix, SystemVector and solveField](solution.md).
 
 ## Multi-point constraints
 
+See [Boundary conditions and MPC](boundary-conditions.md) for `MultiPointConstraint`/`MPC`.
+
 ```@docs
-MultiPointConstraint
 rigidRotationMap
 collapseMPC
 ```
@@ -788,4 +786,17 @@ periodic = MPC(
 )
 
 u = solveField(K, f; support=[bc], mpc=[periodic])
+```
+
+## Quadrature annotations
+
+```@docs
+full
+reduced
+```
+
+## Mass lumping
+
+```@docs
+consistentToLumped
 ```

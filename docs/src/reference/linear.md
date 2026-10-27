@@ -1,6 +1,15 @@
-# Linear API
+# Engineering Linear Mechanics API
 
-Linear mechanics, dynamic solvers, and modal/buckling workflows.
+```@meta
+CurrentModule = LowLevelFEM
+```
+
+Problem-oriented assembly and solution functions for the engineering workflow.
+Names such as `stiffnessMatrix` and `solveDisplacement` are intended to remain
+while their current dedicated kernels are migrated to DSL-backed wrappers.
+The current implementation is not yet uniformly DSL-based. For custom forms,
+use [weak-form assembly](multifield.md) and [solveField](solution.md) directly.
+See [API layers and legacy implementations](legacy.md).
 
 ## Assembly
 
@@ -9,9 +18,9 @@ stiffnessMatrix
 nonLinearStiffnessMatrix
 massMatrix
 dampingMatrix
-consistentToLumped
 elasticSupportMatrix
 loadVector
+sourceVector
 applyBoundaryConditions
 applyBoundaryConditions!
 applyElasticSupport!
@@ -26,22 +35,15 @@ solveStress
 solveAxialForce
 ```
 
-## Eigen and Buckling
+## Engineering eigenvalue helpers
 
-`solveEigen` is the generic generalized eigenvalue solver. Its default output is
-an eigenfield whose columns are mode shapes and whose `t` vector stores
-individual eigenvalues. This is distinct from the physical meaning of a
-buckling load multiplier or a frequency, which depends on the matrix pencil.
+For the generic solver and eigenfields, use [Solution](solution.md). These
+helpers provide specialized mechanical interpretations and the existing
+`Eigen` result container for engineering workflows.
 
 ```@docs
-solveEigen
-showEigenResults
-eigenValue
-eigenVector
-getEigenValues
-LowLevelFEM.mapEigenValues
-solveEigenProblem
 solveEigenModes
+solveEigenFields
 solveBucklingModes
 solveModalAnalysis
 solveBuckling
@@ -50,9 +52,6 @@ smallestPeriodTime
 largestEigenValue
 smallestEigenValue
 ```
-
-See [Linear Buckling and Prestressed Natural Frequencies](../tutorials/buckling-and-prestressed-modes.md)
-for an example of eigenvalue mappings in two mechanical applications.
 
 ## Time Integration
 

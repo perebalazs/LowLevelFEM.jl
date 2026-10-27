@@ -1,24 +1,24 @@
 # Fields and Results
 
-LowLevelFEM exposes scalar, vector, and tensor field objects directly.
+The DSL workflow returns ordinary scalar, vector or tensor fields:
 
-## Common Output Flow
+1. Assemble a matrix and RHS with `∫`, then call `solveField`.
+2. Derive quantities with field algebra and `∇`.
+3. Inspect components, integrate, or create Gmsh views.
 
-1. Solve primary unknowns (`solveDisplacement`, `solveTemperature`, etc.)
-2. Derive secondary fields (`solveStress`, `solveStrain`, `solveHeatFlux`)
-3. Visualize and query results (`show*Results`, `plotOnPath`, `probe`)
+For the 3D example in [First Problem](first-problem.md), `u` is nodal, while
+`εtensor` and `σ` are element-wise derived fields. `u[1]` is the first
+component field; `σ[1,2]` is tensor shear stress. `showDoFResults(u)` and
+`showStressResults(σ)` create view tags for visualization and probing.
+Keep the Gmsh model active while evaluating or displaying these fields.
 
-## Example
+Use `isNodal`, `isElementwise`, `nodesToElements` and `elementsToNodes` to
+inspect or convert representation. Smoothing discontinuous element results
+onto shared nodes can change them; see [Nodal vs Element Fields](../explanations/nodal-vs-element-fields.md).
 
-```julia
-u = solveDisplacement(problem, load=[ld], support=[bc])
-S = solveStress(u)
+Eigenresults use the same containers, but columns hold modes and `.t` stores
+eigenvalues. Use `eigenValue`, `eigenVector` and `showEigenResults`; their
+columns are not a physical time series.
 
-ux = showDoFResults(u, :ux)
-s  = showStressResults(S, :s)
-```
-
-## See Also
-
-- [Manual: Postprocessing and Visualization](../manual/postprocessing-and-visualization.md)
-- [Reference: Postprocessing API](../reference/postprocessing.md)
+See [Field algebra](../reference/operators.md), [Field calculus](../reference/field-calculus.md),
+and [Postprocessing](../manual/postprocessing-and-visualization.md).

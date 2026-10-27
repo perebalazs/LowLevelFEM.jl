@@ -18,3 +18,11 @@ Tutorials provide scenario-driven workflows for common LowLevelFEM tasks.
 - [Space–Time FEM for Elastic Wave Propagation](space-time-FEM.md) – Solving a one-dimensional elastic impact problem by treating time as an additional finite-element coordinate.
 - [Contact Mechanics](contact-mechanics.md) – Frictionless contact analysis using penalty and Lagrange-multiplier formulations in two and three dimensions.
 - [Legacy Example Gallery](legacy-examples.md) – Collection of additional examples covering a wide range of finite element applications.
+
+## Focused formulation guides
+
+- [Scalar diffusion, reaction and advection](poisson-and-custom-operators.md)
+- [Nonlinear formulations and constitutive conventions](nonlinear-large-deformation.md)
+
+Exact signatures and legacy migration information are in the
+[API topic map](../reference/index.md).

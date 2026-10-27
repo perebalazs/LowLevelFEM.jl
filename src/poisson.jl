@@ -745,6 +745,13 @@ function poissonMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=
     return SystemMatrix(K, problem)
 end
     
+"""
+    ∫∇oN_c_∇oN_dΩ(problem::Problem; coefficient=1.0)
+
+Legacy compatibility wrapper for [`poissonMatrix`](@ref), returning its
+`SystemMatrix`. Accepts a numeric or element-wise `ScalarField` coefficient.
+For new formulations use the weak-form DSL documented under [`∫`](@ref).
+"""
 ∫∇oN_c_∇oN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = poissonMatrix(problem, coefficient=coefficient)
 
 """
@@ -810,8 +817,32 @@ function advectionMatrix(
     return SystemMatrix(C, problem)
 end
 
+"""
+    ∫N_c_∂N∂x_dΩ(problem::Problem; coefficient=1.0)
+
+Legacy shorthand for `advectionMatrix(problem; coefficient, dir=1)`.
+Assemble the trial derivative in global `x` with an identity test operator;
+this direction must lie within `problem.dim`. Return a `SystemMatrix`.
+See [`advectionMatrix`](@ref) for coefficient and domain conventions.
+"""
 ∫N_c_∂N∂x_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = advectionMatrix(problem, coefficient=coefficient, dir=1)
+"""
+    ∫N_c_∂N∂y_dΩ(problem::Problem; coefficient=1.0)
+
+Legacy shorthand for `advectionMatrix(problem; coefficient, dir=2)`.
+Assemble the trial derivative in global `y` with an identity test operator;
+this direction must lie within `problem.dim`. Return a `SystemMatrix`.
+See [`advectionMatrix`](@ref) for coefficient and domain conventions.
+"""
 ∫N_c_∂N∂y_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = advectionMatrix(problem, coefficient=coefficient, dir=2)
+"""
+    ∫N_c_∂N∂z_dΩ(problem::Problem; coefficient=1.0)
+
+Legacy shorthand for `advectionMatrix(problem; coefficient, dir=3)`.
+Assemble the trial derivative in global `z` with an identity test operator;
+this direction must lie within `problem.dim`. Return a `SystemMatrix`.
+See [`advectionMatrix`](@ref) for coefficient and domain conventions.
+"""
 ∫N_c_∂N∂z_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = advectionMatrix(problem, coefficient=coefficient, dir=3)
 
 """
@@ -863,6 +894,13 @@ function reactionMatrix(problem::Problem; coefficient::Union{Number,ScalarField}
     return SystemMatrix(M, problem)
 end
 
+"""
+    ∫N_c_N_dΩ(problem::Problem; coefficient=1.0)
+
+Legacy compatibility wrapper for [`reactionMatrix`](@ref), returning its
+`SystemMatrix`. Accepts a numeric or element-wise `ScalarField` coefficient.
+For new formulations use the weak-form DSL documented under [`∫`](@ref).
+"""
 ∫N_c_N_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = reactionMatrix(problem, coefficient=coefficient)
 
 """
@@ -913,6 +951,13 @@ function gradDivMatrix(problem::Problem; coefficient::Union{Number,ScalarField}=
     return SystemMatrix(G, problem)
 end
 
+"""
+    ∫∇N_c_∇N_dΩ(problem::Problem; coefficient=1.0)
+
+Legacy compatibility wrapper for [`gradDivMatrix`](@ref), returning its
+`SystemMatrix`. Accepts a numeric or element-wise `ScalarField` coefficient.
+For new formulations use the weak-form DSL documented under [`∫`](@ref).
+"""
 ∫∇N_c_∇N_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = gradDivMatrix(problem, coefficient=coefficient)
 
 """
@@ -1006,6 +1051,13 @@ function curlCurlMatrix(problem::Problem; coefficient::Union{Number,ScalarField}
     return SystemMatrix(C, problem)
 end
     
+"""
+    ∫∇xN_c_∇xN_dΩ(problem::Problem; coefficient=1.0)
+
+Legacy compatibility wrapper for [`curlCurlMatrix`](@ref), returning its
+`SystemMatrix`. Accepts a numeric or element-wise `ScalarField` coefficient.
+For new formulations use the weak-form DSL documented under [`∫`](@ref).
+"""
 ∫∇xN_c_∇xN_dΩ(problem::Problem; coefficient::Union{Number,ScalarField}=1.0) = curlCurlMatrix(problem, coefficient=coefficient)
 
 """

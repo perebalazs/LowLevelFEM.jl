@@ -7,8 +7,29 @@
 export Contact, ContactSet, ContactGap, ContactStiffness, contact, updateContact!
 export CONTACT_OPEN, CONTACT_STICK, CONTACT_SLIP
 
+"""
+    CONTACT_OPEN
+
+Contact-state code `UInt8(0)` for an open/inactive state. This exported
+identifier is a state label; it does not enable a friction law or select the
+active set of [`ContactGap`](@ref).
+"""
 const CONTACT_OPEN  = UInt8(0)
+"""
+    CONTACT_STICK
+
+Contact-state code `UInt8(1)` for a sticking state. This exported
+identifier is a state label; it does not enable a friction law or select the
+active set of [`ContactGap`](@ref).
+"""
 const CONTACT_STICK = UInt8(1)
+"""
+    CONTACT_SLIP
+
+Contact-state code `UInt8(2)` for a sliding state. This exported
+identifier is a state label; it does not enable a friction law or select the
+active set of [`ContactGap`](@ref).
+"""
 const CONTACT_SLIP  = UInt8(2)
 
 # -----------------------------------------------------------------------------
@@ -340,6 +361,28 @@ struct ContactGapOp <: AbstractOp
     active::Symbol
 end
 
+"""
+    ContactGap(C::Contact; components=:normal, active=:current)
+
+Construct a weak-form contact operator evaluated at slave Gauss points using
+the current closest-point master projection. `components=:normal` gives one
+normal component; `:all` gives `(n,t)` in 2D or `(n,t1,t2)` in 3D.
+
+`active=:current` integrates points satisfying
+`gap <= C.options.activation_tol`; `:all` integrates all candidate points.
+For example, `Gn = ContactGap(C)` and `Kc = ∫(Gn ⋅ cn ⋅ Gn)` construct a
+normal penalty matrix. A scalar multiplier field can couple through `∫(Λ ⋅ Gn)`.
+
+The returned operator is callable: `Gn(u; gauss=nothing, step=u.nsteps,
+absolute=false)` returns a nodal gap field using frozen contact geometry.
+Set `gauss=:full`, `:reduced`, or an integer offset for global L2 projection
+from slave Gauss points; that mode requires displacement input (`absolute=false`).
+Nodal evaluation permits absolute positions with `absolute=true`.
+Call [`updateContact!`](@ref) to refresh geometry before evaluation, or pass
+`updateFrom=u` to a supported bilinear assembly call. Contact gap evaluation
+adds reference coordinates to displacement; matrix assembly represents the
+linearized relative-position operator.
+"""
 function ContactGap(
     c::Contact;
     components::Symbol=:normal,
@@ -368,13 +411,30 @@ _preserve_csc_pattern(::ContactGapOp) = true
 
 """
     contact(U::Problem; master, slave, displacement=zero_displacement,
-            activation_tol=0.0, step=displacement.nsteps, kwargs...) -> Contact
+            activation_tol=0.0, step=displacement.nsteps, normal_sign=1.0,
+            self_contact=(slave==master), self_exclusion_layers=1,
+            aabb_padding=0.05, leaf_size=2, projection_tol=1e-10,
+            projection_maxiter=40, topology_tol=1e-3, topology_angle=45.0,
+            LagrangeMultiplierField=nothing) -> Contact
+    contact(u::VectorField; master, slave, U=u.model, kwargs...)
+    contact(U_or_u, slave::String, master::String; kwargs...)
 
-Construct a slave-master contact geometry in the current configuration.
+Construct slave-master contact geometry at `X + displacement`, using the
+selected column `step`. `master` and `slave` are physical-group names.
+The displacement defaults to zero; its `Problem` must be compatible with `U`.
 
-The object contains only geometry, closest-point and search data. Penalty and
-Lagrange-multiplier operators are built with `ContactGap(C)` and assembled with
-`∫`.
+`activation_tol` sets the normal-gap threshold and `normal_sign` selects the
+master-normal orientation. `self_contact` enables topological exclusions over
+`self_exclusion_layers`. `aabb_padding` and `leaf_size` control bounding-box
+search; `projection_tol` and `projection_maxiter` control closest-point
+iteration. `topology_tol` and `topology_angle` (degrees) control near-edge/vertex
+stabilization. These settings are retained for later [`updateContact!`](@ref).
+
+Return geometry/search state only. Assemble penalty or multiplier forms using
+[`ContactGap`](@ref) and [`ContactStiffness`](@ref); no contact equilibrium
+iteration is run automatically. `LagrangeMultiplierField` is accepted only for
+source compatibility and is ignored; place the multiplier field in the weak
+form explicitly. Positional group names are ordered **slave, master**.
 """
 function contact(
     U::Problem;
@@ -469,6 +529,11 @@ contact(U::Problem, slave::String, master::String; kwargs...) =
 
 Refresh current closest-point geometry and search caches while preserving the
 `Contact` object identity used by existing `ContactGap(C)` operators.
+The latest displacement and selected column are stored in `C`; nodal gap,
+activity, local bases, projections and search data are replaced in place.
+Return the updated `Contact`. Construction tolerances are reused.
+A lightweight `updateFrom` during supported assembly refreshes integration
+geometry; use this full update when nodal postprocessing data must be current.
 """
 function updateContact!(
     c::Contact,

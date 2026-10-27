@@ -278,12 +278,9 @@ end
 """
     AxialGradOp()
 
-Axial (directional) gradient operator.
-
-For vector fields:
-    AxialGrad(u) = t ⋅ ∇u
-
-Returns a scalar field representing the derivative along the element axis.
+Internal scalar axial derivative/strain operator along the line-element tangent.
+For scalar fields return `t ⋅ grad(s)`; for vector fields return
+`t ⋅ grad(u) ⋅ t`. Construct through [`AxialGrad`](@ref).
 """
 struct AxialGradOp <: AbstractOp end
 
@@ -4829,72 +4826,49 @@ end
 """
     Grad(P)
 
-Create a weak-form DSL gradient operator applied to `P`.
+Create the weak-form gradient of a `Problem`/`Field` descriptor. A scalar
+field produces `P.dim` rows. A vector field produces `P.dim*P.pdim` rows in
+component-major order: derivatives of component 1, then component 2, etc.
+For 2D vectors the order is `[u₁,x, u₁,y, u₂,x, u₂,y]`.
 
-# Arguments
-- `P`: Field descriptor (`Problem`) used in the weak form.
-
-# Returns
-- `OpApplied`: Operator application object for `∇`.
-
-# Example
-```julia
-K = ∫(Grad(Pu) ⋅ Grad(Pu); Ω="solid")
-```
+This constructs a symbolic operator; it does not differentiate a solved field.
+For field values use [`∇`](@ref). Example: `K = ∫(Grad(P) ⋅ Grad(P))`.
 """
 Grad(P) = OpApplied(P, GradOp())
 
 """
     Div(P)
 
-Create a weak-form DSL divergence operator applied to `P`.
-
-# Arguments
-- `P`: Field descriptor (`Problem`) used in the weak form.
-
-# Returns
-- `OpApplied`: Operator application object for `∇⋅`.
-
-# Example
-```julia
-A = ∫(Div(Pu) ⋅ Div(Pu); Ω="domain")
-```
+Construct the scalar divergence operator for a vector unknown with
+`P.pdim == P.dim`. The output is `sum(∂uᵢ/∂xᵢ)`.
+Example: `B = ∫(Q ⋅ Div(U))` couples scalar test field `Q` to vector trial
+field `U`. Use `∇(u; nabla=:div)` to differentiate a computed field.
 """
 Div(P) = OpApplied(P, DivOp())
 
 """
     Curl(P)
 
-Create a weak-form DSL curl operator applied to `P`.
-
-# Arguments
-- `P`: Field descriptor (`Problem`) used in the weak form.
-
-# Returns
-- `OpApplied`: Operator application object for curl.
-
-# Example
-```julia
-A = ∫(Curl(Pu) ⋅ Curl(Pu); Ω="domain")
-```
+Construct the weak-form curl of a vector unknown (`P.pdim == P.dim`).
+In 2D it has one component `∂u₂/∂x - ∂u₁/∂y`; in 3D it has the three
+Cartesian curl components. Example: `K = ∫(Curl(P) ⋅ Curl(P))`.
+For a computed vector field use `∇(u; nabla=:curl)`.
 """
 Curl(P) = OpApplied(P, CurlOp())
 
 """
     SymGrad(P)
 
-Create a weak-form DSL symmetric-gradient operator applied to `P`.
+Construct the engineering-strain operator for a vector unknown with
+`P.pdim == P.dim`. The component order is `[xx, yy, xy]` in 2D and
+`[xx, yy, zz, xy, yz, zx]` in 3D. For `P.dim == P.pdim == 1`, the output is the single axial derivative.
+Shear entries are engineering strains:
+`γij = ∂uᵢ/∂xⱼ + ∂uⱼ/∂xᵢ`, twice the corresponding tensor strain.
 
-# Arguments
-- `P`: Field descriptor (`Problem`) used in the weak form.
-
-# Returns
-- `OpApplied`: Operator application object for `ε(u)`.
-
-# Example
-```julia
-K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu); Ω="solid")
-```
+Use a constitutive matrix with the same order, for example
+`K = ∫(SymGrad(U) ⋅ D(:Solid, mat) ⋅ SymGrad(U))`.
+`ε` is an alias. A solved-field tensor strain is instead
+`(u ∘ ∇ + ∇ ∘ u)/2`, whose off-diagonal components are tensor strains.
 """
 SymGrad(P) = OpApplied(P, SymGradOp())
 
@@ -4919,36 +4893,26 @@ Id(P) = OpApplied(P, IdOp())
 """
     TensorDiv(P)
 
-Create a weak-form DSL tensor-divergence operator applied to `P`.
-
-# Arguments
-- `P`: Field descriptor (`Problem`) used in the weak form.
-
-# Returns
-- `OpApplied`: Operator application object for tensor divergence.
-
-# Example
-```julia
-A = ∫(TensorDiv(Pσ) ⋅ TensorDiv(Pσ); Ω="solid")
-```
+Construct the divergence of a 2D or 3D tensor unknown. `P.pdim` must be 9:
+full 3×3 tensors are stored column-major as
+`[xx, yx, zx, xy, yy, zy, xz, yz, zz]`. The output has `P.dim` components,
+`(div T)ᵢ = sum(∂Tᵢⱼ/∂xⱼ, j=1:P.dim)`. In 2D only the in-plane block
+and x/y derivatives contribute; no symmetry is assumed.
+Example: `K = ∫(TensorDiv(P) ⋅ TensorDiv(P))`.
 """
 TensorDiv(P) = OpApplied(P, TensorDivOp())
 
 """
     Adv(P)
 
-Create a weak-form DSL advection operator applied to `P`.
+Reserved convenience constructor for scalar advection in the weak-form DSL.
+The current implementation calls the internal `AdvOp` without its required
+velocity argument, so `Adv(P)` currently raises a `MethodError`.
 
-# Arguments
-- `P`: Field descriptor (`Problem`) used in the weak form.
-
-# Returns
-- `OpApplied`: Operator application object for advection terms.
-
-# Example
-```julia
-A = ∫(Adv(Pu) ⋅ Id(Pu); Ω="domain")
-```
+Use an explicit coefficient chain for working scalar advection, for example
+`A = ∫(P ⋅ [bx by] ⋅ Grad(P))` in 2D. A `1×2` coefficient row contracts
+the gradient with the prescribed velocity. No solver fix is made by this
+interface documentation.
 """
 Adv(P) = OpApplied(P, AdvOp())
 
@@ -4968,33 +4932,13 @@ end
 """
     AxialGrad(P)
 
-Create a weak-form DSL axial gradient operator applied to `P`.
+Construct the axial derivative/strain operator along the local element tangent
+`t`. For a scalar unknown this is `t ⋅ grad(s)`; for a vector unknown it is
+`t ⋅ grad(u) ⋅ t`, a scalar axial strain. The direction is obtained from the
+line-element geometry, not supplied as a separate user axis.
 
-# Arguments
-- `P`: Field descriptor (`Problem`) used in the weak form.
-
-# Returns
-- `OpApplied`: Operator application object representing `t ⋅ ∇u`.
-
-Directional derivative operator along a prescribed axial direction.
-
-Computes derivatives projected onto a predefined axis.
-
-Unlike `TangentialGrad`, the axial direction is prescribed explicitly and
-does not depend on the local element geometry.
-
-Typical applications include:
-
-- anisotropic constitutive laws,
-- fiber-reinforced materials,
-- projected strain operators,
-- directional transport problems.
-
-See also: `TangentialGrad`
-
-# Example
-```julia
-K = ∫(AxialGrad(Pu) ⋅ (E*A) ⋅ AxialGrad(Pu); Ω="truss")
+Typical use: `K = ∫(AxialGrad(U) ⋅ (E*A) ⋅ AxialGrad(U); Ω="beam")`.
+[`TangentialGrad`](@ref) retains vector components of the directional derivative.
 """
 AxialGrad(P) = OpApplied(P, AxialGradOp())
 
@@ -5682,8 +5626,10 @@ Weak-form expression composed of operators and coefficients.
 
 `gauss`
 
-`:full` or `:reduced` integration, or `Int` that is a signed number: the
-increment of Gauss points relative to `:full`. `:gll` requests experimental
+`:full` or `:reduced` integration, or an `Int` offset to the Gauss rule
+order (not a direct point count). For polynomial order `p`, the standard
+paths request `Gauss(2p+1)` for full and `Gauss(max(1,2p-1))` for reduced;
+an integer `k` requests `Gauss(max(1,2p+1+k))`. `:gll` requests experimental
 Gauss-Lobatto-Legendre quadrature and is currently supported only for a single
 spectral bilinear term of the form `P ⋅ P`.
 
@@ -5699,7 +5645,27 @@ Boundary physical group name.
 
 # Returns
 
-`SystemMatrix` or `ScalarField`, `VectorField`, `TensorField`
+A bilinear form returns a `SystemMatrix`; a linear form returns a nodal
+`ScalarField`, `VectorField`, or `TensorField` of assembled load entries.
+Mixed-field sums may return block `SystemMatrix`s or `SystemVector`s.
+These linear-form entries are equivalent nodal loads, not point samples of the
+integrand.
+
+`Ω` and `Γ` are mutually exclusive physical-group selectors. With neither,
+the field's material groups define the integration domain. `weight` is an
+additional numeric or nodal scalar-field factor. Field-valued coefficients
+must satisfy the nodal-storage requirements checked by the selected path;
+convert explicitly with `elementsToNodes` when needed.
+
+Single bilinear and compound forms additionally accept `csc_matrix`,
+`element_chunk_size`, and, for a single bilinear term, `updateFrom`; these
+keywords are not available for every weak sum or linear-form method.
+`csc_matrix` accumulates into its existing values. `gauss=:auto` is used by
+compound forms to honor `full(...)`/`reduced(...)` annotations.
+
+This assembly API differs from `∫(P, group, f)` (a scalar spatial integral)
+and `∫(field)` (a time integral). Use `integrate(P, group, f)` when a scalar
+spatial result is intended.
 """
 function ∫(
     expr::WeakExpr; Ω=nothing, Γ=nothing, weight=nothing, gauss=:full,
@@ -5987,40 +5953,24 @@ function ∫(mc::MatrixChain; Ω=nothing, Γ=nothing, weight=nothing, gauss=:ful
 end
 
 """
-    ∫Ω(name, expr)
+    ∫Ω(name, expr; kwargs...)
 
-Convenience wrapper for volume integration on physical group `name`.
-
-# Arguments
-- `name`: Gmsh physical group name used as domain `Ω`.
-- `expr::WeakExpr`: Weak-form expression to assemble.
-
-# Returns
-- `SystemMatrix`: Assembled matrix over the selected volume.
-
-# Example
-```julia
-K = ∫Ω("solid", Grad(Pu) ⋅ Grad(Pu))
-```
+Assemble `expr` on physical group `name`, equivalent to `∫(expr; Ω=name)`.
+A bilinear expression returns a `SystemMatrix`; a linear expression returns
+an assembled nodal load field. Additional keywords are forwarded to [`∫`](@ref),
+including quadrature, weights, thread count, and CSC reuse where supported
+by the selected expression method.
 """
 ∫Ω(name, expr; kwargs...) = ∫(expr; Ω=name, kwargs...)
 
 """
-    ∫Γ(name, expr)
+    ∫Γ(name, expr; kwargs...)
 
-Convenience wrapper for boundary integration on physical group `name`.
-
-# Arguments
-- `name`: Gmsh physical group name used as boundary `Γ`.
-- `expr::WeakExpr`: Weak-form expression to assemble.
-
-# Returns
-- `SystemMatrix`: Assembled matrix over the selected boundary.
-
-# Example
-```julia
-KΓ = ∫Γ("loaded_boundary", Id(Pu) ⋅ Id(Pu))
-```
+Assemble `expr` on physical group `name`, equivalent to `∫(expr; Γ=name)`.
+A bilinear expression returns a `SystemMatrix`; a linear expression returns
+an assembled nodal load field. Additional keywords are forwarded to [`∫`](@ref),
+including quadrature, weights, thread count, and CSC reuse where supported
+by the selected expression method.
 """
 ∫Γ(name, expr; kwargs...) = ∫(expr; Γ=name, kwargs...)
 
@@ -6208,6 +6158,14 @@ With `gauss=:auto`, equal-rule products keep their rule; mixed products
 default to `:full`.
 """
 full(chain) = withgauss(chain, :full)
+"""
+    reduced(chain)
+
+Mark one compound-operator term for reduced quadrature. Combine with
+[`full`](@ref) and assemble the expanded bilinear expression using
+`gauss=:auto` to retain per-term rules; mixed-rule products use full
+quadrature. This selects integration, not `Problem(reducedOrder=true)`.
+"""
 reduced(chain) = withgauss(chain, :reduced)
 
 _as_sumterm(t::ChainSumTerm) = t
@@ -7084,6 +7042,12 @@ Each result contains:
 - For multifield systems, all fields must have the same number of time steps.
 - The algorithm is algebraic and independent of the physical interpretation
   of the field.
+# MPC constraints
+
+The keyword interface also accepts `mpc=MPC[]` for master/slave constraint
+reduction. Keep its Problem associations consistent with the assembled system
+and boundary conditions. This is an existing time-integration API; quadrature
+and interpolation-order reduction are separate choices.
 """
 function FDM(
     K::SystemMatrix,

@@ -1,31 +1,53 @@
-# Operators and Fields
+# Field Algebra, Calculus and DSL Operators
 
-LowLevelFEM treats finite element fields as first-class objects. Scalar, vector and tensor fields can be combined with differential operators to construct new quantities directly in Julia code.
+LowLevelFEM supports two related operations: evaluating quantities from existing
+fields, and building weak forms for unknown fields. The argument tells you
+which operation is taking place.
 
-Typical examples include:
+## Field algebra
+
+Once `u` is a displacement field and `σ` a stress tensor field:
 
 ```julia
-ε = (u ∘ ∇ + ∇ ∘ u) / 2
-σ = D * ε
-q = -k * ∇(T)
+u3 = expandTo3D(u)  # only when u uses the two-component :v2D layout
+εtensor = (u3 ∘ ∇ + ∇ ∘ u3) / 2
+energy_density = (σ ⋅ εtensor) / 2
 ```
 
-These expressions closely follow their mathematical notation while remaining fully executable Julia code.
+`σ ⋅ εtensor` is a double contraction, while `σ*εtensor` is a tensor matrix
+product. For vectors, `v ⋅ w` is an inner product and `v ∘ w` is a dyadic
+product. See the [field algebra operation table](../reference/operators.md).
 
-The same operators can also be combined to assemble finite element formulations directly from their weak form. This provides a concise and flexible way to implement custom PDEs and multiphysics problems.
+## Field calculus
 
-Available functionality includes:
+For computed values, `∇(s)` differentiates a scalar field;
+`∇(v; nabla=:div)` and `∇(v; nabla=:curl)` evaluate divergence and curl.
+Spatial derivatives return element-wise data, preserving jumps between elements.
+Supported layouts are listed in [Field calculus](../reference/field-calculus.md).
 
-- scalar, vector and tensor finite element fields
-- gradient, divergence and curl operators
-- field algebra and tensor operations
-- field transformations and projections
-- weak-form assembly using compound operators
+For a supported vector field, `u ∘ ∇` returns its gradient tensor and
+`∇ ∘ u` its transpose. Therefore their symmetric average gives tensor strain.
+`∂x(s)`, `∂y(s)` and `∂z(s)` extract Cartesian gradient components. These
+are derivatives of the interpolated FE field, not of an unevaluated analytic
+function used to construct it.
 
-For the complete API and additional examples, see the references below.
+## Weak-form operators
 
-## Related API
+For an unknown descriptor `U`, `Grad(U)`, `Div(U)`, `Curl(U)`, `SymGrad(U)`
+and the surface/axial operators construct symbolic element operators.
+The integration call assembles them:
 
-- [Reference: Operators](../reference/operators.md)
-- [Reference: Multifield](../reference/multifield.md)
-- [Reference: Fields](../reference/fields.md)
+```julia
+K = ∫(SymGrad(U) ⋅ D(:PlaneStrain, mat) ⋅ SymGrad(U))
+f = ∫(U ⋅ [1.0, 0.0]; Γ="right")
+u = solveField(K, f; support=[BoundaryCondition("left", ux=0, uy=0)])
+```
+
+Here `U` must describe a 2D vector unknown on an existing mesh.
+`SymGrad(U)` uses engineering shear strains; `εtensor` above stores tensor
+shears. In 3D the DSL Voigt order is `[xx,yy,zz,xy,yz,zx]`.
+Constitutive coefficients must match the chosen convention.
+
+See [weak-form operators and component ordering](../reference/multifield.md),
+[constitutive conventions](../reference/constitutive.md), and the
+[DSL design explanation](../explanations/weak-form-dsl-design.md).

@@ -518,16 +518,13 @@ function grad(r::Union{VectorField,ScalarField})
 end
 
 """
-    grad_xy(rr::ScalarField)
+    grad_xy(rr::ScalarField) -> VectorField
 
-Számolja a 2D (xy-síkban fekvő) hálón adott skalármező x és y szerinti deriváltját
-az elemi csomópontokban. Eredmény: elemenként eltárolt, 2 komponensű vektormeő
-(∂r/∂x, ∂r/∂y).
-
-Megjegyzés: ha a keretrendszered csak :v3D-t kezel, a kimenet típusát cseréld
-: v3D-re, és egészítsd ki z=0 komponenssel.
+Legacy derivative helper for an xy-planar mesh. Return the two in-plane
+components `(∂r/∂x, ∂r/∂y)` in element-wise storage (`type=:v2D`).
+Element-wise input is first projected to nodal values, which can smooth jumps.
+For new field calculus use [`∇`](@ref) or [`∂x`](@ref) and [`∂y`](@ref).
 """
-
 function grad_xy(rr::ScalarField)
     problem = rr.model
     gmsh.model.setCurrent(problem.name)
@@ -3772,7 +3769,9 @@ end
 """
     tensorToVector(T::TensorField)
 
-Convert a symmetric tensor field to Voigt vector form.
+Extract tensor entries in Voigt order. Symmetry is assumed by the physical
+interpretation, but is not checked or imposed. Shear components are copied
+without an engineering-strain factor of two.
 
 # Arguments
 - `T`: symmetric tensor field
@@ -4098,12 +4097,35 @@ where:
 - `S` is an elementwise `TensorField`
 - `D` is a `6×6` matrix whose entries are elementwise `ScalarField`s
 
-The tangent matrix `D` can be used directly as a DSL coefficient matrix.
+The tangent can be used in DSL expressions after matching its Voigt order
+to the operator. See the ordering note below.
+
+# Optional extension and conventions
+
+Load `Tensors` before calling this energy-based interface. The energy function
+`ψ(C, params)` must support the tensor values and automatic differentiation
+provided by that extension. `C` is the right Cauchy–Green tensor, not a Voigt
+strain vector. Parameters are a named tuple of numbers or compatible
+`ScalarField`s; element/column support must match `C` (one-column parameters
+can be reused across columns). Nodal input is converted to element-wise data.
 
 # Notes
-Voigt ordering:
+Current Tensors-extension tangent ordering:
 
-    [xx, yy, zz, xy, yz, zx]
+    [xx, yy, zz, yz, xz, xy]
+
+This differs from `SymGrad` and `tensorToVector`, whose order is
+`[xx, yy, zz, xy, yz, zx]`. For a symmetric constitutive tensor, convert
+both tangent axes before coupling to those operators:
+
+```julia
+p = [1, 2, 3, 6, 4, 5]
+D_dsl = D[p, p]
+```
+
+The stress field uses full column-major tensor storage and needs no such
+permutation. This note describes the current implementation; isotropic
+equal-shear examples alone do not establish anisotropic compatibility.
 
 This function computes stress and tangent simultaneously for efficiency.
 """
@@ -4124,6 +4146,15 @@ function.
 
 # Returns
 An elementwise `TensorField` containing the second Piola–Kirchhoff stress.
+
+# Optional extension and conventions
+
+Load `Tensors` before calling this energy-based interface. The energy function
+`ψ(C, params)` must support the tensor values and automatic differentiation
+provided by that extension. `C` is the right Cauchy–Green tensor, not a Voigt
+strain vector. Parameters are a named tuple of numbers or compatible
+`ScalarField`s; element/column support must match `C` (one-column parameters
+can be reused across columns). Nodal input is converted to element-wise data.
 
 # Notes
 This function internally uses the same constitutive kernel as
@@ -4147,12 +4178,35 @@ function.
 # Returns
 A `6×6` matrix whose entries are elementwise `ScalarField`s.
 
-The returned matrix can be used directly as a DSL coefficient matrix.
+The tangent can be used in DSL expressions after matching its Voigt order
+to the operator. See the ordering note below.
+
+# Optional extension and conventions
+
+Load `Tensors` before calling this energy-based interface. The energy function
+`ψ(C, params)` must support the tensor values and automatic differentiation
+provided by that extension. `C` is the right Cauchy–Green tensor, not a Voigt
+strain vector. Parameters are a named tuple of numbers or compatible
+`ScalarField`s; element/column support must match `C` (one-column parameters
+can be reused across columns). Nodal input is converted to element-wise data.
 
 # Notes
-Voigt ordering:
+Current Tensors-extension tangent ordering:
 
-    [xx, yy, zz, xy, yz, zx]
+    [xx, yy, zz, yz, xz, xy]
+
+This differs from `SymGrad` and `tensorToVector`, whose order is
+`[xx, yy, zz, xy, yz, zx]`. For a symmetric constitutive tensor, convert
+both tangent axes before coupling to those operators:
+
+```julia
+p = [1, 2, 3, 6, 4, 5]
+D_dsl = D[p, p]
+```
+
+The stress field uses full column-major tensor storage and needs no such
+permutation. This note describes the current implementation; isotropic
+equal-shear examples alone do not establish anisotropic compatibility.
 
 This function internally uses the same constitutive kernel as
 `energyMaterial`, but computes only the tangent matrix.

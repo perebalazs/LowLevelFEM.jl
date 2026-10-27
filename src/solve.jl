@@ -1882,7 +1882,10 @@ kinematic transformations such as reduced-order interpolation and MPCs.
 
 `rhs` may be a `ScalarField`, `VectorField`, `TensorField`, `Global(...)`
 wrapper, or a symbolic sum of local and global load terms. Multiple
-right-hand sides are supported columnwise.
+right-hand sides are supported columnwise. Return a nodal field of the RHS
+container type in global coordinates, with one solution per input column.
+`support`, `mpc`, and `coordSys` must refer to the matrix's field. Matrices and
+input RHS values are not overwritten by boundary-condition elimination.
 
 With `coordSys` present, ordinary loads and prescribed component values are
 interpreted in the local solver basis. `Global(...)` marks right-hand-side
@@ -2019,7 +2022,10 @@ slave bases naturally produce rotated periodic relations.
 
 `rhs` may be a `SystemVector`, `Global(rhs)`, or a symbolic sum containing
 local and global `SystemVector` contributions. Multiple right-hand sides are
-supported.
+supported. Return a tuple of nodal solution fields in the `K.problems`
+block order. A one-block multifield system returns its field directly.
+Boundary conditions in a mixed system must identify their `Problem` with
+`field=P` or `problem=P`.
 
 The solver interface is the same as for the single-field method. In
 particular, `solveroptions` contains native options of the selected iterative

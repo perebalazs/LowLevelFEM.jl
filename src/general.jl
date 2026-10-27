@@ -22,7 +22,9 @@ export renumberNodes!, ndofs
 export ConstitutiveMatrix, D
 
 """
-    Material(phName; kwargs...)
+    Material(phName; type=:Hooke, E=nothing, ν=nothing, λ=nothing,
+             μ=nothing, κ=nothing, ρ=7.85e-9, k=45.0, c=4.2e8,
+             α=1.2e-5, η=1e-7, p₀=0.1, A=1.0)
 
 Material parameters assigned to a physical group.
 
@@ -38,8 +40,15 @@ Gmsh physical group via `phName`.
 # Keyword Arguments
 
 ## Elastic properties
-At least one valid combination of elastic constants must be provided.
-Missing parameters are automatically completed.
+With no elastic constants, use `E=2e5` and `ν=0.3`. Supplying only `E`
+keeps `ν=0.3`; supplying only `κ` keeps `E=2e5`. Supported pairs are
+`(E,ν)`, `(μ,ν)`, `(λ,μ)`, and `(κ,μ)`. Other combinations are rejected;
+missing elastic constants are computed from the selected combination.
+
+`type` selects `:Hooke`, `:StVenantKirchhoff`, `:NeoHookeCompressible`, or
+`:JFO`. It is material metadata; the selected assembly or constitutive routine
+must support that material law. Parameters use the user's consistent unit
+system; the defaults are not converted automatically.
 
 - `E::Float64`  
   Young's modulus
@@ -96,6 +105,7 @@ mat = Material("truss",
     E=210e3,
     A=1.0
 )
+```
 """
 struct Material
     phName::String
@@ -203,6 +213,12 @@ function elastic_constants(; E=nothing, ν=nothing, λ=nothing, μ=nothing, κ=n
     return (; E, ν, λ, μ, κ)
 end
 
+"""
+    material(phName::String; kwargs...) -> Material
+
+Compatibility spelling of [`Material`](@ref), forwarding all material keywords
+and defaults unchanged. Prefer `Material` in new models.
+"""
 function material(  phName::String;
         type = :Hooke,
         E = nothing, ν = nothing, λ = nothing, μ = nothing, κ = nothing,
@@ -862,9 +878,21 @@ Return total number of dofs for a single-field problem.
 ndofs(P::Problem) = P.non * P.pdim
 
 """
+    SystemMatrix(A::SparseMatrixCSC{Float64}, trial::Problem, test::Problem=trial)
     SystemMatrix(blocks::Matrix{SystemMatrix})
+    SystemMatrix(K::SystemMatrix, trial::Problem, test::Problem=trial)
 
-Construct a global block system matrix from a matrix of `SystemMatrix` blocks.
+Sparse finite-element matrix with trial/test field metadata.
+
+The sparse-array constructor wraps an existing matrix. Rebinding an existing
+`SystemMatrix` changes metadata while sharing its `.A` array; it does not copy
+entries. Matrix multiplication by a compatible field returns a nodal field.
+`Symmetric(K)` declares a symmetric system for solver dispatch; it does not
+verify the physical definiteness of the problem.
+
+The block constructor builds a global matrix from `SystemMatrix` blocks.
+Literal zero blocks are accepted where the row/column Problems can be inferred
+from other blocks. `.problems` and `.offsets` record the block order.
 
 This function assembles a global sparse matrix from a block structure where each
 block represents the discretization of a bilinear form between two fields
@@ -1711,7 +1739,7 @@ end
     VectorField(problem::Problem, dataField::Vector)
     VectorField(problem::Problem, phName::String, data::Vector)
     VectorField(problem::Problem, phName::String, func::Function)
-    VectorField(comps::Vector{ScalarField})
+    VectorField(comps::Vector)
 
 Container for a (possibly time-dependent) vector field defined on a finite
 element mesh (e.g. displacement, velocity, heat flux).
@@ -1745,7 +1773,9 @@ or imaginary eigenvalue components rather than physical time instants.
 - `model` : Associated `Problem`
 
 Vector components are stored in **interleaved form**
-(`x₁,y₁,z₁,x₂,y₂,z₂,…`) for each element or node.
+(`x₁,y₁,z₁,x₂,y₂,z₂,…`) for element-wise `:v3D` data. A nodal
+solution or assembled load instead has `model.pdim` components per node;
+for a 2D vector unknown this means `(x₁,y₁,x₂,y₂,…)`.
 
 ---
 
@@ -1806,12 +1836,15 @@ Constructs an element-wise vector field by evaluating a function
 VectorField(comps::Vector{ScalarField})
 ```
 
-Assembles a 3D vector field from exactly three compatible `ScalarField`s.
+Assembles a 3D vector field from exactly three components. At least one
+component must be a `ScalarField`; the others may be compatible scalar fields
+or numbers. Numbers are expanded over the reference field's element support
+and columns. Nodal scalar components are converted to element-wise storage.
 
 Requirements:
 
-* exactly three components,
-* same `Problem`,
+* exactly three components, at least one a scalar field,
+* all field components share the same `Problem`,
 * identical element numbering,
 * identical time discretization.
 
@@ -2220,7 +2253,7 @@ or imaginary eigenvalue components rather than physical time instants.
   (e.g. `:e`, `:stress`, `:tensor`)
 - `model` : Associated `Problem`
 
-Tensor components are stored in **row-major, interleaved form**
+Tensor components are stored in **column-major, interleaved form**
 for each node:
 ```
 
@@ -2320,7 +2353,11 @@ T2 = TensorField(problem, "body", [1 0 0;
                                   0 0 3])
 ```
 
-Here `T1` and `T2` define equivalent element-wise tensor fields.
+Both examples construct element-wise tensor fields; their values differ.
+Matrix-based construction also accepts `ScalarField` entries belonging to the
+same `Problem`, and mixed scalar components can be used with
+`TensorField(comps::Matrix)`. Nodal components are converted to element-wise
+storage; component fields must have compatible support and column counts.
 """
 struct TensorField <: AbstractField
     A::Vector{Matrix{Float64}}
@@ -2637,41 +2674,15 @@ end
 """
     SystemVector
 
-Unified global right-hand-side (RHS) vector for both single-field and
-multi-field finite element systems.
+Global right-hand-side container. `.a::AbstractMatrix{Float64}` has one row
+per DOF and one column per right-hand side or stored step.
 
-This type stores the global load vector together with metadata describing
-how the vector is associated with one or multiple `Problem`s.
+A single-field vector has `.model` set and `.problems === nothing`. A
+multifield vector has `.model === nothing`, an ordered `.problems` vector,
+and zero-based starting `.offsets` into the concatenated rows. Its field order
+must match the corresponding [`SystemMatrix`](@ref).
 
-# Fields
-- `a::Vector{Float64}`
-    Global RHS vector.
-
-Single-field metadata:
-- `model::Union{Problem,Nothing}`
-    The associated `Problem` in the single-field case.
-
-Multi-field metadata:
-- `problems::Union{Vector{Problem},Nothing}`
-    Ordered list of `Problem`s defining the block structure of the system.
-    The ordering corresponds to the trial-field ordering used when assembling
-    the global `SystemMatrix`.
-
-- `offsets::Union{Vector{Int},Nothing}`
-    Starting global DOF index of each field in the concatenated vector.
-
-# Semantics
-- If `problems === nothing` → **single-field system**
-- If `problems !== nothing` → **multi-field system**
-
-In the multi-field case the global vector has the structure
-
-    a = [ a₁
-          a₂
-          ⋮ ]
-
-where each subvector `aᵢ` corresponds to the RHS contribution of the
-`i`-th field (Problem) in the system.
+Construct through `SystemVector(field)` or `SystemVector([f1, f2, ...])`.
 """
 struct SystemVector
     a::AbstractMatrix{Float64}
@@ -2687,28 +2698,12 @@ end
 """
     SystemVector(field::Union{ScalarField,VectorField,TensorField})
 
-Construct a global RHS vector from a single finite element field.
+Wrap the nodal RHS matrix `field.a` without dropping any columns. The matrix
+is shared with the input; the constructor does not convert element-wise data.
+Use [`elementsToNodes`](@ref) first when nodal field values are intended.
 
-Supported field types:
-
-    ScalarField
-    VectorField
-    TensorField
-
-The field values are extracted from the first load step
-
-    field.a[:,1]
-
-and stored as a global vector.
-
-# Arguments
-- `field`: Field object containing nodal RHS values.
-
-# Returns
-- `SystemVector` representing a single-field RHS vector.
-
-# Notes
-This constructor assumes that the field contains a single load step.
+For an assembled load from [`∫`](@ref), all columns are retained as independent
+right-hand sides. See also [`SystemVector`](@ref).
 """
 function SystemVector(field::Union{ScalarField,VectorField,TensorField})
 
@@ -2721,53 +2716,13 @@ end
 """
     SystemVector(fields::Vector)
 
-Construct a global RHS vector for a multifield system from a vector of
-field objects (`ScalarField`, `VectorField`, or `TensorField`).
+Concatenate nodal RHS matrices in the supplied field order for a multifield
+system. All columns are preserved; fields must have the same column count,
+unique `Problem`s, and the correct nodal DOF counts. An empty list is rejected.
 
-The order of fields determines the block ordering of the global vector.
-This ordering must be consistent with the ordering used when assembling
-the corresponding `SystemMatrix`.
-
-# Arguments
-- `fields::Vector`
-    Vector of field objects providing RHS values for each field.
-
-# Returns
-- `SystemVector` containing the concatenated global RHS vector and
-  metadata describing the involved `Problem`s and their DOF offsets.
-
-# Global structure
-If the fields correspond to Problems `P₁, P₂, …`, the resulting vector is
-
-    a = [ a₁
-          a₂
-          ⋮ ]
-
-where each `aᵢ` is the RHS vector of field `Pᵢ`.
-
-# Errors
-An error is thrown if:
-- the field list is empty,
-- the same `Problem` appears multiple times,
-- the local RHS size does not match the DOF count of its `Problem`.
-
-# Example
-```julia
-fu = bodyForce(Pu)
-fp = pressureLoad(Pp)
-
-rhs = SystemVector([fu, fp])
-````
-
-This constructs a global RHS vector for a two-field system with ordering
-
-```
-[ u
-  p ]
-```
-
-See also: [`SystemMatrix`](@ref)
-
+The order must match the block order of [`SystemMatrix`](@ref). For example,
+`F = SystemVector([fu, fp])` combines already assembled velocity and pressure
+loads, and `u, p = solveField(K, F; support=bc)` reconstructs their solutions.
 """
 function SystemVector(fields::Vector)
 
@@ -2940,7 +2895,7 @@ end
 General container type for prescribing boundary conditions in LowLevelFEM.
 
 - `phName` is a Gmsh physical group name.
-- `problem` optionally binds the load to a specific field (required for multi-field).
+- `problem` optionally binds the condition to a specific field (required for multi-field).
 - `field` alias for `problem`
 - `values` stores component-wise boundary condition data, such as `ux`, `uy`, `T`, `exx`, etc.,
   as `Number`, `Function`, or `ScalarField`.
@@ -2948,8 +2903,7 @@ General container type for prescribing boundary conditions in LowLevelFEM.
 `BoundaryCondition` unifies all Dirichlet- and Neumann-type boundary data
 (mechanical, thermal, elastic, convective, etc.) into a single, extensible
 structure. A boundary condition always refers to a *physical group* of the mesh
-(e.g. `"left"`, `"right"`, `"wall"`) and may prescribe one or more fields
-simultaneously.
+(e.g. `"left"`, `"right"`, `"wall"`) and may prescribe several components of its associated field.
 
 The same `BoundaryCondition` type is used consistently across:
 - static and transient solid mechanics
@@ -3002,7 +2956,6 @@ This is intentional and handled consistently by the heat assembly routines.
 Each field may be specified as:
 - a scalar number (`Number`)
 - a `ScalarField`
-- a `VectorField`
 - a function `(x,y,z) -> value`
 
 depending on the context and the assembly routine using it.
@@ -3025,8 +2978,15 @@ bc = [
 
 * Only the fields relevant to a given analysis are accessed; unused fields
   may safely remain `nothing`.
-* Invalid combinations (e.g. simultaneous displacement and force prescription
-  on the same DOF) are detected during boundary condition application.
+* The container stores keyword/value pairs; it does not validate every
+  physical combination. The consuming solver or assembly routine determines
+  which components are meaningful.
+* For generic DSL fields, component keys follow `P.field` and `P.rhs_field`.
+  Use `field=P` in a mixed problem to identify the constrained unknown.
+* DSL natural loads are assembled as linear forms with `∫`; storing a load
+  in a `BoundaryCondition` alone does not assemble it.
+* With local solver coordinates, prescribed components are local. Use
+  [`Global`](@ref) to mark a Cartesian right-hand side.
 
 See also:
 
@@ -4318,85 +4278,44 @@ function ∂e(rr::ScalarField, dir::Int)
 end
 
 """
-    ∂x(r::ScalarField)
-    ∂y(r::ScalarField)
-    ∂z(r::ScalarField)
+    ∂x(r::ScalarField) -> ScalarField
 
-Compute directional derivatives of a scalar field `r` with respect to the
-global coordinates x, y, or z.
+Differentiate a scalar field with respect to global Cartesian `x`.
+Equivalent to `∇(r)[1]`; see [`∇`](@ref) for supported geometries.
 
-These functions are convenience wrappers that automatically choose between  
-the nodal differentiation (`∂`) and the elementwise differentiation (`∂e`)
-depending on the representation of the input field.
-
-# Dispatch logic
-- If `isNodal(r)` is `true`:  
-    - `∂x(r)` → `∂(r, 1)`  
-    - `∂y(r)` → `∂(r, 2)`  
-    - `∂z(r)` → `∂(r, 3)`  
-- Otherwise (elementwise field):  
-    - `∂x(r)` → `∂e(r, 1)`  
-    - `∂y(r)` → `∂e(r, 2)`  
-    - `∂z(r)` → `∂e(r, 3)`
-
-# Coordinate conventions
-- In **3D**: `(x, y, z)` are the global Cartesian coordinates.
-- In **2D (plane stress/strain)**:  
-  - `∂x` and `∂y` operate in the plane.  
-  - `∂z` is mathematically allowed and returns zero for planar meshes.
-
-# Returns
-A `ScalarField` storing the derivative in **elementwise** representation.
-
-# Examples
-
-## 1) Derivative of a nodal field (automatic nodal→element conversion)
+Nodal input is evaluated through element interpolation. Element-wise input
+preserves its support and discontinuities. The output is element-wise and
+contains all input columns. The derivative is that of the finite-element
+interpolant, so an analytic function must be representable by the element
+space before its exact derivative can be expected.
 
 ```julia
-s = ScalarField(prob, "vol", (x,y,z) -> x^2 + y)
-
-dxs = ∂x(s)      # computes 2x
-dys = ∂y(s)      # computes 1
-dzs = ∂z(s)      # computes 0
+s = ScalarField(P, "body", (x,y,z) -> 2x + 3y)
+dx = ∂x(s)  # constant 2 on a mesh reproducing linear functions
 ```
-
-## 2) Derivative of an elementwise field
-
-```julia
-se = nodesToElements(s) |> r -> ∂e(r, 1)  # manually
-dxs = ∂x(se)                              # same result, auto-detected
-```
-
-## 3) Works on 2D meshes as well
-
-```julia
-s = ScalarField(prob2D, "surf", (x,y,z) -> x - y)
-
-dxs = ∂x(s)      # = 1 everywhere
-dys = ∂y(s)      # = -1 everywhere
-dzs = ∂z(s)      # = zero field (2D mesh)
-```
-
-## 4) Using derivatives to build a gradient vector field
-
-```julia
-s = ScalarField(prob, "vol", (x,y,z) -> sin(x)*y)
-
-gx = ∂x(s)       # y*cos(x)
-gy = ∂y(s)       # sin(x)
-gz = ∂z(s)       # 0
-
-grad_s = VectorField([gx, gy, gz])
-```
-
-# Notes
-
-* The output is always **elementwise**, enabling consistent post-processing.
-* Direction indices follow FEM convention:
-  1 → x, 2 → y, 3 → z.
 """
 ∂x(r::ScalarField) = ∇(r)[1]
+"""
+    ∂y(r::ScalarField) -> ScalarField
+
+Differentiate with respect to global Cartesian `y`. Equivalent to
+`∇(r)[2]`; input support, columns, and discontinuities are handled as
+for [`∂x`](@ref). The result is element-wise.
+
+On an xy-planar mesh, `∂z` returns zero. On embedded curves or surfaces,
+Cartesian components follow the tangential physical gradient from [`∇`](@ref).
+"""
 ∂y(r::ScalarField) = ∇(r)[2]
+"""
+    ∂z(r::ScalarField) -> ScalarField
+
+Differentiate with respect to global Cartesian `z`. Equivalent to
+`∇(r)[3]`; input support, columns, and discontinuities are handled as
+for [`∂x`](@ref). The result is element-wise.
+
+On an xy-planar mesh, `∂z` returns zero. On embedded curves or surfaces,
+Cartesian components follow the tangential physical gradient from [`∇`](@ref).
+"""
 ∂z(r::ScalarField) = ∇(r)[3]
 #∂x(r::ScalarField) = isNodal(r) ? ∂(r, 1) : ∂e(r, 1)
 #∂y(r::ScalarField) = isNodal(r) ? ∂(r, 2) : ∂e(r, 2)
@@ -5495,20 +5414,17 @@ end
 =#
 
 """
-    load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
+    load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing) -> BoundaryCondition
 
-Specifies a distributed load on the physical group `name`. At least one of `fx`, `fy`, or `fz`
-must be provided (depending on the problem dimension). `fx`, `fy`, or `fz` can be a constant
-or a function of `x`, `y`, and `z` or `ScalarField`.
-(e.g., `fn(x,y,z) = 5*(5-x); load("load1", fx=fn)`)
+Create engineering distributed-load data on physical group `name`. Supply at least
+one Cartesian component or pressure `p`. Values may be numbers, spatial
+functions `(x,y,z)->value`, or scalar fields (converted to nodal storage).
+If `p` is supplied it takes precedence over Cartesian component keywords.
 
-Returns: BoundaryCondition
-
-Types:
-- `name`: String
-- `fx`: Float64 or Function
-- `fy`: Float64 or Function
-- `fz`: Float64 or Function
+This declares load data consumed by the engineering assembly interface; it does
+not itself assemble a DSL RHS. The engineering API name is intended to remain
+when its backend migrates to DSL-backed wrappers. For direct weak forms use
+`f = ∫(U ⋅ traction; Γ="right")`.
 """
 function load(name; fx=nothing, fy=nothing, fz=nothing, p=nothing)
     fx === nothing && fy === nothing && fz === nothing && p === nothing &&
@@ -7839,7 +7755,7 @@ return: VectorField
 
 # Examples
 ```julia
-V2D = expandTo3D(V3D)
+V2D = projectTo2D(V3D)
 ```
 """
 function projectTo2D(a::VectorField)
@@ -7932,29 +7848,26 @@ function fieldError(S)
 end
 
 """
-    resultant(field::VectorField, phName::String)
+    resultant(field::VectorField, phName::String) -> Vector{Float64}
+    resultant(problem, view_or_field, phName; grad=false, component=:x,
+              offsetX=0, offsetY=0, offsetZ=0)
 
-Computes the resultant of vector field `field` on the physical group `phName`.
-Returns the resultant(s) in a `tuple`. The number of elements in the tuple depends on the
-dimension of problem (dimension of `field`).
-It can solve for example the resultant of a load vector (sum of the elements of the vector).
+Sum nodal vector entries on the named physical group. The two-argument form
+requires nodal input and returns a length-`problem.dim` vector. Only the first
+stored column is used; this is suitable for a resultant of assembled nodal
+loads, not quadrature of an arbitrary sampled traction. Axisymmetric presets
+multiply each selected entry by the local `2πr` factor.
 
-Return: `resx`
+The legacy three-argument form returns a scalar/tuple for vector fields.
+For a scalar Gmsh view tag, it instead integrates probed values over the group:
+`grad=true` requests the view gradient, `component=:x/:y/:z` selects the
+probed component, and `offsetX/Y/Z` shift the probing coordinates. These
+keywords apply to the view-integration branch, not to nodal summation.
+The legacy `Matrix` branch expects field metadata and is not an ordinary
+array-based interface; prefer a `VectorField`.
 
-or
-
-Return: `resx`, `resy`
-
-or
-
-Return: `resx`, `resy`, `resz`
-
-Types:
-- `field`: VectorField
-- `phName`: String 
-- `resx`: Float64 
-- `resy`: Float64 
-- `resz`: Float64 
+Use [`integrate`](@ref) for explicit spatial quadrature of a function or
+`ScalarField`, selecting `step` there when several columns are present.
 """
 function resultant(field::VectorField, phName::String)
     axiSymmetric = false
@@ -8722,6 +8635,14 @@ Types:
 - `visible`: Boolean
 - `smooth`: Boolean
 - `tag`: Integer
+# Display configuration
+
+The keyword `factor` is accepted by this view constructor; the current call
+signature is:
+
+    showStrainResults(E0, comp; name=comp, visible=false, smooth=true)
+
+View options affect visualization only, not the stored finite-element field.
 """
 function showStrainResults(E0, comp; name=comp, visible=false, smooth=true)
     #gmsh.fltk.openTreeItem("0Modules/Post-processing")
@@ -8820,6 +8741,22 @@ Types:
 - `visible`: Boolean
 - `smooth`: Boolean
 - `tag`: Integer
+# Display configuration
+
+The keyword `ff` is accepted by this view constructor; the current call
+signature is:
+
+    showElementResults(F::Union{ScalarField,VectorField,TensorField}, comp; name=comp, visible=false, smooth=false, factor=0)
+
+View options affect visualization only, not the stored finite-element field.
+# Display configuration
+
+The keyword `factor` is accepted by this view constructor; the current call
+signature is:
+
+    showStressResults(q::TensorField; name="StressField", visible=false, smooth=false, ff = 0, factor=0)
+
+View options affect visualization only, not the stored finite-element field.
 """
 function showElementResults(F::Union{ScalarField,VectorField,TensorField}, comp; name=comp, visible=false, smooth=false, factor=0)
     if F.type == :e || F.type == :tensor && isElementwise(F)
@@ -10346,7 +10283,9 @@ The following physical groups are created:
 - A transfinite structured mesh is enforced.
 - The number of nodes is determined from `ceil(lx/dx) + 1`.
 - The mesh is generated but not written to file.
-- The function assumes that Gmsh is already initialized.
+- Initialize Gmsh automatically if needed, clear existing models with
+  `gmsh.clear()`, and set Gmsh verbosity to zero. Existing geometry, meshes
+  and views are discarded; reconstruct descriptors after remeshing.
 
 Returns `nothing`.
 
@@ -10416,19 +10355,27 @@ quadrilateral elements.
 # Physical Groups
 The following physical groups are created:
 - 1D boundaries: `"bottom"`, `"right"`, `"top"`, `"left"`
-- 2D domain: `"surface"`
+- 2D domain: `"body"`
 - 0D corner points: `"leftbottom"`, `"rightbottom"`, `"righttop"`, `"lefttop"`
 
 # Notes
 - A transfinite structured mesh is enforced.
 - Elements are recombined into quadrilaterals.
 - The mesh is generated but not written to file.
-- The function assumes that Gmsh is already initialized.
+- Initialize Gmsh automatically if needed, clear existing models with
+  `gmsh.clear()`, and set Gmsh verbosity to zero. Existing geometry, meshes
+  and views are discarded; reconstruct descriptors after remeshing.
 
 Returns `nothing`.
 
 Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
+# Optional remote points
+
+`leftRemote=false` and `rightRemote=false` optionally create extra point
+physical groups `"leftremote"` and `"rightremote"` at the end-section centers.
+These provide reference nodes for MPC construction; enabling them alone
+creates no rigid coupling or boundary condition.
 """
 function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1, leftRemote::Bool=false, rightRemote::Bool=false)
     if gmsh.isInitialized() == 0
@@ -10552,18 +10499,26 @@ and recombined into hexahedral elements.
 The following physical groups are created:
 - 2D boundary faces: `"left"`, `"right"`, `"front"`, `"rear"`,
   `"bottom"`, `"top"`
-- 3D domain: `"volume"`
+- 3D domain: `"body"`
 
 # Notes
 - A transfinite structured mesh is enforced in all directions.
 - Elements are recombined into hexahedra.
 - The mesh is generated but not written to file.
-- The function assumes that Gmsh is already initialized.
+- Initialize Gmsh automatically if needed, clear existing models with
+  `gmsh.clear()`, and set Gmsh verbosity to zero. Existing geometry, meshes
+  and views are discarded; reconstruct descriptors after remeshing.
 
 Returns `nothing`.
 
 Note: These helper functions are primarily intended for rapid prototyping,
 testing and educational examples in LowLevelFEM workflows.
+# Optional remote points
+
+`leftRemote=false` and `rightRemote=false` optionally create extra point
+physical groups `"leftremote"` and `"rightremote"` at the end-section centers.
+These provide reference nodes for MPC construction; enabling them alone
+creates no rigid coupling or boundary condition.
 """
 function structured_box_mesh(; x0=0.0, y0=0.0, z0=0.0, lx=1.0, ly=1.0, lz=1.0, n=10, dx=lx / n, dy=ly / n, dz=lz / n, order=1, leftRemote::Bool=false, rightRemote::Bool=false)
     if gmsh.isInitialized() == 0

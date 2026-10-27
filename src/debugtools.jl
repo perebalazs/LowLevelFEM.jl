@@ -2,7 +2,12 @@ module DebugTools
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
 
-"Listázza a struct mezőit és azok aktuális értékét."
+"""
+    @showfields expr
+
+Evaluate `expr` once and print its type, field names and current field values.
+Return `nothing`; the value must support structural field access.
+"""
 macro showfields(expr)
     return quote
         x = $(esc(expr))
@@ -15,7 +20,12 @@ macro showfields(expr)
     end
 end
 
-"Listázza a struct mezőit típusokkal és aktuális értékekkel."
+"""
+    @showstruct expr
+
+Evaluate `expr` once and print its type plus field names, declared types and
+current values. Return `nothing`.
+"""
 macro showstruct(expr)
     return quote
         x = $(esc(expr))
@@ -28,7 +38,12 @@ macro showstruct(expr)
     end
 end
 
-"Csak a struct definícióját (mezőnevek és típusok) írja ki, értékek nélkül."
+"""
+    @showdef expr
+
+Evaluate `expr` once and print a structural summary of its type: field names
+and declared field types, without current values. Return `nothing`.
+"""
 macro showdef(expr)
     return quote
         T = typeof($(esc(expr)))
@@ -40,7 +55,12 @@ macro showdef(expr)
     end
 end
 
-"Kiírja az adott kifejezés típusát és méretét (ha ismert)."
+"""
+    @showtype expr
+
+Evaluate `expr` once and print its type and total reachable object size from
+`Base.summarysize` when available. Return `nothing`; this is not array shape.
+"""
 macro showtype(expr)
     return quote
         x = $(esc(expr))
@@ -55,7 +75,13 @@ macro showtype(expr)
     end
 end
 
-"Megméri a kifejezés futási idejét és memória-allokációját (BenchmarkTools nélkül)."
+"""
+    @showmem expr
+
+Evaluate `expr` with `@timed`, print elapsed milliseconds and allocated bytes,
+and return the expression result. First-call compilation is included; this
+single sample is not a statistical benchmark.
+"""
 macro showmem(expr)
     return quote
         local result = @timed $(esc(expr))
@@ -65,7 +91,12 @@ macro showmem(expr)
     end
 end
 
-"Kiírja a megadott függvény összes metódusát és azok aláírásait."
+"""
+    @showmethods expr
+
+Evaluate a callable expression once and print its available methods and
+signatures. Return `nothing`.
+"""
 macro showmethods(expr)
     return quote
         f = $(esc(expr))
@@ -77,11 +108,24 @@ macro showmethods(expr)
     end
 end
 
+"""
+    @disp expr
+
+Evaluate `expr` once and display its source text followed by its string value.
+The macro returns the result of `display` (normally `nothing`).
+"""
 macro disp(expr)
     s = string(expr)
     return :(display($s * " = " * string($(esc(expr)))))
 end
 
+"""
+    @showsize expr
+
+Evaluate `expr` once and print its total reachable memory from
+`Base.summarysize`, using B/kB/MB/GB with factors of 1024. Return `nothing`.
+This reports object storage, not allocations during evaluation.
+"""
 macro showsize(expr)
     return quote
         local x = $(esc(expr))

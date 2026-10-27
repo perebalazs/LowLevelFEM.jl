@@ -1,5 +1,9 @@
 # Postprocessing API
 
+```@meta
+CurrentModule = LowLevelFEM
+```
+
 Visualization, probing, path plots, and result extraction helpers.
 
 ## Derived Quantities
@@ -33,3 +37,7 @@ plotOnBeam
 probe
 openPostProcessor
 ```
+
+Field persistence is documented under [Fields and storage](fields.md), result
+coordinate transformations under [Boundary conditions and coordinates](boundary-conditions.md),
+and field derivatives under [Field calculus](field-calculus.md).

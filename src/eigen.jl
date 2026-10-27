@@ -506,7 +506,28 @@ keywords `ncv`, `tol`, `maxiter`, `v0`, `check`, `explicittransform`, `which`
 and `sigma` can be passed directly, or in `solveroptions=(; ...)`.
 `ritzvec=false` is unsupported because eigenvectors are always returned.
 
+# Solvers and normalization
+
+`solver=:direct` uses a dense generalized eigensolve of the reduced matrices.
+`:arpack` requires `using Arpack`; `:auto` selects direct solution for reduced
+size at most 32 or near-full mode requests, and ARPACK otherwise. No optional package is
+loaded automatically.
+
+`normalize=:none` retains reconstructed eigenvectors; `:unit` gives unit
+Euclidean norm; `:mass` and its alias `:B` normalize using the full B matrix.
+The latter requires an appropriate positive modal B-norm.
+
+Single-field `output=:field` returns one field (or a real/imaginary pair for
+`part=:both`). Multifield output is a tuple in block order. Raw eigenvectors
+are columns in the original global DOF order after constraint reconstruction.
+A one-block system also returns its sole field directly. An eigenvalue is a
+frequency squared, buckling multiplier, or another physical
+quantity only according to the chosen matrix pencil; no conversion to Hz is
+performed automatically.
+
 Coordinates, boundary conditions and MPCs share the `solveField` reduction.
+Essential constraints for eigenmodes must be homogeneous. Consult the shared
+solver/basis restrictions when combining spectral interpolation and MPCs.
 """
 function solveEigen(
     A::Union{SystemMatrix,SymmetricSystemMatrix},
@@ -760,6 +781,8 @@ end
 
 Backward-compatible alias. The historical `shift` means the ARPACK numerical
 shift (`sigma`), *not* the `solveEigen` lower spectral bound.
+Additional keywords, including native ARPACK `which`, are forwarded to
+[`solveEigen`](@ref). Prefer that interface for new code.
 """
 function solveEigenProblem(
     A::Union{SystemMatrix,SymmetricSystemMatrix},
@@ -812,6 +835,12 @@ end
 
 Compute natural frequencies and real mode shapes for a single mechanical
 field and return the existing Gmsh-compatible `Eigen` container.
+# Backend options
+
+`solver=:auto`, `solveroptions=(;)`, and `directSolver=false` select/configure
+the underlying [`solveEigen`](@ref) backend. `directSolver=true` overrides
+`solver` with `:direct`; otherwise an ARPACK selection requires `using Arpack`.
+`normalize=:mass` is forwarded to eigenvector reconstruction.
 """
 function solveEigenModes(
     K::SystemMatrix, M::SystemMatrix;
@@ -841,6 +870,12 @@ end
 
 Return a tuple of `Eigen` containers, one per physical field, for real
 multifield vibration modes. Use `solveEigen` directly for complex problems.
+# Backend options
+
+`solver=:auto`, `solveroptions=(;)`, and `directSolver=false` select/configure
+the underlying [`solveEigen`](@ref) backend. `directSolver=true` overrides
+`solver` with `:direct`; otherwise an ARPACK selection requires `using Arpack`.
+`normalize=:mass` is forwarded to eigenvector reconstruction.
 """
 function solveEigenFields(
     K::SystemMatrix, M::SystemMatrix;
@@ -870,6 +905,12 @@ end
 
 Compute critical load multipliers from `K*phi = -λ*Kg*phi` and return a
 Gmsh-compatible `Eigen` container for a real, single-field problem.
+# Backend options
+
+`solver=:auto`, `solveroptions=(;)`, and `directSolver=false` select/configure
+the underlying [`solveEigen`](@ref) backend. `directSolver=true` overrides
+`solver` with `:direct`; otherwise an ARPACK selection requires `using Arpack`.
+Buckling modes use unit Euclidean eigenvector normalization.
 """
 function solveBucklingModes(
     K::SystemMatrix, Kg::SystemMatrix;

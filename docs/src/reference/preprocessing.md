@@ -1,51 +1,47 @@
 # Preprocessing API
 
-Preprocessing includes model setup, material/problem definitions,
-boundary/load declarations, and mesh-related helpers.
+```@meta
+CurrentModule = LowLevelFEM
+```
 
-## Mesh and Geometry Setup
+Set up the current Gmsh mesh, material groups, and unknown-field descriptors.
+`Field` is an alias of `Problem`; a descriptor defines interpolation and DOFs,
+while `ScalarField`/`VectorField`/`TensorField` contain values.
+
+## Materials and unknowns
+
+```@docs
+Material
+material
+Problem
+Field
+```
+
+## Mesh and geometry
+
+The structured mesh helpers create named physical groups; see their individual
+lists before selecting `Ω`, `Γ`, or a boundary condition.
 
 ```@docs
 line_mesh
 structured_rect_mesh
 structured_box_mesh
-projectTo2D
-expandTo3D
-Transformation
-rotateNodes
-Global
 renumberNodes!
+openGeometry
 ```
 
-## Model Setup and Parameters
+## Parameters and interactive geometry
 
 ```@docs
 setParameter
 setParameters
 getParameter
 openPreProcessor
-openGeometry
 ```
 
-## Boundary Conditions and Loads
+## Next steps
 
-```@docs
-displacementConstraint
-temperatureConstraint
-elasticSupport
-load
-heatFlux
-heatSource
-heatConvection
-BoundaryConditionFields
-BoundaryCondition_to_LoadCondition
-```
-
-## DOF Selection Helpers
-
-```@docs
-constrainedDoFs
-freeDoFs
-allDoFs
-ndofs
-```
+- [Field construction and conversion](fields.md)
+- [Boundary conditions, DOFs and coordinates](boundary-conditions.md)
+- [Weak-form operators and assembly](multifield.md)
+- [Solution and spectral/reduced interpolation](solution.md)

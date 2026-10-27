@@ -24,6 +24,11 @@ Types:
 ```julia
 Kth = heatConductionMatrix(problem)
 ```
+# Element selection
+
+`elements=[]` assembles the material-group elements. A nonempty list restricts
+the element tags included by the legacy assembly kernel. For a new DSL model,
+select a physical group through `Ω` or `Γ` in [`∫`](@ref).
 """
 function heatConductionMatrix(problem; elements=[])
     if problem.type == :AxiSymmetricHeatConduction
@@ -253,6 +258,11 @@ Types:
 - `problem`: Problem
 - `lumped`: Boolean
 - `massMat`: SystemMatrix
+# Element selection
+
+`elements=[]` assembles the material-group elements. A nonempty list restricts
+the element tags included by the legacy assembly kernel. For a new DSL model,
+select a physical group through `Ω` or `Γ` in [`∫`](@ref).
 """
 function heatCapacityMatrix(problem; elements=[], lumped=false)
     gmsh.model.setCurrent(problem.name)

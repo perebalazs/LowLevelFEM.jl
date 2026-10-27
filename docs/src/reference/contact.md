@@ -1,5 +1,9 @@
 # Contact API
 
+```@meta
+CurrentModule = LowLevelFEM
+```
+
 Contact geometry, weak-form operators and post-processing for slave-master contact problems.
 
 ## Overview
@@ -977,4 +981,12 @@ ContactGap
 ContactStiffness
 contact
 updateContact!
+```
+
+## State identifiers
+
+```@docs
+CONTACT_OPEN
+CONTACT_STICK
+CONTACT_SLIP
 ```
