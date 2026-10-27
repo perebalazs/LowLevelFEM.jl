@@ -9,6 +9,7 @@
 [![status](https://joss.theoj.org/papers/b3ca075c57757edaacbfdf748e1cc6ee/status.svg)](https://joss.theoj.org/papers/b3ca075c57757edaacbfdf748e1cc6ee)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17073982.svg)](https://doi.org/10.5281/zenodo.17073982)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fv1%2Fmonthly_downloads%2FLowLevelFEM&query=total_requests&suffix=%2Fmonth&label=Downloads)](https://juliapkgstats.com/pkg/LowLevelFEM)
 
 # LowLevelFEM
 
