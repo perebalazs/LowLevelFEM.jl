@@ -1,4 +1,4 @@
-export Problem, Field, Material, getEigenVectors, getEigenValues, material
+export Problem, Field, Material, getEigenValues, material
 export displacementConstraint, load, elasticSupport, BoundaryCondition, BoundaryConditionFields
 export LoadCondition, MultiPointConstraint, MPC
 export temperatureConstraint, heatFlux, heatSource, heatConvection

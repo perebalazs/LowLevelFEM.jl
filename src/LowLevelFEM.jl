@@ -30,7 +30,6 @@ include("contact.jl")
 include("extra.jl")
 
 export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @disp, @showsize
-export probe_field
 
 # Representative public workflows, not an exhaustive API catalogue. Keep meshes
 # tiny: the purpose is to capture JIT specializations, not to benchmark assembly.

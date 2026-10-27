@@ -4,7 +4,6 @@ export loadVector
 export applyBoundaryConditions, applyBoundaryConditions!, applyElasticSupport!
 export solveDisplacement, solveStrain, solveStress, solveAxialForce
 export initialDisplacement, initialDisplacement!, initialVelocity, initialVelocity!
-export nodalForce!, nodalAcceleration!
 export CDM, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
 export printElasticConstantsTable
 
