@@ -369,7 +369,7 @@ version = "1.11.0"
 deps = ["JLD2", "LinearAlgebra", "PrecompileTools", "SparseArrays", "StaticArrays", "gmsh_jll"]
 path = "/home/perebal/Dokumentumok/GitHub/LowLevelFEM.jl/docs/.."
 uuid = "6171b9fb-adbf-4751-adb9-5faded75de07"
-version = "1.14.2"
+version = "1.15.0"
 
     [deps.LowLevelFEM.extensions]
     LowLevelFEMArpackExt = "Arpack"

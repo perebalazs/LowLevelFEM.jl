@@ -262,7 +262,7 @@ function _build_preconditioner(
 
     error(
         "Preconditioner :$pc requires $package.jl.\n" *
-        "Install and load the package before calling solveField."
+        "Install and load the package before selecting this preconditioner."
     )
 end
 
@@ -311,12 +311,33 @@ preconditioner backend. It is only meaningful when LowLevelFEM constructs the
 preconditioner from a symbolic choice such as `:ich` or `:ilu`; it is rejected
 for `:none`, preconstructed preconditioners, and direct solvers.
 
-For multiple right-hand sides, the preconditioner is constructed once and
-reused for all columns of `B`.
+For multiple right-hand sides, the factorization or preconditioner is
+constructed once and reused for all columns of `B`. Transient solvers reuse
+the same preparation across time steps through `prepare_linear_solver`.
 """
-function solve_linear_system(
-    A,
-    B;
+function solve_linear_system(A, B; kwargs...)
+    prepared = prepare_linear_solver(A; kwargs...)
+    return solve_prepared_linear_system(prepared, B)
+end
+
+struct _PreparedLinearSolver{TA,TF,TP,TO}
+    A::TA
+    factor::TF
+    preconditioner::TP
+    solver::Symbol
+    solveroptions::TO
+end
+
+"""
+    prepare_linear_solver(A; solver=:backslash, preconditioner=:auto,
+                          solveroptions=(;), preconditioneroptions=(;))
+
+Prepare a reusable linear solve. A direct factorization or iterative
+preconditioner is constructed once for the fixed matrix `A`. The same backend
+and option validation are used by `solveField`, HHT and FDM.
+"""
+function prepare_linear_solver(
+    A;
     solver=:backslash,
     preconditioner=:auto,
     solveroptions=(;),
@@ -337,13 +358,16 @@ function solve_linear_system(
         end
     end
 
+    F = nothing
+    P = nothing
     if solver === :backslash
-        return A \ B
+        # Diagonal sparse storage must not turn transient state vectors sparse.
+        F = size(A, 1) == size(A, 2) && isdiag(A) ?
+            Diagonal(Vector(diag(A))) : factorize(A)
 
     elseif solver === :auto_symmetric
         try
             F = cholesky(A)
-            return F \ B
         catch err
             if err isa PosDefException
                 @warn(
@@ -351,24 +375,21 @@ function solve_linear_system(
                     "positive definite. Falling back to LU factorization."
                 )
                 F = lu(sparse(A))
-                return F \ B
+            else
+                rethrow()
             end
-            rethrow()
         end
 
     elseif solver === :lu
         A0 = A isa Union{Symmetric,Hermitian} ? sparse(A) : A
         F = lu(A0)
-        return F \ B
 
     elseif solver === :lu_no_ordering
         A0 = A isa Union{Symmetric,Hermitian} ? sparse(A) : A
         F = lu(A0, q=nothing)
-        return F \ B
 
     elseif solver === :cholesky
         F = cholesky(A)
-        return F \ B
 
     elseif solver === :ldlt
         A isa Union{Symmetric,Hermitian} ||
@@ -378,11 +399,9 @@ function solve_linear_system(
             )
 
         F = ldlt(A)
-        return F \ B
 
     elseif solver === :qr
         F = qr(A)
-        return F \ B
 
     elseif solver in _ITERATIVE_SOLVERS
 
@@ -417,23 +436,29 @@ function solve_linear_system(
             P = pc
         end
 
-        X = similar(B)
-
-        for j in axes(B, 2)
-            X[:, j] = _solve_iterative(
-                Val(solver),
-                A,
-                @view(B[:, j]);
-                preconditioner=P,
-                solveroptions=solveroptions
-            )
-        end
-
-        return X
-
     else
         error("Unknown linear solver: $solver.")
     end
+    return _PreparedLinearSolver(A, F, P, solver, solveroptions)
+end
+
+function solve_prepared_linear_system(prepared::_PreparedLinearSolver, B::AbstractVecOrMat)
+    # UMFPACK cannot solve against SparseVector right-hand sides. Results of
+    # a linear solve are dense even when input data happen to be sparse.
+    rhs = B isa Union{SparseVector,SparseMatrixCSC} ? Array(B) : B
+    if prepared.factor !== nothing
+        return prepared.factor \ rhs
+    end
+    if rhs isa AbstractVector
+        return _solve_iterative(Val(prepared.solver), prepared.A, rhs;
+            preconditioner=prepared.preconditioner, solveroptions=prepared.solveroptions)
+    end
+    X = Matrix{eltype(rhs)}(undef, size(prepared.A, 2), size(rhs, 2))
+    for j in axes(rhs, 2)
+        X[:, j] = _solve_iterative(Val(prepared.solver), prepared.A, @view(rhs[:, j]);
+            preconditioner=prepared.preconditioner, solveroptions=prepared.solveroptions)
+    end
+    return X
 end
 
 function _check_solveroptions(options)
@@ -445,7 +470,7 @@ function _check_solveroptions(options)
     for key in reserved
         key in keys(options) &&
             error(
-                "Solver option `$key` is managed internally by solveField."
+                "Solver option `$key` is managed internally by the linear solver."
             )
     end
 
@@ -1804,7 +1829,7 @@ function _resolve_preconditioner(A, solver, preconditioner)
         A isa Union{Symmetric,Hermitian} ||
             error(
                 "Automatic preconditioning for :cg requires a symmetric system. " *
-                "Use Symmetric(K), specify a preconditioner explicitly, " *
+                "Use symmetric matrix wrappers, specify a preconditioner explicitly, " *
                 "or use preconditioner=:none."
             )
 

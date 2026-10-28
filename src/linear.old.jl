@@ -1,0 +1,7045 @@
+export stiffnessMatrix, nonLinearStiffnessMatrix, massMatrix, dampingMatrix
+export elasticSupportMatrix
+export loadVector
+export applyBoundaryConditions, applyBoundaryConditions!, applyElasticSupport!
+export solveDisplacement, solveStrain, solveStress, solveAxialForce
+export initialDisplacement, initialDisplacement!, initialVelocity, initialVelocity!
+export CDM, HHT, CDMaccuracyAnalysis, HHTaccuracyAnalysis
+export printElasticConstantsTable
+
+# linear.jl tetején
+mutable struct SolidWS
+    dH::Matrix{Float64}
+    B::Matrix{Float64}
+    nnet::Vector{Int}
+    K1::Matrix{Float64}
+    nn2::Vector{Int}
+end
+
+function make_ws(dim::Int, numNodes::Int, numIntPoints::Int, rowsOfB::Int, dof_elem::Int)
+    SolidWS(
+    zeros(dim, numNodes*numIntPoints),
+    zeros(rowsOfB*numIntPoints, dof_elem),
+    zeros(Int, numNodes),
+    zeros(dof_elem, dof_elem),
+    zeros(Int, dof_elem)
+    )
+end
+
+mutable struct AxisWS
+    dH::Matrix{Float64}   # dim × (numNodes*numIntPoints)
+    B::Matrix{Float64}    # (rowsOfB*numIntPoints) × dof_elem
+    nnet::Vector{Int}     # numNodes
+    K1::Matrix{Float64}   # dof_elem × dof_elem
+    nn2::Vector{Int}      # dof_elem
+    r::Vector{Float64}    # numIntPoints
+end
+
+function make_ws_axi(dim::Int, numNodes::Int, numIntPoints::Int, rowsOfB::Int, dof_elem::Int)
+    AxisWS(
+    zeros(dim, numNodes*numIntPoints),
+    zeros(rowsOfB*numIntPoints, dof_elem),
+    zeros(Int, numNodes),
+    zeros(dof_elem, dof_elem),
+    zeros(Int, dof_elem),
+    zeros(numIntPoints)
+    )
+end
+
+"""
+    stiffnessMatrix(problem; elements=[], forceOneThread=true) -> SystemMatrix
+
+Assemble elastic stiffness through the engineering API for a solid, plane,
+axisymmetric or truss problem. `elements=[]` uses the material-group elements;
+a nonempty list restricts the element tags assembled by the selected kernel.
+
+`forceOneThread=true` keeps the solid path serial. With it disabled, multiple
+Julia threads and at least 50,000 mesh nodes are required for that legacy
+parallel dispatch. Axisymmetric and truss paths select their own kernels.
+The engineering entry point is intended to remain as its current dedicated
+kernels migrate to DSL-backed wrappers. For a direct weak-form formulation,
+use [`SymGrad`](@ref), [`D`](@ref) and [`∫`](@ref).
+"""
+function stiffnessMatrix(problem; elements=[], forceOneThread=true)
+    if problem.type == :dummy
+        return nothing
+    end
+    if problem.type == :AxiSymmetric && Threads.nthreads() == 1
+        return stiffnessMatrixAXI(problem, elements=elements)
+    elseif problem.type == :AxiSymmetric && Threads.nthreads() > 1
+        #return stiffnessMatrixAXIParallel(problem, elements=elements)
+        return stiffnessMatrixAXI(problem, elements=elements)
+    elseif problem.type == :Truss
+        return stiffnessMatrixTruss(problem, elements=elements)
+    elseif (problem.type != :AxiSymmetric || problem.type != :Truss) && (Threads.nthreads() == 1 || forceOneThread == true || problem.non < 5e4)
+        return stiffnessMatrixSolid(problem, elements=elements)
+    elseif (problem.type != :AxiSymmetric || problem.type != :Truss) && Threads.nthreads() > 1
+        return stiffnessMatrixSolidParallel(problem, elements=elements)
+        #return stiffnessMatrixSolid(problem, elements=elements)
+    end
+end
+
+@inline function inv3x3_fast(J::SMatrix{3,3,Float64})
+    # kofaktorok + det, majd 1/det * adj(J)
+    J11, J12, J13 = J[1,1], J[1,2], J[1,3]
+    J21, J22, J23 = J[2,1], J[2,2], J[2,3]
+    J31, J32, J33 = J[3,1], J[3,2], J[3,3]
+    
+    c11 =  (J22*J33 - J23*J32)
+    c12 = -(J21*J33 - J23*J31)
+    c13 =  (J21*J32 - J22*J31)
+    
+    c21 = -(J12*J33 - J13*J32)
+    c22 =  (J11*J33 - J13*J31)
+    c23 = -(J11*J32 - J12*J31)
+    
+    c31 =  (J12*J23 - J13*J22)
+    c32 = -(J11*J23 - J13*J21)
+    c33 =  (J11*J22 - J12*J21)
+    
+    detJ = J11*c11 + J12*c12 + J13*c13
+    invdet = 1.0 / detJ
+    
+    # inv(J) = adj(J)/det, majd transzponálás, ha kell
+    return @SMatrix [c11*invdet  c21*invdet  c31*invdet;
+    c12*invdet  c22*invdet  c32*invdet;
+    c13*invdet  c23*invdet  c33*invdet]
+end
+
+@inline function inv2x2_fast(A11::Float64, A12::Float64, A21::Float64, A22::Float64)
+    detA = A11*A22 - A12*A21
+    invdet = 1.0 / detA
+    # [A11 A12; A21 A22]^{-1} = (1/det)[ A22 -A12; -A21 A11]
+    return @SMatrix [ A22*invdet  -A12*invdet;
+    -A21*invdet   A11*invdet]
+end
+
+# 2D B mátrix kitöltése
+@inline function fill_B_matrix!(B::Matrix{Float64}, ∂h::Matrix{Float64},
+    numNodes::Int, numIntPoints::Int, pdim::Int)
+    rowsOfB = 3
+    for k in 1:numIntPoints, l in 1:numNodes
+        B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+        B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+        B[k*rowsOfB-0, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+        B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+    end
+end
+
+# 3D B mátrix kitöltése
+@inline function fill_B_matrix!(B::Matrix{Float64}, ∂h::Matrix{Float64},
+    numNodes::Int, numIntPoints::Int, pdim::Int, ::Val{3})
+    rowsOfB = 6
+    for k in 1:numIntPoints, l in 1:numNodes
+        B[k*rowsOfB-5, l*pdim-2] = ∂h[1,(k-1)*numNodes+l]
+        B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+        B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+        B[k*rowsOfB-4, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+        B[k*rowsOfB-2, l*pdim-2] = ∂h[2,(k-1)*numNodes+l]
+        B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+        B[k*rowsOfB-3, l*pdim-0] = ∂h[3,(k-1)*numNodes+l]
+        B[k*rowsOfB-1, l*pdim-1] = ∂h[3,(k-1)*numNodes+l]
+        B[k*rowsOfB-0, l*pdim-2] = ∂h[3,(k-1)*numNodes+l]
+    end
+end
+
+# anyagmátrix és kísérő adatok
+@inline function constitutive_matrix(dim::Int, type::Symbol,
+    E::Float64, ν::Float64,
+    thickness::Float64)
+    
+    if dim == 3 && type == :Solid
+        D = (E / ((1 + ν) * (1 - 2ν))) * SMatrix{6,6}(
+        1-ν,   ν,   ν,   0,          0,          0,
+        ν,  1-ν,   ν,   0,          0,          0,
+        ν,   ν,  1-ν,  0,          0,          0,
+        0,   0,   0,  (1-2ν)/2,    0,          0,
+        0,   0,   0,   0,         (1-2ν)/2,    0,
+        0,   0,   0,   0,          0,         (1-2ν)/2
+        )
+        return D, 6, 1
+        
+    elseif dim == 2 && type == :PlaneStress
+        D = (E / (1 - ν^2)) * SMatrix{3,3}(
+        1,   ν,   0,
+        ν,   1,   0,
+        0,   0, (1-ν)/2
+        )
+        return D, 3, thickness
+        
+    elseif dim == 2 && type == :PlaneStrain
+        D = (E / ((1 + ν) * (1 - 2ν))) * SMatrix{3,3}(
+        1-ν,   ν,   0,
+        ν,  1-ν,   0,
+        0,   0, (1-2ν)/2
+        )
+        return D, 3, 1
+        
+    else
+        error("constitutive_matrix: unsupported dim/type combo")
+    end
+end
+
+function stiffnessMatrixSolid(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    #@info "One thread"
+    
+    # --- előszámítás ---
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+    gmsh.model.mesh.getElements(problem.dim, -1)
+    
+    lengthOfIJV = sum([
+    (div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all)
+    ])
+    
+    I  = Int[]
+    J  = Int[]
+    V  = Float64[]
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    
+    # --- anyagcsoportonként ---
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim, pdim = problem.dim, problem.pdim
+        
+        # anyagmátrix D + paraméterek
+        D, rowsOfB, b = constitutive_matrix(dim, problem.type, E, ν, problem.thickness)
+        
+        # --- fizikai csoport entitásai ---
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # --- érintett elemtípusok ---
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x -> push!(types_in_group, x), t)
+        end
+        
+        # --- típusonként ---
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order+1))
+            numIntPoints = length(intWeights)
+            
+            comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numIntPoints)
+            
+            elemTags_global, elemNodeTags_global = gmsh.model.mesh.getElementsByType(et)
+            
+            jac_all, det_all, coords_all = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            # tag → globális index map
+            idxmap = Dict{Int,Int}()
+            sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            ∂h = zeros(dim, numNodes * numIntPoints)
+            B  = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+            K1 = zeros(pdim*numNodes, pdim*numNodes)
+            nn2 = zeros(Int, pdim*numNodes)
+            
+            Iidx = [l for k in 1:pdim*numNodes, l in 1:pdim*numNodes]
+            Jidx = [k for k in 1:pdim*numNodes, l in 1:pdim*numNodes]
+            # --- csoportonként ---
+            for (edim, etag) in dimTags
+                if edim != problem.dim; continue; end
+                elemTags_local, elemNodeTags_local = gmsh.model.mesh.getElementsByType(et, etag)
+                if isempty(elemTags_local); continue; end
+                
+                nloc = length(elemTags_local)
+                nnet = zeros(Int, nloc, numNodes)
+                
+                fill!(nnet, 0)
+                fill!(nn2, 0)
+                
+                @inbounds for j in 1:nloc
+                    # node-tag-ek
+                    for k in 1:numNodes
+                        nnet[j,k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+                    
+                    gidx = idxmap[elemTags_local[j]]
+                    jac_slice = view(jac_all, gidx*9*nip + 1 : (gidx+1)*9*nip)
+                    det_slice = view(det_all, gidx*nip + 1   : (gidx+1)*nip)
+                    
+                    fill!(∂h, 0.0)
+                    
+                    @inbounds for k in 1:numIntPoints
+                        Jk = SMatrix{3,3}(jac_slice[(k-1)*9+1 : k*9])
+                        invJT = inv(Jk)'
+                        
+                        for l in 1:numNodes
+                            ∂h[1:dim, (k-1)*numNodes+l] =
+                            invJT[1:dim,1:dim] * ∇h_ref[l*3-2 : l*3-(3-dim), k]
+                        end
+                    end
+                    
+                    fill!(B, 0.0)
+                    if dim == 2
+                        fill_B_matrix!(B, ∂h, numNodes, numIntPoints, pdim)
+                    elseif dim == 3
+                        fill_B_matrix!(B, ∂h, numNodes, numIntPoints, pdim, Val(3))
+                    else
+                        error("Unsupported dimension for B matrix")
+                    end
+                    
+                    fill!(K1, 0.0)
+                    @inbounds for k in 1:numIntPoints
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 .+= B1' * D * B1 * b * det_slice[k] * intWeights[k]
+                    end
+                    
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] =
+                        pdim * nnet[j,1:numNodes] .- (pdim - k)
+                    end
+                    
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    I = nothing
+    J = nothing
+    V = nothing
+    GC.gc()
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixSolidOld2(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    @info "One thread"
+    
+    # --- előszámítás ---
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+    gmsh.model.mesh.getElements(problem.dim, -1)
+    
+    lengthOfIJV = sum([
+    (div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all)
+    ])
+    
+    #nn = Vector{Any}()
+    I  = Int[]
+    J  = Int[]
+    V  = Float64[]
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    
+    # --- anyagcsoportonként ---
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim, pdim = problem.dim, problem.pdim
+        
+        # anyagmátrix D
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+            1-ν  ν    ν    0            0            0;
+            ν    1-ν  ν    0            0            0;
+            ν    ν    1-ν  0            0            0;
+            0    0    0    (1-2ν)/2     0            0;
+            0    0    0    0            (1-2ν)/2     0;
+            0    0    0    0            0            (1-2ν)/2
+            ]
+            rowsOfB, b = 6, 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * @SMatrix [
+            1   ν   0;
+            ν   1   0;
+            0   0  (1-ν)/2
+            ]
+            rowsOfB, b = 3, problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+            1-ν   ν    0;
+            ν    1-ν   0;
+            0     0   (1-2ν)/2
+            ]
+            rowsOfB, b = 3, 1
+        else
+            error("stiffnessMatrixSolid: dimension=$(problem.dim), type=$(problem.type)")
+        end
+        
+        # --- fizikai csoport entitásai ---
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # --- érintett elemtípusok ---
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x -> push!(types_in_group, x), t)
+        end
+        
+        # --- típusonként ---
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order+1))
+            numIntPoints = length(intWeights)
+            
+            comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numIntPoints)
+            
+            elemTags_global, elemNodeTags_global = gmsh.model.mesh.getElementsByType(et)
+            
+            jac_all, det_all, coords_all = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            # tag → globális index map
+            idxmap = Dict{Int,Int}()
+            sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            ∂h = zeros(dim, numNodes * numIntPoints)
+            B  = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+            K1 = zeros(pdim*numNodes, pdim*numNodes)
+            nn2 = zeros(Int, pdim*numNodes)
+            
+            Iidx = [l for k in 1:pdim*numNodes, l in 1:pdim*numNodes]
+            Jidx = [k for k in 1:pdim*numNodes, l in 1:pdim*numNodes]
+            # --- csoportonként ---
+            for (edim, etag) in dimTags
+                if edim != problem.dim; continue; end
+                elemTags_local, elemNodeTags_local = gmsh.model.mesh.getElementsByType(et, etag)
+                if isempty(elemTags_local); continue; end
+                
+                nloc = length(elemTags_local)
+                nnet = zeros(Int, nloc, numNodes)
+                
+                fill!(nnet, 0)
+                fill!(nn2, 0)
+                
+                @inbounds for j in 1:nloc
+                    # node-tag-ek
+                    for k in 1:numNodes
+                        nnet[j,k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+                    
+                    gidx = idxmap[elemTags_local[j]]
+                    jac_slice = view(jac_all, gidx*9*nip + 1 : (gidx+1)*9*nip)
+                    det_slice = view(det_all, gidx*nip + 1   : (gidx+1)*nip)
+                    
+                    fill!(∂h, 0.0)
+                    
+                    @inbounds for k in 1:numIntPoints
+                        Jk = SMatrix{3,3}(jac_slice[(k-1)*9+1 : k*9])
+                        invJT = inv(Jk)'
+                        
+                        for l in 1:numNodes
+                            ∂h[1:dim, (k-1)*numNodes+l] =
+                            invJT[1:dim,1:dim] * ∇h_ref[l*3-2 : l*3-(3-dim), k]
+                        end
+                    end
+                    
+                    fill!(B, 0.0)
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-2] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = ∂h[3,(k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-1] = ∂h[3,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-2] = ∂h[3,(k-1)*numNodes+l]
+                        end
+                    end
+                    
+                    fill!(K1, 0.0)
+                    @inbounds for k in 1:numIntPoints
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 .+= B1' * D * B1 * b * det_slice[k] * intWeights[k]
+                    end
+                    
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] =
+                        pdim * nnet[j,1:numNodes] .- (pdim - k)
+                    end
+                    
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+                #push!(nn, nnet)
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixSolidParallelNew(problem; elements=[])
+    old_blas_threads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    @info "Parallel assembly"
+
+    gmsh.model.setCurrent(problem.name)
+
+    # előszámítás
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+        gmsh.model.mesh.getElements(problem.dim, -1)
+
+    lengthOfIJV = sum([
+        (div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.pdim)^2 *
+        length(elemTags_all[i]) for i in 1:length(elemTags_all)
+    ])
+
+    dof = problem.pdim * problem.non
+
+    nt = Threads.nthreads()
+    Ichunks = [Int[] for _ in 1:nt]
+    Jchunks = [Int[] for _ in 1:nt]
+    Vchunks = [Float64[] for _ in 1:nt]
+    for t in 1:nt
+        cap = max(1, cld(lengthOfIJV, nt))
+        sizehint!(Ichunks[t], cap)
+        sizehint!(Jchunks[t], cap)
+        sizehint!(Vchunks[t], cap)
+    end
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E, ν = problem.material[ipg].E, problem.material[ipg].ν
+        dim, pdim = problem.dim, problem.pdim
+
+        D, rowsOfB, b = constitutive_matrix(dim, problem.type, E, ν, problem.thickness)
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x -> push!(types_in_group, x), t)
+        end
+
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+                gmsh.model.mesh.getElementProperties(et)
+
+            intPoints, intWeights =
+                gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order+1))
+            numIntPoints = length(intWeights)
+
+            comp, dfun, ori =
+                gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numIntPoints)
+
+            elemTags_global, elemNodeTags_global =
+                gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, coords_all =
+                gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+
+            idxmap = Dict{Int,Int}()
+            sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+
+            for (edim, etag) in dimTags
+                if edim != problem.dim; continue; end
+                elemTags_local, elemNodeTags_local =
+                    gmsh.model.mesh.getElementsByType(et, etag)
+                if isempty(elemTags_local); continue; end
+
+                nloc     = length(elemTags_local)
+                dof_elem = pdim * numNodes
+
+                Iidx = [l for k in 1:dof_elem, l in 1:dof_elem]
+                Jidx = [k for k in 1:dof_elem, l in 1:dof_elem]
+
+                # minden szál kap egy workspace-et
+                W = [make_ws(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
+
+                Threads.@threads :static for j in 1:nloc
+                    tid = Threads.threadid()
+                    w   = W[tid]
+                    Iloc, Jloc, Vloc = Ichunks[tid], Jchunks[tid], Vchunks[tid]
+
+                    fill!(w.K1, 0.0)
+                    fill!(w.nn2, 0)
+
+                    @inbounds for k in 1:numNodes
+                        w.nnet[k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+
+                    gidx      = idxmap[elemTags_local[j]]
+                    jac_slice = view(jac_all, gidx*9*nip + 1 : (gidx+1)*9*nip)
+                    det_slice = view(det_all, gidx*nip + 1   : (gidx+1)*nip)
+
+                    fill!(w.dH, 0.0)
+                    @inbounds for k in 1:numIntPoints
+                        Jk    = SMatrix{3,3,Float64}(jac_slice[(k-1)*9+1 : k*9])
+                        invJT = inv(Jk)'
+                        for l in 1:numNodes
+                            w.dH[1:dim, (k-1)*numNodes+l] =
+                                invJT[1:dim,1:dim] * ∇h_ref[l*3-2 : l*3-(3-dim), k]
+                        end
+                    end
+
+                    fill!(w.B, 0.0)
+                    if dim == 2
+                        fill_B_matrix!(w.B, w.dH, numNodes, numIntPoints, pdim)
+                    else
+                        fill_B_matrix!(w.B, w.dH, numNodes, numIntPoints, pdim, Val(3))
+                    end
+
+                    # elem integráció közvetlenül itt, nem külön függvényben
+                    @inbounds for k in 1:numIntPoints
+                        B1 = view(w.B, k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dof_elem)
+                        w.K1 .+= B1' * D * B1 * b * det_slice[k] * intWeights[k]
+                    end
+
+                    for c in 1:pdim
+                        @simd for t = 1:numNodes
+                            w.nn2[(t-1)*pdim + c] = pdim*w.nnet[t] - (pdim - c)
+                        end
+                    end
+
+                    append!(Iloc, w.nn2[Iidx])
+                    append!(Jloc, w.nn2[Jidx])
+                    append!(Vloc, vec(w.K1))
+                end
+            end
+        end
+    end
+
+    I = reduce(vcat, Ichunks)
+    J = reduce(vcat, Jchunks)
+    V = reduce(vcat, Vchunks)
+
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+
+    BLAS.set_num_threads(old_blas_threads)
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixSolidParallel(problem; elements=[])
+    # --- BLAS szálak mentése + átállítása ---
+    old_blas_threads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    #@info "Multi threads"
+    
+    gmsh.model.setCurrent(problem.name)
+    
+    # Előszámítás I,J,V méretére
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+    gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([
+    (div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all)
+    ])
+    
+    I  = Int[]
+    J  = Int[]
+    V  = Float64[]
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    
+    # Anyagcsoportonként
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim, pdim = problem.dim, problem.pdim
+        
+        # anyagmátrix
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+            1-ν  ν    ν    0            0            0;
+            ν    1-ν  ν    0            0            0;
+            ν    ν    1-ν  0            0            0;
+            0    0    0    (1-2ν)/2     0            0;
+            0    0    0    0            (1-2ν)/2     0;
+            0    0    0    0            0            (1-2ν)/2
+            ]
+            rowsOfB, b = 6, 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * @SMatrix [
+            1   ν   0;
+            ν   1   0;
+            0   0  (1-ν)/2
+            ]
+            rowsOfB, b = 3, problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+            1-ν   ν    0;
+            ν    1-ν   0;
+            0     0   (1-2ν)/2
+            ]
+            rowsOfB, b = 3, 1
+        else
+            error("stiffnessMatrixSolidParallel: dimension=$(problem.dim), type=$(problem.type)")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # érintett elemtípusok
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x -> push!(types_in_group, x), t)
+        end
+        
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            intPoints, intWeights =
+            gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order+1))
+            numIntPoints = length(intWeights)
+            
+            comp, dfun, ori =
+            gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numIntPoints)
+            
+            elemTags_global, elemNodeTags_global =
+            gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, coords_all =
+            gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            # gyors tag→index map
+            idxmap = Dict{Int,Int}()
+            sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            # csoportonként
+            for (edim, etag) in dimTags
+                if edim != problem.dim; continue; end
+                elemTags_local, elemNodeTags_local =
+                gmsh.model.mesh.getElementsByType(et, etag)
+                if isempty(elemTags_local); continue; end
+                
+                nloc     = length(elemTags_local)
+                dof_elem = pdim * numNodes
+                
+                # szálankénti puffer
+                nt  = Threads.nthreads()
+                Is  = [Int[] for _ in 1:nt]
+                Js  = [Int[] for _ in 1:nt]
+                Vs  = [Float64[] for _ in 1:nt]
+                for t in 1:nt
+                    sizehint!(Is[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Js[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Vs[t], dof_elem^2 * cld(nloc, nt))
+                end
+                
+                Iidx = [l for k in 1:dof_elem, l in 1:dof_elem]
+                Jidx = [k for k in 1:dof_elem, l in 1:dof_elem]
+                
+                # workspace-ek létrehozása
+                W = [make_ws(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
+                
+                Threads.@threads :static for j in 1:nloc
+                    tid = Threads.threadid()
+                    w   = W[tid]
+                    Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
+                    
+                    fill!(w.K1, 0.0)
+                    fill!(w.nn2, 0)
+                    
+                    # node-tag-ek
+                    for k in 1:numNodes
+                        w.nnet[k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+                    
+                    # globális index + jac szelet
+                    gidx      = idxmap[elemTags_local[j]]
+                    jac_slice = view(jac_all, gidx*9*nip + 1 : (gidx+1)*9*nip)
+                    det_slice = view(det_all, gidx*nip + 1   : (gidx+1)*nip)
+                    
+                    fill!(w.dH, 0.0)
+                    for k in 1:numIntPoints
+                        Jk    = SMatrix{3,3,Float64}(jac_slice[(k-1)*9+1 : k*9])
+                        invJT = inv(Jk)'
+                        
+                        for l in 1:numNodes
+                            w.dH[1:dim, (k-1)*numNodes+l] =
+                            invJT[1:dim,1:dim] * ∇h_ref[l*3-2 : l*3-(3-dim), k]
+                        end
+                    end
+                    
+                    fill!(w.B, 0.0)
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            w.B[k*rowsOfB-0, l*pdim-0] = w.dH[1,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-2, l*pdim-1] = w.dH[1,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-0, l*pdim-1] = w.dH[2,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-1, l*pdim-0] = w.dH[2,(k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            w.B[k*rowsOfB-5, l*pdim-2] = w.dH[1,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-2, l*pdim-1] = w.dH[1,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-0, l*pdim-0] = w.dH[1,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-4, l*pdim-1] = w.dH[2,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-2, l*pdim-2] = w.dH[2,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-1, l*pdim-0] = w.dH[2,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-3, l*pdim-0] = w.dH[3,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-1, l*pdim-1] = w.dH[3,(k-1)*numNodes+l]
+                            w.B[k*rowsOfB-0, l*pdim-2] = w.dH[3,(k-1)*numNodes+l]
+                        end
+                    end
+                    
+                    for k in 1:numIntPoints
+                        B1 = view(w.B, k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dof_elem)
+                        w.K1 .+= B1' * D * B1 * b * det_slice[k] * intWeights[k]
+                    end
+                    
+                    for c in 1:pdim
+                        w.nn2[c:pdim:dof_elem] = pdim .* w.nnet .- (pdim - c)
+                    end
+                    
+                    append!(Iᵗ, w.nn2[Iidx[:]])
+                    append!(Jᵗ, w.nn2[Jidx[:]])
+                    append!(Vᵗ, w.K1[:])
+                end
+                
+                append!(I, vcat(Is...))
+                append!(J, vcat(Js...))
+                append!(V, vcat(Vs...))
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    
+    # --- BLAS szálak visszaállítása ---
+    BLAS.set_num_threads(old_blas_threads)
+    
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixSolidOld(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim = problem.dim
+        pdim = problem.pdim
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+            ν 1-ν ν 0 0 0;
+            ν ν 1-ν 0 0 0;
+            0 0 0 (1-2ν)/2 0 0;
+            0 0 0 0 (1-2ν)/2 0;
+            0 0 0 0 0 (1-2ν)/2]
+            
+            rowsOfB = 6
+            b = 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * [1 ν 0;
+            ν 1 0;
+            0 0 (1-ν)/2]
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
+            ν 1-ν 0;
+            0 0 (1-2ν)/2]
+            rowsOfB = 3
+            b = 1
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                #display("numIntPoints = $numIntPoints")
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                @inbounds for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = @inline gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    @inbounds for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = @inline inv(Jac[1:3, 3*k-2:3*k])'
+                    end
+                    ∂h .*= 0
+                    @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    K1 .*= 0
+                    @inbounds for k in 1:numIntPoints
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 += B1' * D * B1 * b * jacDet[k] * intWeights[k]
+                    end
+                    @inbounds for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixAXI(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    
+    # I,J,V becslés
+    elemTypes_all, elemTags_all, elemNodeTags_all = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum(((div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2) *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all))
+    
+    I = Int[]; J = Int[]; V = Float64[]
+    sizehint!(I, lengthOfIJV); sizehint!(J, lengthOfIJV); sizehint!(V, lengthOfIJV)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim, pdim = problem.dim, problem.pdim
+        
+        @assert dim == 2 && problem.type == :AxiSymmetric "stiffnessMatrixAXI: dim=2 és :AxiSymmetric kell."
+        
+        # Anyagmátrix (4×4) – [εrr, εzz, εθθ, γrz] sorrenddel
+        D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+        1-ν  ν    ν    0;
+        ν    1-ν  ν    0;
+        ν    ν    1-ν  0;
+        0    0     0   (1-2ν)/2
+        ]
+        rowsOfB = 4
+        b = 1.0     # axi: “vastagság” tényező normálisan 1
+        
+        # a teljes 2D háló csomópont-koordinátái (R, Z a 3D X,Y-ból: R=X, Z=Y)
+        #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+        nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+        ncoord2 = zeros(3 * problem.non)
+        ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]   # R (X)
+        ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]   # Z (Y)
+        ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]   # (unused)
+        
+        # A fizikai csoport entitásai
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # érintett elemtípusok
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x->push!(types_in_group, x), t)
+        end
+        
+        # típusonként
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            # kvadratúra + alakfüggvények
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order + 1))
+            numIntPoints = length(intWeights)
+            
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numIntPoints)
+            
+            _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h_ref = reshape(fun, :, numIntPoints)
+            
+            # típushoz tartozó összes elem jacobiánjai (előre)
+            elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            # gyors elemTag→glob.index map
+            idxmap = Dict{Int,Int}(); sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            # a csoport elemei
+            for (edim, etag) in dimTags
+                edim == dim || continue
+                elemTags_local, elemNodeTags_local = gmsh.model.mesh.getElementsByType(et, etag)
+                isempty(elemTags_local) && continue
+                
+                nloc     = length(elemTags_local)
+                dof_elem = pdim * numNodes
+                
+                # munkaterek (újrafelhasználható tömbök)
+                dH = zeros(dim, numNodes * numIntPoints)
+                B  = zeros(rowsOfB * numIntPoints, dof_elem)
+                K1 = zeros(dof_elem, dof_elem)
+                nn2 = zeros(Int, dof_elem)
+                r  = zeros(numIntPoints)
+                nnet = zeros(Int, nloc, numNodes)
+                
+                # indexlisták (I,J) – kész mintaelemhez
+                Iidx = repeat(1:dof_elem, inner=dof_elem)
+                Jidx = repeat(1:dof_elem, outer=dof_elem)
+                
+                @inbounds for j in 1:nloc
+                    # lokális csomópont-címkék
+                    for k in 1:numNodes
+                        nnet[j,k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+                    
+                    # jacobián-szeletek
+                    gidx      = idxmap[elemTags_local[j]]
+                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
+                    det_slice = @view det_all[gidx*nip + 1   : (gidx+1)*nip]
+                    
+                    fill!(dH, 0.0)
+                    fill!(r, 0.0)
+                    
+                    @inbounds for k in 1:numIntPoints
+                        # 3×3 inv(J)^T
+                        Jk    = SMatrix{3,3,Float64}(jac_slice[(k-1)*9+1 : k*9])
+                        invJT = inv(Jk)'
+                        
+                        # ∂h = invJT[1:2,1:2]*∇h_ref(•)
+                        @inbounds for l in 1:numNodes
+                            dH[1:dim, (k-1)*numNodes+l] =
+                            invJT[1:dim,1:dim] * ∇h_ref[l*3-2 : l*3-(3-dim), k]
+                        end
+                        
+                        # sugár r(k) = Σ_l h_l(k) * R_l
+                        # (R_l = ncoord2[ node*3-2 ])
+                        r[k] = dot(@view(h_ref[:,k]), ncoord2[nnet[j,:] .* 3 .- 2])
+                    end
+                    
+                    # B mátrix felépítése
+                    fill!(B, 0.0)
+                    @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                        # ε_rr
+                        B[k*rowsOfB-3, l*pdim-1] = dH[1,(k-1)*numNodes+l]
+                        # ε_zz
+                        B[k*rowsOfB-2, l*pdim-0] = dH[2,(k-1)*numNodes+l]
+                        # ε_θθ = u_r / r
+                        B[k*rowsOfB-1, l*pdim-1] = h_ref[l,k] / r[k]
+                        # γ_rz
+                        B[k*rowsOfB-0, l*pdim-1] = dH[2,(k-1)*numNodes+l]
+                        B[k*rowsOfB-0, l*pdim-0] = dH[1,(k-1)*numNodes+l]
+                    end
+                    
+                    # elem-mátrix
+                    fill!(K1, 0.0)
+                    @inbounds for k in 1:numIntPoints
+                        @views B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dof_elem]
+                        K1 .+= (B1' * D * B1) * (2π * r[k] * det_slice[k] * intWeights[k] * b)
+                    end
+                    
+                    # globális indexek (nn2)
+                    @inbounds for c in 1:pdim
+                        nn2[c:pdim:dof_elem] = pdim .* nnet[j,1:numNodes] .- (pdim - c)
+                    end
+                    
+                    # illesztés
+                    append!(I, nn2[Iidx]); append!(J, nn2[Jidx]); append!(V, K1[:])
+                end
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixAXIParallel(problem; elements=[])
+    # BLAS szálak kikapcs. szálonkénti szorzások miatt
+    old_blas_threads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    
+    gmsh.model.setCurrent(problem.name)
+    
+    # I,J,V becslés
+    elemTypes_all, elemTags_all, elemNodeTags_all = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum(((div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2) *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all))
+    I = Int[]; J = Int[]; V = Float64[]
+    sizehint!(I, lengthOfIJV); sizehint!(J, lengthOfIJV); sizehint!(V, lengthOfIJV)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim, pdim = problem.dim, problem.pdim
+        
+        @assert dim == 2 && problem.type == :AxiSymmetric "stiffnessMatrixAXIParallel: dim=2 és :AxiSymmetric kell."
+        
+        D = E / ((1 + ν) * (1 - 2ν)) * @SMatrix [
+        1-ν  ν    ν    0;
+        ν    1-ν  ν    0;
+        ν    ν    1-ν  0;
+        0     0    0   (1-2ν)/2
+        ]
+        rowsOfB = 4
+        b = 1.0
+        
+        # teljes 2D háló csomópont-koordináták (R = X)
+        #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+        nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+        ncoord2 = zeros(3 * problem.non)
+        ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]
+        ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]
+        ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # érintett elemtípusok
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x->push!(types_in_group, x), t)
+        end
+        
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order + 1))
+            numIntPoints = length(intWeights)
+            
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numIntPoints)
+            
+            _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h_ref = reshape(fun, :, numIntPoints)
+            
+            elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            idxmap = Dict{Int,Int}(); sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            for (edim, etag) in dimTags
+                edim == dim || continue
+                elemTags_local, elemNodeTags_local = gmsh.model.mesh.getElementsByType(et, etag)
+                isempty(elemTags_local) && continue
+                
+                nloc     = length(elemTags_local)
+                dof_elem = pdim * numNodes
+                
+                # szálankénti gyűjtők
+                nt = Threads.nthreads()
+                Is = [Int[] for _ in 1:nt]
+                Js = [Int[] for _ in 1:nt]
+                Vs = [Float64[] for _ in 1:nt]
+                for t in 1:nt
+                    sizehint!(Is[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Js[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Vs[t], dof_elem^2 * cld(nloc, nt))
+                end
+                
+                Iidx = repeat(1:dof_elem, inner=dof_elem)
+                Jidx = repeat(1:dof_elem, outer=dof_elem)
+                
+                # workspace-ek
+                W = [make_ws_axi(dim, numNodes, numIntPoints, rowsOfB, dof_elem) for _ in 1:nt]
+                
+                Threads.@threads :static for j in 1:nloc
+                    tid = Threads.threadid()
+                    w = W[tid]
+                    Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
+                    
+                    fill!(w.K1, 0.0); fill!(w.nn2, 0)
+                    
+                    # csomópont-címkék az elemhez
+                    @inbounds for k in 1:numNodes
+                        w.nnet[k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+                    
+                    # jac szeletek
+                    gidx      = idxmap[elemTags_local[j]]
+                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
+                    det_slice = @view det_all[gidx*nip + 1   : (gidx+1)*nip]
+                    
+                    fill!(w.dH, 0.0); fill!(w.r, 0.0)
+                    @inbounds for k in 1:numIntPoints
+                        Jk    = SMatrix{3,3,Float64}(jac_slice[(k-1)*9+1 : k*9])
+                        invJT = inv(Jk)'
+                        @inbounds for l in 1:numNodes
+                            w.dH[1:dim, (k-1)*numNodes+l] =
+                            invJT[1:dim,1:dim] * ∇h_ref[l*3-2 : l*3-(3-dim), k]
+                        end
+                        w.r[k] = dot(@view(h_ref[:,k]), ncoord2[w.nnet .* 3 .- 2])
+                    end
+                    
+                    fill!(w.B, 0.0)
+                    @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                        # ε_rr
+                        w.B[k*rowsOfB-3, l*pdim-1] = w.dH[1,(k-1)*numNodes+l]
+                        # ε_zz
+                        w.B[k*rowsOfB-2, l*pdim-0] = w.dH[2,(k-1)*numNodes+l]
+                        # ε_θθ
+                        w.B[k*rowsOfB-1, l*pdim-1] = h_ref[l,k] / w.r[k]
+                        # γ_rz
+                        w.B[k*rowsOfB-0, l*pdim-1] = w.dH[2,(k-1)*numNodes+l]
+                        w.B[k*rowsOfB-0, l*pdim-0] = w.dH[1,(k-1)*numNodes+l]
+                    end
+                    
+                    @inbounds for k in 1:numIntPoints
+                        @views B1 = w.B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:dof_elem]
+                        w.K1 .+= (B1' * D * B1) * (2π * w.r[k] * det_slice[k] * intWeights[k] * b)
+                    end
+                    
+                    @inbounds for c in 1:pdim
+                        w.nn2[c:pdim:dof_elem] = pdim .* w.nnet .- (pdim - c)
+                    end
+                    
+                    append!(Iᵗ, w.nn2[Iidx]); append!(Jᵗ, w.nn2[Jidx]); append!(Vᵗ, w.K1[:])
+                end
+                
+                append!(I, vcat(Is...)); append!(J, vcat(Js...)); append!(V, vcat(Vs...))
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    
+    BLAS.set_num_threads(old_blas_threads)
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixAXIOld(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim = problem.dim
+        pdim = problem.pdim
+        if problem.dim == 2 && problem.type == :AxiSymmetric
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
+            ν 1-ν ν 0;
+            ν ν 1-ν 0;
+            0 0 0 (1-2ν)/2]
+            
+            rowsOfB = 4
+        else
+            error("stiffnessMatrixAxiSymmetric: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                r = zeros(numIntPoints)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 4
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-3, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = B[k*rowsOfB-0, l*pdim-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-1] = h[l, k] / r[k]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    K1 .*= 0
+                    for k in 1:numIntPoints
+                        #r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 += 2π * B1' * D * B1 * r[k] * jacDet[k] * intWeights[k]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+function stiffnessMatrixTruss(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(1, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        A = problem.material[ipg].A
+        dim = problem.dim
+        pdim = problem.pdim
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            if edim ≠ 1
+                error("stiffnessMatrixTruss: not 1D elements.")
+            end
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(1, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                if numNodes ≠ 2
+                    error("stiffnessMatrixTruss: truss element must have exactly two nodes.")
+                end
+                #intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                #numIntPoints = length(intWeights)
+                #comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                #∇h = reshape(dfun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                #invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                #∂h = zeros(dim, numNodes * numIntPoints)
+                #B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    #Jac = reshape(jac, 3, :)
+                    #for k in 1:numIntPoints
+                    #    invJac[1:3, 3*k-2:3*k] = @inline inv(Jac[1:3, 3*k-2:3*k])'
+                    #end
+                    #∂h .*= 0
+                    #for k in 1:numIntPoints, l in 1:numNodes
+                    #    ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    #end
+                    #B .*= 0
+                    #if dim == 2 && rowsOfB == 3
+                    #    for k in 1:numIntPoints, l in 1:numNodes
+                    #        B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #    end
+                    #elseif dim == 3 && rowsOfB == 6
+                    #    for k in 1:numIntPoints, l in 1:numNodes
+                    #        B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                    #    end
+                    #else
+                    #    error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    #end
+                    #K1 .*= 0
+                    #for k in 1:numIntPoints
+                    #    B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                    #    K1 += B1' * D * B1 * b * jacDet[k] * intWeights[k]
+                    #end
+                    K0 = [1 -1; -1 1]
+                    x1 = ncoord2[nnet[j, 1] * 3 .- 2]
+                    y1 = ncoord2[nnet[j, 1] * 3 .- 1]
+                    z1 = ncoord2[nnet[j, 1] * 3 .- 0]
+                    x2 = ncoord2[nnet[j, 2] * 3 .- 2]
+                    y2 = ncoord2[nnet[j, 2] * 3 .- 1]
+                    z2 = ncoord2[nnet[j, 2] * 3 .- 0]
+                    L = √((x2 - x1)^2 + (y2 - y1)^2 + (z2 - z1)^2)
+                    c1 = (x2 - x1) / L
+                    c2 = (y2 - y1) / L
+                    c3 = (z2 - z1) / L
+                    T = [c1 c2 c3 0 0 0; 0 0 0 c1 c2 c3]
+                    k1 = A * E / L
+                    K1 = k1 * T' * K0 * T
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+"""
+    nonLinearStiffnessMatrix(q::VectorField)
+
+Solves the nonlinear stiffness matrix of the `problem`. `q` is a displacement field.
+                        
+Returns: `stiffMat`
+                        
+Types:
+- `problem`: Problem
+- `q`: VectorField
+- `stiffMat`: SystemMatrix
+# Element selection
+
+`elements=[]` assembles the material-group elements. A nonempty list restricts
+the element tags included by the legacy assembly kernel. For a new DSL model,
+select a physical group through `Ω` or `Γ` in [`∫`](@ref).
+"""
+function nonLinearStiffnessMatrix(q; elements=[])
+    problem = q.model
+    if problem.type == :AxiSymmetric
+        return nonLinearStiffnessMatrixAXI(problem, elements=elements)
+    else
+        return nonLinearStiffnessMatrixSolid(q, elements=elements)
+    end
+end
+
+function nonLinearStiffnessMatrixSolid(q; elements=[])
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    S1 = zeros(problem.dim, problem.dim)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim = problem.dim
+        pdim = problem.pdim
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+            ν 1-ν ν 0 0 0;
+            ν ν 1-ν 0 0 0;
+            0 0 0 (1-2ν)/2 0 0;
+            0 0 0 0 (1-2ν)/2 0;
+            0 0 0 0 0 (1-2ν)/2]
+            
+            rowsOfB = 6
+            b = 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * [1 ν 0;
+            ν 1 0;
+            0 0 (1-ν)/2]
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
+            ν 1-ν 0;
+            0 0 (1-2ν)/2]
+            rowsOfB = 3
+            b = 1
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                #comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                #h = reshape(fun, :, numIntPoints)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                ∂H = zeros(dim * numIntPoints, numNodes)
+                B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                K0 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                #for k in 1:numIntPoints, l in 1:numNodes
+                #    for kk in 1:pdim
+                #        H[k*pdim-(pdim-kk), l*pdim-(pdim-kk)] = h[(k-1)*numNodes+l]
+                #    end
+                #end
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = @inline inv(Jac[1:3, 3*k-2:3*k])'
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    B .*= 0
+                    ∂H .*= 0
+                    if dim == 2 && rowsOfB == 3
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                            ∂H[k*pdim*dim-3, l*pdim-1] = ∂H[k*pdim*dim-1, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            ∂H[k*pdim*dim-2, l*pdim-1] = ∂H[k*pdim*dim-0, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                            ∂H[k*dim-2, l] = ∂h[1, (k-1)*numNodes+l]
+                            ∂H[k*dim-1, l] = ∂h[2, (k-1)*numNodes+l]
+                            ∂H[k*dim-0, l] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    else
+                        error("nonLinearStiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    K1 .*= 0
+                    q1 = q.a[nn2]
+                    for k in 1:numIntPoints
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        ∂H1 = ∂H[k*dim-(dim-1):k*dim, 1:numNodes]
+                        σ1 = D * B1 * q1
+                        if problem.type == :Solid
+                            S1[1,1] = σ1[1]
+                            S1[2,2] = σ1[2]
+                            S1[3,3] = σ1[3]
+                            S1[1,2] = S1[2,1] = σ1[4]
+                            S1[2,3] = S1[3,2] = σ1[5]
+                            S1[3,1] = S1[1,3] = σ1[6]
+                        else
+                            error("nonLinearStiffnessMatrix: only 'Solid' is implemented")
+                        end
+                        K0 = ∂H1' * S1 * ∂H1 * b * jacDet[k] * intWeights[k]
+                        for kk in 1:3
+                            K1[kk:dim:dim*numNodes, kk:dim:dim*numNodes] += K0
+                        end
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+function nonLinearStiffnessMatrixAXI(problem; elements=[])
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        dim = problem.dim
+        pdim = problem.pdim
+        if problem.dim == 2 && problem.type == :AxiSymmetric
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
+            ν 1-ν ν 0;
+            ν ν 1-ν 0;
+            0 0 0 (1-2ν)/2]
+            
+            rowsOfB = 4
+        else
+            error("stiffnessMatrixAxiSymmetric: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                ∇h = reshape(dfun, :, numIntPoints)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                ∂h = zeros(dim, numNodes * numIntPoints)
+                B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                K1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                r = zeros(numIntPoints)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    for k in 1:numIntPoints
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    ∂h .*= 0
+                    for k in 1:numIntPoints, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+                    B .*= 0
+                    if dim == 2 && rowsOfB == 4
+                        for k in 1:numIntPoints, l in 1:numNodes
+                            B[k*rowsOfB-3, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-1, l*pdim-0] = B[k*rowsOfB-0, l*pdim-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-2, l*pdim-1] = h[l, k] / r[k]
+                        end
+                    else
+                        error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    K1 .*= 0
+                    for k in 1:numIntPoints
+                        #r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                        B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                        K1 += 2π * B1' * D * B1 * r[k] * jacDet[k] * intWeights[k]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, K1[:])
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    K = sparse(I, J, V, dof, dof)
+    dropzeros!(K)
+    return SystemMatrix(K, problem)
+end
+
+"""
+    massMatrix(problem; lumped=true)
+
+Solves the mass matrix of the `problem`. If `lumped` is true, computes the lumped mass matrix.
+                        
+Returns: `massMat`
+                        
+Types:
+- `problem`: Problem
+- `lumped`: Boolean
+- `massMat`: SystemMatrix
+                        
+# Examples
+                        
+```julia
+M = massMatrix(problem; lumped=true)
+```
+"""
+function massMatrix(problem; lumped=true)
+    if problem.type == :Truss
+        return massMatrixTruss(problem, lumped=lumped)
+    elseif Threads.nthreads() == 1 || problem.non < 5e4
+        return massMatrixSolid(problem, lumped=lumped)
+    elseif Threads.nthreads() > 1
+        return massMatrixSolidParallel(problem, lumped=lumped)
+        #return massMatrixSolid(problem, lumped=lumped)
+    end
+end
+
+function massMatrixSolid(problem; elements = [], lumped::Bool = true)
+    gmsh.model.setCurrent(problem.name)
+    
+    # --- I,J,V becslés a jobb allokációkhoz ---
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+    gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum(((div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.pdim)^2) *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all))
+    
+    I = Int[]; J = Int[]; V = Float64[]
+    sizehint!(I, lengthOfIJV); sizehint!(J, lengthOfIJV); sizehint!(V, lengthOfIJV)
+    
+    # --- anyagcsoportonként ---
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ρ   = problem.material[ipg].ρ
+        dim = problem.dim
+        pdim = problem.pdim
+        
+        rowsOfH, b =
+        if     dim == 3 && problem.type == :Solid       ; (3, 1.0)
+        elseif dim == 2 && problem.type == :PlaneStress ; (2, problem.thickness)
+        elseif dim == 2 && problem.type == :PlaneStrain ; (2, 1.0)
+        elseif dim == 2 && problem.type == :AxiSymmetric; (2, 1.0)
+        else
+            error("massMatrixSolid: unsupported dim=$(problem.dim), type=$(problem.type)")
+        end
+        
+        # AXI-hoz szükséges a R koordináta (R=X)
+        ncoord2 = zeros(3 * problem.non)
+        if problem.type == :AxiSymmetric
+            #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)] # R
+            ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)] # Z
+            ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # érintett elemtípusok a csoportban
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x->push!(types_in_group, x), t)
+        end
+        
+        # --- típusonként ---
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            # kvadratúra + Lagrange alakfüggvény
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order + 1))
+            numIntPoints = length(intWeights)
+            
+            _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h_ref = reshape(fun, :, numIntPoints)
+            
+            # H mátrix (csak a h értékeket ismételjük a pdim komponensre)
+            dof_elem = pdim * numNodes
+            H = zeros(rowsOfH * numIntPoints, dof_elem)
+            @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                val = h_ref[l, k]
+                for c in 1:pdim
+                    # 2D-ben rowsOfH==pdim (PlaneStress/Strain/Axi); 3D-ben rowsOfH=3, pdim=3 → stimmel
+                    H[k*pdim-(pdim-c), l*pdim-(pdim-c)] = val
+                end
+            end
+            
+            # Jacobianok előre a típus összes elemére
+            elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            # elemTag -> globális index
+            idxmap = Dict{Int,Int}(); sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            # --- a csoport elemei ---
+            for (edim, etag) in dimTags
+                edim == dim || continue
+                elemTags_local, elemNodeTags_local =
+                gmsh.model.mesh.getElementsByType(et, etag)
+                isempty(elemTags_local) && continue
+                
+                nloc = length(elemTags_local)
+                nnet = zeros(Int, nloc, numNodes)
+                
+                # fix indexminták (I,J)
+                Iidx = repeat(1:dof_elem, inner=dof_elem)
+                Jidx = repeat(1:dof_elem, outer=dof_elem)
+                
+                # munka pufferek
+                M1  = zeros(dof_elem, dof_elem)
+                nn2 = zeros(Int, dof_elem)
+                r   = (problem.type == :AxiSymmetric) ? zeros(numIntPoints) : Float64[]
+                
+                @inbounds for j in 1:nloc
+                    # node címkék
+                    for k in 1:numNodes
+                        nnet[j,k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+                    
+                    # Jacobian szeletek
+                    gidx      = idxmap[elemTags_local[j]]
+                    det_slice = @view det_all[gidx*nip + 1 : (gidx+1)*nip]
+                    
+                    fill!(M1, 0.0)
+                    
+                    if problem.type != :AxiSymmetric
+                        @inbounds for k in 1:numIntPoints
+                            @views H1 = H[k*pdim-(pdim-1):k*pdim, 1:dof_elem]
+                            # ρ*b * ∫ HᵀH detJ w
+                            M1 .+= (H1' * H1) * (det_slice[k] * intWeights[k])
+                        end
+                        M1 .*= (ρ * b)
+                    else
+                        # axi: r(k) kiszámítása
+                        @inbounds for k in 1:numIntPoints
+                            r[k] = dot(@view(h_ref[:,k]), ncoord2[nnet[j,:] .* 3 .- 2]) # R=X
+                        end
+                        @inbounds for k in 1:numIntPoints
+                            @views H1 = H[k*pdim-(pdim-1):k*pdim, 1:dof_elem]
+                            # 2π ρ b ∫ HᵀH r detJ w
+                            M1 .+= (H1' * H1) * (r[k] * det_slice[k] * intWeights[k])
+                        end
+                        M1 .*= (2π * ρ * b)
+                    end
+                    
+                    # globális indexelés
+                    @inbounds for c in 1:pdim
+                        nn2[c:pdim:dof_elem] = pdim .* nnet[j,1:numNodes] .- (pdim - c)
+                    end
+                    
+                    append!(I, nn2[Iidx]); append!(J, nn2[Jidx]); append!(V, M1[:])
+                end
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    M = sparse(I, J, V, dof, dof)
+    if lumped
+        M = spdiagm(vec(sum(M, dims = 2)))  # diagonál (row-sum)
+    end
+    dropzeros!(M)
+    return SystemMatrix(M, problem)
+end
+
+function massMatrixSolid0(problem; elements=[], lumped=true)
+    gmsh.model.setCurrent(problem.name)
+    
+    # felső becslés I,J,V hosszára
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+    gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all)])
+    
+    I  = Int[]
+    J  = Int[]
+    V  = Float64[]
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    
+    # globális koordináták (axi esethez kell R=x)
+    #nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes(problem.dim, -1, true, false)
+    nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes()
+    ncoord2 = zeros(3 * problem.non)
+    ncoord2[nodeTags_all .* 3 .- 2] = ncoord_all[1:3:end]
+    ncoord2[nodeTags_all .* 3 .- 1] = ncoord_all[2:3:end]
+    ncoord2[nodeTags_all .* 3 .- 0] = ncoord_all[3:3:end]
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ρ      = problem.material[ipg].ρ
+        dim    = problem.dim
+        pdim   = problem.pdim
+        
+        rowsOfH, b = if problem.dim == 3 && problem.type == :Solid
+            (3, 1.0)
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            (2, problem.thickness)
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            (2, 1.0)
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            (2, 1.0)
+        else
+            error("massMatrixSolid: dimension=$(problem.dim), type=$(problem.type)")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # érintett elemtípusok
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x->push!(types_in_group, x), t)
+        end
+        
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            # kvadratúra + alakfüggvények
+            intPoints, intWeights =
+            gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order + 1))
+            numIntPoints = length(intWeights)
+            
+            _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h_ref = reshape(fun, :, numIntPoints)   # (numNodes × numIntPoints)
+            
+            # globális (típusonként) elemlisták + jacobianok bulkban
+            elemTags_global, elemNodeTags_global = gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            # elemTag → 0-based index a jac_all/det_all szeleteléshez
+            idxmap = Dict{Int,Int}()
+            for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            # végig a fizikai csoport elemein
+            for (edim2, etag) in dimTags
+                if edim2 != problem.dim; continue; end
+                elemTags_local, elemNodeTags_local =
+                gmsh.model.mesh.getElementsByType(et, etag)
+                if isempty(elemTags_local); continue; end
+                
+                nloc     = length(elemTags_local)
+                dof_elem = pdim * numNodes
+                
+                # scatter indexek
+                Iidx = [l for k in 1:dof_elem, l in 1:dof_elem]
+                Jidx = [k for k in 1:dof_elem, l in 1:dof_elem]
+                
+                # H mátrix előkészítése (shape-függvény × dof)
+                H = zeros(pdim*numIntPoints, dof_elem)
+                for k in 1:numIntPoints, l in 1:numNodes
+                    for kk in 1:pdim
+                        H[(k-1)*pdim + kk, l*pdim - (pdim-kk)] = h_ref[l,k]
+                    end
+                end
+                
+                @inbounds for j in 1:nloc
+                    # elem csomópont tagjei
+                    nnet = zeros(Int, numNodes)
+                    @inbounds for k in 1:numNodes
+                        nnet[k] = elemNodeTags_local[(j-1)*numNodes + k]
+                    end
+                    
+                    # jacobik szeletei
+                    gidx      = idxmap[elemTags_local[j]]
+                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
+                    det_slice = @view det_all[gidx*nip + 1   : (gidx+1)*nip]
+                    
+                    # helyi M1
+                    M1 = MMatrix{dof_elem,dof_elem,Float64}(undef)
+                    fill!(M1, 0.0)
+                    
+                    if problem.type != :AxiSymmetric
+                        @inbounds for k in 1:numIntPoints
+                            H1 = SMatrix{pdim,dof_elem,Float64}(H[(k-1)*pdim+1:k*pdim, 1:dof_elem])
+                            G  = H1' * H1 * det_slice[k] * intWeights[k]
+                            M1 .+= G
+                        end
+                        M1 .*= ρ * b
+                    else
+                        @inbounds for k in 1:numIntPoints
+                            # r(IP) = Σ_l h_l(IP) * R_l
+                            acc = 0.0
+                            @inbounds for l in 1:numNodes
+                                Rl = ncoord2[nnet[l]*3 - 2]
+                                acc += h_ref[l,k] * Rl
+                            end
+                            r = acc
+                            H1 = SMatrix{pdim,dof_elem,Float64}(H[(k-1)*pdim+1:k*pdim, 1:dof_elem])
+                            G  = H1' * H1 * det_slice[k] * intWeights[k] * r
+                            M1 .+= G
+                        end
+                        M1 .*= 2π * ρ * b
+                    end
+                    
+                    # globális dof-indexek
+                    nn2 = MVector{dof_elem,Int}(undef)
+                    @inbounds for c in 1:pdim
+                        nn2[c:pdim:dof_elem] = pdim .* nnet .- (pdim - c)
+                    end
+                    
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, M1[:])
+                end
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    M = sparse(I, J, V, dof, dof)
+    if lumped
+        M = spdiagm(vec(sum(M, dims=2)))
+    end
+    dropzeros!(M)
+    return SystemMatrix(M, problem)
+end
+
+function massMatrixSolidParallel(problem; elements = [], lumped::Bool = true)
+    # BLAS szálak mentése + 1 szálra állítás
+    old_blas_threads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    
+    gmsh.model.setCurrent(problem.name)
+    
+    # --- I,J,V becslés ---
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+    gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum(((div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.pdim)^2) *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all))
+    
+    I = Int[]; J = Int[]; V = Float64[]
+    sizehint!(I, lengthOfIJV); sizehint!(J, lengthOfIJV); sizehint!(V, lengthOfIJV)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ρ   = problem.material[ipg].ρ
+        dim = problem.dim
+        pdim = problem.pdim
+        
+        rowsOfH, b =
+        if     dim == 3 && problem.type == :Solid       ; (3, 1.0)
+        elseif dim == 2 && problem.type == :PlaneStress ; (2, problem.thickness)
+        elseif dim == 2 && problem.type == :PlaneStrain ; (2, 1.0)
+        elseif dim == 2 && problem.type == :AxiSymmetric; (2, 1.0)
+        else
+            error("massMatrixSolidParallel: unsupported dim=$(problem.dim), type=$(problem.type)")
+        end
+        
+        # AXI-hoz kell a R koordináta
+        ncoord2 = zeros(3 * problem.non)
+        if problem.type == :AxiSymmetric
+            #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # érintett elemtípusok
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x->push!(types_in_group, x), t)
+        end
+        
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            # kvadratúra + Lagrange
+            intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order + 1))
+            numIntPoints = length(intWeights)
+            
+            _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h_ref = reshape(fun, :, numIntPoints)
+            
+            dof_elem = pdim * numNodes
+            
+            # H mátrix (elem-típus-specifikus, minden elemhez ugyanaz)
+            H = zeros(rowsOfH * numIntPoints, dof_elem)
+            @inbounds for k in 1:numIntPoints, l in 1:numNodes
+                val = h_ref[l, k]
+                for c in 1:pdim
+                    H[k*pdim-(pdim-c), l*pdim-(pdim-c)] = val
+                end
+            end
+            
+            # Jacobianok előre
+            elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            idxmap = Dict{Int,Int}(); sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            # --- a csoport elemei ---
+            for (edim, etag) in dimTags
+                edim == dim || continue
+                elemTags_local, elemNodeTags_local =
+                gmsh.model.mesh.getElementsByType(et, etag)
+                isempty(elemTags_local) && continue
+                
+                nloc = length(elemTags_local)
+                
+                # szálankénti gyűjtők
+                nt = Threads.nthreads()
+                Is = [Int[] for _ in 1:nt]
+                Js = [Int[] for _ in 1:nt]
+                Vs = [Float64[] for _ in 1:nt]
+                for t in 1:nt
+                    sizehint!(Is[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Js[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Vs[t], dof_elem^2 * cld(nloc, nt))
+                end
+                
+                # minták
+                Iidx = repeat(1:dof_elem, inner=dof_elem)
+                Jidx = repeat(1:dof_elem, outer=dof_elem)
+                
+                # per-thread workspace-ek
+                M1s  = [zeros(dof_elem, dof_elem) for _ in 1:nt]
+                nn2s = [zeros(Int, dof_elem)      for _ in 1:nt]
+                rs   = (problem.type == :AxiSymmetric) ? [zeros(numIntPoints) for _ in 1:nt] : Vector{Vector{Float64}}()
+                nnet_s = [zeros(Int, numNodes) for _ in 1:nt]
+                
+                Threads.@threads :static for j in 1:nloc
+                    tid = Threads.threadid()
+                    Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
+                    M1 = M1s[tid]; nn2 = nn2s[tid]; nnet = nnet_s[tid]
+                    (problem.type == :AxiSymmetric) && fill!(rs[tid], 0.0)
+                    
+                    # node címkék
+                    @inbounds for k in 1:numNodes
+                        nnet[k] = elemNodeTags_local[(j-1)*numNodes+k]
+                    end
+                    
+                    # jac szeletek
+                    gidx      = idxmap[elemTags_local[j]]
+                    det_slice = @view det_all[gidx*nip + 1 : (gidx+1)*nip]
+                    
+                    fill!(M1, 0.0)
+                    
+                    if problem.type != :AxiSymmetric
+                        @inbounds for k in 1:numIntPoints
+                            @views H1 = H[k*pdim-(pdim-1):k*pdim, 1:dof_elem]
+                            M1 .+= (H1' * H1) * (det_slice[k] * intWeights[k])
+                        end
+                        M1 .*= (ρ * b)
+                    else
+                        rloc = rs[tid]
+                        @inbounds for k in 1:numIntPoints
+                            rloc[k] = dot(@view(h_ref[:,k]), ncoord2[nnet .* 3 .- 2])
+                        end
+                        @inbounds for k in 1:numIntPoints
+                            @views H1 = H[k*pdim-(pdim-1):k*pdim, 1:dof_elem]
+                            M1 .+= (H1' * H1) * (rloc[k] * det_slice[k] * intWeights[k])
+                        end
+                        M1 .*= (2π * ρ * b)
+                    end
+                    
+                    # globális indexek
+                    @inbounds for c in 1:pdim
+                        nn2[c:pdim:dof_elem] = pdim .* nnet .- (pdim - c)
+                    end
+                    
+                    append!(Iᵗ, nn2[Iidx]); append!(Jᵗ, nn2[Jidx]); append!(Vᵗ, M1[:])
+                end
+                
+                append!(I, vcat(Is...)); append!(J, vcat(Js...)); append!(V, vcat(Vs...))
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    M = sparse(I, J, V, dof, dof)
+    if lumped
+        M = spdiagm(vec(sum(M, dims = 2)))
+    end
+    dropzeros!(M)
+    
+    BLAS.set_num_threads(old_blas_threads)
+    return SystemMatrix(M, problem)
+end
+
+function massMatrixSolidParallel0(problem; elements=[], lumped=true)
+    # --- BLAS szálak mentése + átállítása ---
+    old_blas_threads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    
+    gmsh.model.setCurrent(problem.name)
+    
+    # felső becslés I,J,V hosszára
+    elemTypes_all, elemTags_all, elemNodeTags_all =
+    gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags_all[i]), length(elemTags_all[i])) * problem.dim)^2 *
+    length(elemTags_all[i]) for i in 1:length(elemTags_all)])
+    
+    I  = Int[]
+    J  = Int[]
+    V  = Float64[]
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    
+    # Globális csomópont-koordináták (axi-hoz kell az R=x komponens)
+    #nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes(problem.dim, -1, true, false)
+    nodeTags_all, ncoord_all, _ = gmsh.model.mesh.getNodes()
+    ncoord2 = zeros(3 * problem.non)
+    ncoord2[nodeTags_all .* 3 .- 2] = ncoord_all[1:3:end]   # R (x)
+    ncoord2[nodeTags_all .* 3 .- 1] = ncoord_all[2:3:end]   # Z/Y
+    ncoord2[nodeTags_all .* 3 .- 0] = ncoord_all[3:3:end]   # (z)
+    
+    # anyagcsoportonként
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ρ      = problem.material[ipg].ρ
+        dim    = problem.dim
+        pdim   = problem.pdim
+        
+        rowsOfH, b, is_axi = if problem.dim == 3 && problem.type == :Solid
+            (3, 1.0, false)
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            (2, problem.thickness, false)
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            (2, 1.0, false)
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            (2, 1.0, true)
+        else
+            error("massMatrixSolidParallel: dimension=$(problem.dim), type=$(problem.type)")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # érintett elemtípusok
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x->push!(types_in_group, x), t)
+        end
+        
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, _, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            # kvadratúra + alakfüggvények (csak H-hoz kell a "Lagrange")
+            intPoints, intWeights =
+            gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2*order + 1))
+            numIntPoints = length(intWeights)
+            
+            _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+            h_ref = reshape(fun, :, numIntPoints)   # (numNodes × numIntPoints)
+            
+            # globális, típusonként: elemek és jacobianok bulkban
+            elemTags_global, elemNodeTags_global = gmsh.model.mesh.getElementsByType(et)
+            jac_all, det_all, _ = gmsh.model.mesh.getJacobians(et, intPoints)
+            nip = length(det_all) ÷ length(elemTags_global)
+            
+            idxmap = Dict{Int,Int}()             # elemTag -> 0-based index a szeletekhez
+            for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            for (edim2, etag) in dimTags
+                if edim2 != problem.dim; continue; end
+                elemTags_local, elemNodeTags_local =
+                gmsh.model.mesh.getElementsByType(et, etag)
+                if isempty(elemTags_local); continue; end
+                
+                nloc     = length(elemTags_local)
+                dof_elem = pdim * numNodes
+                
+                # szálankénti triplet pufferek
+                nt  = Threads.nthreads()
+                Is  = [Int[] for _ in 1:nt]
+                Js  = [Int[] for _ in 1:nt]
+                Vs  = [Float64[] for _ in 1:nt]
+                for t in 1:nt
+                    sizehint!(Is[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Js[t], dof_elem^2 * cld(nloc, nt))
+                    sizehint!(Vs[t], dof_elem^2 * cld(nloc, nt))
+                end
+                
+                # scatter indexek (állandó ebben a blokkban)
+                Iidx = [l for k in 1:dof_elem, l in 1:dof_elem]
+                Jidx = [k for k in 1:dof_elem, l in 1:dof_elem]
+                
+                # H mátrix előállítása (numIntPoints*pdim) × dof_elem
+                H = zeros(pdim*numIntPoints, dof_elem)
+                for k in 1:numIntPoints, l in 1:numNodes
+                    @inbounds for kk in 1:pdim
+                        H[(k-1)*pdim + kk, l*pdim - (pdim-kk)] = h_ref[l,k]
+                    end
+                end
+                
+                # workspace szálanként
+                function make_workspace()
+                    (
+                    nnet = zeros(Int, numNodes),
+                    M1   = MMatrix{dof_elem,dof_elem,Float64}(undef),
+                    nn2  = MVector{dof_elem,Int}(undef),
+                    rbuf = is_axi ? zeros(Float64, numIntPoints) : Float64[],  # axi: IP-enkénti r
+                    )
+                end
+                W = [make_workspace() for _ in 1:nt]
+                
+                Threads.@threads :static for j in 1:nloc
+                    tid = Threads.threadid()
+                    w   = W[tid]
+                    Iᵗ, Jᵗ, Vᵗ = Is[tid], Js[tid], Vs[tid]
+                    
+                    fill!(w.M1, 0.0)
+                    
+                    # elem csomópontok
+                    @inbounds for k in 1:numNodes
+                        w.nnet[k] = elemNodeTags_local[(j-1)*numNodes + k]
+                    end
+                    
+                    # jacobian szeletek
+                    gidx      = idxmap[elemTags_local[j]]
+                    det_slice = @view det_all[gidx*nip + 1 : (gidx+1)*nip]
+                    
+                    if !is_axi
+                        # nem axi
+                        @inbounds for k in 1:numIntPoints
+                            H1 = SMatrix{pdim,dof_elem,Float64}(H[(k-1)*pdim+1 : k*pdim, 1:dof_elem])
+                            G  = H1' * H1 * det_slice[k] * intWeights[k]
+                            # in-place
+                            @inbounds for p in 1:dof_elem
+                                @simd for q in 1:dof_elem
+                                    w.M1[p,q] += G[p,q]
+                                end
+                            end
+                        end
+                        w.M1 .*= ρ * b
+                    else
+                        # axi: r(IP) = Σ_l h_l(IP) * R_l
+                        @inbounds for k in 1:numIntPoints
+                            acc = 0.0
+                            @inbounds for l in 1:numNodes
+                                acc += h_ref[l,k] * ncoord2[w.nnet[l]*3 - 2]  # R_l
+                            end
+                            w.rbuf[k] = acc
+                        end
+                        @inbounds for k in 1:numIntPoints
+                            H1 = SMatrix{pdim,dof_elem,Float64}(H[(k-1)*pdim+1 : k*pdim, 1:dof_elem])
+                            G  = H1' * H1 * det_slice[k] * intWeights[k] * w.rbuf[k]
+                            @inbounds for p in 1:dof_elem
+                                @simd for q in 1:dof_elem
+                                    w.M1[p,q] += G[p,q]
+                                end
+                            end
+                        end
+                        w.M1 .*= 2π * ρ * b
+                    end
+                    
+                    # globális dof-indexek
+                    @inbounds for c in 1:pdim
+                        w.nn2[c:pdim:dof_elem] = pdim .* w.nnet .- (pdim - c)
+                    end
+                    
+                    append!(Iᵗ, w.nn2[Iidx[:]])
+                    append!(Jᵗ, w.nn2[Jidx[:]])
+                    append!(Vᵗ, w.M1[:])
+                end # @batch
+                
+                # szálpufferek összefésülése
+                append!(I, vcat(Is...))
+                append!(J, vcat(Js...))
+                append!(V, vcat(Vs...))
+            end
+        end
+    end
+    
+    dof = problem.pdim * problem.non
+    M = sparse(I, J, V, dof, dof)
+    if lumped
+        M = spdiagm(vec(sum(M, dims=2)))
+    end
+    dropzeros!(M)
+    
+    # --- BLAS szálak visszaállítása ---
+    BLAS.set_num_threads(old_blas_threads)
+    
+    return SystemMatrix(M, problem)
+end
+
+function massMatrixSolidOld(problem; elements=[], lumped=true)
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        dim = problem.dim
+        pdim = problem.pdim
+        ρ = problem.material[ipg].ρ
+        if problem.dim == 3 && problem.type == :Solid
+            rowsOfH = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            rowsOfH = 2
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            rowsOfH = 2
+            b = 1
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            rowsOfH = 2
+            b = 1
+        else
+            error("stiffnessMatrixSolid: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                nn2 = zeros(Int, pdim * numNodes)
+                H = zeros(rowsOfH * numIntPoints, pdim * numNodes)
+                for k in 1:numIntPoints, l in 1:numNodes
+                    for kk in 1:pdim
+                        H[k*pdim-(pdim-kk), l*pdim-(pdim-kk)] = h[(k-1)*numNodes+l]
+                    end
+                end
+                M1 = zeros(pdim * numNodes, pdim * numNodes)
+                if problem.type != :AxiSymmetric
+                    for j in 1:length(elemTags[i])
+                        elem = elemTags[i][j]
+                        for k in 1:numNodes
+                            nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                        end
+                        jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                        M1 .*= 0
+                        for k in 1:numIntPoints
+                            H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
+                            M1 += H1' * H1 * jacDet[k] * intWeights[k]
+                        end
+                        M1 *= ρ * b
+                        for k in 1:pdim
+                            nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                        end
+                        append!(I, nn2[Iidx[:]])
+                        append!(J, nn2[Jidx[:]])
+                        append!(V, M1[:])
+                    end
+                elseif problem.type == :AxiSymmetric
+                    for j in 1:length(elemTags[i])
+                        elem = elemTags[i][j]
+                        for k in 1:numNodes
+                            nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                        end
+                        jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                        M1 .*= 0
+                        for k in 1:numIntPoints
+                            r = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                            H1 = H[k*pdim-(pdim-1):k*pdim, 1:pdim*numNodes]
+                            M1 += H1' * H1 * jacDet[k] * r * intWeights[k]
+                        end
+                        M1 *= 2π * ρ * b
+                        for k in 1:pdim
+                            nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                        end
+                        append!(I, nn2[Iidx[:]])
+                        append!(J, nn2[Jidx[:]])
+                        append!(V, M1[:])
+                    end
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    M = sparse(I, J, V, dof, dof)
+    if lumped == true
+        M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
+    end
+    dropzeros!(M)
+    return SystemMatrix(M, problem)
+end
+
+function massMatrixTruss(problem; lumped=false)
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(1, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    ncoord2 = zeros(3 * problem.non)
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ρ = problem.material[ipg].ρ
+        A = problem.material[ipg].A
+        dim = problem.dim
+        pdim = problem.pdim
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            if edim ≠ 1
+                error("stiffnessMatrixTruss: not 1D elements.")
+            end
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(1, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                if numNodes ≠ 2
+                    error("stiffnessMatrixTruss: truss element must have exactly two nodes.")
+                end
+                #intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                #numIntPoints = length(intWeights)
+                #comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, intPoints, "GradLagrange")
+                #∇h = reshape(dfun, :, numIntPoints)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                #invJac = zeros(3, 3numIntPoints)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                #∂h = zeros(dim, numNodes * numIntPoints)
+                #B = zeros(rowsOfB * numIntPoints, pdim * numNodes)
+                M1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    #Jac = reshape(jac, 3, :)
+                    #for k in 1:numIntPoints
+                    #    invJac[1:3, 3*k-2:3*k] = @inline inv(Jac[1:3, 3*k-2:3*k])'
+                    #end
+                    #∂h .*= 0
+                    #for k in 1:numIntPoints, l in 1:numNodes
+                    #    ∂h[1:dim, (k-1)*numNodes+l] .= invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k]
+                    #end
+                    #B .*= 0
+                    #if dim == 2 && rowsOfB == 3
+                    #    for k in 1:numIntPoints, l in 1:numNodes
+                    #        B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #    end
+                    #elseif dim == 3 && rowsOfB == 6
+                    #    for k in 1:numIntPoints, l in 1:numNodes
+                    #        B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                    #    end
+                    #else
+                    #    error("stiffnessMatrix: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    #end
+                    #K1 .*= 0
+                    #for k in 1:numIntPoints
+                    #    B1 = B[k*rowsOfB-(rowsOfB-1):k*rowsOfB, 1:pdim*numNodes]
+                    #    K1 += B1' * D * B1 * b * jacDet[k] * intWeights[k]
+                    #end
+                    M0 = [2 1; 1 2] / 6
+                    x1 = ncoord2[nnet[j, 1] * 3 .- 2]
+                    y1 = ncoord2[nnet[j, 1] * 3 .- 1]
+                    z1 = ncoord2[nnet[j, 1] * 3 .- 0]
+                    x2 = ncoord2[nnet[j, 2] * 3 .- 2]
+                    y2 = ncoord2[nnet[j, 2] * 3 .- 1]
+                    z2 = ncoord2[nnet[j, 2] * 3 .- 0]
+                    L = √((x2 - x1)^2 + (y2 - y1)^2 + (z2 - z1)^2)
+                    c1 = (x2 - x1) / L
+                    c2 = (y2 - y1) / L
+                    c3 = (z2 - z1) / L
+                    T = [c1 c2 c3 0 0 0; 0 0 0 c1 c2 c3]
+                    m1 = A * ρ * L
+                    M1 = m1 * T' * M0 * T
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, M1[:])
+                end
+                push!(nn, nnet)
+            end
+        end
+    end
+    dof = problem.pdim * problem.non
+    M = sparse(I, J, V, dof, dof)
+    if lumped == true
+        M = spdiagm(vec(sum(M, dims=2))) # lumped mass matrix
+    end
+    dropzeros!(M)
+    return SystemMatrix(M, problem)
+end
+
+"""
+    dampingMatrix(K::SystemMatrix, M::SystemMatrix, ωₘₐₓ::Float64; 
+                  α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
+
+Generates the damping matrix for proportional damping. C = αM + βK, or
+C = αM + β₁K + β₂KM⁻¹K + β₃KM⁻¹KM⁻¹K + ⋯. The latter corresponds to a damping characteristic
+given by a power series in the natural frequencies with odd exponents. ξᵢ (`ξ` in the
+arguments) are the values of the individual terms of the series at ωₘₐₓ. βᵢ (`β` in the
+arguments) are the coefficients of the series. Either `ξ` or `β` must be specified; each may
+be a scalar or a vector. `K` is the stiffness matrix, `M` is the mass matrix, and `ωₘₐₓ` is the
+largest natural frequency.
+                            
+Returns: `dampingMatrix`
+                            
+Types:
+- `K`: SystemMatrix
+- `M`: SystemMatrix
+- `ωₘₐₓ`: Float64
+- `α`: Float64
+- `ξ`: Float64 or Vector{Float64}
+- `β`: Float64 or Vector{Float64}
+- `dampingMatrix`: SystemMatrix
+                            
+# Examples
+                            
+```julia
+K = stiffnessMatrix(problem)
+M = massMatrix(problem; lumped=true)
+ωmax = 2π * 1000
+C = dampingMatrix(K, M, ωmax; α=0.0, ξ=[0.02, 0.02])
+```
+"""
+function dampingMatrix(K, M, ωₘₐₓ; α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)])
+    if K.model != M.model
+        error("dampingMatrix: problem of K and M are not the same.")
+    end
+    dof, dof = size(M.A)
+    dof2, dof2 = size(K.A)
+    #if dof != nnz(M.A)
+    if !isdiag(M.A)
+        error("dampingMatrix: M is not lumped!")
+    end
+    if dof != dof2
+        error("dampingMatrix: sizes of M and K are not match: $dof <--> $dof2!")
+    end
+    invM = spdiagm(1 ./ diag(M.A))
+    C = spzeros(dof, dof)
+    MK = copy(K.A)
+    iMK = invM * K.A
+    C += α * M.A
+    C += β[1] * MK
+    for i in 2:length(β)
+        MK *= iMK
+        C += β[i] * MK
+    end
+    dropzeros!(C)
+    return SystemMatrix(C, K.model)
+end
+
+"""
+    elasticSupportMatrix(problem, elSupports)
+
+Solves the elastic support matrix of the `problem`. `elSupp` is a vector of elastic
+supports defined in function `elasticSupport`. With the displacementent vector `q` in hand the
+reaction force vector `fR` arising from the elastic support can be solved.
+(`fR = heatConvMat * q`)
+                            
+Return: `elSuppMat`
+                            
+Types:
+- `problem`: Problem
+- `elSupp`: Vector{BoundaryCondition}
+- `elSuppMat`: SystemMatrix
+"""
+function elasticSupportMatrix(problem, elSupports)
+    gmsh.model.setCurrent(problem.name)
+    elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(problem.dim, -1)
+    lengthOfIJV = sum([(div(length(elemNodeTags[i]), length(elemTags[i])) * problem.dim)^2 * length(elemTags[i]) for i in 1:length(elemTags)])
+    nn = []
+    I = []
+    J = []
+    V = []
+    V = convert(Vector{Float64}, V)
+    sizehint!(I, lengthOfIJV)
+    sizehint!(J, lengthOfIJV)
+    sizehint!(V, lengthOfIJV)
+    
+    if !isa(elSupports, Vector)
+        error("elasticSupportMatrix: elastic supports are not arranged in a vector. Put them in [...]")
+    end
+    pdim = problem.pdim
+    DIM = problem.dim
+    b = problem.thickness
+    non = problem.non
+    dof = pdim * non
+    ncoord2 = zeros(3 * problem.non)
+    for n in 1:length(elSupports)
+        #name, kx, ky, kz = elSupports[n]
+        name = elSupports[n].phName
+        vals = elSupports[n].values
+        kx = get(vals, :kx, nothing)
+        ky = get(vals, :ky, nothing)
+        kz = get(vals, :kz, nothing)
+        kx = kx !== nothing ? kx : 0
+        ky = ky !== nothing ? ky : 0
+        kz = kz !== nothing ? kz : 0
+        hh = get(vals, :h, nothing)
+        hc = hh !== nothing ? hh : 0
+        if problem.pdim == 3
+            f = [0, 0, 0]
+        elseif problem.pdim == 2
+            f = [0, 0]
+        elseif problem.pdim == 1
+            f = [0]
+        else
+            error("elasticSupportMatrix: dimension of the problem is $(problem.pdim).")
+        end
+        dimTags = gmsh.model.getEntitiesForPhysicalName(name)
+        for i ∈ 1:length(dimTags)
+            dimTag = dimTags[i]
+            dim = dimTag[1]
+            tag = dimTag[2]
+            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for ii in 1:length(elementTypes)
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+                nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(2order+1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elementTags[ii]), numNodes)
+                Iidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                Jidx = zeros(Int, numNodes * pdim, numNodes * pdim)
+                for k in 1:numNodes*pdim, l in 1:numNodes*pdim
+                    Iidx[k, l] = l
+                    Jidx[k, l] = k
+                end
+                H = zeros(pdim * numIntPoints, pdim * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdim
+                            H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                        end
+                    end
+                end
+                C1 = zeros(pdim * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                for l in 1:length(elementTags[ii])
+                    elem = elementTags[ii][l]
+                    for k in 1:numNodes
+                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    C1 .*= 0
+                    for j in 1:numIntPoints
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        y = 0
+                        z = 0
+                        if isa(kx, Function) || isa(ky, Function) || isa(kz, Function)
+                            y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                            z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        end
+                        if hh !== nothing && problem.pdim == 1
+                            f[1] = hc
+                        end
+                        if hh === nothing
+                            f[1] = isa(kx, Function) ? kx(x, y, z) : kx
+                        end
+                        if problem.pdim > 1
+                            f[2] = isa(ky, Function) ? ky(x, y, z) : ky
+                        end
+                        if problem.pdim == 3
+                            f[3] = isa(kz, Function) ? kz(x, y, z) : kz
+                        end
+                        r = x
+                        if pdim == 3
+                            kk = [f[1] 0 0; 0 f[2] 0; 0 0 f[3]]
+                        elseif pdim == 2
+                            kk = [f[1] 0; 0 f[2]]
+                        elseif pdim == 1
+                            kk = [f[1]]
+                        end
+                        H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                        ############### NANSON ######## 3D ###################################
+                        if DIM == 3 && dim == 3
+                            Ja = jacDet[j]
+                        elseif DIM == 3 && dim == 2
+                            xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                            yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                            zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                            Ja = √(xy^2 + yz^2 + zx^2)
+                        elseif DIM == 3 && dim == 1
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                        elseif DIM == 3 && dim == 0
+                            Ja = 1
+                            ############ 2D #######################################################
+                        elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = jacDet[j] * b
+                        elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * jacDet[j] * r
+                        elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                        elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                        elseif DIM == 2 && dim == 0
+                            Ja = 1
+                            ############ 1D #######################################################
+                        elseif DIM == 1 && dim == 1
+                            Ja = Jac[1, 3*j-2] * b
+                        elseif DIM == 1 && dim == 0
+                            Ja = 1
+                        else
+                            error("elasticSupportMatrix: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                        end
+                        C1 += H1' * kk * H1 * Ja * intWeights[j]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                    end
+                    append!(I, nn2[Iidx[:]])
+                    append!(J, nn2[Jidx[:]])
+                    append!(V, C1[:])
+                end
+            end
+        end
+    end
+    
+    C = sparse(I, J, V, dof, dof)
+    dropzeros!(C)
+    return SystemMatrix(C, problem)
+end
+
+
+@inline function _rotation_from_F(F::AbstractMatrix{<:Real})
+    U, _, Vt = svd(F)
+    R = U * Vt
+    if det(R) < 0
+        U[:, end] .*= -1
+        R = U * Vt
+    end
+    return R
+end
+
+@inline function _loadvec_helper(f, h, x, y, z, nnet, j, l, nsteps)
+    if f isa Number
+        return fill(f, nsteps)
+    elseif f isa Function
+        return fill(f(x, y, z), nsteps)
+    elseif f isa ScalarField && isNodal(f)
+        v = h[:, j]' * f.a[nnet[l, :], :]
+        return vec(v)
+    else
+        error("loadVector: internal error.")
+    end
+end
+
+"""
+    loadVector(problem, loads; F=nothing)
+                            
+Assembles the right-hand-side vector associated with external mechanical loads
+in weak-form finite element problems.
+
+Depending on the problem dimension and the dimension of the physical group,
+this function handles concentrated forces, line/surface/volume loads,
+tractions, pressures, and body forces in 1D, 2D, and 3D.
+
+The interpretation of the physical group dimension is:
+- 1D problems:
+  - Point  → concentrated force
+  - Line   → distributed force
+- 2D problems:
+  - Point  → concentrated force
+  - Line   → surface force
+  - Surface → body force
+- 3D problems:
+  - Point  → concentrated force
+  - Line   → edge force
+  - Surface → surface force
+  - Volume → body force
+
+Load components may be specified as constants, spatial functions, or `ScalarField`s (nodal type).
+Axisymmetric and other weighted formulations can be handled by including the
+appropriate geometric factor (e.g. `2πr`) in the load definition or coefficient.
+
+Returns a `VectorField` for vector-valued problems (`pdim > 1`) and a `ScalarField`
+for scalar problems (`pdim == 1`).
+
+If `F` is the deformation gradient (a `TensorField`), then the function solves the follower load
+for large displacement problems (in 3D).
+                            
+Return: `loadVec`
+                            
+Types:
+- `problem`: Problem
+- `loads`: Vector{BoundaryCondition}
+- `loadVec`: VectorField
+- `F`: Union{Nothing,TensorField}
+"""
+function loadVector(problem, loads; F=nothing)
+
+    if problem.type == :dummy
+        return nothing
+    end
+
+    gmsh.model.setCurrent(problem.name)
+
+    !isa(loads, Vector) &&
+        error("loadVector: loads must be in a vector.")
+
+    Fe = nothing
+    Fmap = nothing
+    if F !== nothing
+        Fe = nodesToElements(F)
+        Fmap = Dict(zip(Fe.numElem, Fe.A))
+    end
+
+    pdim = problem.pdim
+    DIM = problem.dim
+    b = problem.thickness
+    non = problem.non
+    dof = pdim * non
+
+    ncoord2 = zeros(3 * non)
+    fp = zeros(dof, 1)
+    nsteps = 1
+
+    for load in loads
+
+        # multi-field filter
+        if load.problem !== nothing && load.problem !== problem
+            continue
+        end
+
+        name = load.phName
+        vals = load.values
+
+        # validate logic
+        _check_load_keys(problem, vals)
+
+        rhs_comps = _extract_rhs_components(problem, vals)
+
+        # --- special loads ---
+        p = get(vals, :p, nothing)
+        T = get(vals, :T, nothing)
+        h = get(vals, :h, nothing)
+        qn = get(vals, :qn, nothing)
+        hs = get(vals, :hs, nothing)
+        hc = get(vals, :h, nothing)
+        T0 = get(vals, :T∞, nothing)
+        q = get(vals, :q, nothing)
+
+        # --- initialize RHS components ---
+        fx = nothing
+        fy = nothing
+        fz = nothing
+        fxy = nothing
+        fyz = nothing
+        fzx = nothing
+        fyx = nothing
+        fzy = nothing
+        fxz = nothing
+
+        # scalar field
+        if pdim == 1
+            fx = get(rhs_comps, "", nothing)
+
+        # 2D vector field
+        elseif pdim == 2
+            fx = get(rhs_comps, "x", nothing)
+            fy = get(rhs_comps, "y", nothing)
+
+        # 3D vector field
+        elseif pdim == 3
+            fx = get(rhs_comps, "x", nothing)
+            fy = get(rhs_comps, "y", nothing)
+            fz = get(rhs_comps, "z", nothing)
+        end
+
+        #=
+        if pdim <= 3
+            fx = get(rhs_comps, "x", nothing)
+            fy = get(rhs_comps, "y", nothing)
+            fz = get(rhs_comps, "z", nothing)
+        end
+        =#
+
+        # tensor field (column-major)
+        if pdim == 9
+            fxx = get(rhs_comps, "xx", nothing)
+            fyx = get(rhs_comps, "yx", nothing)
+            fzx = get(rhs_comps, "zx", nothing)
+            fxy = get(rhs_comps, "xy", nothing)
+            fyy = get(rhs_comps, "yy", nothing)
+            fzy = get(rhs_comps, "zy", nothing)
+            fxz = get(rhs_comps, "xz", nothing)
+            fyz = get(rhs_comps, "yz", nothing)
+            fzz = get(rhs_comps, "zz", nothing)
+
+            fx = fxx
+            fy = fyy
+            fz = fzz
+        end
+
+        # elementwise → nodal conversion
+        for ref in (fx, fy, fz, p, T, hc, qn, hs, q, fxy, fyz, fzx, fyx, fzy, fxz)
+            if ref isa ScalarField && isElementwise(ref)
+                ref = elementsToNodes(ref)
+            end
+        end
+
+        nsteps = 1
+        for i in [fx, fy , fz, T,  p, hc, T0, qn, hs, q, fxy, fyz, fzx, fyx, fzy, fxz]
+            if i isa ScalarField
+                nsteps = max(nsteps, i.nsteps)
+            end
+        end
+        if nsteps > size(fp, 2)
+            fp = hcat(fp, zeros(dof, nsteps - size(fp,2)))
+        end
+        (qn !== nothing || hc !== nothing || hs !== nothing || T !== nothing) && (fx !== nothing || fy !== nothing || fz !== nothing) &&
+            error("loadVector: qn/h/T∞ and fx/fy/fz cannot be defined in the same BC.")
+        if pdim == 1 || pdim == 2 || pdim == 3 || pdim == 9
+            f = zeros(pdim, nsteps)
+        else
+            error("loadVector: dimension of the problem is $(problem.dim).")
+        end
+
+        # ----- PRESSURE (Solid only) -----
+        if p !== nothing
+            if !(DIM == 3 && pdim == 3)
+                error("loadVector: pressure only allowed for 3D solid.")
+            end
+
+            nv = -normalVector(problem, name)
+
+            ex = VectorField(problem, [field(name, fx=1, fy=0, fz=0)])
+            ey = VectorField(problem, [field(name, fx=0, fy=1, fz=0)])
+            ez = VectorField(problem, [field(name, fx=0, fy=0, fz=1)])
+
+            if p isa Number || p isa ScalarField
+                fx = elementsToNodes((nv ⋅ ex) * p)
+                fy = elementsToNodes((nv ⋅ ey) * p)
+                fz = elementsToNodes((nv ⋅ ez) * p)
+            elseif p isa Function
+                pp = scalarField(problem, [field(name, f=p)])
+                fx = elementsToNodes((nv ⋅ ex) * pp)
+                fy = elementsToNodes((nv ⋅ ey) * pp)
+                fz = elementsToNodes((nv ⋅ ez) * pp)
+            end
+        end
+        if p !== nothing && DIM ≠ 3
+            error("loadVector: pressure can be given on a surface of a 3D solid.")
+        end
+
+        fx = fx !== nothing ? fx : 0.0
+        fy = fy !== nothing ? fy : 0.0
+        fz = fz !== nothing ? fz : 0.0
+
+        # ------------------------------------------------------------
+        # >>>>>> INNENTŐL AZ EREDETI NUMERIKUS BLOKK VÁLTOZATLAN <<<<<
+        # (az általad küldött integrációs rész)
+        # ------------------------------------------------------------
+
+        # !!! ide változtatás nélkül bemásolható a teljes integrációs rész !!!
+        # !!! a Jacobian, Nanson, follower load stb. marad !!!
+
+        # (A teljes blokkot itt nem ismétlem meg újra a válasz hossza miatt,
+        # de a te eredeti kódod változatlanul beilleszthető.)
+        dimTags = gmsh.model.getEntitiesForPhysicalName(name)
+        for i ∈ 1:length(dimTags)
+            dimTag = dimTags[i]
+            dim = dimTag[1]
+            tag = dimTag[2]
+            elementTypes, elementTags, elemNodeTags = gmsh.model.mesh.getElements(dim, tag)
+            nodeTags::Vector{Int64}, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, tag, true, false)
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for ii in 1:length(elementTypes)
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(elementTypes[ii])
+                nnoe = reshape(elemNodeTags[ii], numNodes, :)'
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(elementTypes[ii], "Gauss" * string(2order+1))
+                numIntPoints = length(intWeights)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(elementTypes[ii], intPoints, "Lagrange")
+                h = reshape(fun, :, numIntPoints)
+                nnet = zeros(Int, length(elementTags[ii]), numNodes)
+                H = zeros(pdim * numIntPoints, pdim * numNodes)
+                for j in 1:numIntPoints
+                    for k in 1:numNodes
+                        for l in 1:pdim
+                            H[j*pdim-(pdim-l), k*pdim-(pdim-l)] = h[k, j]
+                        end
+                    end
+                end
+                f1 = zeros(pdim * numNodes, nsteps)
+                nn2 = zeros(Int, pdim * numNodes)
+                @inbounds for l in 1:length(elementTags[ii])
+                    elem = elementTags[ii][l]
+                    for k in 1:numNodes
+                        nnet[l, k] = elemNodeTags[ii][(l-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, intPoints)
+                    Jac = reshape(jac, 3, :)
+                    fill!(f1, 0.0)
+                    @inbounds for j in 1:numIntPoints
+                        x = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 2]
+                        y = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 1]
+                        z = h[:, j]' * ncoord2[nnet[l, :] * 3 .- 0]
+                        if hc !== nothing && T0 !== nothing
+                            if hc isa Function
+                                error("heatConvectionVector: h cannot be a function.")
+                            end
+                            f[1,:] .= _loadvec_helper(T0, h, x, y, z, nnet, j, l, nsteps) * hc
+                        elseif qn !== nothing
+                            f[1,:] .= _loadvec_helper(qn, h, x, y, z, nnet, j, l, nsteps)
+                        elseif hs !== nothing
+                            f[1,:] .= _loadvec_helper(hs, h, x, y, z, nnet, j, l, nsteps)
+                        elseif q !== nothing
+                            f[1,:] .= _loadvec_helper(q, h, x, y, z, nnet, j, l, nsteps)
+                        elseif fx !== nothing && pdim <= 3
+                            f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim > 1 && pdim <= 3
+                            f[2,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim == 3
+                            f[3,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
+                        end
+                        if pdim == 9
+                            fill!(f, 0.0)
+                            if fx !== nothing
+                                f[1,:] .= _loadvec_helper(fx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fy !== nothing
+                                f[5,:] .= _loadvec_helper(fy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fz !== nothing
+                                f[9,:] .= _loadvec_helper(fz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fxy !== nothing
+                                f[4,:] .= _loadvec_helper(fxy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fyz !== nothing
+                                f[8,:] .= _loadvec_helper(fyz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fzx !== nothing
+                                f[3,:] .= _loadvec_helper(fzx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fyx !== nothing
+                                f[2,:] .= _loadvec_helper(fyx, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fzy !== nothing
+                                f[6,:] .= _loadvec_helper(fzy, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                            if fxz !== nothing
+                                f[7,:] .= _loadvec_helper(fxz, h, x, y, z, nnet, j, l, nsteps)
+                            end
+                        end
+
+                        # -------- FOLLOWER LOAD (Total Lagrange, Piola) ----------
+                        if F !== nothing
+                            # F elemértékek
+                            Fnode = Fmap[elem]   # 9*numNodes × 1
+
+                            # F interpoláció Gauss-pontra (pont úgy, ahogy Kext-ben)
+                            Fgp = zeros(DIM, DIM)
+                            for a in 1:numNodes
+                                Na = h[a, j]
+                                Fgp .+= Na * reshape(Fnode[9a-8:9a], DIM, DIM)
+                            end
+
+                            Rgp = _rotation_from_F(Fgp)
+
+                            Jgp = det(Fgp)
+                            FinvT = inv(Fgp)'
+
+                            if !(Jgp > 0)
+                                error("Element inversion detected: det(Fgp) = $Jgp at elem=$elem, gp=$j")
+                            end
+
+                            # reference surface normal at GP from reference Jacobian
+                            t1 = Jac[:, 3*j-2]          # first tangent in reference
+                            t2 = Jac[:, 3*j-1]          # second tangent in reference
+                            nref = cross(t1, t2)
+                            Ja_ref = norm(nref)         # ugyanaz, mint amit lent Ja-ként használsz
+                            N0 = nref / Ja_ref          # unit normal in reference
+
+                            # Nanson scalar: da = |J F^{-T} N0| dA
+                            scale = norm(Jgp * FinvT * N0)
+
+                            # Piola transzformáció a traction-re
+                            for s in 1:nsteps
+                                ##f[:,s] .= Jgp * FinvT * f[:,s]
+                                #f[:, s] .= Rgp * f[:, s]          # t = R * t_loc  (itt f a traction, lokálisnak tekint
+                                #f[:, s] .= Jgp * FinvT * f[:, s]  # Piola: t0 = J F^{-T} t
+                                #f[:, s] .= Rgp * f[:, s]        # true follower: rotate traction with body
+                                #f[:, s] .*= scale               # ONLY area scaling (no FinvT acting on t)
+                                f[:, s] .= Fgp * f[:, s]        # true follower: rotate traction with body
+                            end
+                        end
+                        # ---------------------------------------------------------
+
+                        r = x
+                        H1 = H[j*pdim-(pdim-1):j*pdim, 1:pdim*numNodes] # H1[...] .= H[...] ????
+                        ############### NANSON ######## 3D ###################################
+                        if DIM == 3 && dim == 3
+                            Ja = jacDet[j]
+                        elseif DIM == 3 && dim == 2
+                            xy = Jac[1, 3*j-2] * Jac[2, 3*j-1] - Jac[2, 3*j-2] * Jac[1, 3*j-1]
+                            yz = Jac[2, 3*j-2] * Jac[3, 3*j-1] - Jac[3, 3*j-2] * Jac[2, 3*j-1]
+                            zx = Jac[3, 3*j-2] * Jac[1, 3*j-1] - Jac[1, 3*j-2] * Jac[3, 3*j-1]
+                            Ja = √(xy^2 + yz^2 + zx^2)
+                        elseif DIM == 3 && dim == 1
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2 + (Jac[3, 3*j-2])^2)
+                        elseif DIM == 3 && dim == 0
+                            Ja = 1
+                            ############ 2D #######################################################
+                        elseif DIM == 2 && dim == 2 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = jacDet[j] * b
+                        elseif DIM == 2 && dim == 2 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * jacDet[j] * r
+                        elseif DIM == 2 && dim == 1 && problem.type != :AxiSymmetric && problem.type != :AxiSymmetricHeatConduction
+                            Ja = √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * b
+                        elseif DIM == 2 && dim == 1 && (problem.type == :AxiSymmetric || problem.type == :AxiSymmetricHeatConduction)
+                            Ja = 2π * √((Jac[1, 3*j-2])^2 + (Jac[2, 3*j-2])^2) * r
+                        elseif DIM == 2 && dim == 0
+                            Ja = 1
+                            ############ 1D #######################################################
+                        elseif DIM == 1 && dim == 1
+                            Ja = Jac[1, 3*j-2] * b
+                        elseif DIM == 1 && dim == 0
+                            Ja = 1
+                        else
+                            error("loadVector: dimension of the problem is $(problem.dim), dimension of load is $dim.")
+                        end
+                        f1 += H1' * f * Ja * intWeights[j]
+                    end
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnoe[l, 1:numNodes] .- (pdim - k)
+                    end
+                    fp[nn2,1:nsteps] .+= f1
+                end
+            end
+        end
+    end
+
+    type = pdim == 3 ? :v3D :
+           pdim == 2 ? :v2D :
+           pdim == 1 ? :scalar :
+           pdim == 9 ? :tensor :
+           error("loadVector: wrong pdim.")
+
+    ts = [i for i in 0:size(fp, 2)-1]
+
+    if type in (:v3D, :v2D)
+        return VectorField([], reshape(fp, :, size(fp, 2)), ts, [], size(fp, 2), type, problem)
+    elseif type == :scalar
+        return ScalarField([], reshape(fp, :, size(fp, 2)), ts, [], size(fp, 2), type, problem)
+    elseif type == :tensor
+        return TensorField([], reshape(fp, :, size(fp, 2)), ts, [], size(fp, 2), type, problem)
+    end
+end
+
+@inline function _aBC_helper(ux, comp, xx, yy, zz, nodeTags, pdim, field)
+    nodeTagsX = copy(nodeTags)
+    nodeTagsX *= pdim
+    nodeTagsX .-= (pdim - comp)
+    if isa(ux, Function)
+        uux = ux.(xx, yy, zz)
+        field.a[nodeTagsX,:] .= uux
+    elseif ux isa ScalarField
+        ux.nsteps != field.nsteps && ux.nsteps != 1 &&
+            error("applyBoundaryCondition: different number of time steps. bc has: $(ux.nsteps) steps, field-to-modify has: $(field.nsteps) steps")
+        ux = elementsToNodes(ux)
+        if ux.nsteps == 1
+            n = field.nsteps
+            uux = ux.a[nodeTags,1]
+            for i in 1:n
+                field.a[nodeTagsX,i] .= uux
+            end
+        else
+            uux = ux.a[nodeTags,:]
+            field.a[nodeTagsX,:] .= uux
+        end
+    else
+        field.a[nodeTagsX,:] .= ux
+    end
+end
+
+"""
+    _bc_component_map(problem::Problem)
+
+Return Dict mapping component string → component index (1:pdim)
+"""
+function _bc_component_map(problem::Problem)
+
+    if problem.pdim == 1
+        return Dict("" => 1)
+
+    elseif problem.pdim == 2
+        return Dict("x"=>1, "y"=>2)
+
+    elseif problem.pdim == 3
+        return Dict("x"=>1, "y"=>2, "z"=>3)
+
+    elseif problem.pdim == 9
+        # column-major
+        return Dict(
+            "xx"=>1, "yx"=>2, "zx"=>3,
+            "xy"=>4, "yy"=>5, "zy"=>6,
+            "xz"=>7, "yz"=>8, "zz"=>9,
+            "x"=>1, "y"=>5, "z"=>9
+        )
+    else
+        error("Unsupported pdim $(problem.pdim)")
+    end
+end
+
+"""
+    applyBoundaryConditions!(field::Union{ScalarField,VectorField,TensorField}, 
+                             supports::Vector{BoundaryCondition})
+
+Applies boundary conditions `supports` on a `ScalarField`, `VectorField` or `TensorField`
+`field`. Mesh details are in `problem`. `supports` is `BoundaryCondition`.
+                            
+Returns: nothing
+                            
+Types:
+- `problem`: Problem
+- `field`: ScalarField, VectorField or TensorField
+- `supports`: Vector{BoundaryCondition}
+"""
+function applyBoundaryConditions!(
+    field::Union{ScalarField,VectorField,TensorField},
+    supports::Vector{BoundaryCondition})
+
+    problem = field.model
+    gmsh.model.setCurrent(problem.name)
+
+    isempty(supports) && return field
+
+    field = elementsToNodes(field)
+
+    prefix = String(problem.field)
+    comp_map = _bc_component_map(problem)
+
+    for bc in supports
+
+        # multi-field filter
+        if bc.problem !== nothing && bc.problem !== problem
+            continue
+        end
+
+        name = bc.phName
+        vals = bc.values
+
+        phg = getTagForPhysicalName(name)
+        nodeTags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(-1, phg)
+
+        xx = nothing; yy = nothing; zz = nothing
+
+        # ha van Function típusú BC
+        if any(v -> v isa Function, values(vals))
+            xx = coord[1:3:end]
+            yy = coord[2:3:end]
+            zz = coord[3:3:end]
+        end
+
+        for (sym,val) in vals
+
+            s = String(sym)
+
+            # prefix check
+            if !startswith(s, prefix)
+                error("applyBoundaryConditions!: unknown BC key '$sym'")
+            end
+
+            comp = String(chopprefix(s, prefix))
+
+            if !haskey(comp_map, comp)
+                error("applyBoundaryConditions!: invalid component '$comp' for field $(problem.field)")
+            end
+
+            idx = comp_map[comp]
+
+            _aBC_helper(val, idx, xx, yy, zz, nodeTags, problem.pdim, field)
+        end
+    end
+
+    return field
+end
+
+#=
+function applyBoundaryConditions!(
+    field::Union{ScalarField,VectorField,TensorField},
+    supports::AbstractVector)
+
+    isempty(supports) && return field
+
+    supports isa Vector{BoundaryCondition} ||
+        error("applyBoundaryConditions!: supports must be Vector{BoundaryCondition}")
+
+    return applyBoundaryConditions!(field, supports::Vector{BoundaryCondition})
+end
+=#
+
+"""
+    applyBoundaryConditions(problem::Problem, 
+                            supports::Vector{BoundaryCondition}; 
+                            steps::Int=1)
+
+Create a `ScalarField`, `VectorField` or `TensorField` and applies the boundary 
+conditions `supports` on it. Mesh details are in `problem`. `supports` is `BoundaryCondition`.
+                            
+Returns: ScalarField, VectorField or TensorField
+                            
+Types:
+- `problem`: Problem
+- `supports`: Vector{BoundaryCondition}
+"""
+function applyBoundaryConditions(problem::Problem,
+                                 supports::Vector{BoundaryCondition};
+                                 steps::Int=1)
+
+    if problem.pdim == 1
+        field = ScalarField(problem, problem.material[1].phName, 0)
+        field = ScalarField(field, steps=steps)
+        field = elementsToNodes(field)
+
+    elseif problem.pdim == 2
+        g = ScalarField(problem, problem.material[1].phName, 0)
+        g = ScalarField(g, steps=steps)
+        v = VectorField([g,g,g])
+        v = elementsToNodes(v)
+        v = projectTo2D(v)
+        field = v #ectorField(problem, problem.material[1].phName, v)
+
+    elseif problem.pdim == 3
+        g = ScalarField(problem, problem.material[1].phName, 0)
+        g = ScalarField(g, steps=steps)
+        v = VectorField([g,g,g])
+        v = elementsToNodes(v)
+        field = v#ectorField(problem, problem.material[1].phName, v)
+
+    elseif problem.pdim == 9
+        g = ScalarField(problem, problem.material[1].phName, 0)
+        g = ScalarField(g, steps=steps)
+        v = TensorField([g g g; g g g; g g g])
+        v = elementsToNodes(v)
+        field = v#tensorField(problem,
+                  #          problem.material[1].phName,
+                   #         v)
+    else
+        error("Unsupported pdim $(problem.pdim)")
+    end
+
+    applyBoundaryConditions!(field, supports)
+
+    return field
+end
+
+
+"""
+    applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
+
+Applies elastic support boundary conditions `elastSupp` on a stiffness matrix
+`stiffMat`. Mesh details are in `problem`. `elastSupp` is a tuple of `name`
+of physical group and prescribed `kx`, `ky` and `kz` stiffnesses.
+                            
+Returns: nothing
+                            
+Types:
+- `stiffMat`: SystemMatrix 
+- `elastSupp`: Vector{BoundaryCondition}}
+"""
+function applyElasticSupport!(stiffMat::SystemMatrix, elastSupp)
+    problem = stiffMat.model
+    if !isa(elastSupp, Vector)
+        error("applyElasticSupport!: elastic supports are not arranged in a vector. Put them in [...]")
+    end
+    C0 = elasticSupportMatrix(stiffMat.model, elastSupp)
+    stiffMat.A .+= C0.A
+end
+
+"""
+    solveDisplacement(K::SystemMatrix, f::VectorField; 
+                      support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                      iterative=false, 
+                      reltol::Real = sqrt(eps()), 
+                      maxiter::Int = K.model.non * K.model.dim, 
+                      preconditioner = Identity(), 
+                      ordering=true)
+
+Solves the linear system
+
+    K * u = f
+
+for the displacement vector `u`, where `K` is a stiffness matrix and `f` is the
+load vector. Essential (Dirichlet) boundary conditions are imposed via the
+`support` argument.
+
+This is a **low-level solver** operating directly on a preassembled
+[`SystemMatrix`] and load [`VectorField`]. It assumes that the stiffness matrix
+already includes all material contributions (and optional elastic supports).
+
+If `iterative = true`, the reduced system is solved using the conjugate gradient
+method. Otherwise, a direct solver is used.
+
+# Arguments
+- `K::SystemMatrix`:
+  Assembled stiffness matrix associated with a [`Problem`].
+- `f::VectorField`:
+  Load vector.
+- `support::Vector{BoundaryCondition}` (keyword, optional):
+  Essential boundary conditions (Dirichlet-type constraints).
+  Default is an empty vector (no supports).
+- `iterative::Bool` (keyword):
+  If `true`, uses the conjugate gradient method.
+- `reltol::Real` (keyword):
+  Relative tolerance for the iterative solver.
+- `maxiter::Int` (keyword):
+  Maximum number of iterations for the iterative solver.
+- `preconditioner` (keyword):
+  Preconditioner object for iterative solution (e.g. from `ilu` or `ichol`).
+- `ordering::Bool` (keyword):
+  If `false`, disables column reordering in the direct solver
+  (`lu(A, q=nothing)`).
+
+# Returns
+- `u::VectorField`:
+  Displacement vector satisfying the prescribed boundary conditions.
+
+# Notes
+- Only the unconstrained degrees of freedom are solved for; constrained values
+  are imposed explicitly.
+- This function is primarily intended for internal or advanced use. Most users
+  should prefer the high-level `solveDisplacement(problem; ...)` interface.
+"""
+function solveDisplacement(K::SystemMatrix, f::VectorField; 
+                           support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                           iterative=false,
+                           reltol::Real = sqrt(eps()),
+                           maxiter::Int = K.model.non * K.model.dim,
+                           preconditioner = :auto,
+                           ordering=true)
+    type = :null
+    if f.type == :v3D
+        type = :v3D
+    elseif f.type == :v2D
+        type = :v2D
+    else
+        error("solveDisplacement: wrong type of 'f': ($(f.type))")
+    end
+    problem = K.model
+
+    fixed = constrainedDoFs(problem, support)
+    free = freeDoFs(problem, support)
+    u = copy(f)
+    fill!(u.a, 0.0)
+    applyBoundaryConditions!(u, support)
+    f_kin = K.A[:, fixed] * u.a[fixed]
+    #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
+    if iterative
+        error(
+            "The legacy iterative solver in solveDisplacement is no longer supported. " *
+            "Use solveField(...; solver=:cg) instead."
+        )
+    elseif ordering == false
+        u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
+    else
+        u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
+    end
+    return u
+end
+
+"""
+    solveDisplacement(problem::Problem; 
+                      load::Vector{LoadCondition}=LoadCondition[], 
+                      support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                      elasticSupport::Vector{BoundaryCondition}=BoundaryCondition[], 
+                      condensed=true, 
+                      iterative=false, 
+                      reltol::Real = sqrt(eps()), 
+                      maxiter::Int = problem.non * problem.dim, 
+                      preconditioner = Identity(), 
+                      ordering=true)
+
+Computes the displacement vector `u` for a given [`Problem`] subject to external
+loads, essential supports, and optional elastic supports.
+
+The stiffness matrix is assembled internally. Depending on the value of
+`condensed`, either a reduced system (eliminating constrained degrees of freedom)
+or the full system with modified rows and columns is solved.
+
+This is the **high-level, user-facing displacement solver**.
+
+# Arguments
+- `problem::Problem`:
+  Finite element problem definition (geometry, materials, DOFs, etc.).
+- `load::Vector{BoundaryCondition}` (keyword, optional):
+  Prescribed nodal loads.
+- `support::Vector{BoundaryCondition}` (keyword, optional):
+  Essential (Dirichlet) boundary conditions.
+- `elasticSupport::Vector{BoundaryCondition}` (keyword, optional):
+  Elastic (spring-type) supports contributing to the stiffness matrix.
+- `condensed::Bool` (keyword):
+  If `true`, solves the reduced system using only free degrees of freedom.
+  If `false`, modifies the full system matrix explicitly.
+- `iterative::Bool` (keyword):
+  If `true`, uses the conjugate gradient method.
+- `reltol::Real` (keyword):
+  Relative tolerance for the iterative solver.
+- `maxiter::Int` (keyword):
+  Maximum number of iterations for the iterative solver.
+- `preconditioner` (keyword):
+  Preconditioner object for iterative solution (e.g. from `ilu` or `ichol`).
+- `ordering::Bool` (keyword):
+  If `false`, disables column reordering in the direct solver
+  (`lu(A, q=nothing)`).
+
+# Returns
+- `u::VectorField`:
+  Displacement vector defined on the problem degrees of freedom.
+
+# Notes
+- If `problem.type == :dummy`, the function returns `nothing`.
+- When `condensed = true`, constrained DOFs are eliminated algebraically.
+- When `condensed = false`, constrained rows and columns are modified explicitly.
+- This function internally calls the low-level `solveDisplacement(K, f; ...)`
+  routine after assembling the stiffness matrix and load vector.
+"""
+function solveDisplacement(problem::Problem; 
+                           load::Vector{LoadCondition}=LoadCondition[], 
+                           support::Vector{BoundaryCondition}=BoundaryCondition[], 
+                           elasticSupport::Vector{BoundaryCondition}=BoundaryCondition[],
+                           condensed=true,
+                           iterative=false,
+                           reltol::Real = sqrt(eps()),
+                           maxiter::Int = problem.non * problem.dim,
+                           preconditioner = :auto,
+                           ordering=true)
+    if problem.type == :dummy
+        return nothing
+    end
+    K = stiffnessMatrix(problem)
+    if !isempty(elasticSupport)
+        applyElasticSupport!(K, elasticSupport)
+    end
+    f = loadVector(problem, load)
+    if condensed
+        fixed = constrainedDoFs(problem, support)
+        free = freeDoFs(problem, support)
+        u = copy(f)
+        fill!(u.a, 0.0)
+        applyBoundaryConditions!(u, support)
+        f_kin = K.A[:, fixed] * u.a[fixed]
+        #u.a[free] = cholesky(Symmetric(K.A[free, free])) \ (f.a[free] - f_kin[free])
+        if iterative
+            error(
+                "The legacy iterative solver in solveDisplacement is no longer supported. " *
+                "Use solveField(...; solver=:cg) instead."
+            )
+        elseif ordering == false
+            u.a[free] = lu(K.A[free, free], q=nothing) \ (f.a[free] - f_kin[free])
+        else
+            u.a[free] = (K.A[free, free]) \ (f.a[free] - f_kin[free])
+        end
+        return u
+    else
+        fixed_dofs = constrainedDoFs(problem, support)
+        u = copy(f)
+        fill!(u.a, 0.0)
+        applyBoundaryConditions!(u, support)
+        f_kin = K.A[:, fixed_dofs] * u.a[fixed_dofs]
+        fixed = falses(size(K.A, 1))
+        fixed[fixed_dofs] .= true
+        for col in 1:size(K.A, 2)
+            colrange = K.A.colptr[col]:(K.A.colptr[col+1]-1)
+            for rowidx in colrange
+                row = K.A.rowval[rowidx]
+                if fixed[row]
+                    K.A.nzval[rowidx] = 0.0
+                elseif fixed[col]
+                    K.A.nzval[rowidx] = 0.0
+                end
+            end
+        end
+        for dof in fixed_dofs
+            K.A[dof, dof] = 1.0  # ha létezett korábban
+            f.a[dof] = u.a[dof]
+            f_kin[dof] = 0.0
+        end
+        dropzeros!(K.A)
+        #u.a .= cholesky(Symmetric(K.A)) \ (f.a - f_kin)
+        if iterative
+            error(
+                "The legacy iterative solver in solveDisplacement is no longer supported. " *
+                "Use solveField(...; solver=:cg) instead."
+            )
+        elseif ordering == false
+            u.a .= lu(K.A, q=nothing) \ (f.a - f_kin)
+        else
+            u.a .= K.A \ (f.a - f_kin)
+        end
+        return u
+    end
+end
+
+"""
+    solveStrain(q; DoFResults=false)
+                            
+Solves the strain field `E` from displacement vector `q`. Strain field is given
+per elements, so it usually contains jumps at the boundaries of elements. Details
+of mesh is available in `problem`. If `DoFResults` is true, `E` is a matrix with
+nodal results. In this case `showDoFResults` can be used to show the results 
+(otherwise `showStrainResults` or `showElementResults`).
+                            
+Return: `E`
+                            
+Types:
+- `q`: VectorField
+- `E`: TensorField
+"""
+function solveStrain(q; DoFResults=false)
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+    
+    if !isa(q, VectorField) 
+        error("solveStrain:argument must be a VectorField. Now it is '$(typeof(q))'.")
+    end
+    if q.type != :v3D && q.type != :v2D
+        error("solveStrain: argument must be a displacement vector. Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStrain: q.A != []")
+    end
+    nsteps = q.nsteps
+    ε = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    type = :e
+    if DoFResults == true
+        E1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ν = problem.material[ipg].ν
+        dim = 0
+        if problem.dim == 3 && problem.type == :Solid
+            dim = 3
+            rowsOfB = 6
+            b = 1
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            dim = 2
+            rowsOfB = 3
+            b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            dim = 2
+            rowsOfB = 3
+            b = 1
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            dim = 2
+            rowsOfB = 4
+            b = 1
+        else
+            error("solveStrain: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(dim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                #e0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                invJac = zeros(3, 3numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                r = zeros(numNodes)
+                leTags = length(elemTags[i])
+                @inbounds for j in 1:leTags
+                    elem = elemTags[i][j]
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+                    @inbounds for k in 1:numNodes
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    fill!(B, 0.0)
+                    if dim == 2 && rowsOfB == 3
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*3-0, l*2-0] = B[k*3-2, l*2-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*3-0, l*2-1] = B[k*3-1, l*2-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 3 && rowsOfB == 6
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*6-5, l*3-2] = B[k*6-2, l*3-1] = B[k*6-0, l*3-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*6-4, l*3-1] = B[k*6-2, l*3-2] = B[k*6-1, l*3-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*6-3, l*3-0] = B[k*6-1, l*3-1] = B[k*6-0, l*3-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    elseif dim == 2 && rowsOfB == 4
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l, k] / r[k]
+                        end
+                    else
+                        error("solveStrain: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    push!(numElem, elem)
+                    @inbounds for k in 1:dim
+                        nn2[k:dim:dim*numNodes] = dim * nnet[j, 1:numNodes] .- (dim - k)
+                    end
+                    #fill!(e, 0.0)
+                    e = zeros(9numNodes, nsteps) # tensors have nine elements
+                    @inbounds for k in 1:numNodes
+                        if rowsOfB == 6 && dim == 3 && problem.type == :Solid
+                            B1 = @view B[k*6-5:k*6, 1:3*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, e0[6]/2,
+                                    e0[4]/2, e0[2], e0[5]/2,
+                                    e0[6]/2, e0[5]/2, e0[3]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4]/2, e0[6]/2, e0[4]/2, e0[2], e0[5]/2, e0[6]/2, e0[5]/2, e0[3]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStress
+                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                    e0[3]/2, e0[2], 0,
+                                    0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, ν/(ν-1)*(e0[1]+e0[2])]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
+                            B1 = @view B[k*3-2:k*3, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[3]/2, 0,
+                                    e0[3]/2, e0[2], 0,
+                                    0, 0, 0]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[3], 0, e0[3], e0[2], 0, 0, 0, 0]
+                                end
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                e0 = B1 * q.a[nn2, kk]
+                                if DoFResults == false
+                                    e[(k-1)*9+1:k*9, kk] = [e0[1], e0[4]/2, 0,
+                                    e0[4]/2, e0[3], 0,
+                                    0, 0, e0[2]]
+                                end
+                                if DoFResults == true
+                                    E1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [e0[1], e0[4], 0, e0[4], e0[3], 0, 0, 0, e0[2]]
+                                end
+                            end
+                        else
+                            error("solveStrain: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        end
+                    end
+                    if DoFResults == true
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    end
+                    if DoFResults == false
+                        push!(ε, e)
+                    end
+                end
+            end
+        end
+    end
+    if DoFResults == true
+        @inbounds for k in 1:9
+            @inbounds for l in 1:non
+                E1[k + 9 * l - 9, :] ./= pcs[l]
+            end
+        end
+    end
+    if DoFResults == true
+        epsilon = TensorField([], E1, q.t, [], nsteps, type, problem)
+        return epsilon
+    else
+        epsilon = TensorField(ε, [;;], q.t, numElem, nsteps, type, problem)
+        return epsilon
+    end
+end
+
+function solveStrainNew(q; DoFResults::Bool=false)
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+    
+    # --- ellenőrzések ---
+    if !(q isa VectorField)
+        error("solveStrain: argument must be a VectorField. Now it is '$(typeof(q))'.")
+    end
+    if q.type != :v3D && q.type != :v2D
+        error("solveStrain: argument must be a displacement vector (v2D/v3D). Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStrain: q.A != []")
+    end
+    
+    nsteps = q.nsteps
+    dim_global = problem.dim
+    pdim = problem.pdim
+    non  = problem.non
+    
+    # kimenet gyűjtők
+    ε = Vector{Matrix{Float64}}()   # elemenként (9*numNodes × nsteps)
+    numElem = Int[]                 # elem címkék
+    type = :e
+    
+    # DoF-átlagoláshoz (csomóponti strain):
+    if DoFResults
+        E1  = zeros(non * 9, nsteps) # 9 komponens / csomópont
+        pcs = zeros(Int, non)         # hány elem érinti a csomópontot
+    end
+    
+    # --- anyagcsoportonként (physical group) ---
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        ν = problem.material[ipg].ν   # PlaneStress-hez kell a ε_zz képlethez
+        
+        # helyi dim/rowsOfB/b a feladat típusától függően
+        local_dim = 0
+        rowsOfB = 0
+        b = 1.0
+        if problem.dim == 3 && problem.type == :Solid
+            local_dim = 3; rowsOfB = 6; b = 1.0
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            local_dim = 2; rowsOfB = 3; b = problem.thickness
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            local_dim = 2; rowsOfB = 3; b = 1.0
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            local_dim = 2; rowsOfB = 4; b = 1.0
+        else
+            error("solveStrain: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        # AXI-hoz kell a (R= X) koordináta
+        ncoord2 = zeros(3 * non)
+        if problem.type == :AxiSymmetric
+            #nodeTags, ncoord, _ = gmsh.model.mesh.getNodes(local_dim, -1, true, false)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags .* 3 .- 2] .= ncoord[1:3:length(ncoord)]  # R (X)
+            ncoord2[nodeTags .* 3 .- 1] .= ncoord[2:3:length(ncoord)]  # Z (Y)
+            ncoord2[nodeTags .* 3 .- 0] .= ncoord[3:3:length(ncoord)]
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        
+        # --- érintett elemtípusok összegyűjtése ---
+        types_in_group = Set{Int}()
+        for (edim, etag) in dimTags
+            t, _, _ = gmsh.model.mesh.getElements(edim, etag)
+            foreach(x->push!(types_in_group, x), t)
+        end
+        
+        # --- típusonként ---
+        for et in types_in_group
+            elementName, edim, order, numNodes::Int, localNodeCoord, _ =
+            gmsh.model.mesh.getElementProperties(et)
+            
+            # "pontok": itt az ELEMENT CSOMÓPONTOK lokális koordinátái (nodeCoord)
+            nodeCoord = zeros(numNodes * 3)
+            @inbounds for k in 1:local_dim, j in 1:numNodes
+                nodeCoord[k + (j-1)*3] = localNodeCoord[k + (j-1)*local_dim]
+            end
+            
+            # bázisfüggvények node-helyeken
+            _, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+            ∇h_ref = reshape(dfun, :, numNodes)  # (3*numNodes)×numNodes → rendezve
+            _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+            h_ref = reshape(fun, :, numNodes)    # numNodes × numNodes
+            
+            # típus összes elemére Jacobianok előre
+            elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)
+            jac_all, _, _ = gmsh.model.mesh.getJacobians(et, nodeCoord)  # det nem kell a strainhez
+            nip = numNodes  # nodeCoord hosszából következik
+            
+            # elemTag → globális index a jac_all-hoz
+            idxmap = Dict{Int,Int}(); sizehint!(idxmap, length(elemTags_global))
+            @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                idxmap[gtag] = gi - 1
+            end
+            
+            # --- a csoport adott entitásain belüli elemek ---
+            for (edim, etag) in dimTags
+                edim == local_dim || continue
+                elemTags_local, elemNodeTags_local = gmsh.model.mesh.getElementsByType(et, etag)
+                isempty(elemTags_local) && continue
+                
+                nloc = length(elemTags_local)
+                dof_elem = pdim * numNodes
+                
+                # munkaterek
+                invJac = zeros(3, 3*numNodes)                    # 3×(3*numNodes)
+                dH     = zeros(local_dim, numNodes * numNodes)   # ∂h (∂/x, ∂/y[,∂/z]) minden csomópontra
+                B      = zeros(rowsOfB * numNodes, dof_elem)     # B-mátrix csomópontokra
+                nn2    = zeros(Int, dof_elem)
+                r      = (problem.type == :AxiSymmetric) ? zeros(numNodes) : Float64[]
+                
+                # gyors csomóponti index-minta a B1 kivágásához
+                # csomópont k-hoz tartozó rows: (k-1)*rowsOfB+1 : k*rowsOfB
+                # dof-oszlopok: 1:dof_elem
+                
+                # feldolgozás elemenként
+                @inbounds for j in 1:nloc
+                    elem = elemTags_local[j]
+                    
+                    # node-tag-ek
+                    nnet_j = similar(nn2, Int, numNodes)
+                    for k in 1:numNodes
+                        nnet_j[k] = elemNodeTags_local[(j-1)*numNodes + k]
+                    end
+                    
+                    # Jacobian szelet és inverzei node-pontonként
+                    gidx = idxmap[elem]
+                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
+                    
+                    @inbounds for k in 1:numNodes
+                        Jk = @view jac_slice[(k-1)*9+1 : k*9]
+                        # 3×3 mátrix
+                        J = reshape(copy(Jk), 3, 3)  # kis mátrix → a copy olcsó; kerülhet SMatrix is, de így kisebb a compile-time
+                        IJT = permutedims(inv(J))    # inv(J)'  (3×3)
+                        invJac[:, 3k-2:3k] .= IJT
+                    end
+                    
+                    # sugár (AXI): r[k] = Σ_l h_ref[l,k] * R_l
+                    if problem.type == :AxiSymmetric
+                        @inbounds for k in 1:numNodes
+                            r[k] = dot(@view(h_ref[:,k]), ncoord2[nnet_j .* 3 .- 2])
+                        end
+                    end
+                    
+                    # ∂h mező (lokális → globális deriváltak)
+                    fill!(dH, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        # invJac[1:local_dim, k*3-2 : k*3-(3-local_dim)] * ∇h_ref[l*3-2 : l*3-(3-local_dim), k]
+                        dH[1:local_dim, (k-1)*numNodes + l] =
+                        @view(invJac[1:local_dim, (k-1)*3+1 : (k-1)*3+local_dim]) *
+                        @view(∇h_ref[l*3-2 : l*3-(3-local_dim), k])
+                    end
+                    
+                    # B összeállítás (csomópontokra)
+                    fill!(B, 0.0)
+                    if local_dim == 2 && rowsOfB == 3 && problem.type == :PlaneStress
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            # εxx, εyy, γxy
+                            B[k*3-2, l*2-1] = dH[1, (k-1)*numNodes + l]
+                            B[k*3-1, l*2-0] = dH[2, (k-1)*numNodes + l]
+                            B[k*3-0, l*2-1] = dH[2, (k-1)*numNodes + l]
+                            B[k*3-0, l*2-0] = dH[1, (k-1)*numNodes + l]
+                        end
+                    elseif local_dim == 2 && rowsOfB == 3 && problem.type == :PlaneStrain
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            # εxx, εyy, γxy
+                            B[k*3-2, l*2-1] = dH[1, (k-1)*numNodes + l]
+                            B[k*3-1, l*2-0] = dH[2, (k-1)*numNodes + l]
+                            B[k*3-0, l*2-1] = dH[2, (k-1)*numNodes + l]
+                            B[k*3-0, l*2-0] = dH[1, (k-1)*numNodes + l]
+                        end
+                    elseif local_dim == 3 && rowsOfB == 6 && problem.type == :Solid
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            # εxx, εyy, εzz, γyz, γxz, γxy (Voigt 6)
+                            B[k*6-5, l*3-2] = dH[1, (k-1)*numNodes + l]   # εxx ← ∂u/∂x
+                            B[k*6-4, l*3-1] = dH[2, (k-1)*numNodes + l]   # εyy ← ∂v/∂y
+                            B[k*6-3, l*3-0] = dH[3, (k-1)*numNodes + l]   # εzz ← ∂w/∂z
+                            
+                            B[k*6-2, l*3-1] = dH[3, (k-1)*numNodes + l]   # γyz ← ∂w/∂y
+                            B[k*6-2, l*3-0] += dH[2, (k-1)*numNodes + l]  #       + ∂v/∂z
+                            
+                            B[k*6-1, l*3-2] = dH[3, (k-1)*numNodes + l]   # γxz ← ∂w/∂x
+                            B[k*6-1, l*3-0] += dH[1, (k-1)*numNodes + l]  #       + ∂u/∂z
+                            
+                            B[k*6-0, l*3-2] = dH[2, (k-1)*numNodes + l]   # γxy ← ∂v/∂x
+                            B[k*6-0, l*3-1] += dH[1, (k-1)*numNodes + l]  #       + ∂u/∂y
+                        end
+                    elseif local_dim == 2 && rowsOfB == 4 && problem.type == :AxiSymmetric
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            # εrr, εzz, εθθ, γrz
+                            B[k*4-3, l*2-1] = dH[1, (k-1)*numNodes + l]               # εrr ← ∂u_r/∂r
+                            B[k*4-2, l*2-0] = dH[2, (k-1)*numNodes + l]               # εzz ← ∂u_z/∂z
+                            B[k*4-1, l*2-1] = (r[k] < 1e-12) ? 0.0 : h_ref[l,k] / r[k] # εθθ ← u_r / r
+                            B[k*4-0, l*2-1] = dH[2, (k-1)*numNodes + l]               # γrz ← ∂u_r/∂z + ∂u_z/∂r
+                            B[k*4-0, l*2-0] += dH[1, (k-1)*numNodes + l]
+                        end
+                    else
+                        error("solveStrain: rowsOfB=$rowsOfB, dim=$local_dim, type=$(problem.type) not supported.")
+                    end
+                    
+                    # globális dof indexek (nn2)
+                    @inbounds for c in 1:pdim
+                        nn2[c:pdim:dof_elem] = pdim .* nnet_j .- (pdim - c)
+                    end
+                    
+                    # elemi elmozdulás vektor(ok) (összes lépésre)
+                    # disp_sub: dof_elem × nsteps
+                    disp_sub = @view q.a[nn2, :]
+                    
+                    # elemi eredmény: 9*numNodes × nsteps
+                    e_elem = zeros(9*numNodes, nsteps)
+                    
+                    # csomópontonként kivágjuk a B-ből a blokkot, és minden lépésre szorozzuk
+                    @inbounds for k in 1:numNodes
+                        row1 = (k-1)*rowsOfB + 1
+                        row2 = k*rowsOfB
+                        B1 = @view B[row1:row2, :]
+                        
+                        # e0: Voigt vektor (3D:6×, 2D:3× vagy AXI:4×) minden lépésre
+                        # számoljuk lépésenként, hogy ne hozzunk létre hatalmas tempókat
+                        @inbounds for kk in 1:nsteps
+                            e0 = B1 * @view(disp_sub[:, kk])
+                            # e-tensor (9) kitöltése a típusnak megfelelően
+                            if rowsOfB == 6 && local_dim == 3 && problem.type == :Solid
+                                # [εxx, εyy, εzz, γyz, γxz, γxy]
+                                e9 = (Float64[
+                                e0[1], e0[6]/2, e0[5]/2,
+                                e0[6]/2, e0[2], e0[4]/2,
+                                e0[5]/2, e0[4]/2, e0[3]
+                                ])
+                                e_elem[(k-1)*9+1 : k*9, kk] = e9
+                                if DoFResults
+                                    base = 9*(nnet_j[k]-1)
+                                    E1[base+1:base+9, kk] .+= e9
+                                end
+                            elseif rowsOfB == 3 && local_dim == 2 && problem.type == :PlaneStress
+                                # [εxx, εyy, γxy] → 3D tenzor komponensek, εzz = ν/(ν-1)*(εxx+εyy)
+                                ezz = ν/(ν-1) * (e0[1] + e0[2])
+                                e9 = (Float64[
+                                e0[1], e0[3]/2, 0.0,
+                                e0[3]/2, e0[2], 0.0,
+                                0.0,     0.0,   ezz
+                                ])
+                                e_elem[(k-1)*9+1 : k*9, kk] = e9
+                                if DoFResults
+                                    base = 9*(nnet_j[k]-1)
+                                    # megjegyzés: eredetiben a DoFResults esetén γxy-t nem felezted; ott "e0[3]" ment
+                                    # itt követjük az elem-eredmény konvenciót: γxy/2 → e12
+                                    E1[base+1:base+9, kk] .+= e9
+                                end
+                            elseif rowsOfB == 3 && local_dim == 2 && problem.type == :PlaneStrain
+                                # [εxx, εyy, γxy], εzz = 0
+                                e9 = (Float64[
+                                e0[1], e0[3]/2, 0.0,
+                                e0[3]/2, e0[2], 0.0,
+                                0.0,     0.0,   0.0
+                                ])
+                                e_elem[(k-1)*9+1 : k*9, kk] = e9
+                                if DoFResults
+                                    base = 9*(nnet_j[k]-1)
+                                    E1[base+1:base+9, kk] .+= e9
+                                end
+                            elseif rowsOfB == 4 && local_dim == 2 && problem.type == :AxiSymmetric
+                                # [εrr, εzz, εθθ, γrz]
+                                e9 = (Float64[
+                                e0[1], e0[4]/2, 0.0,
+                                e0[4]/2, e0[3], 0.0,
+                                0.0,     0.0,   e0[2]
+                                ])
+                                e_elem[(k-1)*9+1 : k*9, kk] = e9
+                                if DoFResults
+                                    base = 9*(nnet_j[k]-1)
+                                    E1[base+1:base+9, kk] .+= e9
+                                end
+                            else
+                                error("solveStrain: unexpected branch (rowsOfB=$rowsOfB, local_dim=$local_dim, type=$(problem.type)).")
+                            end
+                        end
+                    end
+                    
+                    # DoFResults-hez számlálás (hányszor érintett a csomópont)
+                    if DoFResults
+                        pcs[nnet_j] .+= 1
+                    else
+                        push!(ε, e_elem)
+                        push!(numElem, elem)
+                    end
+                end
+            end
+        end
+    end
+    
+    if DoFResults
+        # csomóponti átlagolás
+        @inbounds for l in 1:non
+            cnt = pcs[l]
+            if cnt > 0
+                E1[9*(l-1)+1 : 9*l, :] ./= cnt
+            end
+        end
+        return TensorField([], E1, q.t, [], nsteps, type, problem)
+    else
+        return TensorField(ε, [;;], q.t, numElem, nsteps, type, problem)
+    end
+end
+
+# --- anyagmátrix és kísérő adatok feszültséghez ---
+@inline function constitutive_matrix_stress(dim::Int, type::Symbol,
+    E::Float64, ν::Float64, thickness::Float64)
+
+    if dim == 3 && type == :Solid
+        D = (E / ((1 + ν) * (1 - 2ν))) * SMatrix{6,6}(
+            1-ν, ν,   ν,   0,          0,          0,
+            ν,   1-ν, ν,   0,          0,          0,
+            ν,   ν,   1-ν, 0,          0,          0,
+            0,   0,   0,   (1-2ν)/2,   0,          0,
+            0,   0,   0,   0,          (1-2ν)/2,   0,
+            0,   0,   0,   0,          0,          (1-2ν)/2
+        )
+        rowsOfB = 6
+        b       = 1.0
+        E0      = SVector{6,Float64}(1,1,1,0,0,0)
+        return D, rowsOfB, b, E0
+
+    elseif dim == 2 && type == :PlaneStress
+        D = (E / (1 - ν^2)) * SMatrix{3,3}(
+            1,   ν,   0,
+            ν,   1,   0,
+            0,   0, (1-ν)/2
+        )
+        rowsOfB = 3
+        b       = thickness
+        E0      = SVector{3,Float64}(1,1,0)
+        return D, rowsOfB, b, E0
+
+    elseif dim == 2 && type == :PlaneStrain
+        D = (E / ((1 + ν) * (1 - 2ν))) * SMatrix{3,3}(
+            1-ν,  ν,   0,
+            ν,  1-ν,   0,
+            0,   0, (1-2ν)/2
+        )
+        rowsOfB = 3
+        b       = 1.0
+        E0      = SVector{3,Float64}(1,1,0)
+        return D, rowsOfB, b, E0
+
+    elseif dim == 2 && type == :AxiSymmetric
+        D = (E / ((1 + ν) * (1 - 2ν))) * SMatrix{4,4}(
+            1-ν,  ν,  ν,  0,
+            ν,  1-ν,  ν,  0,
+            ν,   ν, 1-ν,  0,
+            0,   0,  0, (1-2ν)/2
+        )
+        rowsOfB = 4
+        b       = 1.0
+        E0      = SVector{4,Float64}(1,1,1,0)
+        return D, rowsOfB, b, E0
+
+    else
+        error("constitutive_matrix_stress: unsupported dim/type combo")
+    end
+end
+
+# --- B mátrix kitöltés a csomópontokra értékelve ---
+@inline function fill_B_node!(B::Matrix{Float64}, ∂h::Matrix{Float64},
+    numNodes::Int, pdim::Int, rowsOfB::Int, dim::Int)
+
+    fill!(B, 0.0)
+    if pdim == 2 && rowsOfB == 3
+        @inbounds for k in 1:numNodes, l in 1:numNodes
+            B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+            B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+            B[k*rowsOfB-0, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+            B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+        end
+    elseif pdim == 3 && rowsOfB == 6
+        @inbounds for k in 1:numNodes, l in 1:numNodes
+            B[k*rowsOfB-5, l*pdim-2] = ∂h[1,(k-1)*numNodes+l]
+            B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+            B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+            B[k*rowsOfB-4, l*pdim-1] = ∂h[2,(k-1)*numNodes+l]
+            B[k*rowsOfB-2, l*pdim-2] = ∂h[2,(k-1)*numNodes+l]
+            B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+            B[k*rowsOfB-3, l*pdim-0] = ∂h[3,(k-1)*numNodes+l]
+            B[k*rowsOfB-1, l*pdim-1] = ∂h[3,(k-1)*numNodes+l]
+            B[k*rowsOfB-0, l*pdim-2] = ∂h[3,(k-1)*numNodes+l]
+        end
+    elseif pdim == 2 && rowsOfB == 4 # axi
+        # itt majd külön kezeljük az r/körirány tagot a fő függvényben
+        # (mert kell az r[k] sugár), ezért csak a deriváltak része:
+        @inbounds for k in 1:numNodes, l in 1:numNodes
+            B[k*4-3, l*2-1] = ∂h[1,(k-1)*numNodes+l]
+            B[k*4-1, l*2-0] = ∂h[2,(k-1)*numNodes+l]
+            # a keverő tagokat nem írjuk felül itt; a főben befejezzük
+        end
+    else
+        error("fill_B_node!: unsupported (pdim, rowsOfB)=($pdim, $rowsOfB)")
+    end
+    return B
+end
+
+# --- 3×3 inverz (SMatrix) – funkcionális egyező a Base.inv-vel ---
+@inline function inv3x3(A::SMatrix{3,3,Float64})
+    detA = det(A)
+    c11 =  A[2,2]*A[3,3] - A[2,3]*A[3,2]
+    c12 =  A[1,3]*A[3,2] - A[1,2]*A[3,3]
+    c13 =  A[1,2]*A[2,3] - A[1,3]*A[2,2]
+    c21 =  A[2,3]*A[3,1] - A[2,1]*A[3,3]
+    c22 =  A[1,1]*A[3,3] - A[1,3]*A[3,1]
+    c23 =  A[1,3]*A[2,1] - A[1,1]*A[2,3]
+    c31 =  A[2,1]*A[3,2] - A[2,2]*A[3,1]
+    c32 =  A[1,2]*A[3,1] - A[1,1]*A[3,2]
+    c33 =  A[1,1]*A[2,2] - A[1,2]*A[2,1]
+    Cof = SMatrix{3,3}(c11,c12,c13,c21,c22,c23,c31,c32,c33)
+    return (1/detA) * Cof
+end
+
+"""
+    solveStress(q::VectorField; 
+                T=ScalarField([],[;;],[0.0],[],0,:null,q.model), 
+                T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model), 
+                DoFResults=false)
+
+Solves the stress field `S` from displacement vector `q`. Stress field is given
+per elements, so it usually contains jumps at the boundary of elements. Details
+of mesh is available in `problem`. If `DoFResults` is true, `S` is a matrix with
+nodal results. In this case `showDoFResults` can be used to show the results 
+(otherwise `showStressResults` or `showElementResults`).
+If the `T` temperature field (and `T₀` initial temperature field if it differs from zero) is given, the
+function solves also the thermal stresses.
+                            
+Return: `S`
+                            
+Types:
+- `q`: VectorField
+- `T`: ScalarField
+- `T₀`: ScalarField
+- `S`: TensorField
+"""
+function solveStress(q::VectorField; T=ScalarField([],[;;],[0.0],[],0,:null,q.model), T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model), DoFResults=false)
+    if q.type == :dummy
+        return nothing
+    end
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+    # Jacobian --> faster
+
+    if !isa(q, VectorField) 
+        error("solveStress:argument must be a VectorField. Now it is '$(typeof(q))'.")
+    end
+    if q.type != :v3D && q.type != :v2D
+        error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStress: q.A != []")
+    end
+    
+    type = :s
+    nsteps = q.nsteps
+    σ = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    if DoFResults == true
+        S1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        α = problem.material[ipg].α
+        ακ = α * E / ν / (1 - 2ν)
+        dim = 0
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0;
+            ν 1-ν ν 0 0 0;
+            ν ν 1-ν 0 0 0;
+            0 0 0 (1-2ν)/2 0 0;
+            0 0 0 0 (1-2ν)/2 0;
+            0 0 0 0 0 (1-2ν)/2]
+            
+            dim = 3
+            rowsOfB = 6
+            b = 1
+            E0 = [1,1,1,0,0,0]
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * [1 ν 0;
+            ν 1 0;
+            0 0 (1-ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = problem.thickness
+            E0 = [1,1,0]
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0;
+            ν 1-ν 0;
+            0 0 (1-2ν)/2]
+            dim = 2
+            rowsOfB = 3
+            b = 1
+            E0 = [1,1,0]
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0;
+            ν 1-ν ν 0;
+            ν ν 1-ν 0;
+            0 0 0 (1-2ν)/2]
+            dim = 2
+            rowsOfB = 4
+            b = 1
+            E0 = [1,1,1,0]
+        else
+            error("solveStress: dimension is $(problem.dim), problem type is $(problem.type).")
+        end
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                H = zeros(numNodes, numNodes)
+                @inbounds for j in 1:numNodes
+                    @inbounds for k in 1:numNodes
+                        H[j, k] = h[k, j]
+                    end
+                end
+                invJac = zeros(3, 3numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                nn1 = zeros(Int, numNodes)
+                r = zeros(numNodes)
+                leTags = length(elemTags[i])
+                @inbounds for j in 1:leTags
+                    elem = elemTags[i][j]
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    Jac = reshape(jac, 3, :)
+                    @inbounds for k in 1:numNodes
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+                    fill!(∂h, 0.0)
+                    for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    end
+                    fill!(B, 0.0)
+                    if pdim == 2 && rowsOfB == 3
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                        end
+                    elseif pdim == 3 && rowsOfB == 6
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                        end
+                    elseif pdim == 2 && rowsOfB == 4
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l, k] / r[k]
+                        end
+                    else
+                        error("solveStress: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    end
+                    push!(numElem, elem)
+                    @inbounds for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    nn1[1:numNodes] = nnet[j, 1:numNodes]
+                    #fill!(s, 0.0)
+                    s = zeros(9numNodes, nsteps) # tensors have nine elements
+                    @inbounds for k in 1:numNodes
+                        if rowsOfB == 6 && pdim == 3 && problem.type == :Solid
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
+                                end
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
+                                    s0[4], s0[2], s0[5],
+                                    s0[6], s0[5], s0[3]]
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && pdim == 2 && problem.type == :PlaneStress
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
+                                end
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                    s0[3], s0[2], 0,
+                                    0, 0, 0]
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, 0]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
+                                end
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                    s0[3], s0[2], 0,
+                                    0, 0, ν*(s0[1]+s0[2])]
+                                    # PlaneStrain: σz ≠ 0
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, ν*(s0[1]+s0[2])]
+                                end
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
+                            @inbounds for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * dot(H1, (T.a[nn1, kk] - T₀.a[nn1])) * α
+                                end
+                                if DoFResults == false
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
+                                    s0[4], s0[3], 0,
+                                    0, 0, s0[2]]
+                                end
+                                if DoFResults == true
+                                    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[4], 0, s0[4], s0[3], 0, 0, 0, s0[2]]
+                                end
+                            end
+                        else
+                            error("solveStress: rowsOfB is $rowsOfB, dimension of the problem is $dim, problem type is $(problem.type).")
+                        end
+                    end
+                    if DoFResults == true
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    end
+                    if DoFResults == false
+                        push!(σ, s)
+                    end
+                end
+            end
+        end
+    end
+    if DoFResults == true
+        @inbounds for k in 1:9
+            @inbounds for l in 1:non
+                S1[k + 9 * l - 9, :] ./= pcs[l]
+            end
+        end
+    end
+    if DoFResults == true
+        sigma = TensorField([], S1, q.t, [], nsteps, type, problem)
+        return sigma
+    else
+        sigma = TensorField(σ, [;;], q.t, numElem, nsteps, type, problem)
+        return sigma
+    end
+end
+
+function solveStressSlow(q; T=ScalarField([],[;;],[0.0],[],0,:null,q.model),
+                        T₀=ScalarField([],reshape(zeros(q.model.non),:,1),[0],[],1,:scalar,q.model),
+                        DoFResults=false)
+    # Jacobians --> slow
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+
+    if !isa(q, VectorField); error("solveStress:argument must be a VectorField. Now it is '$(typeof(q))'."); end
+    if q.type != :v3D && q.type != :v2D; error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'."); end
+    if q.A != []; error("solveStress: q.A != []"); end
+
+    type = :s
+    nsteps = q.nsteps
+    σ = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    if DoFResults
+        S1 = zeros(non * 9, nsteps)
+        pcs = zeros(Int64, non * dim)
+    end
+
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        ν = problem.material[ipg].ν
+        α = problem.material[ipg].α
+
+        D = Matrix{Float64}(undef, 0, 0)
+        rowsOfB = 0
+        b = 1.0
+        E0 = Float64[]
+
+        if problem.dim == 3 && problem.type == :Solid
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0 0 0; ν 1-ν ν 0 0 0; ν ν 1-ν 0 0 0; 0 0 0 (1-2ν)/2 0 0; 0 0 0 0 (1-2ν)/2 0; 0 0 0 0 0 (1-2ν)/2]
+            rowsOfB = 6; b = 1.0; E0 = [1,1,1,0,0,0]
+        elseif problem.dim == 2 && problem.type == :PlaneStress
+            D = E / (1 - ν^2) * [1 ν 0; ν 1 0; 0 0 (1-ν)/2]
+            rowsOfB = 3; b = problem.thickness; E0 = [1,1,0]
+        elseif problem.dim == 2 && problem.type == :PlaneStrain
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν 0; ν 1-ν 0; 0 0 (1-2ν)/2]
+            rowsOfB = 3; b = 1.0; E0 = [1,1,0]
+        elseif problem.dim == 2 && problem.type == :AxiSymmetric
+            D = E / ((1 + ν) * (1 - 2ν)) * [1-ν ν ν 0; ν 1-ν ν 0; ν ν 1-ν 0; 0 0 0 (1-2ν)/2]
+            rowsOfB = 4; b = 1.0; E0 = [1,1,1,0]
+        else
+            error("solveStress: dimension=$(problem.dim), type=$(problem.type).")
+        end
+
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            edim, etag = dimTags[idm]
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            nodeTags, ncoord, _ = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] .= ncoord[1:3:end]
+            ncoord2[nodeTags*3 .- 1] .= ncoord[2:3:end]
+            ncoord2[nodeTags*3 .- 0] .= ncoord[3:3:end]
+
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int, localNodeCoord, numPrimaryNodes =
+                    gmsh.model.mesh.getElementProperties(et)
+
+                # lokális (csomóponti) értékeléshez IP = csomópontok lokális koordinátái
+                nodeCoord = zeros(numNodes * 3)
+                @inbounds for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k + (j-1)*3] = localNodeCoord[k + (j-1)*dim]
+                end
+
+                comp, dfun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                ∇h = reshape(dfun, :, numNodes)
+                comp, fun, _ = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                h = reshape(fun, :, numNodes)
+
+                # --- FONTOS: globális sorrend és mapping felépítése ---
+                elemTags_global, _ = gmsh.model.mesh.getElementsByType(et)   # minden et típusú elem tag-je, globális sorrendben
+                jac_all, jacDet_all, coord_all = gmsh.model.mesh.getJacobians(et, nodeCoord) # ugyanerre a globális sorrendre
+                nip = length(jacDet_all) ÷ length(elemTags_global)
+
+                idxmap = Dict{Int,Int}()           # elemTag -> (globális index - 1)
+                @inbounds for (gi, gtag) in enumerate(elemTags_global)
+                    idxmap[gtag] = gi - 1
+                end
+                # -----------------------------------------------
+
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                H = zeros(numNodes, numNodes)
+                @inbounds for j in 1:numNodes, k in 1:numNodes
+                    H[j, k] = h[k, j]
+                end
+
+                invJac = zeros(3, 3*numNodes)
+                ∂h = zeros(3, numNodes * numNodes)
+                B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                nn1 = zeros(Int, numNodes)
+                r = zeros(numNodes)
+                s = zeros(9*numNodes, nsteps)
+
+                leTags = length(elemTags[i])
+                @inbounds for j in 1:leTags
+                    elem = elemTags[i][j]
+                    @inbounds for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes + k]
+                    end
+
+                    # --- helyes szelet a GLOBÁLIS jac_all-ból: idxmap alapján ---
+                    gidx = idxmap[elem]              # NEM j-1!
+                    jac_slice = @view jac_all[gidx*9*nip + 1 : (gidx+1)*9*nip]
+                    # ------------------------------------------------------------
+
+                    @inbounds for k in 1:numNodes
+                        Jk = @view jac_slice[(k-1)*9+1 : k*9]
+                        Jac = reshape(Jk, 3, 3)
+                        invJac[1:3, 3*k-2:3*k] = inv(Jac)'
+                        r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    end
+
+                    fill!(∂h, 0.0)
+                    @inbounds for k in 1:numNodes, l in 1:numNodes
+                        ∂h[1:dim, (k-1)*numNodes+l] =
+                            invJac[1:dim, k*3-2:k*3-(3-dim)] *
+                            ∇h[l*3-2:l*3-(3-dim), k]
+                    end
+
+                    fill!(B, 0.0)
+                    if pdim == 2 && rowsOfB == 3
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                        end
+                    elseif pdim == 3 && rowsOfB == 6
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3,(k-1)*numNodes+l]
+                        end
+                    elseif pdim == 2 && rowsOfB == 4
+                        @inbounds for k in 1:numNodes, l in 1:numNodes
+                            B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1,(k-1)*numNodes+l]
+                            B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2,(k-1)*numNodes+l]
+                            B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l,k] / r[k]
+                        end
+                    else
+                        error("solveStress: rowsOfB=$rowsOfB, dim=$dim not supported.")
+                    end
+
+                    push!(numElem, elem)
+                    @inbounds for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    nn1 .= nnet[j, 1:numNodes]
+                    fill!(s, 0.0)
+
+                    @inbounds for k in 1:numNodes
+                        if rowsOfB == 6 && pdim == 3 && problem.type == :Solid
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], s0[6],
+                                                            s0[4], s0[2], s0[5],
+                                                            s0[6], s0[5], s0[3]]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
+                                end
+                            end
+                        elseif rowsOfB == 3 && pdim == 2 && problem.type == :PlaneStress
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                                            s0[3], s0[2], 0,
+                                                            0, 0, 0]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, 0]
+                                end
+                            end
+                        elseif rowsOfB == 3 && dim == 2 && problem.type == :PlaneStrain
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*rowsOfB-2:k*rowsOfB, 1:pdim*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[3], 0,
+                                                            s0[3], s0[2], 0,
+                                                            0, 0, ν*(s0[1]+s0[2])]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[3], 0, s0[3], s0[2], 0, 0, 0, ν*(s0[1]+s0[2])]
+                                end
+                            end
+                        elseif rowsOfB == 4 && dim == 2 && problem.type == :AxiSymmetric
+                            H1 = @view H[k, 1:numNodes]
+                            B1 = @view B[k*4-3:k*4, 1:2*numNodes]
+                            for kk in 1:nsteps
+                                s0 = D * B1 * q.a[nn2, kk]
+                                if T.type != :null
+                                    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                                end
+                                if !DoFResults
+                                    s[(k-1)*9+1:k*9, kk] = [s0[1], s0[4], 0,
+                                                            s0[4], s0[3], 0,
+                                                            0, 0, s0[2]]
+                                else
+                                    S1[9*nnet[j,k]-8:9*nnet[j,k], kk] .+=
+                                        [s0[1], s0[4], 0, s0[4], s0[3], 0, 0, 0, s0[2]]
+                                end
+                            end
+                        else
+                            error("solveStress: rowsOfB=$rowsOfB, dim=$dim, type=$(problem.type).")
+                        end
+                    end
+
+                    if DoFResults
+                        pcs[nnet[j,1:numNodes]] .+= 1
+                    else
+                        push!(σ, s)
+                    end
+                end
+            end
+        end
+    end
+
+    if DoFResults
+        @inbounds for k in 1:9, l in 1:non
+            S1[k + 9*l - 9, :] ./= pcs[l]
+        end
+        return TensorField([], S1, q.t, [], nsteps, type, problem)
+    else
+        return TensorField(σ, [;;], q.t, numElem, nsteps, type, problem)
+    end
+end
+
+"""
+    solveAxialForce(u::VectorField)
+                            
+Compute axial (bar/truss) forces from a displacement field.
+                            
+The input displacement field `u` must be nodal (VectorField), typically
+containing the nodal displacements of a truss or bar structure.  
+The output is a scalar field (ScalarField), where each value represents 
+the axial force in a truss element.
+                            
+# Arguments
+- `u::VectorField`: nodal displacement field.
+                            
+# Returns
+- `ScalarField`: axial forces defined per element.
+                            
+# Examples
+```julia
+u = solveDisplacement(problem, load=[loads], support=[supports])  # VectorField of nodal displacements
+N = solveAxialForce(u)                               # ScalarField of axial element forces
+```
+"""
+function solveAxialForce(q::VectorField)
+    problem = q.model
+    gmsh.model.setCurrent(problem.name)
+    
+    if q.type != :v3D && q.type != :v2D
+        error("solveStress: argument must be a displacement vector. Now it is '$(q.type)'.")
+    end
+    if q.A != []
+        error("solveStress: q.A != []")
+    end
+    
+    type = :scalar
+    nsteps = q.nsteps
+    σ = []
+    numElem = Int[]
+    ncoord2 = zeros(3 * problem.non)
+    dim = problem.dim
+    pdim = problem.pdim
+    non = problem.non
+    #if T₀ == 1im
+    #    T₀ = zeros(problem.non)
+    #end
+    #if DoFResults == true
+    #    S1 = zeros(non * 9, nsteps)
+    #    pcs = zeros(Int64, non * dim)
+    #end
+    
+    for ipg in 1:length(problem.material)
+        phName = problem.material[ipg].phName
+        E = problem.material[ipg].E
+        A = problem.material[ipg].A
+        #α = problem.material[ipg].α
+        #ακ = α * E / ν / (1 - 2ν)
+        dim = 0
+        
+        dimTags = gmsh.model.getEntitiesForPhysicalName(phName)
+        for idm in 1:length(dimTags)
+            dimTag = dimTags[idm]
+            edim = dimTag[1]
+            etag = dimTag[2]
+            if edim ≠ 1
+                error("stiffnessMatrixTruss: not 1D elements.")
+            end
+            elemTypes, elemTags, elemNodeTags = gmsh.model.mesh.getElements(edim, etag)
+            #nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes(edim, -1, true, false)
+            nodeTags, ncoord, parametricCoord = gmsh.model.mesh.getNodes()
+            ncoord2[nodeTags*3 .- 2] = ncoord[1:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 1] = ncoord[2:3:length(ncoord)]
+            ncoord2[nodeTags*3 .- 0] = ncoord[3:3:length(ncoord)]
+            for i in 1:length(elemTypes)
+                et = elemTypes[i]
+                elementName, dim, order, numNodes::Int64, localNodeCoord, numPrimaryNodes = gmsh.model.mesh.getElementProperties(et)
+                #s0 = zeros(rowsOfB * numNodes)
+                nodeCoord = zeros(numNodes * 3)
+                for k in 1:dim, j = 1:numNodes
+                    nodeCoord[k+(j-1)*3] = localNodeCoord[k+(j-1)*dim]
+                end
+                #comp, dfun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "GradLagrange")
+                #∇h = reshape(dfun, :, numNodes)
+                #comp, fun, ori = gmsh.model.mesh.getBasisFunctions(et, nodeCoord, "Lagrange")
+                #h = reshape(fun, :, numNodes)
+                nnet = zeros(Int, length(elemTags[i]), numNodes)
+                #pdimT = 1
+                #H = zeros(pdimT * numNodes, pdimT * numNodes)
+                #for j in 1:numNodes
+                #    for k in 1:numNodes
+                #        for l in 1:pdimT
+                #            H[j*pdimT-(pdimT-l), k*pdimT-(pdimT-l)] = h[k, j]
+                #        end
+                #    end
+                #end
+                #invJac = zeros(3, 3numNodes)
+                #∂h = zeros(3, numNodes * numNodes)
+                #B = zeros(rowsOfB * numNodes, pdim * numNodes)
+                nn2 = zeros(Int, pdim * numNodes)
+                #nn1 = zeros(Int, pdimT * numNodes)
+                #r = zeros(numNodes)
+                B1 = [-1 1]
+                for j in 1:length(elemTags[i])
+                    elem = elemTags[i][j]
+                    for k in 1:numNodes
+                        nnet[j, k] = elemNodeTags[i][(j-1)*numNodes+k]
+                    end
+                    #jac, jacDet, coord = gmsh.model.mesh.getJacobian(elem, nodeCoord)
+                    #Jac = reshape(jac, 3, :)
+                    #for k in 1:numNodes
+                    #    invJac[1:3, 3*k-2:3*k] = inv(Jac[1:3, 3*k-2:3*k])'
+                    #    r[k] = h[:, k]' * ncoord2[nnet[j, :] * 3 .- 2]
+                    #end
+                    #∂h .*= 0
+                    #for k in 1:numNodes, l in 1:numNodes
+                    #    ∂h[1:dim, (k-1)*numNodes+l] = invJac[1:dim, k*3-2:k*3-(3-dim)] * ∇h[l*3-2:l*3-(3-dim), k] #??????????????????
+                    #end
+                    #B .*= 0
+                    #if pdim == 2 && rowsOfB == 3
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*rowsOfB-0, l*pdim-0] = B[k*rowsOfB-2, l*pdim-1] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-0, l*pdim-1] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #    end
+                    #elseif pdim == 3 && rowsOfB == 6
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*rowsOfB-5, l*pdim-2] = B[k*rowsOfB-2, l*pdim-1] = B[k*rowsOfB-0, l*pdim-0] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-4, l*pdim-1] = B[k*rowsOfB-2, l*pdim-2] = B[k*rowsOfB-1, l*pdim-0] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*rowsOfB-3, l*pdim-0] = B[k*rowsOfB-1, l*pdim-1] = B[k*rowsOfB-0, l*pdim-2] = ∂h[3, (k-1)*numNodes+l]
+                    #    end
+                    #elseif pdim == 2 && rowsOfB == 4
+                    #    for k in 1:numNodes, l in 1:numNodes
+                    #        B[k*4-3, l*2-1] = B[k*4-0, l*2-0] = ∂h[1, (k-1)*numNodes+l]
+                    #        B[k*4-1, l*2-0] = B[k*4-0, l*2-1] = ∂h[2, (k-1)*numNodes+l]
+                    #        B[k*4-2, l*2-1] = r[k] < 1e-10 ? 0 : h[l, k] / r[k]
+                    #    end
+                    #else
+                    #    error("solveStress: rows of B is $rowsOfB, dimension of the problem is $dim.")
+                    #end
+                    push!(numElem, elem)
+                    for k in 1:pdim
+                        nn2[k:pdim:pdim*numNodes] = pdim * nnet[j, 1:numNodes] .- (pdim - k)
+                    end
+                    #for k in 1:pdimT
+                    #    nn1[k:pdimT:pdimT*numNodes] = pdimT * nnet[j, 1:numNodes] .- (pdimT - k)
+                    #end
+                    s = zeros(numNodes, nsteps) # tensors have nine elements
+                    x1 = ncoord2[nnet[j, 1] * 3 .- 2]
+                    y1 = ncoord2[nnet[j, 1] * 3 .- 1]
+                    z1 = ncoord2[nnet[j, 1] * 3 .- 0]
+                    x2 = ncoord2[nnet[j, 2] * 3 .- 2]
+                    y2 = ncoord2[nnet[j, 2] * 3 .- 1]
+                    z2 = ncoord2[nnet[j, 2] * 3 .- 0]
+                    L = √((x2 - x1)^2 + (y2 - y1)^2 + (z2 - z1)^2)
+                    c1 = (x2 - x1) / L
+                    c2 = (y2 - y1) / L
+                    c3 = (z2 - z1) / L
+                    T = [c1 c2 c3 0 0 0; 0 0 0 c1 c2 c3]
+                    k1 = A * E / L
+                    for k in 1:numNodes
+                        #if rowsOfB == 6 && pdim == 3 && problem.type == :Solid
+                        #H1 = H[k*pdimT-(pdimT-1):k*pdimT, 1:pdimT*numNodes]
+                        #B1 = B[k*rowsOfB-5:k*rowsOfB, 1:pdim*numNodes]
+                        for kk in 1:nsteps
+                            s0 = k1 * B1 * T * q.a[nn2, kk]
+                            #if T.type != :null
+                            #    s0 -= D * E0 * H1 * (T.a[nn1, kk] - T₀.a[nn1]) * α
+                            #end
+                            #if DoFResults == false
+                            s[k, kk] = s0[1]
+                            #end
+                            #if DoFResults == true
+                            #    S1[9*nnet[j, k]-8:9*nnet[j,k], kk] .+= [s0[1], s0[4], s0[6], s0[4], s0[2], s0[5], s0[6], s0[5], s0[3]]
+                            #end
+                        end
+                    end
+                    #if DoFResults == true
+                    #    pcs[nnet[j,1:numNodes]] .+= 1
+                    #end
+                    #if DoFResults == false
+                    push!(σ, s)
+                    #end
+                end
+            end
+        end
+    end
+    #if DoFResults == true
+    #    for k in 1:9
+    #        for l in 1:non
+    #            S1[k + 9 * l - 9, :] ./= pcs[l]
+    #        end
+    #    end
+    #end
+    #if DoFResults == true
+    #    sigma = TensorField([], S1, q.t, [], nsteps, type, problem)
+    #    return sigma
+    #else
+    sigma = ScalarField(σ, [;;], q.t, numElem, nsteps, type, problem)
+    return sigma
+    #end
+end
+
+"""
+    initialDisplacement(problem::Problem, 
+                        name::String; 
+                        ux=nothing, 
+                        uy=nothing, 
+                        uz=nothing)
+
+Sets the displacement values `ux`, `uy` and `uz` (depending on the dimension of
+the `problem`) at nodes belonging to physical group `name`. Returns the initial
+displacement vector `u0`.
+                            
+Return: u0
+                            
+Types:
+- `problem`: Problem
+- `name`: String 
+- `u0`: VectorField
+- `ux`: Float64 
+- `uy`: Float64 
+- `uz`: Float64 
+"""
+function initialDisplacement(problem, name; ux=nothing, uy=nothing, uz=nothing)
+    bc = BoundaryCondition(name, ux=ux, uy=uy, uz=uz)
+    return applyBoundaryConditions(problem, [bc])
+end
+
+"""
+    initialDisplacement!(u0::VectorField, 
+                         name::String; 
+                         ux=nothing, 
+                         uy=nothing, 
+                         uz=nothing)
+
+Changes the displacement values to `ux`, `uy` and `uz` (depending on the dimension of
+the `problem`) at nodes belonging to physical group `name`. Original values are in
+displacement vector `u0`.
+                            
+Return: nothing
+                            
+Types:
+- `name`: String 
+- `ux`: Float64 
+- `uy`: Float64 
+- `uz`: Float64 
+- `u0`: VectorField
+"""
+function initialDisplacement!(u0, name; ux=nothing, uy=nothing, uz=nothing)
+    bc = BoundaryCondition(name, ux=ux, uy=uy, uz=uz)
+    applyBoundaryConditions!(u0, [bc])
+end
+
+"""
+    initialVelocity(problem::Problem, 
+                    name::String; 
+                    vx=nothing, 
+                    vy=nothing, 
+                    vz=nothing)
+
+Sets the velocity values `vx`, `vy` and `vz` (depending on the dimension of
+the `problem`) at nodes belonging to physical group `name`. Returns the initial
+velocity vector `v0`.
+                            
+Return: v0
+                            
+Types:
+- `problem`: Problem
+- `name`: String 
+- `vx`: Float64 
+- `vy`: Float64 
+- `vz`: Float64 
+- `v0`: VectorField
+"""
+function initialVelocity(problem, name; vx=nothing, vy=nothing, vz=nothing)
+    bc = BoundaryCondition(name, ux=vx, uy=vy, uz=vz)
+    return applyBoundaryConditions(problem, [bc])
+end
+
+"""
+    initialVelocity!(u0::VectorField, 
+                     name::String; 
+                     vx=nothing, 
+                     vy=nothing, 
+                     vz=nothing)
+
+Changes the velocity values `vx`, `vy` and `vz` (depending on the dimension of
+the `problem`) at nodes belonging to physical group `name`. Original values are in
+velocity vector `v0`.
+                            
+Returns: nothing
+                            
+Types:
+- `name`: String 
+- `v0`: VectorField
+- `vx`: Float64 
+- `vy`: Float64 
+- `vz`: Float64 
+"""
+function initialVelocity!(u0, name; vx=nothing, vy=nothing, vz=nothing)
+    bc = BoundaryCondition(name, ux=vx, uy=vy, uz=vz)
+    applyBoundaryConditions!(u0, [bc])
+end
+
+"""
+    CDM(K::SystemMatrix, 
+        M::SystemMatrix, 
+        C::SystemMatrix, 
+        f::Union{ScalarField,VectorField}, 
+        bc::Vector{BoundaryCondition}, 
+        u0::Union{ScalarField,VectorField}, 
+        v0::Union{ScalarField,VectorField}, 
+        n::Int, 
+        Δt::Float64)
+
+aliases:
+
+    CDM(K, M, C, f, bc, u0, v0, n, Δt)
+    CDM(K, M, C, f, u0, v0, n, Δt; support=BoundaryCondition[])
+
+Solves a transient problem using an **explicit central difference–type scheme (CDM)**.
+
+The semi-discrete system
+
+```
+M * ü(t) + C * u̇(t) + K * u(t) = f(t)
+```
+
+is advanced in time using finite differences with a **lumped (diagonal) mass matrix**.
+
+The implementation supports:
+
+- time-independent or time-dependent load vectors `f`
+- time-independent or time-dependent displacement boundary conditions
+- scalar and vector unknowns (`ScalarField`, `VectorField`)
+- consistent incorporation of prescribed displacements into the right-hand side
+
+Boundary conditions are applied *solver-side*:
+
+- constrained DOFs are prescribed directly from `bc`
+- free DOFs evolve according to the dynamic equation
+- velocities on constrained DOFs are computed from the prescribed displacement history
+
+The effect of prescribed displacements is included through
+
+```
+- K_fc * u_c - C_fc * u̇_c
+```
+
+terms in the right-hand side.
+
+If `f.nsteps == 1`, the load is treated as time-independent.  
+If `f.nsteps == n`, the load is applied step-by-step.
+
+---
+
+### Arguments
+
+- `K::SystemMatrix`  
+  Global stiffness matrix.
+- `M::SystemMatrix`  
+  Global mass matrix (must be diagonal / lumped).
+- `C::SystemMatrix`  
+  Global damping matrix.
+- `f::Union{ScalarField,VectorField}`  
+  External load vector (time-independent or time-dependent).
+- `bc::Vector{BoundaryCondition}`  
+  Displacement boundary conditions (possibly time-dependent).
+- `u0::Union{ScalarField,VectorField}`  
+  Initial displacement field (overridden on constrained DOFs).
+- `v0::Union{ScalarField,VectorField}`  
+  Initial velocity field (overridden on constrained DOFs).
+- `n::Int`  
+  Number of time steps (`n ≥ 2`).
+- `Δt::Float64`  
+  Time step size (`Δt > 0`).
+
+---
+
+### Returns
+
+- `u::Union{ScalarField,VectorField}`  
+  Displacement field for all time steps (`ndof × nsteps`).
+- `v::Union{ScalarField,VectorField}`  
+  Velocity field for all time steps (`ndof × nsteps`).
+
+The time vector is:
+
+```
+t = 0 : Δt : (n-1)Δt
+```
+
+---
+
+### Notes
+
+- The scheme is **explicit** and requires a **diagonal (lumped) mass matrix**.
+- The damping term is evaluated using a **first-order velocity approximation**
+  
+  ```
+  
+  ```
+
+u̇ ≈ (uⁱ - uⁱ⁻¹) / Δt
+
+```
+which keeps the left-hand side diagonal.
+- The method is conditionally stable. The critical time step depends on the highest eigenfrequency and damping:
+```
+
+Δt_max = T_min / π * (√(1 + ξ_max^2) - ξ_max)
+
+```
+- The algorithm is purely algebraic and independent of the underlying physics of the field.
+
+# MPC keyword overload
+
+The overload taking initial fields followed by `n, Δt` accepts
+`support=BoundaryCondition[]` and `mpc=MPC[]`. It applies the supplied
+master/slave reduction before time integration; the positional boundary-list
+overload retains the original signature. This is an engineering
+time-integration interface.
+"""
+function CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarField,VectorField}, 
+    bc::Vector{BoundaryCondition}, U0::Union{ScalarField,VectorField}, V0::Union{ScalarField,VectorField}, 
+    n::Int, Δt::Float64)
+    
+    if K.model != M.model || M.model != C.model || C.model != f.model
+        error("CDM: K, M, C and f does not belong to the same model.")
+    end
+
+    if K.model !== M.model ||
+        M.model !== C.model ||
+        C.model !== f.model ||
+        f.model !== U0.model ||
+        U0.model !== V0.model
+        error("CDM: K, M, C, f, U0 and V0 must belong to the same model.")
+    end
+    
+    if f.nsteps != 1 && f.nsteps != n
+        error("CDM: number of time steps in load vector is not equal to the time steps given in CDM.")
+    end
+
+    if f.type != U0.type || f.type != V0.type
+        error("CDM: f, u0 and v0 must be the same type.")
+    end
+
+    TYPE = typeof(f)
+
+    Δt > 0 || error("CDM: Δt must be positive.")
+    n > 0 || error("CDM: n must be non-negative and non-zero.")
+    n > 1 || error("CDM: n must be greater than one.")
+
+    f = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+    
+    free = freeDoFs(K.model, bc)
+    fix = constrainedDoFs(K.model, bc)
+
+    ts = collect(0:Δt:(n-1)*Δt)
+    uu = TYPE([], zeros(size(f.a,1), n), ts, [], n, f.type, f.model)
+    uu = elementsToNodes(uu)
+    vv = copy(uu)
+    applyBoundaryConditions!(uu, bc)
+
+    # Velocities of prescribed DOFs
+    if !isempty(fix)
+        if n >= 3
+            @views vv.a[fix, 1] .=
+                (-3.0 .* uu.a[fix, 1] .+
+                  4.0 .* uu.a[fix, 2] .-
+                          uu.a[fix, 3]) ./ (2.0 * Δt)
+        else
+            @views vv.a[fix, 1] .=
+                (uu.a[fix, 2] .- uu.a[fix, 1]) ./ Δt
+        end
+
+        for i in 2:n
+            @views vv.a[fix, i] .=
+                (uu.a[fix, i] .- uu.a[fix, i-1]) ./ Δt
+        end
+    end
+
+    # Initial conditions on free DOFs
+    @views uu.a[free, 1] .= DoFs(U0)[free, 1]
+    @views vv.a[free, 1] .= DoFs(V0)[free, 1]
+
+    #isdiag = size(M.A, 1) == nnz(M.A) ? true : false
+    if !isdiag(M.A)
+        error("CDM: only lumped M is supported.")
+    end
+
+    Kff = K.A[free, free]
+    Kfc = K.A[free, fix]
+
+    Cff = C.A[free, free]
+    Cfc = C.A[free, fix]
+
+    Mff = M.A[free, free]   # diagonális
+    #Mfc = M.A[free, fix]
+
+    ff = @view f.a[free, :]
+
+    d = diag(Mff)
+    all(abs.(d) .> 0) || error("CDM: zero diagonal entry detected in Mff on free DOFs.")
+    all(>(0), d) || error("CDM: non-positive diagonal entry detected in Mff on free DOFs.")
+    #invMff = spdiagm(1.0 ./ d)
+
+    nsteps = n
+    
+    u = uu.a
+    v = vv.a
+    t = ts
+    
+    #u00 = zeros(eltype(u), size(u,1))
+
+    a0 = Mff \ (
+        f.a[free,1] .-
+        Kff * u[free,1] .-
+        Kfc * u[fix,1] .-
+        Cff * v[free,1] .-
+        Cfc * v[fix,1])
+
+    #u00[free] .= u[free,1] .- v[free,1] .* Δt .+ 0.5 .* a0 .* Δt^2
+    #u00[fix]  .= 2.0 .* u[fix,1] .- u[fix,2]
+
+    #u0 = copy(u[:,1])
+    ΔtΔt = Δt * Δt
+
+    invd = 1.0 ./ d
+
+    u0_free = copy(@view u[free, 1])
+    u00_free = u0_free .- (@view v[free, 1]) .* Δt .+ 0.5 .* a0 .* Δt^2
+    for i in 2:nsteps
+        # u[:, i] is computed from the equilibrium equation at step i - 1
+        ii = f.nsteps == 1 ? 1 : i - 1
+
+        @views begin
+            uc = u[fix, i-1]
+            vc = v[fix, i-1]
+
+            #u0_free = u0[free]
+            #u00_free = u00[free]
+        end
+
+        rhs =
+            ff[:, ii] -
+            Kfc * uc -
+            Cfc * vc
+
+        Δu = u0_free .- u00_free
+
+        u1 =
+            2.0 .* u0_free .-
+            u00_free .+
+            invd .* (
+                ΔtΔt .* (rhs .- Kff * u0_free) .-
+                Δt .* (Cff * Δu)
+            )
+
+        @views begin
+            u[free, i] .= u1
+            v[free, i] .= (u1 .- u0_free) ./ Δt
+        end
+
+        u00_free, u0_free = u0_free, u1
+        #u00 = u0
+        #u0 = copy(@view u[:, i])
+    end
+    return TYPE([], u, t, [], length(t), U0.type, f.model), TYPE([], v, t, [], length(t), V0.type, f.model)
+end
+
+function CDM(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, bc::Vector{BoundaryCondition}, u0::Union{ScalarField,VectorField}, v0::Union{ScalarField,VectorField}, n::Int, Δt::Float64)
+    C = K * 0.0
+    dropzeros!(C.A)
+    return CDM(K, M, C, f, bc, u0, v0, n, Δt)
+end
+
+#CDM(K::SystemMatrix, M::SystemMatrix, C::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+#    CDM(K, M, C, f, support,  uu0, vv0, n, Δt)
+
+#CDM(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=Vector{BoundaryCondition}()) = 
+#    CDM(K, M, f, support,  uu0, vv0, n, Δt)
+
+CDM(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    C::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    support=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[]
+    ) =
+    isempty(mpc) ?
+        CDM(
+            K, M, C, f,
+            support,
+            U0, V0,
+            n, Δt
+        ) :
+        _CDM_mpc(
+            K, M, C, f,
+            support,
+            U0, V0,
+            n, Δt;
+            mpc=mpc
+        )
+
+CDM(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    support=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[]
+    ) =
+    isempty(mpc) ?
+        CDM(
+            K, M, f,
+            support,
+            U0, V0,
+            n, Δt
+        ) :
+        _CDM_mpc(
+            K, M, f,
+            support,
+            U0, V0,
+            n, Δt;
+            mpc=mpc
+        )
+
+function _CDM_reduced(
+    K,
+    M,
+    C,
+    f,
+    U0,
+    V0,
+    uD,
+    free,
+    fixed,
+    n,
+    Δt
+    )
+
+    nr = size(K, 1)
+
+    u = zeros(Float64, nr, n)
+    v = zeros(Float64, nr, n)
+
+    if !isempty(fixed)
+        u[fixed, :] .= uD[fixed, :]
+    end
+
+    u[free, 1] .= U0[free]
+    v[free, 1] .= V0[free]
+
+    if !isempty(fixed)
+
+        if n >= 3
+
+            @views v[fixed, 1] .=
+                (
+                    -3.0 .* u[fixed, 1] .+
+                     4.0 .* u[fixed, 2] .-
+                             u[fixed, 3]
+                ) ./ (2Δt)
+
+        else
+
+            @views v[fixed, 1] .=
+                (
+                    u[fixed, 2] .-
+                    u[fixed, 1]
+                ) ./ Δt
+        end
+
+        for i in 2:n
+
+            @views v[fixed, i] .=
+                (
+                    u[fixed, i] .-
+                    u[fixed, i - 1]
+                ) ./ Δt
+        end
+    end
+
+    Kff = K[free, free]
+    Kfc = K[free, fixed]
+
+    Cff = C[free, free]
+    Cfc = C[free, fixed]
+
+    Mff = M[free, free]
+
+    isdiag(Mff) ||
+        error(
+            "CDM: MPC-reduced mass matrix is not diagonal. " *
+            "Explicit CDM requires a lumped reduced mass matrix."
+        )
+
+    d = diag(Mff)
+
+    all(>(0), d) ||
+        error(
+            "CDM: non-positive diagonal entry in MPC-reduced mass matrix."
+        )
+
+    invd = 1.0 ./ d
+
+    a0 =
+        Mff \ (
+            f[free, 1] -
+            Kff * u[free, 1] -
+            Kfc * u[fixed, 1] -
+            Cff * v[free, 1] -
+            Cfc * v[fixed, 1]
+        )
+
+    u0 =
+        copy(
+            @view u[free, 1]
+        )
+
+    u00 =
+        u0 .-
+        (@view v[free, 1]) .* Δt .+
+        0.5 .* a0 .* Δt^2
+
+    for i in 2:n
+
+        ii =
+            size(f, 2) == 1 ?
+            1 :
+            i - 1
+
+        @views begin
+            uc = u[fixed, i - 1]
+            vc = v[fixed, i - 1]
+        end
+
+        rhs =
+            f[free, ii] -
+            Kfc * uc -
+            Cfc * vc
+
+        Δu = u0 .- u00
+
+        u1 =
+            2.0 .* u0 .-
+            u00 .+
+            invd .* (
+                Δt^2 .* (
+                    rhs -
+                    Kff * u0
+                ) -
+                Δt .* (
+                    Cff * Δu
+                )
+            )
+
+        @views begin
+            u[free, i] .= u1
+            v[free, i] .=
+                (u1 .- u0) ./ Δt
+        end
+
+        u00, u0 = u0, u1
+    end
+
+    return u, v
+end
+
+function _CDM_mpc(
+    K,
+    M,
+    C,
+    f,
+    bc,
+    U0,
+    V0,
+    n,
+    Δt;
+    mpc
+    )
+
+    P = K.model
+
+    P.reducedOrder &&
+        error(
+            "CDM: simultaneous single-field reduced-order and MPC " *
+            "transformations are not yet supported."
+        )
+
+    f  = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+
+    rep =
+        mpcRepresentativeMap(
+            P,
+            mpc
+        )
+
+    T, p, full_to_reduced =
+        mpcTransformation(rep)
+
+    Kr = T' * K.A * T
+    Mr = T' * M.A * T
+    Cr = T' * C.A * T
+    fr = T' * f.a
+
+    ts = collect(0:Δt:(n - 1) * Δt)
+
+    TYPE = typeof(f)
+
+    UD = TYPE(
+        [],
+        zeros(Float64, size(K.A, 1), n),
+        ts,
+        [],
+        n,
+        U0.type,
+        P
+    )
+
+    applyBoundaryConditions!(UD, bc)
+
+    fixed =
+        constrainedDoFs(
+            P,
+            bc
+        )
+
+    free_r, fixed_r, uD_r =
+        mpcReducedBCData(
+            full_to_reduced,
+            fixed,
+            UD.a
+        )
+
+    U0r =
+        copy(
+            @view U0.a[p, 1]
+        )
+
+    V0r =
+        copy(
+            @view V0.a[p, 1]
+        )
+
+    ur, vr =
+        _CDM_reduced(
+            Kr,
+            Mr,
+            Cr,
+            fr,
+            U0r,
+            V0r,
+            uD_r,
+            free_r,
+            fixed_r,
+            n,
+            Δt
+        )
+
+    u = T * ur
+    v = T * vr
+
+    return TYPE(
+        [],
+        u,
+        ts,
+        [],
+        n,
+        U0.type,
+        P
+    ),
+    TYPE(
+        [],
+        v,
+        ts,
+        [],
+        n,
+        V0.type,
+        P
+    )
+end
+
+function _CDM_mpc(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    bc::Vector{BoundaryCondition},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    mpc::Vector{MPC}
+    )
+
+    C = K * 0.0
+    dropzeros!(C.A)
+
+    return _CDM_mpc(
+        K,
+        M,
+        C,
+        f,
+        bc,
+        U0,
+        V0,
+        n,
+        Δt;
+        mpc=mpc
+    )
+end
+
+"""
+    HHT(K::SystemMatrix, 
+        M::SystemMatrix, 
+        f::VectorField, 
+        bc::Vector{BoundaryCondition}, 
+        u0::VectorField, 
+        v0::VectorField, 
+        n::Int, 
+        Δt::Float64; 
+        α = 0.0, 
+        δ = 0.0, 
+        γ = 0.5 + δ, 
+        β = 0.25 * (0.5 + γ)^2)
+
+alias:
+
+    HHT(K, M, f, u0, v0, n, Δt; α=..., δ=..., γ=..., β=...)
+
+Solves a transient structural dynamic problem using the **Hilber–Hughes–Taylor
+(HHT-α) method**, an implicit time integration scheme with controllable numerical
+dissipation.
+
+The semi-discrete system
+```
+
+M * ü(t) + K * u(t) = f(t)
+
+```
+is integrated using a generalized Newmark formulation with HHT-α modification.
+
+The discrete equilibrium at step `n+1` is:
+```
+
+M a_{n+1} + (1+α) K u_{n+1} - α K u_n = f_{n+1}
+
+```
+
+The method supports:
+- time-independent or time-dependent load vectors `f`
+- time-independent or time-dependent displacement boundary conditions
+- solver-side enforcement of Dirichlet constraints
+- vector-valued unknowns (`VectorField`)
+
+Boundary conditions are applied *solver-side*:
+- prescribed displacements are written into the solution at every time step
+- free DOFs are solved from the reduced system
+- constraint effects enter via
+```
+
+A_fc * u_c^{n+1}
+
+```
+terms in the reduced system
+
+If `f.nsteps == 1`, the load is treated as time-independent.  
+If `f.nsteps == n`, the load is applied step-by-step.
+
+The parameters `α`, `β`, and `γ` control numerical dissipation and stability.
+If `δ` is given, the standard relations
+```
+
+γ = 0.5 + δ
+β = 0.25 * (0.5 + γ)^2
+
+```
+are used.
+
+---
+
+### Arguments
+- `K::SystemMatrix`  
+  Global stiffness matrix.
+- `M::SystemMatrix`  
+  Global mass matrix.
+- `f::VectorField`  
+  External load vector.
+- `bc::Vector{BoundaryCondition}`  
+  Displacement boundary conditions.
+- `u0::VectorField`  
+  Initial displacement field.
+- `v0::VectorField`  
+  Initial velocity field.
+- `n::Int`  
+  Number of time steps.
+- `Δt::Float64`  
+  Time step size.
+
+---
+
+### Returns
+- `u::VectorField`  
+  Displacement field (`ndof × nsteps`)
+- `v::VectorField`  
+  Velocity field (`ndof × nsteps`)
+
+Time vector:
+```
+
+t = 0 : Δt : (n-1)Δt
+
+```
+
+---
+
+### Notes
+- The method is unconditionally stable for appropriate parameter choices.
+- Parameter `α < 0` introduces high-frequency numerical damping.
+- The formulation is implicit and requires solving a linear system at each step.
+- The algorithm is algebraic and independent of the physical interpretation of the field.
+
+---
+
+### Reference
+Hilber, H. M., Hughes, T. J. R., Taylor, R. L.  
+*Improved numerical dissipation for time integration algorithms in structural dynamics*,  
+Earthquake Engineering & Structural Dynamics, 5(3), 283–292, 1977.
+# MPC keyword overload
+
+The overload taking initial fields followed by `n, Δt` accepts
+`support=BoundaryCondition[]` and `mpc=MPC[]`. It applies the supplied
+master/slave reduction before time integration; the positional boundary-list
+overload retains the original signature. This is an engineering
+time-integration interface.
+"""
+function HHT(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    bc::Vector{BoundaryCondition},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    α = 0.0,
+    δ = 0.0,
+    γ = 0.5 + δ,
+    β = 0.25 * (0.5 + γ)^2)
+
+    if K.model !== M.model ||
+        M.model !== f.model ||
+        f.model !== U0.model ||
+        U0.model !== V0.model
+        error("HHT: K, M, f, U0 and V0 must belong to the same model.")
+    end
+    if f.nsteps != 1 && f.nsteps != n
+        error("HHT: number of time steps in load vector is not equal to the time steps given in HHT.")
+    end
+    
+    if f.type != U0.type || f.type != V0.type
+        error("HHT: f, u0 and v0 must be the same type.")
+    end
+
+    TYPE = typeof(f)
+
+    Δt > 0 || error("HHT: Δt must be positive.")
+    n > 0 || error("HHT: n must be non-negative and non-zero.")
+    n > 1 || error("HHT: n must be greater than one.")
+
+    f  = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+
+    #ts = [i for i in 0:n-1]
+    ts = collect(0:Δt:(n-1)*Δt)
+
+    # Allocate displacement container and pre-fill prescribed displacements for all steps (CDM-style)
+    uu = TYPE([], zeros(size(f.a, 1), n), ts, [], n, U0.type, K.model)
+    uu = elementsToNodes(uu)
+    applyBoundaryConditions!(uu, bc)
+
+    free = freeDoFs(K.model, bc)
+    fix  = constrainedDoFs(K.model, bc)
+
+    ndof = size(K.A, 1)
+    u = uu.a
+    v = zeros(ndof, n)
+    t = ts
+
+    dt   = Δt
+    dtdt = dt * dt
+
+    # Newmark/HHT constants
+    c0 = 1.0 / (β * dtdt)
+    c2 = 1.0 / (β * dt)
+    c3 = 0.5 / β - 1.0
+    c6 = dt * (1.0 - γ)
+    c7 = γ * dt
+
+    # Initial conditions: set free parts from U0, keep fix parts from prescribed BC in uu
+    u[free, 1] .= DoFs(U0)[free, 1]
+    v[free,1] .= DoFs(V0)[free,1]
+    v[fix,1]  .= (u[fix,2] .- u[fix,1]) ./ Δt
+    #v[:, 1]    .= DoFs(V0)[:, 1]
+    #t[1] = 0.0
+
+    has_fix = !isempty(fix)
+
+    Kff = K.A[free, free]
+    Mff = M.A[free, free]
+
+    if has_fix
+        Kfc = K.A[free, fix]
+        Mfc = M.A[free, fix]
+    else
+        Kfc = spzeros(length(free), 0)
+        Mfc = spzeros(length(free), 0)
+    end
+
+    # Initial acceleration
+    a = zeros(ndof)
+    if has_fix
+        if n >= 3
+            @views begin
+                v[fix, 1] .=
+                    (-3.0 .* u[fix, 1] .+
+                      4.0 .* u[fix, 2] .-
+                              u[fix, 3]) ./ (2.0 * Δt)
+   
+                a[fix] .=
+                    (u[fix, 1] .-
+                     2.0 .* u[fix, 2] .+
+                            u[fix, 3]) ./ Δt^2
+            end
+        else
+            @views v[fix, 1] .=
+                (u[fix, 2] .- u[fix, 1]) ./ Δt
+        end
+    end
+
+    #a[free] .= Mff \ rhs0
+    rhs0 = copy(@view f.a[free, 1])
+    if has_fix
+        mul!(rhs0, Kfc, @view(u[fix, 1]), -1.0, 1.0)
+        mul!(rhs0, Mfc, @view(a[fix]), -1.0, 1.0)
+    end
+
+    u_f0 = @view u[free, 1]
+    mul!(rhs0, Kff, u_f0, -1.0, 1.0)
+
+    #if has_fix
+    #    u_c0 = @view u[fix, 1]
+    #    mul!(rhs0, Kfc, u_c0, -1.0, 1.0)
+    #end
+
+    a[free] .= Mff \ rhs0
+
+    # Effective stiffness
+    Aff = (1 + α) * Kff + c0 * Mff
+    Afc = (1 + α) * Kfc + c0 * Mfc
+
+    luAff = lu(Aff)
+
+    # Reusable workspaces
+    predictor = zeros(ndof)
+    rhs_full = zeros(ndof)
+    rhs_free = zeros(length(free))
+    u_free_np1 = similar(rhs_free)
+
+    a_np1 = similar(a)
+    u_fix_np1 = zeros(length(fix))
+
+    for i in 2:n
+        u_n = @view u[:, i-1]
+        v_n = @view v[:, i-1]
+        u_np1 = @view u[:, i]
+   
+        # c0*u_n + c2*v_n + c3*a_n
+        @. predictor = c0 * u_n + c2 * v_n + c3 * a
+   
+        # M*predictor + α*K*u_n
+        mul!(rhs_full, M.A, predictor)
+        mul!(rhs_full, K.A, u_n, α, 1.0)
+   
+        # Condense and add the HHT-weighted load
+        if f.nsteps == 1
+            @inbounds for j in eachindex(free)
+                dof = free[j]
+                rhs_free[j] = rhs_full[dof] + f.a[dof, 1]
+            end
+        else
+            @inbounds for j in eachindex(free)
+                dof = free[j]
+                rhs_free[j] =
+                    rhs_full[dof] +
+                    (1 + α) * f.a[dof, i] -
+                    α * f.a[dof, i-1]
+            end
+        end
+   
+        # Prescribed displacement contribution
+        if has_fix
+            @views u_fix_np1 .= u[fix, i]
+            mul!(rhs_free, Afc, u_fix_np1, -1.0, 1.0)
+        end
+   
+        # Effective system solution
+        ldiv!(u_free_np1, luAff, rhs_free)
+        @views u[free, i] .= u_free_np1
+   
+        # Newmark acceleration and velocity
+        @. a_np1 =
+            c0 * (u_np1 - u_n) -
+            c2 * v_n -
+            c3 * a
+   
+        v_np1 = @view v[:, i]
+   
+        @. v_np1 =
+            v_n +
+            c6 * a +
+            c7 * a_np1
+   
+        # Reuse acceleration workspaces
+        a, a_np1 = a_np1, a
+    end
+
+    return TYPE([], u, t, [], length(t), U0.type, K.model),
+           TYPE([], v, t, [], length(t), V0.type, K.model)
+end
+
+#HHT(K::SystemMatrix, M::SystemMatrix, f::Union{ScalarField,VectorField}, uu0::Union{ScalarField,VectorField}, vv0::Union{ScalarField,VectorField}, n::Int, Δt::Float64; support=BoundaryCondition[], 
+#    α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2) =
+#        HHT(K, M, f, support, uu0, vv0, n, Δt; α=α, δ=δ, γ=γ, β=β)
+
+function HHT(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    support=BoundaryCondition[],
+    mpc::Vector{MPC}=MPC[],
+    α=0.0,
+    δ=0.0,
+    γ=0.5 + δ,
+    β=0.25 * (0.5 + γ)^2
+    )
+
+    if isempty(mpc)
+
+        # Existing path remains unchanged.
+        return HHT(
+            K,
+            M,
+            f,
+            support,
+            U0,
+            V0,
+            n,
+            Δt;
+            α=α,
+            δ=δ,
+            γ=γ,
+            β=β
+        )
+    end
+
+    return _HHT_mpc(
+        K,
+        M,
+        f,
+        support,
+        U0,
+        V0,
+        n,
+        Δt;
+        mpc=mpc,
+        α=α,
+        γ=γ,
+        β=β
+    )
+end
+
+"""
+    _HHT_reduced(K, M, f, U0, V0, uD, free, fixed, n, Δt;
+                 α=0.0, γ=0.5, β=0.25)
+
+Integrate a reduced structural dynamic system using the HHT method.
+"""
+function _HHT_reduced(
+    K,
+    M,
+    f,
+    U0,
+    V0,
+    uD,
+    free,
+    fixed,
+    n,
+    Δt;
+    α=0.0,
+    γ=0.5,
+    β=0.25
+    )
+
+    nr = size(K, 1)
+
+    u = zeros(Float64, nr, n)
+    v = zeros(Float64, nr, n)
+
+    # ----------------------------------------------------------
+    # Prescribed displacement history
+    # ----------------------------------------------------------
+
+    if !isempty(fixed)
+        u[fixed, :] .= uD[fixed, :]
+    end
+
+    # Initial conditions on free DOFs
+    u[free, 1] .= U0[free]
+    v[free, 1] .= V0[free]
+
+    dt = Δt
+    dtdt = dt^2
+
+    # Newmark/HHT constants
+    c0 = 1.0 / (β * dtdt)
+    c2 = 1.0 / (β * dt)
+    c3 = 0.5 / β - 1.0
+    c6 = dt * (1.0 - γ)
+    c7 = γ * dt
+
+    has_fix = !isempty(fixed)
+
+    # ----------------------------------------------------------
+    # Matrix blocks
+    # ----------------------------------------------------------
+
+    Kff = K[free, free]
+    Mff = M[free, free]
+
+    if has_fix
+
+        Kfc = K[free, fixed]
+        Mfc = M[free, fixed]
+
+    else
+
+        Kfc = spzeros(length(free), 0)
+        Mfc = spzeros(length(free), 0)
+    end
+
+    # ----------------------------------------------------------
+    # Initial acceleration
+    # ----------------------------------------------------------
+
+    a = zeros(Float64, nr)
+
+    if has_fix
+
+        if n >= 3
+
+            @views begin
+
+                v[fixed, 1] .=
+                    (
+                        -3.0 .* u[fixed, 1] .+
+                         4.0 .* u[fixed, 2] .-
+                                 u[fixed, 3]
+                    ) ./ (2.0 * Δt)
+
+                a[fixed] .=
+                    (
+                        u[fixed, 1] .-
+                        2.0 .* u[fixed, 2] .+
+                               u[fixed, 3]
+                    ) ./ Δt^2
+            end
+
+        else
+
+            @views v[fixed, 1] .=
+                (
+                    u[fixed, 2] .-
+                    u[fixed, 1]
+                ) ./ Δt
+        end
+    end
+
+    rhs0 =
+        copy(
+            @view f[free, 1]
+        )
+
+    if has_fix
+
+        mul!(
+            rhs0,
+            Kfc,
+            @view(u[fixed, 1]),
+            -1.0,
+            1.0
+        )
+
+        mul!(
+            rhs0,
+            Mfc,
+            @view(a[fixed]),
+            -1.0,
+            1.0
+        )
+    end
+
+    mul!(
+        rhs0,
+        Kff,
+        @view(u[free, 1]),
+        -1.0,
+        1.0
+    )
+
+    a[free] .=
+        Mff \ rhs0
+
+    # ----------------------------------------------------------
+    # Effective stiffness
+    # ----------------------------------------------------------
+
+    Aff =
+        (1 + α) * Kff +
+        c0 * Mff
+
+    Afc =
+        (1 + α) * Kfc +
+        c0 * Mfc
+
+    luAff = lu(Aff)
+
+    # ----------------------------------------------------------
+    # Workspaces
+    # ----------------------------------------------------------
+
+    predictor =
+        zeros(Float64, nr)
+
+    rhs_full =
+        zeros(Float64, nr)
+
+    rhs_free =
+        zeros(Float64, length(free))
+
+    u_free_np1 =
+        similar(rhs_free)
+
+    a_np1 =
+        similar(a)
+
+    u_fix_np1 =
+        zeros(Float64, length(fixed))
+
+    # ----------------------------------------------------------
+    # Time stepping
+    # ----------------------------------------------------------
+
+    for i in 2:n
+
+        u_n =
+            @view u[:, i - 1]
+
+        v_n =
+            @view v[:, i - 1]
+
+        u_np1 =
+            @view u[:, i]
+
+        # Newmark predictor
+        @. predictor =
+            c0 * u_n +
+            c2 * v_n +
+            c3 * a
+
+        # M * predictor + α K u_n
+        mul!(
+            rhs_full,
+            M,
+            predictor
+        )
+
+        mul!(
+            rhs_full,
+            K,
+            u_n,
+            α,
+            1.0
+        )
+
+        # HHT-weighted load
+        if size(f, 2) == 1
+
+            @inbounds for j in eachindex(free)
+
+                dof = free[j]
+
+                rhs_free[j] =
+                    rhs_full[dof] +
+                    f[dof, 1]
+            end
+
+        else
+
+            @inbounds for j in eachindex(free)
+
+                dof = free[j]
+
+                rhs_free[j] =
+                    rhs_full[dof] +
+                    (1 + α) * f[dof, i] -
+                    α * f[dof, i - 1]
+            end
+        end
+
+        # Prescribed displacement contribution
+        if has_fix
+
+            @views u_fix_np1 .=
+                u[fixed, i]
+
+            mul!(
+                rhs_free,
+                Afc,
+                u_fix_np1,
+                -1.0,
+                1.0
+            )
+        end
+
+        # Effective solve
+        ldiv!(
+            u_free_np1,
+            luAff,
+            rhs_free
+        )
+
+        @views u[free, i] .=
+            u_free_np1
+
+        # Acceleration
+        @. a_np1 =
+            c0 * (u_np1 - u_n) -
+            c2 * v_n -
+            c3 * a
+
+        # Velocity
+        v_np1 =
+            @view v[:, i]
+
+        @. v_np1 =
+            v_n +
+            c6 * a +
+            c7 * a_np1
+
+        a, a_np1 =
+            a_np1, a
+    end
+
+    return u, v
+end
+
+function _HHT_mpc(
+    K::SystemMatrix,
+    M::SystemMatrix,
+    f::Union{ScalarField,VectorField},
+    bc::Vector{BoundaryCondition},
+    U0::Union{ScalarField,VectorField},
+    V0::Union{ScalarField,VectorField},
+    n::Int,
+    Δt::Float64;
+    mpc::Vector{MPC},
+    α=0.0,
+    γ=0.5,
+    β=0.25
+    )
+
+    P = K.model
+
+    P.reducedOrder &&
+        error(
+            "HHT: simultaneous single-field reduced-order and MPC " *
+            "transformations are not yet supported."
+        )
+
+    f  = elementsToNodes(f)
+    U0 = elementsToNodes(U0)
+    V0 = elementsToNodes(V0)
+
+    f.nsteps == 1 || f.nsteps == n ||
+        error(
+            "HHT: load vector must contain either 1 or n time steps."
+        )
+
+    rep =
+        mpcRepresentativeMap(
+            P,
+            mpc
+        )
+
+    T, p, full_to_reduced =
+        mpcTransformation(rep)
+
+    # ----------------------------------------------------------
+    # MPC projection
+    # ----------------------------------------------------------
+
+    Kr = T' * K.A * T
+    Mr = T' * M.A * T
+    fr = T' * f.a
+
+    ts =
+        collect(
+            0:Δt:(n - 1) * Δt
+        )
+
+    TYPE = typeof(f)
+
+    # ----------------------------------------------------------
+    # Full-space prescribed displacement history
+    # ----------------------------------------------------------
+
+    UD =
+        TYPE(
+            [],
+            zeros(Float64, size(K.A, 1), n),
+            ts,
+            [],
+            n,
+            U0.type,
+            P
+        )
+
+    applyBoundaryConditions!(
+        UD,
+        bc
+    )
+
+    fixed =
+        constrainedDoFs(
+            P,
+            bc
+        )
+
+    free_r, fixed_r, uD_r =
+        mpcReducedBCData(
+            full_to_reduced,
+            fixed,
+            UD.a
+        )
+
+    # Reduced initial conditions
+    U0r =
+        copy(
+            @view U0.a[p, 1]
+        )
+
+    V0r =
+        copy(
+            @view V0.a[p, 1]
+        )
+
+    # ----------------------------------------------------------
+    # Reduced HHT integration
+    # ----------------------------------------------------------
+
+    ur, vr =
+        _HHT_reduced(
+            Kr,
+            Mr,
+            fr,
+            U0r,
+            V0r,
+            uD_r,
+            free_r,
+            fixed_r,
+            n,
+            Δt;
+            α=α,
+            γ=γ,
+            β=β
+        )
+
+    # ----------------------------------------------------------
+    # Prolongate to full MPC-constrained space
+    # ----------------------------------------------------------
+
+    u = T * ur
+    v = T * vr
+
+    return TYPE(
+        [],
+        u,
+        ts,
+        [],
+        n,
+        U0.type,
+        P
+    ),
+    TYPE(
+        [],
+        v,
+        ts,
+        [],
+        n,
+        V0.type,
+        P
+    )
+end
+
+"""
+    CDMaccuracyAnalysis(ωₘᵢₙ::Float64, 
+                        ωₘₐₓ::Float64, 
+                        Δt::Float64, 
+                        type::Symbol; 
+                        n=100, 
+                        α=0.0, 
+                        ξ=0.01, 
+                        β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], 
+                        show_β=false, 
+                        show_ξ=false)
+
+Gives some functions (graphs) for accuracy analysis of the CDM method. 
+`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
+**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
+following values:
+- `:SR`: spectral radius
+- `:PDR`: physical damping ratio
+- `:ADR`: algorithmic damping ratio
+- `:PE`: period error
+For details see [^3]. 
+`n` is the number of points in the graph. The damping matrix is assembled in the 
+following ways: **C**=α**M**+β**K** or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅. 
+The latter corresponds to the damping characteristic characterized by a power series consisting of powers
+of the natural frequencies with odd exponents. ξᵢ (`ξ` in the argument list) are the values ​​of the 
+individual members of the series corresponding to the ωₘₐₓ value. βᵢ (`β` in the argument list) are the 
+coefficients of the series. (see [^4]) Either `ξ` or `β` must be specified. `ξ` or `β` are scalars or 
+vectors. If `show_β` or `show_ξ` is `true`, the corresponding `β` or `ξ` values will be 
+sent to the output.
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+                            
+[^4]: Serfőző, D., Pere, B.: *An effective reduction method with Caughey damping for 
+    spurious oscillations in dynamic problems*, Meccanica, <https://doi.org/10.1007/s11012-025-02036-9>
+                            
+Return: `xy`
+                            
+Types:
+- `ωₘᵢₙ`: Float64
+- `ωₘₐₓ`: Float64
+- `Δt`: Float64 
+- `n`: Int64
+- `α`: Float64
+- `β`: Float64 of Vector{Float64}
+- `ξ`: Float64 of Vector{Float64}
+- `show_β`: Boolean
+- `show_ξ`: Boolean
+- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+"""
+function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false, show_ξ=false)
+    if show_β == true
+        println("β = $β")
+    end
+    if show_ξ == true
+        ξ = [β[i] / 2 * ωₘₐₓ^((2i-1)) for i in 1:length(β)]
+        println("ξ = $ξ")
+    end
+    #Tₘᵢₙ /= √(1-ξₘₐₓ^2)
+    x = zeros(n)
+    y = zeros(n)
+    ω = range(ωₘᵢₙ, length=n, stop=ωₘₐₓ)
+    for i ∈ 1:n
+        ξ = α/ω[i]
+        for j in 1:length(β)
+            ξ += β[j] / 2 * ω[i]^(2j-1)
+        end
+        Ω = Δt * ω[i]
+        A = [2-2ξ*Ω-Ω^2 2ξ*Ω-1
+        1 0]
+        
+        eig = eigen(A)
+        ρ, idx = findmax(abs, eig.values)
+        λ = eig.values[idx]
+        σ = real(λ)
+        ε = imag(λ)
+        if type == :SR
+            x[i] = log((ω[i] / 2π) * Δt)
+            y[i] = ρ
+        elseif type == :ADR
+            x[i] = (ω[i] / 2π) * Δt
+            Ω0 = √((log(ρ))^2 + (atan(ε,σ))^2 / 4)
+            y[i] = -log(ρ) / 2Ω0
+        elseif type == :PDR
+            x[i] = (ω[i] / 2π) * Δt
+            for j in 1:length(β)
+                y[i] += β[j] / 2 * (2π * x[i] / Δt) ^ (2j-1)
+            end
+        elseif type == :PE
+            x[i] = (ω[i] / 2π) * Δt
+            Ω0 = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = 1 - Ω0/(Δt*ω[i])
+        else
+            str1 = "CDMaccuracyAnalysis: wrong analysis type: $type\n"
+            str2 = "Possibilities:\n"
+            str3 = "\n:SR - spectral radius\n"
+            str4 = ":PDR - physical damping ratio\n"
+            str5 = ":ADR - algorithmic damping ratio\n"
+            str6 = ":PE - period error\n"
+            str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
+            str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
+            str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
+            error(str1*str2*str3*str4*str5*str6*str7*str8*str9)
+        end
+    end
+    return x, y
+end
+
+"""
+    HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+                            
+Gives some functions (graphs) for accuracy analysis of the HHT-α method described by [`HHT`](@ref).
+`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
+**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
+following values:
+- `:SR`: spectral radius
+- `:ADR`: algorithmic damping ratio
+- `:PE`: period error
+For details see [^2] and [^3]. 
+`n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
+see [`HHT`](@ref). If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
+Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+                            
+[^2]: Belytschko, Ted, and Thomas JR, Hughes: *Computational methods for 
+    transient analysis*, North-Holland, (1983).
+                            
+[^3]: Serfőző, D., Pere, B.: *A method to accurately define arbitrary algorithmic
+    damping character as viscous damping*. Arch Appl Mech 93, 3581–3595 (2023).
+    <https://doi.org/10.1007/s00419-023-02454-9>
+                            
+Return: `xy`
+                            
+Types:
+- `ωₘᵢₙ`: Float64
+- `ωₘₐₓ`: Float64
+- `Δt`: Float64 
+- `n`: Int64
+- `α`: Float64
+- `β`: Float64
+- `γ`: Float64
+- `δ`: Float64
+- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+"""
+function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    x = zeros(n)
+    y = similar(x)
+    invT = range(ωₘᵢₙ/2π, length=n, stop=ωₘₐₓ/2π)
+    for i ∈ 1:n
+        ω = 2π * invT[i]
+        A1 = [1 0 -Δt^2*β
+        0 1 -Δt*γ
+        (1+α)*ω^2 0 1]
+        A2 = [1 Δt Δt^2*(0.5-β)
+        0 1 Δt*(1-γ)
+        α*ω^2 0 0]
+        
+        A = A1 \ A2
+        
+        eig = eigen(A)
+        ρ, idx = findmax(abs, eig.values)
+        λ = eig.values[idx]
+        σ = real(λ)
+        ε = imag(λ)
+        if type == :SR
+            x[i] = log(invT[i] * Δt)
+            y[i] = ρ
+        elseif type == :ADR
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = -log(ρ) / 2Ω
+            #y[i] = -log(ρ) / atan(ε, σ)
+        elseif type == :PE
+            x[i] = invT[i] * Δt
+            Ω = √(log(ρ)^2 / 4 +atan(ε,σ)^2)
+            y[i] = 1 - Ω/(2π*Δt*invT[i])
+        else
+            str1 = "HHTaccuracyAnalysis: wrong analysis type: $type\n"
+            str2 = "Possibilities:\n"
+            str3 = "\n:SR - spectral radius\n"
+            str5 = ":ADR - algorithmic damping ratio\n"
+            str6 = ":PE - period error\n"
+            str7 = "\nFor details see Serfőző, D., Pere, B.: A method to accurately define arbitrary\n"
+            str8 = "algorithmic damping character as viscous damping. Arch Appl Mech 93, 3581–3595 (2023).\n"
+            str9 = "https://doi.org/10.1007/s00419-023-02454-9\n"
+            error(str1*str2*str3*str5*str6*str7*str8*str9)
+        end
+    end
+    return x, y
+end
+
+"""
+    printElasticConstantsTable(; io::IO=stdout)
+
+Prints a compact reference table of the most common relations between
+isotropic linear-elastic material constants:
+
+- Young's modulus `E`
+- Poisson's ratio `ν`
+- Shear modulus `G` (also denoted as `μ`)
+- Bulk modulus `K`
+- Lamé's first parameter `λ`
+- Lamé's second parameter `μ` (= `G`)
+
+The table is meant as a quick cheat-sheet for documentation / teaching.
+"""
+function printElasticConstantsTable(; io::IO=stdout)
+    lines = String[]
+    push!(lines, "Isotropic linear elasticity (small strain) — key relations")
+    push!(lines, "")
+    push!(lines, "Valid ranges (stable material):  E>0,  G>0,  K>0,  -1 < ν < 1/2")
+    push!(lines, "Common note: μ ≡ G  (Lamé's 2nd parameter equals shear modulus)")
+    push!(lines, "")
+
+    # helper to add a row
+    function row(lhs, rhs)
+        return "| " * rpad(lhs, 14) * " | " * rpad(rhs, 44) * " |"
+    end
+    sep = "+----------------+----------------------------------------------+"
+
+    push!(lines, sep)
+    push!(lines, row("Given", "Relations"))
+    push!(lines, sep)
+
+    push!(lines, row("(E, ν)", "G = E / (2*(1+ν))"))
+    push!(lines, row("",      "K = E / (3*(1-2ν))"))
+    push!(lines, row("",      "λ = E*ν / ((1+ν)*(1-2ν))"))
+    push!(lines, row("",      "μ = G"))
+    push!(lines, sep)
+
+    push!(lines, row("(K, G)", "E = 9*K*G / (3*K + G)"))
+    push!(lines, row("",      "ν = (3*K - 2*G) / (2*(3*K + G))"))
+    push!(lines, row("",      "λ = K - 2*G/3"))
+    push!(lines, row("",      "μ = G"))
+    push!(lines, sep)
+
+    push!(lines, row("(λ, μ)", "E = μ*(3λ + 2μ) / (λ + μ)"))
+    push!(lines, row("",      "ν = λ / (2*(λ + μ))"))
+    push!(lines, row("",      "K = λ + 2μ/3"))
+    push!(lines, row("",      "G = μ"))
+    push!(lines, sep)
+
+    push!(lines, row("(E, G)", "ν = E/(2G) - 1"))
+    push!(lines, row("",      "K = E*G / (3*(3G - E))"))
+    push!(lines, row("",      "λ = G*(E - 2G) / (3G - E)"))
+    push!(lines, sep)
+
+    # print
+    for s in lines
+        println(io, s)
+    end
+    return nothing
+end
