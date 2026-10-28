@@ -117,7 +117,7 @@ end
     end
 end
 
-@testset "Remote rotation prescribed by a full U0 block history" begin
+@testset "Remote rotation prescribed by support ScalarField history" begin
     for dim in (2,3)
         with_test_gmsh() do
             f=transient_remote_fixture(dim)
@@ -128,11 +128,12 @@ end
             φk=dim == 2 ? (;φ=0.0) : (;φx=0.0,φy=0.0,φz=0.0)
             support=vcat(f.support,[BoundaryCondition("rightremote";field=U,uk...),
                                     BoundaryCondition("rightremote";field=Φ,φk...)])
-            remoteφ=constrainedDoFs(Φ,[support[end]])
-            history=zeros(size(K.A,1),n)
+            remoteφ=sort!(constrainedDoFs(Φ,[support[end]]))
+            φhistory=ScalarField([],repeat(reshape(0.01t,1,:),Φ.non,1),t,[],n,:scalar,Φ)
+            values=dim == 2 ? (;φ=φhistory) : (;φx=0.0,φy=0.0,φz=φhistory)
+            support[end]=BoundaryCondition("rightremote";field=Φ,values...)
             off=ndofs(U)
-            history[off+remoteφ[end],:].=0.01t
-            U0=SystemVector(history,nothing,K.problems,K.offsets)
+            U0=initial
             v0=zeros(size(K.A,1),1)
             v0[off.+remoteφ,1].=99.0
             V0=SystemVector(v0,nothing,K.problems,K.offsets)

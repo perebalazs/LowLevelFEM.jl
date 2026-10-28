@@ -128,13 +128,12 @@ Common coordinate/approximation/MPC preparation for all transient methods.
 `M` and `V0` may be `nothing` for a first-order system. Matrices and input
 fields are never modified. Dirichlet values are transferred through the same
 MPC and approximation helpers as `solveField` and `solveEigen`.
-One-column `U0` initializes free DOFs. With `n` columns, supported DOFs use its
-full history while free DOFs still use only column 1. Constrained derivatives
-are determined by the integrator from this primary-variable history.
+`U0` and `V0` contain one initial column. All prescribed primary-variable
+histories come from `support`; the integrator determines their derivatives.
 """
 function prepare_transient_system(K0, M0, C0, rhs, U0, V0, n, dt;
     support::Vector{BoundaryCondition}=BoundaryCondition[],
-    mpc::Vector{MPC}=MPC[], coordSys=CoordinateSystem[], t0=0.0)
+    mpc::Vector{MPC}=MPC[], coordSys=CoordinateSystem[], t0=0.0, _modifier_data=false)
     t = _transient_time(n, dt, t0)
     K = parent_system(K0)
     M = M0 === nothing ? nothing : parent_system(M0)
@@ -169,11 +168,12 @@ function prepare_transient_system(K0, M0, C0, rhs, U0, V0, n, dt;
     Kr = project(K.A)
     Mr = M === nothing ? spzeros(size(Kr)...) : project(M.A)
     Cr = C === nothing ? spzeros(size(Kr)...) : project(C.A)
-    F = T' * _transient_values(rhs, K, Q, n)
-    initial = _transient_values(U0, K, Q, n)
+    F0 = _transient_values(rhs, K, Q, n)
+    F = T' * F0
+    initial = _transient_values(U0, K, Q, 1)
     u0 = Vector(R * @view(initial[:, 1]))
     v0 = V0 === nothing ? zeros(size(T, 2)) :
-        Vector(R * @view(_transient_values(V0, K, Q, n)[:, 1]))
+        Vector(R * @view(_transient_values(V0, K, Q, 1)[:, 1]))
     fixed = Int[]
     local_fixed = [constrainedDoFs(P, support) for P in problems]
     for i in eachindex(problems)
@@ -183,15 +183,9 @@ function prepare_transient_system(K0, M0, C0, rhs, U0, V0, n, dt;
     # Avoid a full ndof-by-n zero history for unconstrained vibration problems.
     D = zeros(isempty(fixed) ? 0 : size(K.A, 1), n)
     if !isempty(fixed)
-        if size(initial, 2) == n
-            # A complete U0/X0 history prescribes only supported components.
-            # Future values at free DOFs are deliberately not read by the solver.
-            D[fixed, :] .= initial[fixed, :]
-        else
-            for (i, P) in enumerate(problems)
-                isempty(local_fixed[i]) && continue
-                D[offsets[i]+1:offsets[i]+ndofs(P), :] .= _transient_support(P, support, t)
-            end
+        for (i, P) in enumerate(problems)
+            isempty(local_fixed[i]) && continue
+            D[offsets[i]+1:offsets[i]+ndofs(P), :] .= _transient_support(P, support, t)
         end
     end
     all(isfinite, D) || error("Transient: non-finite prescribed values.")
@@ -207,7 +201,10 @@ function prepare_transient_system(K0, M0, C0, rhs, U0, V0, n, dt;
         free = _remove_inactive_mpc_dofs((Kr, Mr, Cr), F, free, fixed_r, protected, prunable)
     end
     return (; K=Kr, M=Mr, C=Cr, F=Matrix(F[free, :]), u0=u0[free], v0=v0[free],
-            D=Dr[fixed_r, :], free, fixed=fixed_r, T, Q, problems, offsets, t)
+            D=Dr[fixed_r, :], free, fixed=fixed_r, T, Q, problems, offsets, t,
+            layout=K, L=_modifier_data ? (Q === nothing ? T : Q*T) : nothing,
+            Ffull=_modifier_data ? (Q === nothing ? Matrix(F0) : Matrix(Q*F0)) : nothing,
+            inactive=_modifier_data ? setdiff(1:size(T,2),union(free,fixed_r)) : Int[])
 end
 
 """
@@ -279,7 +276,9 @@ _transient_column(F, j) = @view F[:, size(F, 2) == 1 ? 1 : j]
 """
     HHT(K, M, [C,] f, U0, V0, n, Δt; support=[], mpc=[], coordSys=[],
         α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2, t0=0.0,
-        solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;))
+        solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
+        modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
+        nonlinearoptions=(;))
 
 Integrate `M*ü + C*u̇ + K*u = f` with HHT/Newmark. Omitting `C` means zero
 physical damping; `α` controls algorithmic damping. Set `δ=-α` for the standard
@@ -297,20 +296,17 @@ also applies here. Loads and initial fields are in local solver components;
 `f` accepts a Field, a multifield `SystemVector`/tuple, `Global(...)`, or a
 local/global sum. Its columns are constant (1 column) or sampled at
 `t0 + (j-1)*Δt` (`n` columns); input Field time labels are not resampled.
-`U0` must have either one initial column or exactly `n` columns. With one
-column, the initial free displacement comes from `U0` and support values come
-from `support` (constant values, spatial functions, sampled scalar components,
-or `(x,y,z,t)` functions). With `n` columns, `U0` supplies the complete history
-on DOFs selected by `support`, overriding values stored in the BC objects.
-Only the first column is used on free DOFs; their later values are solved.
-Other column counts are rejected. Full block histories use the same column
-count for every field. `V0` supplies initial velocities on free DOFs only.
+`U0` and `V0` contain one initial column. The complete boundary history is
+assembled internally from `support`, including time-dependent ScalarField
+components and `(x,y,z,t)` functions. No external applyBoundaryConditions!
+call is needed. Boundary data override initial values on supported DOFs;
+`V0` supplies initial free velocities only.
 
 Constrained velocities and accelerations always follow the prescribed primary
 history: initial derivatives use finite differences and later HHT derivatives
 follow Newmark kinematics. At least three samples are needed to estimate
 nonzero initial support acceleration. To prescribe a velocity history,
-integrate it to an `U0` displacement history before calling the solver.
+integrate it and put the resulting scalar components into BoundaryConditions.
 
 Return `(u, v)`. For multiple fields each of `u` and `v` is a tuple in matrix
 block order, e.g. `(u1,u2), (v1,v2) = HHT(...)`. Initial values on constrained
@@ -319,6 +315,27 @@ The positional `..., f, support, U0, V0, n, Δt` form is also supported.
 HHT/CDM require a nonsingular mass on free reduced coordinates; arbitrary
 mass-singular differential-algebraic systems are outside this interface.
 SEM plus MPC on the same field follows the shared backend's current rejection.
+
+The generic equation is `A2*ü + A1*u̇ + A0*u = rhs`, with the positional
+aliases `A0=K`, `A2=M`, `A1=C`. The optional `modifyA2`, `modifyA1`,
+`modifyA0`, `modifyRHS` callbacks default to `nothing`. Each is called as
+`callback(operator, state)` in the full global field space. See the transient
+callback documentation in `docs/src/reference/solution.md` for the state and
+linearization contract. Matrix callbacks return a SystemMatrix (optionally
+wrapped in Symmetric); modifyRHS returns a one-column global Field/SystemVector.
+Returning `nothing` keeps the previous accepted matrix, or the prescribed RHS
+sample at the evaluation time. Callback inputs are private copies; return the
+copy to retain in-place edits. `state` data must be treated as read-only.
+
+HHT reevaluates callbacks inside each time step until the discrete equilibrium
+residual converges. `nonlinearoptions` accepts `maxiter=30`, `reltol=1e-9`,
+`abstol=1e-11`, and `relaxation=1.0`. Nonconvergence throws an error with step,
+time and residual. For Newton iteration, return a consistent tangent in A0 and
+`rhs = external - internal + A0*u` in modifyRHS. Otherwise the same loop can
+perform a Picard iteration. State-dependent A2/A1 need a consistent user
+linearization for Newton convergence. Fixed layout, supports, MPCs, coordinates
+and approximation transformations are retained; inactive MPC DOFs cannot be
+activated by updates. Equal matrices reuse the cached linear solver.
 
 Linear solvers follow `solveField`: `:auto`, `:backslash`, `:lu`,
 `:lu_no_ordering`, `:cholesky`, `:ldlt`, `:qr`, `:cg` and `:gmres`.
@@ -344,9 +361,18 @@ function HHT(K::_TransientMatrix, M::_TransientMatrix, f::_TransientData, U0, V0
     return _HHT(K, M, damping, f, U0, V0, n, dt; α, γ, β, kwargs...)
 end
 function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
-    solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;), kwargs...)
+    solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
+    modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
+    nonlinearoptions=(;), kwargs...)
     all(isfinite, (α, γ, β)) && -1/3 <= α <= 0 && γ >= 0 && β > 0 ||
         throw(ArgumentError("HHT: require -1/3 ≤ α ≤ 0, γ ≥ 0 and β > 0, all finite."))
+    if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
+        return _modified_hht(K,M,C,f,U0,V0,n,dt; α,γ,β,solver,preconditioner,
+            solveroptions,preconditioneroptions,modifyA2,modifyA1,modifyA0,modifyRHS,
+            nonlinearoptions,kwargs...)
+    end
+    nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
+        throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
     p = prepare_transient_system(K, M, C, f, U0, V0, n, dt; kwargs...)
     free, fixed = p.free, p.fixed
     Kff, Mff, Cff = p.K[free, free], p.M[free, free], p.C[free, free]
@@ -389,7 +415,9 @@ function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
 end
 
 """
-    CDM(K, M, [C,] f, U0, V0, n, Δt; support=[], mpc=[], coordSys=[], ...)
+    CDM(K, M, [C,] f, U0, V0, n, Δt; support=[], mpc=[], coordSys=[],
+        modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
+        nonlinearoptions=(;))
 
 Central differences with lagged damping `C*(u[j]-u[j-1])/Δt`. Accepts the same
 load, initial-value, coordinate, approximation, MPC and prescribed-history
@@ -400,6 +428,11 @@ The scheme is conditionally stable; choose Δt for the reduced dynamic system.
 Constrained derivatives are estimated from the U0/support displacement history
 with second-order finite differences. Returned free velocities use backward differences after
 the initial sample, preserving the historical CDM convention.
+Operator callbacks use the same global-space contract as HHT. Displacement
+updates remain explicit: callbacks are evaluated at the known current field.
+An acceleration consistency iteration handles any callback dependence on the
+current acceleration; no implicit displacement Newton solve is introduced.
+Updated coefficients must satisfy the CDM time-step stability requirement.
 """
 function CDM(K::_TransientMatrix, M::_TransientMatrix, C::_TransientMatrix,
              f::_TransientData, U0, V0, n::Int, dt::Real; kwargs...)
@@ -409,7 +442,15 @@ function CDM(K::_TransientMatrix, M::_TransientMatrix, f::_TransientData, U0, V0
              damping=nothing, kwargs...)
     return _CDM(K, M, damping, f, U0, V0, n, dt; kwargs...)
 end
-function _CDM(K, M, C, f, U0, V0, n, dt; kwargs...)
+function _CDM(K, M, C, f, U0, V0, n, dt;
+    modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
+    nonlinearoptions=(;), kwargs...)
+    if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
+        return _modified_cdm(K,M,C,f,U0,V0,n,dt; modifyA2,modifyA1,modifyA0,modifyRHS,
+                             nonlinearoptions,kwargs...)
+    end
+    nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
+        throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
     p = prepare_transient_system(K, M, C, f, U0, V0, n, dt; kwargs...)
     free, fixed = p.free, p.fixed
     Kff, Mff, Cff = p.K[free, free], p.M[free, free], p.C[free, free]
@@ -437,12 +478,12 @@ end
 
 """
     FDM(K, C, q, X0, n, Δt; ϑ=0.5, support=[], mpc=[], coordSys=[],
-        t0=0.0, solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;))
+        t0=0.0, solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
+        modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing, nonlinearoptions=(;))
 
 Theta integration of `C*ẋ + K*x = q`, sharing the constrained preparation and
-sampled-data conventions of [`HHT`](@ref). `X0` has one initial column or
-exactly `n` columns; a full history prescribes supported components, while only
-the first column initializes free components. Includes the complete prescribed
+sampled-data conventions of [`HHT`](@ref). `X0` has one initial column and
+all boundary histories are supplied by `support`. Includes the complete prescribed
 increment `-C_fc*(d[j+1]-d[j])/Δt` and theta-weighted loads and stiffness terms.
 Return one global nodal Field, or a tuple in matrix block order. `ϑ=0` uses
 explicit Euler, `ϑ=0.5` Crank–Nicolson and `ϑ=1` backward Euler. The effective
@@ -451,11 +492,25 @@ The positional `..., q, support, X0, n, Δt` form is retained.
 Linear solver and preconditioner options follow `solveField` and HHT. The
 factorization or preconditioner of `C_ff + ϑ*Δt*K_ff` is built once and reused.
 Wrap both `K` and `C` in `Symmetric(...)` for the symmetric automatic path.
+Generic operators are A0=K and A1=C (the first-derivative/capacity matrix).
+modifyA2 is rejected for this first-order method. With modify callbacks, the
+time-step loop checks the nonlinear theta residual. A1 is interpolated as
+`(1-ϑ)*A1_old + ϑ*A1_new`; the old and new A0*u-rhs terms use their own
+endpoint operators. Callback and nonlinear options follow HHT.
 """
 function FDM(K::_TransientMatrix, C::_TransientMatrix, q, X0, n::Int, dt::Real;
              ϑ=0.5, solver=:auto, preconditioner=:auto,
-             solveroptions=(;), preconditioneroptions=(;), kwargs...)
+             solveroptions=(;), preconditioneroptions=(;),
+             modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
+             nonlinearoptions=(;), kwargs...)
     isfinite(ϑ) && 0 <= ϑ <= 1 || throw(ArgumentError("FDM: require 0 ≤ ϑ ≤ 1."))
+    modifyA2 === nothing || throw(ArgumentError("FDM has no A2 operator; use modifyA1 for capacity."))
+    if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
+        return _modified_fdm(K,C,q,X0,n,dt; ϑ,solver,preconditioner,solveroptions,
+            preconditioneroptions,modifyA1,modifyA0,modifyRHS,nonlinearoptions,kwargs...)
+    end
+    nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
+        throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
     p = prepare_transient_system(K, nothing, C, q, X0, nothing, n, dt; kwargs...)
     free, fixed = p.free, p.fixed
     Kff, Cff = p.K[free, free], p.C[free, free]

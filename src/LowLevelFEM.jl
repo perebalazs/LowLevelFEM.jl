@@ -24,6 +24,7 @@ include("constraints.jl")
 include("solve.jl")
 include("eigen.jl")
 include("transient.jl")
+include("transient_modify.jl")
 include("spectral.jl")
 include("contact.jl")
 #include("fieldtools.jl")
@@ -35,7 +36,7 @@ export @showfields, @showstruct, @showdef, @showtype, @showmem, @showmethods, @d
 # Representative public workflows, not an exhaustive API catalogue. Keep meshes
 # tiny: the purpose is to capture JIT specializations, not to benchmark assembly.
 # Setup and all native Gmsh state are confined to package precompilation.
-const _PRECOMPILE_NEW = false
+const _PRECOMPILE_NEW = true
 if _PRECOMPILE_NEW
     @setup_workload begin
         gmsh_was_initialized = gmsh.isInitialized() != 0
@@ -230,7 +231,7 @@ end
 
 # Legacy compatibility is intentionally isolated. Set this to false to omit
 # only this block on the next package precompilation; it adds no runtime work.
-const _PRECOMPILE_LEGACY = false
+const _PRECOMPILE_LEGACY = true
 if _PRECOMPILE_LEGACY
     @setup_workload begin
         gmsh_was_initialized = gmsh.isInitialized() != 0

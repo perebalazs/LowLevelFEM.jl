@@ -18,6 +18,7 @@ include("helpers.jl")
         include("test_solveeigen.jl")
         include("test_transient.jl")
         include("test_transient_remote.jl")
+        include("test_transient_modify.jl")
         include("test_contact.jl")
         include("test_validation.jl")
     end

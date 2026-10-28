@@ -74,9 +74,8 @@ quadrangles; consult `spectralTransformation` for unsupported combinations.
 preparation. They return global nodal fields, with physical time samples
 `t0 + (j-1)*Δt` for `j=1:n`. Input histories have either one constant column
 or exactly `n` sampled columns; the solvers use column order and do not
-interpolate the input time labels. `U0`/`X0` have one initial column or exactly
-`n` columns; a complete history prescribes supported components while only its
-first column initializes free components. `V0` supplies initial free velocities.
+interpolate the input time labels. `U0`/`X0` and `V0` have exactly one initial
+column. All prescribed histories are supplied once through `support`.
 
 ```julia
 # Second-order dynamics: M*ü + C*u̇ + K*u = f
@@ -141,40 +140,34 @@ bc = [BoundaryCondition("base"; field=U,
 u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc)
 ```
 
-Displacement histories belong in `U0` (or `X0` for FDM), without additional
-prescribed-history keywords:
-
-- One column: initialize free DOFs; boundary values come from `support`.
-- Exactly `n` columns: initialize free DOFs from column 1 and read the complete
-  support history from the columns of `U0`/`X0`. Values in the BC objects are
-  overridden. Future values on free DOFs are ignored and solved normally.
-- Other column counts are rejected. `support` always selects constrained DOFs;
-  a full initial field alone does not constrain any additional component.
+`support` is the only source of prescribed primary-variable histories.
+A BC selects both the component and its value; sampled `ScalarField` components
+may have one constant column or exactly `n` columns. Spatial functions and
+`(x,y,z,t)` functions are supported as well. The solver constructs the history
+internally; no `applyBoundaryConditions!(U0, bc)` call is required.
 
 ```julia
-# u_history is a nodal VectorField with n columns.
-bc = [BoundaryCondition("base"; field=U, ux=0.0, uy=0.0)]
-u, v = HHT(K, M, C, f, u_history, v0, n, Δt; support=bc)
-x = FDM(K, C, q, x_history, n, Δt; support=bc)
+ux_history = ScalarField(U, "base", (x,y,z,t)->0.001*sin(20t);
+                         steps=n, tmin=t0, tmax=t0+(n-1)*Δt)
+bc = [BoundaryCondition("base"; field=U, ux=ux_history, uy=0.0)]
+u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc)
 ```
 
-Constrained velocity and acceleration follow the displacement history. HHT
-estimates the initial derivatives from samples and then uses Newmark
-kinematics; CDM uses finite differences. With only two samples the prescribed
-history is linear and its initial acceleration is zero. FDM uses the complete
-primary-variable increment, including capacity coupling. To specify a
-velocity history, use `integrate(v_history)` (or `∫(v_history)`) to form `U0`
-before calling the solver, choosing the required displacement integration
-constant. `V0` controls only the initial free velocity.
+`U0`/`X0` initialize free primary values; `V0` initializes free velocities.
+Every initial field has exactly one column, also in a multifield SystemVector
+or tuple. Boundary values override initial data on supported DOFs. Multicolumn
+initial fields are rejected to prevent competing boundary specifications.
 
-For block systems all fields in a full history have the same column count.
-For example, `U0=SystemVector([u_history, φ_history])` supplies a displacement
-and rotation history together.
+Constrained derivatives follow the BC history. HHT estimates the initial
+velocity and acceleration by finite differences, then uses Newmark kinematics;
+CDM uses finite differences. With only two samples the history is linear.
+To prescribe a velocity history, integrate its scalar components with
+`integrate(v_history)`/`∫(v_history)` and use the results in BoundaryConditions.
+FDM uses the primary-variable increment, including capacity coupling.
 
-Ordinary loads, initial fields and prescribed histories use the local solver
-basis. Wrap Cartesian data in `Global(...)`, just as for `solveField`.
-Constrained DOFs use the full U0/X0 history when supplied, otherwise support
-data. MPCs act on local components, including supports prescribed on slave nodes.
+Loads and initial values use local solver coordinates unless wrapped in
+`Global(...)`. All returned fields are global. MPCs identify local components;
+prescribed slave values are transferred to their master for every time sample.
 
 For block systems, use `SystemVector([field1,field2,...])` or a tuple in matrix
 block order for loads and initial fields. Return values follow:
@@ -240,3 +233,98 @@ FDMaccuracyAnalysis
 LowLevelFEM.prepare_transient_system
 LowLevelFEM.reconstruct_transient_solution
 ```
+
+## Operator modifications and nonlinear iteration
+
+The physics-independent equations are
+`A2*ü + A1*u̇ + A0*u = rhs` and `A1*u̇ + A0*u = rhs`.
+The positional calling conventions remain `HHT/CDM(A0,A2,[A1,]rhs,...)`
+and `FDM(A0,A1,rhs,...)`.
+
+All methods accept `modifyA2`, `modifyA1`, `modifyA0`, `modifyRHS`, defaulting
+to `nothing`. FDM rejects a nonempty `modifyA2`; its capacity matrix is A1.
+A callback has the signature `callback(operator, state)`.
+
+| State member   | Meaning                                                               |
+| -------------- | --------------------------------------------------------------------- |
+| `fields`       | Tuple of current trial global nodal Fields, even for one field.       |
+| `velocity`     | Tuple of global first derivatives; unavailable at FDM initialization. |
+| `acceleration` | Tuple of global second derivatives for HHT/CDM; `nothing` for FDM.    |
+| `problems`     | Tuple of the corresponding Problem objects, including material data.  |
+| `t`, `dt`      | Evaluation time and time increment.                                   |
+| `step`         | Zero-based time-step index; initial sample is 0.                      |
+| `iteration`    | 0 for the predictor, then the number of completed nonlinear updates.  |
+| `phase`        | `:initial`, `:step` (HHT/FDM), or `:explicit` (CDM).                  |
+| `previous`     | Previous accepted field snapshot, or `nothing` at initialization.     |
+| `operators`    | Current full/global A2, A0, A1; updated in that order.                |
+
+Callbacks run in order **A2, A0, A1, RHS**. The A1 callback can use the updated
+A2 and A0, for example to assemble Rayleigh damping. Extra model parameters,
+contact objects and constants can be captured by a closure or callable object.
+No `Function` type restriction is imposed.
+
+Matrix callbacks receive a private copy of the previous accepted full operator
+and return a SystemMatrix, optionally wrapped in Symmetric. Returning `nothing`
+keeps that accepted operator. Return the argument to retain in-place edits to
+its private matrix copy. Every nonlinear trial starts from the accepted base,
+so updates do not accumulate from one trial to the next.
+
+The RHS callback receives a private one-column copy of the **original prescribed
+RHS sample** at `state.t`. It returns a global one-column Field, field tuple or
+SystemVector; `nothing` restores/keeps the prescribed sample. Unlike ordinary
+unwrapped solver inputs, callback RHS values are always global Cartesian
+components, matching callback state fields and matrices. Do not preapply MPCs,
+Dirichlet elimination or approximation transformations. The solver handles them.
+
+The returned matrix must preserve Problem identities, field ordering, dimensions
+and active DOF layout. It may change numerical values and sparse connectivity.
+The set of constrained DOFs, MPCs, coordinate systems, approximation bases and
+mesh connectivity stay fixed. Activating a previously removed auxiliary MPC
+DOF is rejected. Treat state Fields, Problems and `state.operators` as read-only;
+callbacks are trial evaluations and may run repeatedly at the same time.
+
+With no callbacks the original linear integration path is used. With callbacks,
+HHT and FDM iterate until their full discrete free-coordinate residual meets
+`abstol + reltol*scale`. Defaults are:
+
+```julia
+nonlinearoptions = (maxiter=30, reltol=1e-9, abstol=1e-11, relaxation=1.0)
+```
+
+Failure to converge throws an error identifying the method, step, time and
+residual. The accepted solution is not advanced on a failed trial.
+
+For Newton linearization of an internal force `g(u)`, return its tangent
+`J(u)` in modifyA0 and `f_external - g(u) + J(u)*u` in modifyRHS. The same
+iteration also permits Picard updates. State-dependent A2/A1 need their own
+consistent linearization to obtain Newton convergence; residual iteration alone
+does not manufacture those derivatives. A simple cubic-force example is:
+
+```julia
+# One scalar field; k, λ, and P are captured model parameters.
+updateA0 = (A, state) -> begin
+    u = vec(state.fields[1].a)
+    SystemMatrix(spdiagm(0 => k .+ 3λ .* u.^2), P)
+end
+updateRHS = (rhs, state) -> begin
+    out = copy(rhs)
+    out.a .+= 2λ .* state.fields[1].a.^3
+    out
+end
+u, v = HHT(K, M, C, f, u0, v0, n, Δt;
+           support=bc, modifyA0=updateA0, modifyRHS=updateRHS,
+           nonlinearoptions=(reltol=1e-10, maxiter=30))
+```
+
+HHT retains the previous accepted A0*u + A1*v - rhs contribution for HHT-alpha
+weighting. FDM retains its old A0*u-rhs contribution and uses
+`A1θ=(1-ϑ)*A1_old+ϑ*A1_new`. CDM remains explicit in displacement: its updates
+are evaluated at the current known field, with an acceleration consistency
+iteration if callbacks depend on acceleration. Changing stiffness/mass can
+change the explicit stability limit; selecting Δt remains the caller's task.
+
+Matrix projection is repeated only when an operator changes. Numerically equal
+matrices reuse the cached factorization/preconditioner; RHS-only changes do not
+invalidate it. All matrix and RHS updates support the existing multifield,
+remote MPC, reduced-order, spectral and coordinate transformations subject to
+their documented combination restrictions.

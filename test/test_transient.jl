@@ -76,15 +76,16 @@ end
             @test u.a ≈ U atol=2e-11
             fixed = constrainedDoFs(P,support)
             @test v.a[fixed,:] ≈ V[fixed,:] atol=2e-10
-            # A full U0 history includes the support inertia contribution.
-            u2,_ = run(K,M,C,load,transient_field(P,U,t),initial,n,dt;support)
+            # A sampled BC includes support inertia without modifying initial fields.
+            sampled_support=[BoundaryCondition("left";field=P,p=transient_field(P,U,t))]
+            u2,_ = run(K,M,C,load,initial,initial,n,dt;support=sampled_support)
             @test u2.a ≈ U atol=2e-11
         end
         # First-order exact linear motion tests the capacity cross term.
         X = repeat(reshape(t,1,:),2,1)
         q = transient_field(P,C.A*ones(2,n)+K.A*X,t)
-        bc = [BoundaryCondition("left";field=P,p=0.0)]
-        x = FDM(K,C,q,bc,transient_field(P,X,t),n,dt)
+        bc = [BoundaryCondition("left";field=P,p=transient_field(P,X,t))]
+        x = FDM(K,C,q,bc,initial,n,dt)
         @test x.a ≈ X atol=2e-12
         # Spatial-only callbacks and a shifted physical time grid.
         bcall = [BoundaryCondition("body";field=P,p=(x,y,z,t)->t^2)]
@@ -185,17 +186,17 @@ end
         fg=transient_field(P,Q*f.a,t)
         vg=transient_field(P,Q*velocity.a,[0.0])
         # Only the local x component is constrained; y remains dynamic.
-        support=[BoundaryCondition("left";field=P,ux=0.0)]
+        support=[BoundaryCondition("left";field=P,ux=ScalarField([],repeat(reshape(t,1,:),P.non,1),t,[],n,:scalar,P))]
         d=transient_field(P,U,t)
         for run in (HHT,CDM)
-            u,v=run(K,M,C,f,d,velocity,n,dt;coordSys=[cs],support)
+            u,v=run(K,M,C,f,initial,velocity,n,dt;coordSys=[cs],support)
             @test u.a ≈ Q*U atol=2e-12
             @test v.a ≈ Q*V atol=2e-11
-            globalu,_=run(K,M,C,Global(fg),Global(transient_field(P,Q*U,t)),Global(vg),n,dt;
+            globalu,_=run(K,M,C,Global(fg),Global(initial),Global(vg),n,dt;
                            coordSys=[cs],support)
             @test globalu.a ≈ u.a atol=2e-12
         end
-        x=FDM(K,C,Global(fg),d,n,dt;coordSys=[cs],support)
+        x=FDM(K,C,Global(fg),initial,n,dt;coordSys=[cs],support)
         @test x.a ≈ Q*U atol=2e-12
         # Local and Cartesian load terms can be combined columnwise.
         constant=transient_field(P,fill(0.1,N,n),t)
@@ -315,9 +316,7 @@ end
         u,v=CDM(I2,I2,zero,bc,zero,zero,n,dt)
         @test u.a == sampled.a
         @test v.a ≈ ones(ndofs(P),n) atol=1e-12
-        # A full U0 without supports still initializes only the first column.
-        u,_=HHT(I2,I2,zero,sampled,zero,n,dt)
-        @test iszero(u.a)
+        @test_throws DimensionMismatch HHT(I2,I2,zero,sampled,zero,n,dt)
         @test_throws ErrorException HHT(I2,I2,zero,zero,zero,n,dt;
                     support=[BoundaryCondition("left";field=P,p=NaN)])
         # Legacy names and zero-damping positional signatures are retained.
@@ -358,10 +357,10 @@ end
         force=repeat(reshape(sin.(3t),1,:),ndofs(P),1)
         initial=transient_field(P,zeros(ndofs(P),1),[0.0])
         D=repeat(reshape(sin.(t),1,:),ndofs(P),1)
-        support=[BoundaryCondition("left";field=P,p=0.0)]
+        support=[BoundaryCondition("left";field=P,p=transient_field(P,D,t))]
         free,fixed=freeDoFs(P,support),constrainedDoFs(P,support)
         alpha,gamma,beta=-0.1,0.6,0.3025
-        u,v=HHT(K,M,C,transient_field(P,force,t),transient_field(P,D,t),initial,n,dt;
+        u,v=HHT(K,M,C,transient_field(P,force,t),initial,initial,n,dt;
                  α=alpha,γ=gamma,β=beta,support)
         a=zeros(ndofs(P),n)
         a[fixed,1].=(2D[fixed,1]-5D[fixed,2]+4D[fixed,3]-D[fixed,4])/dt^2
@@ -503,46 +502,32 @@ end
 end
 
 
-@testset "Transient: U0/X0 initial column versus supported history" begin
+@testset "Transient: support is the only prescribed-history input" begin
     with_test_gmsh() do
         line_mesh(n=1,order=1)
         P=Field([Material("body")],type=:ScalarField,dim=1,fieldName=:p)
-        N=ndofs(P)
-        K=SystemMatrix(spdiagm(0=>fill(2.0,N)),P)
-        M=SystemMatrix(spdiagm(0=>ones(N)),P)
-        C=0.2M
-        n,dt=7,0.01
-        t=collect(0:n-1)*dt
-        support=[BoundaryCondition("left";field=P,p=3.0)]
-        fixed,free=constrainedDoFs(P,support),freeDoFs(P,support)
+        N=ndofs(P); K=SystemMatrix(spdiagm(0=>fill(2.0,N)),P)
+        M=SystemMatrix(spdiagm(0=>ones(N)),P); C=0.2M
+        n,dt=7,0.01; t=collect(0:n-1)*dt
         zero=transient_field(P,zeros(N,1),[0.0])
+        history=transient_field(P,repeat(reshape(t,1,:),N,1),t)
+        support=[BoundaryCondition("left";field=P,p=history)]
+        fixed=constrainedDoFs(P,support)
+        force=transient_field(P,repeat(reshape(2t .+ 0.2,1,:),N,1),t)
         wrong_velocity=transient_field(P,fill(99.0,N,1),[0.0])
-        history=repeat(reshape(t,1,:),N,1)
-        # Future free values are distractors and must not be imposed.
-        history[free,2:end].=1000.0
-        U0=transient_field(P,history,t)
-        load=transient_field(P,repeat(reshape(2t .+ 0.2,1,:),N,1),t)
         for run in (HHT,CDM)
-            u,v=run(K,M,C,load,U0,wrong_velocity,n,dt;support)
-            @test u.a[fixed,:] ≈ repeat(reshape(t,1,:),length(fixed),1)
-            @test v.a[fixed,:] ≈ ones(length(fixed),n) atol=1e-11
-            @test maximum(abs,u.a[free,:]) < 100.0
-            constant,_=run(K,M,C,zero,zero,zero,n,dt;support)
-            @test constant.a[fixed,:] == fill(3.0,length(fixed),n)
-            @test_throws DimensionMismatch run(K,M,zero,
-                transient_field(P,zeros(N,n-1),t[1:end-1]),zero,n,dt;support)
-            # Two samples define a linear prescribed history and zero acceleration.
-            two=transient_field(P,repeat(reshape(t[1:2],1,:),N,1),t[1:2])
-            u2,v2=run(K,M,zero,two,zero,2,dt;support)
-            @test u2.a[fixed,:] ≈ two.a[fixed,:]
-            @test v2.a[fixed,:] ≈ ones(length(fixed),2) atol=1e-12
+            u,v=run(K,M,C,force,zero,wrong_velocity,n,dt;support)
+            @test u.a[fixed,:] ≈ reshape(t,1,:)
+            @test v.a[fixed,:] ≈ ones(1,n) atol=1e-11
+            @test_throws DimensionMismatch run(K,M,zero,history,zero,n,dt;support)
         end
-        x=FDM(K,C,load,U0,n,dt;support)
+        x=FDM(K,C,force,zero,n,dt;support)
         @test x.a[fixed,:] ≈ reshape(t,1,:)
-        @test maximum(abs,x.a[free,:]) < 1.0
-        @test FDM(K,C,zero,zero,n,dt;support).a[fixed,:] == fill(3.0,length(fixed),n)
-        @test_throws DimensionMismatch FDM(K,C,zero,
-            transient_field(P,zeros(N,2),t[1:2]),n,dt;support)
-        @test U0.a == history
+        @test_throws DimensionMismatch FDM(K,C,force,history,n,dt;support)
+        @test iszero(zero.a)
+        @test history.a == repeat(reshape(t,1,:),N,1)
+        short=transient_field(P,zeros(N,n-1),t[1:end-1])
+        @test_throws ErrorException HHT(K,M,zero,zero,zero,n,dt;
+            support=[BoundaryCondition("left";field=P,p=short)])
     end
 end
