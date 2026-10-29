@@ -94,31 +94,102 @@ function _transient_values(data, K, Q, n)
     return A
 end
 
-# Reuse the ordinary BC evaluator, sampling four-argument callbacks on the
-# physical time grid. Three-argument callbacks remain spatial functions.
+# Sample only constrained rows. Physical-group lookup and component resolution
+# happen once per BC, never inside the time loop. Prefer a spatial signature
+# when a varargs/optional-argument function supports both signatures.
 function _transient_support(P, support, t)
-    out = _transient_field(P, zeros(ndofs(P), length(t)), t)
+    entries = []
+    fixed = Int[]
+    gmsh.model.setCurrent(P.name)
+    components = _bc_component_map(P)
+    prefix = String(P.field)
     for bc in support
         bc.problem !== nothing && bc.problem !== P && continue
-        timed = Dict(k => v for (k, v) in bc.values
-                     if v isa Function && applicable(v, 0.0, 0.0, 0.0, first(t)))
-        static = Dict(k => v for (k, v) in bc.values if !haskey(timed, k))
-        if !isempty(static)
-            applyBoundaryConditions!(out, [BoundaryCondition(bc.phName; field=P, static...)])
+        tag = getTagForPhysicalName(bc.phName)
+        nodes, coordinates = gmsh.model.mesh.getNodesForPhysicalGroup(-1, tag)
+        for (key, value) in bc.values
+            name = String(key)
+            startswith(name, prefix) || error("Transient: unknown BC key '$key'.")
+            suffix = String(chopprefix(name, prefix))
+            haskey(components, suffix) || error("Transient: invalid BC component '$suffix'.")
+            dofs = (Int.(nodes) .- 1) .* P.pdim .+ components[suffix]
+            timed = false
+            if value isa Function
+                spatial = applicable(value, 0.0, 0.0, 0.0)
+                timed = !spatial && applicable(value, 0.0, 0.0, 0.0, first(t))
+                spatial || timed || throw(ArgumentError("Transient: BC functions must accept (x,y,z) or (x,y,z,t)."))
+            elseif value isa ScalarField
+                value = elementsToNodes(value)
+                size(value.a, 2) in (1, length(t)) ||
+                    throw(DimensionMismatch("Transient: BC ScalarField must have 1 or n columns."))
+            elseif !(value isa Number)
+                throw(ArgumentError("Transient: BC components must be numbers, ScalarFields or functions."))
+            end
+            push!(entries, (; dofs, nodes, coordinates, value, timed))
+            append!(fixed, dofs)
         end
-        if !isempty(timed)
-            for (j, tj) in enumerate(t)
-                vals = Dict(k => ((x, y, z) -> v(x, y, z, tj)) for (k, v) in timed)
-                sample = _transient_field(P, zeros(ndofs(P), 1), [tj])
-                applyBoundaryConditions!(sample, [BoundaryCondition(bc.phName; field=P, vals...)])
-                # Only the components of this BC may overwrite earlier BCs.
-                dbc = [BoundaryCondition(bc.phName; field=P, vals...)]
-                fixed = constrainedDoFs(P, dbc)
-                out.a[fixed, j] .= sample.a[fixed, 1]
+    end
+    sort!(unique!(fixed))
+    row = Dict(dof => i for (i, dof) in enumerate(fixed))
+    D = zeros(length(fixed), length(t))
+    for entry in entries
+        (; dofs, nodes, coordinates, value, timed) = entry
+        for (i, dof) in enumerate(dofs)
+            r = row[dof]
+            if value isa Function
+                x, y, z = coordinates[3i-2], coordinates[3i-1], coordinates[3i]
+                if timed
+                    for (j, tj) in enumerate(t)
+                        D[r, j] = value(x, y, z, tj)
+                    end
+                else
+                    D[r, :] .= value(x, y, z)
+                end
+            elseif value isa ScalarField
+                D[r, :] .= @view value.a[nodes[i], :]
+            else
+                D[r, :] .= value
             end
         end
     end
-    return out.a
+    return fixed, D
+end
+
+# Transfer compact prescribed rows through representative maps once, then
+# restrict only the constrained reduced rows. No ndof-by-n temporary is needed.
+function _transient_boundary_data(problems, offsets, mpc, R, support, t)
+    histories = Matrix{Float64}[]
+    masters = Int[]
+    for (i, P) in enumerate(problems)
+        local_fixed, values = _transient_support(P, support, t)
+        push!(histories, values)
+        if isempty(mpc)
+            append!(masters, offsets[i] .+ local_fixed)
+        else
+            rep = mpcRepresentativeMap(P, mpc)
+            _canonicalize_mpc_rep!(rep)
+            append!(masters, offsets[i] .+ rep[local_fixed])
+        end
+    end
+    D = vcat(histories...)
+    all(isfinite, D) || error("Transient: non-finite prescribed values.")
+    fixed_eff = sort!(unique(masters))
+    effective = zeros(length(fixed_eff), length(t))
+    rows = Dict(dof => i for (i, dof) in enumerate(fixed_eff))
+    assigned = falses(length(fixed_eff))
+    for (i, master) in enumerate(masters)
+        r = rows[master]
+        if assigned[r]
+            all(isapprox.(effective[r, :], D[i, :])) ||
+                error("MPC: incompatible prescribed values on tied DOFs.")
+        else
+            effective[r, :] .= @view D[i, :]
+            assigned[r] = true
+        end
+    end
+    free, fixed_r, _ = reduced_bc_data(R, fixed_eff, spzeros(size(R, 2)))
+    Dr = R[fixed_r, fixed_eff] * effective
+    return free, fixed_r, Dr
 end
 
 """
@@ -164,46 +235,25 @@ function prepare_transient_system(K0, M0, C0, rhs, U0, V0, n, dt;
         Q = _build_multifield_coordinate_transformation(K, coordSys)
         T, R, prunable, protected = _multifield_mpc_transformation(K, mpc)
     end
-    project(A) = T' * (Q === nothing ? A * T : Q' * (A * (Q * T)))
-    Kr = project(K.A)
-    Mr = M === nothing ? spzeros(size(Kr)...) : project(M.A)
-    Cr = C === nothing ? spzeros(size(Kr)...) : project(C.A)
+    L = Q === nothing ? T : Q*T
+    project(A) = _project_system_matrix(A, L)
+    Kr = project(system_matrix_data(K0))
+    Mr = M === nothing ? spzeros(size(Kr)...) : project(system_matrix_data(M0))
+    Cr = C === nothing ? spzeros(size(Kr)...) : project(system_matrix_data(C0))
     F0 = _transient_values(rhs, K, Q, n)
     F = T' * F0
     initial = _transient_values(U0, K, Q, 1)
     u0 = Vector(R * @view(initial[:, 1]))
     v0 = V0 === nothing ? zeros(size(T, 2)) :
         Vector(R * @view(_transient_values(V0, K, Q, 1)[:, 1]))
-    fixed = Int[]
-    local_fixed = [constrainedDoFs(P, support) for P in problems]
-    for i in eachindex(problems)
-        append!(fixed, offsets[i] .+ local_fixed[i])
-    end
-    sort!(unique!(fixed))
-    # Avoid a full ndof-by-n zero history for unconstrained vibration problems.
-    D = zeros(isempty(fixed) ? 0 : size(K.A, 1), n)
-    if !isempty(fixed)
-        for (i, P) in enumerate(problems)
-            isempty(local_fixed[i]) && continue
-            D[offsets[i]+1:offsets[i]+ndofs(P), :] .= _transient_support(P, support, t)
-        end
-    end
-    all(isfinite, D) || error("Transient: non-finite prescribed values.")
-    function reduce_boundary(values)
-        fixed_eff, effective = K.problems === nothing ?
-            singlefield_mpc_bc_data_matrix(K.model, mpc, fixed, values) :
-            _multifield_mpc_bc_data(K, mpc, fixed, values)
-        return reduced_bc_data_matrix(R, fixed_eff, effective)
-    end
-    free, fixed_r, Dr = isempty(fixed) ?
-        (collect(1:size(T, 2)), Int[], zeros(0, n)) : reduce_boundary(D)
+    free, fixed_r, Dr = _transient_boundary_data(problems, offsets, mpc, R, support, t)
     if K.problems !== nothing && !isempty(mpc)
         free = _remove_inactive_mpc_dofs((Kr, Mr, Cr), F, free, fixed_r, protected, prunable)
     end
     return (; K=Kr, M=Mr, C=Cr, F=Matrix(F[free, :]), u0=u0[free], v0=v0[free],
-            D=Dr[fixed_r, :], free, fixed=fixed_r, T, Q, problems, offsets, t,
-            layout=K, L=_modifier_data ? (Q === nothing ? T : Q*T) : nothing,
-            Ffull=_modifier_data ? (Q === nothing ? Matrix(F0) : Matrix(Q*F0)) : nothing,
+            D=Dr, free, fixed=fixed_r, T, Q, problems, offsets, t,
+            layout=K, L=_modifier_data ? L : nothing,
+            Fsource=_modifier_data ? F0 : nothing,
             inactive=_modifier_data ? setdiff(1:size(T,2),union(free,fixed_r)) : Int[])
 end
 
@@ -275,17 +325,19 @@ _transient_column(F, j) = @view F[:, size(F, 2) == 1 ? 1 : j]
 
 """
     HHT(K, M, [C,] f, U0, V0, n, Δt; support=[], mpc=[], coordSys=[],
-        α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2, t0=0.0,
+        α=0.0, δ=nothing, γ=0.5+(δ === nothing ? -α : δ), β=0.25*(0.5+γ)^2, t0=0.0,
         solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
         modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
         nonlinearoptions=(;))
 
 Integrate `M*ü + C*u̇ + K*u = f` with HHT/Newmark. Omitting `C` means zero
-physical damping; `α` controls algorithmic damping. Set `δ=-α` for the standard
-HHT choice `γ=0.5-α`, `β=(1-α)^2/4`; the historical independent `δ=0` default
-is retained. The equilibrium equation is
+physical damping; `α` controls algorithmic damping. The default `δ=nothing`
+selects the standard HHT choice `γ=0.5-α`, `β=(1-α)^2/4`. Explicit `δ`, `γ`
+and `β` override that choice; `δ=0` recovers the historical parameter family. The equilibrium equation is
 `M*a[j+1] + (1+α)*(C*v[j+1]+K*u[j+1]-f[j+1]) -
-α*(C*v[j]+K*u[j]-f[j]) = 0` on admissible free variations.
+α*(C*v[j]+K*u[j]-f[j]) = 0` in free coordinates. Prescribed inertia,
+damping and stiffness are first transferred to the effective RHS and receive
+the same endpoint weights as applied loads.
 
 All transient solvers use `Q*T`: local coordinates, intrinsic reducedOrder/SEM
 approximation, then MPC constraints, following `solveField`. The existing
@@ -303,8 +355,8 @@ call is needed. Boundary data override initial values on supported DOFs;
 `V0` supplies initial free velocities only.
 
 Constrained velocities and accelerations always follow the prescribed primary
-history: initial derivatives use finite differences and later HHT derivatives
-follow Newmark kinematics. At least three samples are needed to estimate
+history through second-order finite differences at every sample; prescribed
+DOFs are not advanced with Newmark recurrence. At least three samples are needed to estimate
 nonzero initial support acceleration. To prescribe a velocity history,
 integrate it and put the resulting scalar components into BoundaryConditions.
 
@@ -353,11 +405,11 @@ a symmetric wrapper alone does not guarantee it.
 """
 function HHT(K::_TransientMatrix, M::_TransientMatrix, C::_TransientMatrix,
              f::_TransientData, U0, V0, n::Int, dt::Real;
-             α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2, kwargs...)
+             α=0.0, δ=nothing, γ=0.5+(δ === nothing ? -α : δ), β=0.25*(0.5+γ)^2, kwargs...)
     return _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β, kwargs...)
 end
 function HHT(K::_TransientMatrix, M::_TransientMatrix, f::_TransientData, U0, V0, n::Int, dt::Real;
-             damping=nothing, α=0.0, δ=0.0, γ=0.5+δ, β=0.25*(0.5+γ)^2, kwargs...)
+             damping=nothing, α=0.0, δ=nothing, γ=0.5+(δ === nothing ? -α : δ), β=0.25*(0.5+γ)^2, kwargs...)
     return _HHT(K, M, damping, f, U0, V0, n, dt; α, γ, β, kwargs...)
 end
 function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
@@ -378,19 +430,15 @@ function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
     Kff, Mff, Cff = p.K[free, free], p.M[free, free], p.C[free, free]
     Kfc, Mfc, Cfc = p.K[free, fixed], p.M[free, fixed], p.C[free, fixed]
     Vd, Ad = _transient_derivatives(p.D, dt)
-    for j in 2:n
-        Ad[:, j] .= (p.D[:, j] - p.D[:, j-1] - dt*Vd[:, j-1] -
-                     dt^2*(0.5-β)*Ad[:, j-1]) / (β*dt^2)
-        Vd[:, j] .= Vd[:, j-1] + dt*((1-γ)*Ad[:, j-1] + γ*Ad[:, j])
-    end
     U, V = zeros(length(free), n), zeros(length(free), n)
     U[:, 1], V[:, 1] = p.u0, p.v0
     if !isempty(free)
         effective = _prepare_transient_linear_solver(
             Mff + (1+α)*γ*dt*Cff + (1+α)*β*dt^2*Kff, (K, M, C);
             solver, preconditioner, solveroptions, preconditioneroptions)
-        rhs0 = _transient_column(p.F, 1) - Kff*p.u0 - Cff*p.v0 -
-               Kfc*p.D[:, 1] - Cfc*Vd[:, 1] - Mfc*Ad[:, 1]
+        boundary_force(j) = Kfc * view(p.D, :, j) + Cfc * view(Vd, :, j) + Mfc * view(Ad, :, j)
+        oldforce = Kff*p.u0 + Cff*p.v0 + boundary_force(1) - _transient_column(p.F, 1)
+        rhs0 = -oldforce
         if isdiag(Mff)
             a = _transient_factor(Mff; mass=true) \ rhs0
         else
@@ -402,32 +450,47 @@ function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
             u, v = @view(U[:, j-1]), @view(V[:, j-1])
             up = u + dt*v + dt^2*(0.5-β)*a
             vp = v + dt*(1-γ)*a
-            rhs = (1+α)*_transient_column(p.F, j) - α*_transient_column(p.F, j-1) -
-                  Mfc*Ad[:, j] - (1+α)*(Kfc*p.D[:, j] + Cfc*Vd[:, j]) +
-                  α*(Kfc*p.D[:, j-1] + Cfc*Vd[:, j-1] + Kff*u + Cff*v) -
-                  (1+α)*(Kff*up + Cff*vp)
+            force = Kff*up + Cff*vp + boundary_force(j) - _transient_column(p.F, j)
+            rhs = -(1+α)*force
+            iszero(α) || (rhs .+= α .* oldforce)
             a = solve_prepared_linear_system(effective, rhs)
             U[:, j] .= up + β*dt^2*a
             V[:, j] .= vp + γ*dt*a
+            if !iszero(α)
+                oldforce = force + β*dt^2*(Kff*a) + γ*dt*(Cff*a)
+            end
         end
     end
     return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
 end
 
+function _transient_cdm_options(dampingScheme, velocityScheme)
+    dampingScheme in (:lagged, :central) ||
+        throw(ArgumentError("CDM: dampingScheme must be :lagged or :central."))
+    velocityScheme in (:backward, :central) ||
+        throw(ArgumentError("CDM: velocityScheme must be :backward or :central."))
+end
+
 """
     CDM(K, M, [C,] f, U0, V0, n, Δt; support=[], mpc=[], coordSys=[],
+        dampingScheme=:lagged, velocityScheme=:backward,
         modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
         nonlinearoptions=(;))
 
-Central differences with lagged damping `C*(u[j]-u[j-1])/Δt`. Accepts the same
+Central differences with `dampingScheme=:lagged` (historical backward damping)
+or `:central`, which uses `C*(u[j+1]-u[j-1])/(2Δt)` and factors `M+Δt*C/2`.
+The central choice is second-order in damping and avoids the additional lagged
+stability restriction. Accepts the same
 load, initial-value, coordinate, approximation, MPC and prescribed-history
 keywords as [`HHT`](@ref). Returns `(u,v)` with multifield tuple grouping as in
 HHT. A diagonal mass uses componentwise division. A consistent or projected
 nondiagonal mass uses a cached factorization, without automatic lumping.
 The scheme is conditionally stable; choose Δt for the reduced dynamic system.
 Constrained derivatives are estimated from the U0/support displacement history
-with second-order finite differences. Returned free velocities use backward differences after
-the initial sample, preserving the historical CDM convention.
+with second-order finite differences. `velocityScheme=:backward` preserves
+historical free velocities at half-step locations (the first sample is V0).
+Choose `velocityScheme=:central` for second-order velocities at the returned
+sample times, using a one-sided final stencil and preserving the initial V0.
 Operator callbacks use the same global-space contract as HHT. Displacement
 updates remain explicit: callbacks are evaluated at the known current field.
 An acceleration consistency iteration handles any callback dependence on the
@@ -444,10 +507,11 @@ function CDM(K::_TransientMatrix, M::_TransientMatrix, f::_TransientData, U0, V0
 end
 function _CDM(K, M, C, f, U0, V0, n, dt;
     modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-    nonlinearoptions=(;), kwargs...)
+    nonlinearoptions=(;), dampingScheme=:lagged, velocityScheme=:backward, kwargs...)
+    _transient_cdm_options(dampingScheme, velocityScheme)
     if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
         return _modified_cdm(K,M,C,f,U0,V0,n,dt; modifyA2,modifyA1,modifyA0,modifyRHS,
-                             nonlinearoptions,kwargs...)
+                             nonlinearoptions,dampingScheme,velocityScheme,kwargs...)
     end
     nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
         throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
@@ -463,15 +527,21 @@ function _CDM(K, M, C, f, U0, V0, n, dt;
         a0 = mass \ (_transient_column(p.F, 1) - Kff*p.u0 - Cff*p.v0 -
                      Kfc*p.D[:, 1] - Cfc*Vd[:, 1] - Mfc*Ad[:, 1])
         previous = p.u0 - dt*p.v0 + 0.5dt^2*a0
+        centered = dampingScheme === :central
+        effective = centered ? _transient_factor(Mff + dt/2*Cff) : mass
         for j in 2:n
             u = @view U[:, j-1]
             rhs = _transient_column(p.F, j-1) - Kff*u -
                   Cff*((u-previous)/dt) - Kfc*p.D[:, j-1] -
                   Cfc*Vd[:, j-1] - Mfc*Ad[:, j-1]
-            U[:, j] .= 2u - previous + dt^2*(mass \ rhs)
+            U[:, j] .= 2u - previous + dt^2*(effective \ rhs)
             V[:, j] .= (U[:, j] - u) / dt
             previous = copy(u)
         end
+    end
+    if velocityScheme === :central
+        V, _ = _transient_derivatives(U, dt)
+        V[:, 1] .= p.v0
     end
     return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
 end
@@ -566,7 +636,8 @@ following values:
 - `:PDR`: physical damping ratio
 - `:ADR`: algorithmic damping ratio
 - `:PE`: period error
-For details see [^3].
+For details see [^3]. `dampingScheme=:lagged` matches historical CDM;
+`:central` matches its centered-damping variant.
 `n` is the number of points in the graph. The damping matrix is assembled in the
 following ways: **C**=α**M**+β**K** or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅.
 The latter corresponds to the damping characteristic characterized by a power series consisting of powers
@@ -594,7 +665,8 @@ Types:
 - `show_ξ`: Boolean
 - `xy`: Tuple{Vector{Float64},Vector{Float64}}
 """
-function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false, show_ξ=false)
+function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false, show_ξ=false, dampingScheme=:lagged)
+    _transient_cdm_options(dampingScheme, :backward)
     if show_β == true
         println("β = $β")
     end
@@ -612,8 +684,9 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
             ξ += β[j] / 2 * ω[i]^(2j-1)
         end
         Ω = Δt * ω[i]
-        A = [2-2ξ*Ω-Ω^2 2ξ*Ω-1
-        1 0]
+        A = dampingScheme === :central ?
+            [(2-Ω^2)/(1+ξ*Ω) (ξ*Ω-1)/(1+ξ*Ω); 1 0] :
+            [2-2ξ*Ω-Ω^2 2ξ*Ω-1; 1 0]
 
         eig = eigen(A)
         ρ, idx = findmax(abs, eig.values)
@@ -653,7 +726,7 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
 end
 
 """
-    HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0, γ=0.5 + δ, β=0.25 * (0.5 + γ)^2)
+    HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=nothing, γ=0.5 + (δ === nothing ? -α : δ), β=0.25 * (0.5 + γ)^2)
 
 Gives some functions (graphs) for accuracy analysis of the HHT-α method described by [`HHT`](@ref).
 `ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
@@ -695,8 +768,8 @@ Types:
 - `δ`: Float64
 - `xy`: Tuple{Vector{Float64},Vector{Float64}}
 """
-function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=0.0,
-    γ=0.5 + δ, β=0.25 * (0.5 + γ)^2, ξ=0.0, massDamping=0.0, stiffnessDamping=0.0)
+function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=nothing,
+    γ=0.5 + (δ === nothing ? -α : δ), β=0.25 * (0.5 + γ)^2, ξ=0.0, massDamping=0.0, stiffnessDamping=0.0)
     _transient_accuracy_check(ωₘᵢₙ, ωₘₐₓ, Δt, n)
     all(isfinite, (α, γ, β, massDamping, stiffnessDamping)) &&
         -1/3 <= α <= 0 && γ >= 0 && β > 0 ||

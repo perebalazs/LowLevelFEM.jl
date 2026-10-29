@@ -362,8 +362,14 @@ function prepare_linear_solver(
     P = nothing
     if solver === :backslash
         # Diagonal sparse storage must not turn transient state vectors sparse.
-        F = size(A, 1) == size(A, 2) && isdiag(A) ?
-            Diagonal(Vector(diag(A))) : factorize(A)
+        F = if size(A, 1) == size(A, 2) && isdiag(A)
+            d = Vector(diag(A))
+            bad = findfirst(x -> !isfinite(x) || iszero(x), d)
+            bad === nothing || throw(SingularException(bad))
+            Diagonal(d)
+        else
+            factorize(A)
+        end
 
     elseif solver === :auto_symmetric
         try
@@ -584,6 +590,21 @@ end
 
 parent_system(K::SystemMatrix) = K
 parent_system(K::SymmetricSystemMatrix) = K.parent
+
+# A SymmetricSystemMatrix declares one authoritative triangle. Expand it before
+# a change of basis; wrapping the projected raw triangle loses cross terms.
+system_matrix_data(K::SystemMatrix) = K.A
+system_matrix_data(K::SymmetricSystemMatrix) = sparse(Symmetric(K.parent.A, K.uplo))
+
+function _project_system_matrix(A, T)
+    if size(T, 1) == size(T, 2) && isdiag(T) && all(isone, diag(T))
+        return A
+    end
+    AT = A * T
+    _shrink_csc!(AT)
+    result = T' * AT
+    return _shrink_csc!(result)
+end
 
 reduced_matrix_wrapper(::SystemMatrix, A) = A
 reduced_matrix_wrapper(K::SymmetricSystemMatrix, A) = Symmetric(A, K.uplo)
@@ -1258,7 +1279,8 @@ function _prepare_singlefield_system(
     rhs_template, F0 = rhs_in_solver_coordinates(rhs, Q)
     nsteps = size(F0, 2)
 
-    A0 = Q === nothing ? K.A : Q.T' * K.A * Q.T
+    Afull = system_matrix_data(K0)
+    A0 = Q === nothing ? Afull : Q.T' * Afull * Q.T
 
     fixed = constrainedDoFs(P, support)
     xDfield = applyBoundaryConditions(P, support; steps=nsteps)
@@ -1279,14 +1301,10 @@ function _prepare_singlefield_system(
         xD_eff
     )
 
-    AT = A0 * T
-    _shrink_csc!(AT)
-    Kr = T' * AT
-    _shrink_csc!(Kr)
-    #Kr = T' * A0 * T
+    Kr = _project_system_matrix(A0, T)
     Br = T' * F0
 
-    B = copy(Br[free_r, :])
+    B = Br[free_r, :]
 
     if !isempty(fixed_r)
         B .-= Kr[free_r, fixed_r] * xD_r[fixed_r, :]
@@ -1593,10 +1611,8 @@ function prepare_multifield_system(
 
     nsteps = size(F0, 2)
 
-    A0 =
-        Q === nothing ?
-        K.A :
-        Q' * K.A * Q
+    Afull = system_matrix_data(K0)
+    A0 = Q === nothing ? Afull : Q' * Afull * Q
 
     # ----------------------------------------------------------
     # 2) Full-space Dirichlet data
@@ -1646,11 +1662,7 @@ function prepare_multifield_system(
     # 6) Galerkin projection
     # ----------------------------------------------------------
 
-    AT = A0 * T
-    _shrink_csc!(AT)
-    Kr = T' * AT
-    _shrink_csc!(Kr)
-    #Kr = T' * A0 * T
+    Kr = _project_system_matrix(A0, T)
     Br = T' * F0
 
     # ----------------------------------------------------------
@@ -1670,7 +1682,7 @@ function prepare_multifield_system(
     # 8) Reduced free-DOF system
     # ----------------------------------------------------------
 
-    B = copy(Br[free_r, :])
+    B = Br[free_r, :]
 
     if !isempty(fixed_r)
         B .-= Kr[free_r, fixed_r] * xD_r[fixed_r, :]

@@ -9,6 +9,11 @@ CurrentModule = LowLevelFEM
 `SystemMatrix.A` exposes the sparse matrix. `SystemVector.a` and nodal field
 `.a` expose RHS/solution matrices, with one column per independent RHS or mode.
 For block systems, preserve the same `Problem` order in matrices and vectors.
+`Symmetric(K, :U)` or `Symmetric(K, :L)` declares its authoritative triangle.
+Solvers expand that triangle before coordinate, approximation or MPC projection,
+so triangular storage is supported consistently across field, eigen and
+transient solutions. The opposite triangle is intentionally ignored, following
+Julia's `Symmetric` contract; projection roundoff follows the same convention.
 
 ```@docs
 SystemMatrix
@@ -31,7 +36,11 @@ explicitly loaded optional packages described by `solveField`.
 ## Eigenproblems
 
 `solveEigen(A,B)` solves `A*ϕ = λ*B*ϕ`; the physical interpretation of `λ`
-depends on the chosen pencil. For vibration, convert positive `λ=ω²` to Hz as
+depends on the chosen pencil. Dense `solver=:direct` has quadratic storage
+cost; `dense_limit=1024^3` bytes guards an estimate of six full work arrays
+before densification. Set a larger limit explicitly, or `nothing` to disable
+the guard. This estimate is not a strict bound on backend peak memory.
+For vibration, convert positive `λ=ω²` to Hz as
 `sqrt(λ)/(2π)`. A buckling multiplier is not a frequency.
 
 ```@docs
@@ -47,6 +56,15 @@ LowLevelFEM.mapEigenValues
 `mapEigenValues` currently accepts `VectorField` eigenresults; it does not have
 scalar/tensor overloads. For other field types, extract values with `eigenValue`
 or request `output=:raw`.
+
+Normalized eigenvectors have their largest-magnitude component real and
+positive; `normalize=:none` keeps the backend phase. Repeated eigenspaces can
+still have different bases. The unshifted default `which=:SR` applies to
+general pencils. For a symmetric positive spectrum, explicit `shift=0.0`
+usually converges faster. `shift` is a strict numerical lower bound, not a
+physical rigid-mode filter: choose a positive cutoff to exclude zero-mode
+roundoff. Shift-invert regularization is placed below the requested bound and
+requests additional candidates when necessary, retaining modes just above it.
 
 See [Linear Buckling and Prestressed Natural Frequencies](../tutorials/buckling-and-prestressed-modes.md)
 for a complete mechanical application. Engineering mechanical eigen helpers and their existing result containers
@@ -89,8 +107,11 @@ x = FDM(K, C, q, x0, n, Δt; support=bc, ϑ=0.5)
 ```
 
 Omit the positional damping matrix in HHT/CDM for zero physical damping, or
-supply it with `damping=C`. For the standard HHT parameter relation use
-`δ=-α` (the historical independent `δ=0` default is retained). The historical positional boundary-list calls
+supply it with `damping=C`. HHT defaults to the standard parameter relation
+`γ=0.5-α`, `β=(1-α)^2/4`. Set `δ=0` explicitly to recover the historical
+independent parameter family; explicit `δ`, `γ` or `β` override the defaults.
+Custom parameters are not guaranteed unconditionally stable.
+The historical positional boundary-list calls
 remain available. Matrices and input fields are not modified.
 
 HHT and FDM accept the same linear solver controls as `solveField`:
@@ -144,7 +165,13 @@ u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc)
 A BC selects both the component and its value; sampled `ScalarField` components
 may have one constant column or exactly `n` columns. Spatial functions and
 `(x,y,z,t)` functions are supported as well. The solver constructs the history
-internally; no `applyBoundaryConditions!(U0, bc)` call is required.
+internally; no `applyBoundaryConditions!(U0, bc)` call is required. Functions
+that accept both three and four arguments (optional arguments or varargs) are
+interpreted as spatial functions; use an explicitly four-argument closure for
+a time-dependent BC. Physical groups/components are resolved once per BC.
+Boundary histories occupy `nfixed × n` storage, including during MPC transfer
+and approximation restriction; they do not allocate a full zero `ndof × n`
+history. Returned solution histories still require full nodal storage.
 
 ```julia
 ux_history = ScalarField(U, "base", (x,y,z,t)->0.001*sin(20t);
@@ -158,12 +185,31 @@ Every initial field has exactly one column, also in a multifield SystemVector
 or tuple. Boundary values override initial data on supported DOFs. Multicolumn
 initial fields are rejected to prevent competing boundary specifications.
 
-Constrained derivatives follow the BC history. HHT estimates the initial
-velocity and acceleration by finite differences, then uses Newmark kinematics;
-CDM uses finite differences. With only two samples the history is linear.
+Constrained derivatives follow the BC history through second-order finite
+differences at every sample, in both HHT and CDM. HHT advances only the free
+unknowns with Newmark kinematics; it first transfers prescribed inertia,
+damping and stiffness terms to the effective load and applies the HHT endpoint
+weights to that complete load. This avoids an unstable inverse Newmark
+recurrence for prescribed accelerations. With only two samples the history is linear.
 To prescribe a velocity history, integrate its scalar components with
 `integrate(v_history)`/`∫(v_history)` and use the results in BoundaryConditions.
 FDM uses the primary-variable increment, including capacity coupling.
+
+CDM retains `dampingScheme=:lagged` and `velocityScheme=:backward` for
+compatibility. Lagged damping uses the previous displacement difference and is
+first-order in that term; backward output velocities lie at half-step times.
+For centered damping and velocities at the reported sample times use:
+
+```julia
+u, v = CDM(K, M, C, f, u0, v0, n, Δt;
+           support=bc, dampingScheme=:central, velocityScheme=:central)
+```
+
+The centered scheme factors `M + Δt*C/2` once for fixed coefficients. It remains
+conditionally stable. Centered output velocities use second-order interior
+and final endpoint differences and retain the prescribed initial free V0.
+Use the same `dampingScheme` in `CDMaccuracyAnalysis` when comparing stability.
+
 
 Loads and initial values use local solver coordinates unless wrapped in
 `Global(...)`. All returned fields are global. MPCs identify local components;
@@ -328,3 +374,13 @@ matrices reuse the cached factorization/preconditioner; RHS-only changes do not
 invalidate it. All matrix and RHS updates support the existing multifield,
 remote MPC, reduced-order, spectral and coordinate transformations subject to
 their documented combination restrictions.
+
+The nonlinear convergence test uses the physical residual, scaled by the
+assembled term norms, plus `abstol`. Choose `abstol` in the units of the reduced
+equilibrium equation. A small update alone does not imply equilibrium and is
+not accepted as an alternative convergence test. Private operator copies
+protect accepted states and allow in-place callback edits; numerical equality
+checks are required to reuse factorizations when callbacks return new matrices.
+Returning `nothing` avoids reprojection and accepts the previous matrix.
+Original RHS histories are retained by reference in solver coordinates;
+callback inputs are converted to global components one sample at a time.

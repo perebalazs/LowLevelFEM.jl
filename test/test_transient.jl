@@ -363,13 +363,15 @@ end
         u,v=HHT(K,M,C,transient_field(P,force,t),initial,initial,n,dt;
                  α=alpha,γ=gamma,β=beta,support)
         a=zeros(ndofs(P),n)
-        a[fixed,1].=(2D[fixed,1]-5D[fixed,2]+4D[fixed,3]-D[fixed,4])/dt^2
+        _, prescribed_acceleration = LowLevelFEM._transient_derivatives(D[fixed, :], dt)
+        a[fixed,:] .= prescribed_acceleration
         a[free,1].=M.A[free,free]\(force[free,1]-K.A[free,:]*u.a[:,1]-
                                    C.A[free,:]*v.a[:,1]-M.A[free,fixed]*a[fixed,1])
         for j in 2:n
-            a[:,j].=(v.a[:,j]-v.a[:,j-1]-dt*(1-gamma)*a[:,j-1])/(gamma*dt)
+            a[free,j].=(v.a[free,j]-v.a[free,j-1]-dt*(1-gamma)*a[free,j-1])/(gamma*dt)
             equilibrium=M.A*a[:,j]+(1+alpha)*(K.A*u.a[:,j]+C.A*v.a[:,j]-force[:,j])-
                         alpha*(K.A*u.a[:,j-1]+C.A*v.a[:,j-1]-force[:,j-1])
+            equilibrium[free] .+= alpha*M.A[free,fixed]*(a[fixed,j]-a[fixed,j-1])
             @test norm(equilibrium[free]) < 2e-11
             @test u.a[free,j] ≈ u.a[free,j-1]+dt*v.a[free,j-1]+
                   dt^2*((0.5-beta)*a[free,j-1]+beta*a[free,j]) atol=2e-12
@@ -527,7 +529,7 @@ end
         @test iszero(zero.a)
         @test history.a == repeat(reshape(t,1,:),N,1)
         short=transient_field(P,zeros(N,n-1),t[1:end-1])
-        @test_throws ErrorException HHT(K,M,zero,zero,zero,n,dt;
+        @test_throws DimensionMismatch HHT(K,M,zero,zero,zero,n,dt;
             support=[BoundaryCondition("left";field=P,p=short)])
     end
 end
