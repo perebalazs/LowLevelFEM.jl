@@ -324,84 +324,167 @@ end
 _transient_column(F, j) = @view F[:, size(F, 2) == 1 ? 1 : j]
 
 """
-    HHT(K, M, [C,] f, U0, V0, n, Δt; support=[], mpc=[], coordSys=[],
-        α=0.0, δ=nothing, γ=0.5+(δ === nothing ? -α : δ), β=0.25*(0.5+γ)^2, t0=0.0,
-        solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
-        modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-        nonlinearoptions=(;))
+    HHT(K, M, C, f, U0, V0, n, Δt; kwargs...)
+    HHT(K, M, f, U0, V0, n, Δt; damping=nothing, kwargs...)
 
-Integrate `M*ü + C*u̇ + K*u = f` with HHT/Newmark. Omitting `C` means zero
-physical damping; `α` controls algorithmic damping. The default `δ=nothing`
-selects the standard HHT choice `γ=0.5-α`, `β=(1-α)^2/4`. Explicit `δ`, `γ`
-and `β` override that choice; `δ=0` recovers the historical parameter family. The equilibrium equation is
-`M*a[j+1] + (1+α)*(C*v[j+1]+K*u[j+1]-f[j+1]) -
-α*(C*v[j]+K*u[j]-f[j]) = 0` in free coordinates. Prescribed inertia,
-damping and stiffness are first transferred to the effective RHS and receive
-the same endpoint weights as applied loads.
+Integrate a second-order system with the **HHT-α / Newmark method**:
 
-All transient solvers use `Q*T`: local coordinates, intrinsic reducedOrder/SEM
-approximation, then MPC constraints, following `solveField`. The existing
-restriction on combining coordinates and an approximation on the same field
-also applies here. Loads and initial fields are in local solver components;
-`Global(...)` accepts Cartesian data. Results are always global nodal Fields.
+```math
+M\\ddot{u} + C\\dot{u} + Ku = f.
+```
 
-`f` accepts a Field, a multifield `SystemVector`/tuple, `Global(...)`, or a
-local/global sum. Its columns are constant (1 column) or sampled at
-`t0 + (j-1)*Δt` (`n` columns); input Field time labels are not resampled.
-`U0` and `V0` contain one initial column. The complete boundary history is
-assembled internally from `support`, including time-dependent ScalarField
-components and `(x,y,z,t)` functions. No external applyBoundaryConditions!
-call is needed. Boundary data override initial values on supported DOFs;
-`V0` supplies initial free velocities only.
+# Arguments
 
-Constrained velocities and accelerations always follow the prescribed primary
-history through second-order finite differences at every sample; prescribed
-DOFs are not advanced with Newmark recurrence. At least three samples are needed to estimate
-nonzero initial support acceleration. To prescribe a velocity history,
-integrate it and put the resulting scalar components into BoundaryConditions.
+| Argument | Meaning |
+|:--|:--|
+| `K`, `M`, `C` | Field, second-derivative and first-derivative operators; single- or multifield `SystemMatrix`s. |
+| `f` | Constant or sampled RHS Field, `SystemVector`, field tuple or local/global sum. |
+| `U0`, `V0` | Initial primary field and first derivative, one column each, on free DOFs. |
+| `n` | Number of stored samples, **including the initial sample**; `n ≥ 2`. |
+| `Δt` | Constant finite positive time increment. |
 
-Return `(u, v)`. For multiple fields each of `u` and `v` is a tuple in matrix
-block order, e.g. `(u1,u2), (v1,v2) = HHT(...)`. Initial values on constrained
-DOFs are replaced by prescribed histories. The factorization is reused.
-The positional `..., f, support, U0, V0, n, Δt` form is also supported.
-HHT/CDM require a nonsingular mass on free reduced coordinates; arbitrary
-mass-singular differential-algebraic systems are outside this interface.
-SEM plus MPC on the same field follows the shared backend's current rejection.
+Omit positional `C` for zero physical damping. Only in that calling form,
+`damping=C` supplies the same operator by keyword (default `nothing`).
+The positional-support alias `HHT(K,M,[C,]f,bc,U0,V0,n,Δt)` is retained.
 
-The generic equation is `A2*ü + A1*u̇ + A0*u = rhs`, with the positional
-aliases `A0=K`, `A2=M`, `A1=C`. The optional `modifyA2`, `modifyA1`,
-`modifyA0`, `modifyRHS` callbacks default to `nothing`. Each is called as
-`callback(operator, state)` in the full global field space. See the transient
-callback documentation in `docs/src/reference/solution.md` for the state and
-linearization contract. Matrix callbacks return a SystemMatrix (optionally
-wrapped in Symmetric); modifyRHS returns a one-column global Field/SystemVector.
-Returning `nothing` keeps the previous accepted matrix, or the prescribed RHS
-sample at the evaluation time. Callback inputs are private copies; return the
-copy to retain in-place edits. `state` data must be treated as read-only.
+# HHT parameters
 
-HHT reevaluates callbacks inside each time step until the discrete equilibrium
-residual converges. `nonlinearoptions` accepts `maxiter=30`, `reltol=1e-9`,
-`abstol=1e-11`, and `relaxation=1.0`. Nonconvergence throws an error with step,
-time and residual. For Newton iteration, return a consistent tangent in A0 and
-`rhs = external - internal + A0*u` in modifyRHS. Otherwise the same loop can
-perform a Picard iteration. State-dependent A2/A1 need a consistent user
-linearization for Newton convergence. Fixed layout, supports, MPCs, coordinates
-and approximation transformations are retained; inactive MPC DOFs cannot be
-activated by updates. Equal matrices reuse the cached linear solver.
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `α` | `0.0` | Algorithmic damping, in `[-1/3,0]`; distinct from physical `C`. |
+| `δ` | `nothing` | Optional override of the relation `γ=0.5+δ`. |
+| `γ` | `0.5-α` | Velocity parameter when `δ` is omitted; explicit values override it. |
+| `β` | `(0.5+γ)^2/4` | Displacement parameter; positive, and explicitly overridable. |
 
-Linear solvers follow `solveField`: `:auto`, `:backslash`, `:lu`,
-`:lu_no_ordering`, `:cholesky`, `:ldlt`, `:qr`, `:cg` and `:gmres`.
-`preconditioner`, `solveroptions` and `preconditioneroptions` have the same
-meaning and optional-package requirements as in `solveField`. The effective
-matrix factorization or preconditioner is prepared once and reused at every
-step. For a nondiagonal mass, the initial acceleration uses a separate solve
-with the same settings; a diagonal mass uses direct division.
-Wrap all contributing matrices in `Symmetric(...)` to declare the effective
-system symmetric, including `C` when supplied. Then `:auto` tries Cholesky
-with LU fallback, and `:cg` with `preconditioner=:auto` uses incomplete
-Cholesky. General systems use sparse backslash by default, while `:gmres`
-with automatic preconditioning uses ILU. CG requires positive definiteness;
-a symmetric wrapper alone does not guarantee it.
+The standard choice is `γ=0.5-α`, `β=(1-α)^2/4`; `α=0` gives average-acceleration
+Newmark. Explicit `δ=0` recovers the historical independent parameter family.
+Custom `γ ≥ 0`, `β > 0` are accepted but need their own stability assessment.
+
+# Data, constraints and coordinates
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `support` | `BoundaryCondition[]` | Prescribed components and their complete time histories. |
+| `mpc` | `MPC[]` | Multi-point constraints, including multifield remote couplings. |
+| `coordSys` | `CoordinateSystem[]` | Local bases for loads, initial values, supports and MPC components. |
+| `t0` | `0.0` | Time of the initial sample. |
+
+Loads have one constant column or exactly `n` sampled columns. Initial fields
+have **one column**. Input time labels are not resampled. `support` is the only
+source of prescribed histories: use numbers, spatial `(x,y,z)` functions,
+time-dependent `(x,y,z,t)` functions or sampled `ScalarField` components.
+Supported values override initial data on constrained DOFs; no external
+`applyBoundaryConditions!` call is needed.
+
+Ordinary loads and initial fields use local solver components. Use `Global(...)`
+for Cartesian input or combine local/global loads. Output is always global.
+For multiple fields, use a `SystemVector` or tuple in matrix block order and
+identify `field=Problem` in every BC/MPC. Reduced-order and SEM spaces follow
+the shared solver transformations.
+
+Prescribed derivatives come from the support history, using centered interior
+and one-sided endpoint differences. With two samples acceleration is zero;
+with three it is the same second difference at all samples; endpoint acceleration
+is second-order for at least four samples. Only free unknowns use Newmark
+recurrence. Prescribed inertia, damping and stiffness enter the effective load
+with the same HHT endpoint weighting as applied loads.
+
+# Linear solver options
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `solver` | `:auto` | Select a direct or iterative solve; choices below. |
+| `preconditioner` | `:auto` | `:ich` for CG, `:ilu` for GMRES; also `:none` or a supplied object. |
+| `solveroptions` | `(;)` | Native iterative options, e.g. `(reltol=1e-9, maxiter=1000)`. |
+| `preconditioneroptions` | `(;)` | Options for a symbolic preconditioner, e.g. `(memory=2,)` for `:ich`. |
+
+- Direct choices: `:auto`, `:backslash`, `:lu`, `:lu_no_ordering`,
+  `:cholesky`, `:ldlt`, `:qr`.
+- Iterative choices: `:cg` (positive-definite symmetric systems) and `:gmres`.
+  Load `IterativeSolvers`; `:ich` additionally needs `Preconditioners`,
+  and `:ilu` needs `IncompleteLU`.
+- Wrap every contributing operator in `Symmetric(...)` to declare the effective
+  matrix symmetric. Then `:auto` tries Cholesky with LU fallback; otherwise it
+  uses the general sparse factorization. Symmetry alone does not imply positive definiteness.
+- Nonempty option tuples and actual preconditioners are for iterative solves.
+  `log`, `Pl`, `Pr` and `initially_zero` are managed internally. Constructor
+  options cannot accompany `:none` or a preconstructed preconditioner.
+
+For unchanged coefficients, the effective factorization/preconditioner is reused.
+See [`solveField`](@ref) for the shared backend contract.
+
+The initial acceleration uses a separate mass solve with the same solver
+settings; diagonal mass uses direct division.
+
+# Operator updates and nonlinear iteration
+
+The generic names are `A2=M`, `A1=C`, `A0=K`.
+
+| Keyword | Default | Updated quantity |
+|:--|:--|:--|
+| `modifyA2` | `nothing` | Second-derivative operator, e.g. mass. |
+| `modifyA1` | `nothing` | First-derivative operator, e.g. damping. |
+| `modifyA0` | `nothing` | Primary-field operator, e.g. stiffness or tangent. |
+| `modifyRHS` | `nothing` | RHS at the evaluation time. |
+| `nonlinearoptions` | `(;)` | Nonlinear iteration controls listed below. |
+
+HHT reevaluates callbacks within each step until discrete equilibrium converges.
+
+The callback signature is `callback(operator, state)`. Matrices are full/global
+`SystemMatrix`s (optionally `Symmetric`); RHS results are one-column global Fields,
+field tuples or `SystemVector`s. `state` includes trial fields and derivatives,
+Problems/material data, time, step, iteration, previous accepted snapshot and
+current operators. Callback order is **A2, A0, A1, RHS**.
+See the [complete callback guide](@ref transient-callbacks).
+
+The operator argument is a private copy. Return it to keep in-place edits;
+return `nothing` to keep the accepted matrix or the original prescribed RHS
+sample. State data are read-only. Mesh, field ordering, supports, MPCs and bases
+stay fixed; inactive MPC DOFs cannot be activated.
+
+| `nonlinearoptions` member | Default | Meaning |
+|:--|:--|:--|
+| `maxiter` | `30` | Maximum nonlinear updates; positive integer. |
+| `reltol` | `1e-9` | Relative residual tolerance; nonnegative. |
+| `abstol` | `1e-11` | Absolute residual tolerance, in equilibrium-equation units; nonnegative. |
+| `relaxation` | `1.0` | Fraction of each correction, in `(0,1]`. |
+
+For Newton iteration, return the tangent `J(u)` as A0 and
+`external - internal(u) + J(u)*u` as RHS. State-dependent A2/A1 also require
+consistent linearization for Newton convergence. Picard updates are permitted.
+Nonconvergence throws a step/time/residual error. Without callbacks, leave
+`nonlinearoptions=(;)` to use the linear path.
+
+# Returns
+
+Return `(u,v)` as global nodal Fields, with `n` columns at
+`t[j] = t0 + (j-1)*Δt`. For multiple fields, return tuples in block order:
+`(u1,u2), (v1,v2) = HHT(...)`.
+
+# Choosing the time step
+
+For linear positive-definite mass, nonnegative stiffness and physical damping,
+the standard HHT parameter family is unconditionally stable. This is a
+**stability property, not a time-resolution guarantee**. Start with about
+20–50 samples per shortest period of interest, resolve rapid loads/support
+motion, then halve `Δt` and compare the quantities of interest.
+Use [`HHTaccuracyAnalysis`](@ref) to inspect damping and phase effects;
+see the [time-step guide](@ref transient-timestep) for a practical workflow.
+
+# Example
+
+```julia
+bc = [BoundaryCondition("base"; field=U,
+                        ux=(x,y,z,t)->0.001*sin(20t), uy=0.0)]
+u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc, α=-0.1)
+```
+
+# Limitations
+
+Mass must be nonsingular on free reduced coordinates; arbitrary mass-singular
+DAEs are not supported. Combining coordinates with reduced/SEM interpolation
+on the same field, or SEM with MPC on the same field, follows the shared
+backend's current restrictions. See also [`CDM`](@ref), [`FDM`](@ref).
 """
 function HHT(K::_TransientMatrix, M::_TransientMatrix, C::_TransientMatrix,
              f::_TransientData, U0, V0, n::Int, dt::Real;
@@ -472,30 +555,126 @@ function _transient_cdm_options(dampingScheme, velocityScheme)
 end
 
 """
-    CDM(K, M, [C,] f, U0, V0, n, Δt; support=[], mpc=[], coordSys=[],
-        dampingScheme=:lagged, velocityScheme=:backward,
-        modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-        nonlinearoptions=(;))
+    CDM(K, M, C, f, U0, V0, n, Δt; kwargs...)
+    CDM(K, M, f, U0, V0, n, Δt; damping=nothing, kwargs...)
 
-Central differences with `dampingScheme=:lagged` (historical backward damping)
-or `:central`, which uses `C*(u[j+1]-u[j-1])/(2Δt)` and factors `M+Δt*C/2`.
-The central choice is second-order in damping and avoids the additional lagged
-stability restriction. Accepts the same
-load, initial-value, coordinate, approximation, MPC and prescribed-history
-keywords as [`HHT`](@ref). Returns `(u,v)` with multifield tuple grouping as in
-HHT. A diagonal mass uses componentwise division. A consistent or projected
-nondiagonal mass uses a cached factorization, without automatic lumping.
-The scheme is conditionally stable; choose Δt for the reduced dynamic system.
-Constrained derivatives are estimated from the U0/support displacement history
-with second-order finite differences. `velocityScheme=:backward` preserves
-historical free velocities at half-step locations (the first sample is V0).
-Choose `velocityScheme=:central` for second-order velocities at the returned
-sample times, using a one-sided final stencil and preserving the initial V0.
-Operator callbacks use the same global-space contract as HHT. Displacement
-updates remain explicit: callbacks are evaluated at the known current field.
-An acceleration consistency iteration handles any callback dependence on the
-current acceleration; no implicit displacement Newton solve is introduced.
-Updated coefficients must satisfy the CDM time-step stability requirement.
+Integrate a second-order system by **central differences**:
+
+```math
+M\\ddot{u} + C\\dot{u} + Ku = f.
+```
+
+# Arguments
+
+| Argument | Meaning |
+|:--|:--|
+| `K`, `M`, `C` | Primary-field, second-derivative and first-derivative operators. |
+| `f` | Constant or sampled RHS; Field, `SystemVector`, tuple or local/global sum. |
+| `U0`, `V0` | Initial primary field and first derivative; one column each. |
+| `n`, `Δt` | Stored sample count (`n ≥ 2`, including the initial sample) and positive constant increment. |
+
+Single-field and multifield `SystemMatrix`s are accepted. Omit `C` for zero
+damping; only that calling form accepts `damping=C` (default `nothing`).
+The positional-support alias `CDM(K,M,[C,]f,bc,U0,V0,n,Δt)` is retained.
+
+# CDM scheme options
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `dampingScheme` | `:lagged` | Backward damping velocity; `:central` uses centered damping. |
+| `velocityScheme` | `:backward` | Historical half-step free-velocity estimates; `:central` returns sample-time estimates. |
+
+- `:lagged` damping uses `C*(u[j]-u[j-1])/Δt` and the free mass matrix.
+- `:central` damping uses `C*(u[j+1]-u[j-1])/(2Δt)` and the effective matrix
+  `M + Δt*C/2`; it is second-order in the damping term.
+- Central output velocities use centered interior and one-sided final
+  differences; the initial free value remains `V0`.
+
+Diagonal systems use componentwise division; otherwise a factorization is
+cached. A consistent or projected mass is supported and is **not automatically
+lumped**. CDM has no `solver` or preconditioner keywords.
+
+# Data, constraints and coordinates
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `support` | `BoundaryCondition[]` | Prescribed components and their complete time histories. |
+| `mpc` | `MPC[]` | Multi-point constraints, including multifield remote couplings. |
+| `coordSys` | `CoordinateSystem[]` | Local bases for loads, initial values, supports and MPC components. |
+| `t0` | `0.0` | Time of the initial sample. |
+
+Loads have one constant column or exactly `n` sampled columns. Initial fields
+have **one column**. Input time labels are not resampled. `support` is the only
+source of prescribed histories: use numbers, spatial `(x,y,z)` functions,
+time-dependent `(x,y,z,t)` functions or sampled `ScalarField` components.
+Supported values override initial data on constrained DOFs; no external
+`applyBoundaryConditions!` call is needed.
+
+Ordinary loads and initial fields use local solver components. Use `Global(...)`
+for Cartesian input or combine local/global loads. Output is always global.
+For multiple fields, use a `SystemVector` or tuple in matrix block order and
+identify `field=Problem` in every BC/MPC. Reduced-order and SEM spaces follow
+the shared solver transformations.
+
+Constrained derivatives always follow the prescribed history by finite
+differences, independently of `velocityScheme`. Two samples define linear
+motion with zero acceleration; four samples permit second-order acceleration
+at both endpoints. The unsupported coordinate/reduced/SEM combinations are
+the same as for [`HHT`](@ref); mass must be nonsingular on free coordinates.
+
+# Operator updates
+
+| Keyword | Default | Updated quantity |
+|:--|:--|:--|
+| `modifyA2` | `nothing` | A2=M: second-derivative operator. |
+| `modifyA1` | `nothing` | A1=C: first-derivative operator. |
+| `modifyA0` | `nothing` | A0=K: primary-field operator. |
+| `modifyRHS` | `nothing` | RHS at the known current state. |
+| `nonlinearoptions` | `(;)` | `maxiter=30`, `reltol=1e-9`, `abstol=1e-11`, `relaxation=1.0`. |
+
+Callbacks use `callback(operator,state)` in full global coordinates, with the
+same state, return types, private-copy and read-only contracts as [`HHT`](@ref).
+Returning `nothing` preserves the accepted operator or prescribed RHS sample.
+Displacement updates remain explicit. A consistency iteration handles callback
+dependence on acceleration or on the centered damping velocity; it does not
+introduce an implicit displacement Newton solve. Nonlinear options control
+that residual iteration and require at least one callback. `maxiter` is positive,
+tolerances are nonnegative, and `relaxation` lies in `(0,1]`.
+
+# Returns
+
+Return `(u,v)` as global nodal Fields at `t0 + (j-1)*Δt`, `j=1:n`.
+Multifield outputs are tuples in block order, for example
+`(u1,u2), (v1,v2) = CDM(...)`. Backward free velocities are half-step estimates
+stored under these same time labels; choose `velocityScheme=:central` for
+sample-time derivatives.
+
+# Choosing the time step
+
+For an undamped linear system, let `ωmax` be the largest free-coordinate
+frequency from `K*ϕ = ω²*M*ϕ`. Require **Δt < 2/ωmax** and leave a safety margin.
+For classical modal damping with `dampingScheme=:lagged`, a conservative limit is
+
+```math
+\\Delta t_{\\mathrm{crit}}
+= \\frac{2}{\\omega_{\\max}}
+  \\left(\\sqrt{1+\\xi_{\\max}^2}-\\xi_{\\max}\\right),
+```
+
+where `ξmax` bounds modal damping ratios over the retained spectrum. Centered
+damping keeps the undamped modal limit `2/ωmax` for nonnegative classical
+damping. These formulas do not establish stability for arbitrary nonsymmetric
+or nonproportionally damped systems. Resolve forcing/support motion as well,
+perform step refinement, and reassess the limit when callbacks change operators.
+Use [`CDMaccuracyAnalysis`](@ref) with the same `dampingScheme`; the
+[time-step guide](@ref transient-timestep) gives an eigenvalue-based example.
+
+# Example
+
+```julia
+u, v = CDM(K, M, C, f, u0, v0, n, Δt;
+           support=bc, dampingScheme=:central, velocityScheme=:central)
+```
 """
 function CDM(K::_TransientMatrix, M::_TransientMatrix, C::_TransientMatrix,
              f::_TransientData, U0, V0, n::Int, dt::Real; kwargs...)
@@ -547,26 +726,157 @@ function _CDM(K, M, C, f, U0, V0, n, dt;
 end
 
 """
-    FDM(K, C, q, X0, n, Δt; ϑ=0.5, support=[], mpc=[], coordSys=[],
-        t0=0.0, solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
-        modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing, nonlinearoptions=(;))
+    FDM(K, C, q, X0, n, Δt; kwargs...)
 
-Theta integration of `C*ẋ + K*x = q`, sharing the constrained preparation and
-sampled-data conventions of [`HHT`](@ref). `X0` has one initial column and
-all boundary histories are supplied by `support`. Includes the complete prescribed
-increment `-C_fc*(d[j+1]-d[j])/Δt` and theta-weighted loads and stiffness terms.
-Return one global nodal Field, or a tuple in matrix block order. `ϑ=0` uses
-explicit Euler, `ϑ=0.5` Crank–Nicolson and `ϑ=1` backward Euler. The effective
-matrix is factorized once; diagonal effective matrices use direct division.
-The positional `..., q, support, X0, n, Δt` form is retained.
-Linear solver and preconditioner options follow `solveField` and HHT. The
-factorization or preconditioner of `C_ff + ϑ*Δt*K_ff` is built once and reused.
-Wrap both `K` and `C` in `Symmetric(...)` for the symmetric automatic path.
-Generic operators are A0=K and A1=C (the first-derivative/capacity matrix).
-modifyA2 is rejected for this first-order method. With modify callbacks, the
-time-step loop checks the nonlinear theta residual. A1 is interpolated as
-`(1-ϑ)*A1_old + ϑ*A1_new`; the old and new A0*u-rhs terms use their own
-endpoint operators. Callback and nonlinear options follow HHT.
+Integrate a first-order system with the **theta method**:
+
+```math
+C\\dot{x} + Kx = q.
+```
+
+# Arguments
+
+| Argument | Meaning |
+|:--|:--|
+| `K`, `C` | Primary-field and first-derivative/capacity operators; single- or multifield matrices. |
+| `q` | Constant or sampled RHS Field, `SystemVector`, tuple or local/global sum. |
+| `X0` | Initial primary field, one column, on free coordinates. |
+| `n`, `Δt` | Sample count (`n ≥ 2`, including the initial sample) and positive constant increment. |
+
+The positional-support alias `FDM(K,C,q,bc,X0,n,Δt)` is retained. Here `C` is
+capacity/first-derivative data, whereas it denotes damping in HHT/CDM.
+
+# Theta parameter
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `ϑ` | `0.5` | Endpoint weight in `[0,1]`; choices below. |
+
+| `ϑ` | Scheme | Time accuracy for smooth solutions |
+|:--|:--|:--|
+| `0.0` | Explicit Euler | First order; conditionally stable. |
+| `0.5` | Crank–Nicolson | Second order. |
+| `1.0` | Backward Euler | First order; strong decay of stiff modes. |
+
+# Data, constraints and coordinates
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `support` | `BoundaryCondition[]` | Prescribed components and their complete time histories. |
+| `mpc` | `MPC[]` | Multi-point constraints, including multifield remote couplings. |
+| `coordSys` | `CoordinateSystem[]` | Local bases for loads, initial values, supports and MPC components. |
+| `t0` | `0.0` | Time of the initial sample. |
+
+Loads have one constant column or exactly `n` sampled columns. Initial fields
+have **one column**. Input time labels are not resampled. `support` is the only
+source of prescribed histories: use numbers, spatial `(x,y,z)` functions,
+time-dependent `(x,y,z,t)` functions or sampled `ScalarField` components.
+Supported values override initial data on constrained DOFs; no external
+`applyBoundaryConditions!` call is needed.
+
+Ordinary loads and initial fields use local solver components. Use `Global(...)`
+for Cartesian input or combine local/global loads. Output is always global.
+For multiple fields, use a `SystemVector` or tuple in matrix block order and
+identify `field=Problem` in every BC/MPC. Reduced-order and SEM spaces follow
+the shared solver transformations.
+
+Prescribed capacity coupling includes the complete increment
+`-C_fc*(d[j+1]-d[j])/Δt`; all histories are supplied through `support`.
+
+# Linear solver options
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `solver` | `:auto` | Select a direct or iterative solve; choices below. |
+| `preconditioner` | `:auto` | `:ich` for CG, `:ilu` for GMRES; also `:none` or a supplied object. |
+| `solveroptions` | `(;)` | Native iterative options, e.g. `(reltol=1e-9, maxiter=1000)`. |
+| `preconditioneroptions` | `(;)` | Options for a symbolic preconditioner, e.g. `(memory=2,)` for `:ich`. |
+
+- Direct choices: `:auto`, `:backslash`, `:lu`, `:lu_no_ordering`,
+  `:cholesky`, `:ldlt`, `:qr`.
+- Iterative choices: `:cg` (positive-definite symmetric systems) and `:gmres`.
+  Load `IterativeSolvers`; `:ich` additionally needs `Preconditioners`,
+  and `:ilu` needs `IncompleteLU`.
+- Wrap every contributing operator in `Symmetric(...)` to declare the effective
+  matrix symmetric. Then `:auto` tries Cholesky with LU fallback; otherwise it
+  uses the general sparse factorization. Symmetry alone does not imply positive definiteness.
+- Nonempty option tuples and actual preconditioners are for iterative solves.
+  `log`, `Pl`, `Pr` and `initially_zero` are managed internally. Constructor
+  options cannot accompany `:none` or a preconstructed preconditioner.
+
+For unchanged coefficients, the effective factorization/preconditioner is reused.
+See [`solveField`](@ref) for the shared backend contract.
+
+For constant operators the effective free matrix is `C_ff + ϑ*Δt*K_ff`.
+Wrap both operators in `Symmetric(...)` for the symmetric automatic path.
+
+# Operator updates and nonlinear iteration
+
+| Keyword | Default | Updated quantity |
+|:--|:--|:--|
+| `modifyA1` | `nothing` | A1=C: first-derivative/capacity operator. |
+| `modifyA0` | `nothing` | A0=K: primary-field operator or tangent. |
+| `modifyRHS` | `nothing` | RHS at the trial endpoint. |
+| `modifyA2` | `nothing` | Reserved: any value other than `nothing` is rejected by FDM. |
+| `nonlinearoptions` | `(;)` | Nonlinear iteration controls listed below. |
+
+FDM reevaluates callbacks within each step. It interpolates capacity as
+`A1θ=(1-ϑ)*A1_old+ϑ*A1_new` and uses each endpoint's own `A0*x-rhs`.
+There is no second-derivative operator.
+
+The callback signature is `callback(operator, state)`. Matrices are full/global
+`SystemMatrix`s (optionally `Symmetric`); RHS results are one-column global Fields,
+field tuples or `SystemVector`s. `state` includes trial fields and derivatives,
+Problems/material data, time, step, iteration, previous accepted snapshot and
+current operators. Callback order is **A2, A0, A1, RHS**.
+See the [complete callback guide](@ref transient-callbacks).
+
+The operator argument is a private copy. Return it to keep in-place edits;
+return `nothing` to keep the accepted matrix or the original prescribed RHS
+sample. State data are read-only. Mesh, field ordering, supports, MPCs and bases
+stay fixed; inactive MPC DOFs cannot be activated.
+
+| `nonlinearoptions` member | Default | Meaning |
+|:--|:--|:--|
+| `maxiter` | `30` | Maximum nonlinear updates; positive integer. |
+| `reltol` | `1e-9` | Relative residual tolerance; nonnegative. |
+| `abstol` | `1e-11` | Absolute residual tolerance, in equilibrium-equation units; nonnegative. |
+| `relaxation` | `1.0` | Fraction of each correction, in `(0,1]`. |
+
+For Newton iteration, return the tangent `J(u)` as A0 and
+`external - internal(u) + J(u)*u` as RHS. State-dependent A2/A1 also require
+consistent linearization for Newton convergence. Picard updates are permitted.
+Nonconvergence throws a step/time/residual error. Without callbacks, leave
+`nonlinearoptions=(;)` to use the linear path.
+
+At FDM initialization both derivative entries in `state` are `nothing`;
+a first derivative is available during step iterations. The same coordinate,
+reduced-order and SEM restrictions as in [`HHT`](@ref) apply.
+
+# Returns
+
+Return a global nodal Field `x` with `n` columns at `t0 + (j-1)*Δt`.
+A multifield result is a tuple in matrix block order: `x1,x2 = FDM(...)`.
+
+# Choosing the time step
+
+For a linear diffusion-type pencil `K*ϕ=λ*C*ϕ` with real nonnegative eigenvalues:
+
+- `ϑ ≥ 0.5`: unconditionally stable, but `Δt` still controls accuracy.
+- `ϑ < 0.5`: require `Δt < 2/((1-2ϑ)*λmax)` with a safety margin.
+
+For complex/nonsymmetric spectra, assess the full stability region instead.
+Crank–Nicolson may alternate stiff modes when `λ*Δt` is large; backward Euler
+damps them more strongly. Resolve the fastest decay/forcing of interest and
+halve `Δt` to check accuracy. See [`FDMaccuracyAnalysis`](@ref).
+
+# Example
+
+```julia
+x = FDM(K, C, q, x0, n, Δt; support=bc, ϑ=0.5)
+x = FDM(Symmetric(K), Symmetric(C), q, x0, n, Δt;
+        support=bc, ϑ=1.0, solver=:cholesky)
+```
 """
 function FDM(K::_TransientMatrix, C::_TransientMatrix, q, X0, n::Int, dt::Real;
              ϑ=0.5, solver=:auto, preconditioner=:auto,
@@ -617,53 +927,59 @@ FDM(K::_TransientMatrix, C::_TransientMatrix, q, bc::Vector{BoundaryCondition},
 FDM_old(args...; kwargs...) = FDM(args...; kwargs...)
 
 """
-    CDMaccuracyAnalysis(ωₘᵢₙ::Float64,
-                        ωₘₐₓ::Float64,
-                        Δt::Float64,
-                        type::Symbol;
-                        n=100,
-                        α=0.0,
-                        ξ=0.01,
-                        β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)],
-                        show_β=false,
-                        show_ξ=false)
+    CDMaccuracyAnalysis(ωmin, ωmax, Δt, type; kwargs...)
 
-Gives some functions (graphs) for accuracy analysis of the CDM method.
-`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
-**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
-following values:
-- `:SR`: spectral radius
-- `:PDR`: physical damping ratio
-- `:ADR`: algorithmic damping ratio
-- `:PE`: period error
-For details see [^3]. `dampingScheme=:lagged` matches historical CDM;
-`:central` matches its centered-damping variant.
-`n` is the number of points in the graph. The damping matrix is assembled in the
-following ways: **C**=α**M**+β**K** or **C**=α**M**+β₁**K**+β₂**KM⁻¹K**+β₃**KM⁻¹KM⁻¹K**+⋅⋅⋅.
-The latter corresponds to the damping characteristic characterized by a power series consisting of powers
-of the natural frequencies with odd exponents. ξᵢ (`ξ` in the argument list) are the values ​​of the
-individual members of the series corresponding to the ωₘₐₓ value. βᵢ (`β` in the argument list) are the
-coefficients of the series. (see [^4]) Either `ξ` or `β` must be specified. `ξ` or `β` are scalars or
-vectors. If `show_β` or `show_ξ` is `true`, the corresponding `β` or `ξ` values will be
-sent to the output.
-Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+Evaluate a **scalar modal amplification model** of [`CDM`](@ref).
+Frequencies are angular frequencies from `K*ϕ=ω²*M*ϕ`.
 
-[^4]: Serfőző, D., Pere, B.: *An effective reduction method with Caughey damping for
-    spurious oscillations in dynamic problems*, Meccanica, <https://doi.org/10.1007/s11012-025-02036-9>
+# Arguments and output
 
-Return: `xy`
+- `ωmin`, `ωmax`: positive frequency interval in radians/time.
+- `Δt`: positive candidate time increment.
+- `type`: analysis listed below.
+- Return `(x,y)` vectors of length `n`, for plotting without a GUI dependency.
 
-Types:
-- `ωₘᵢₙ`: Float64
-- `ωₘₐₓ`: Float64
-- `Δt`: Float64
-- `n`: Int64
-- `α`: Float64
-- `β`: Float64 of Vector{Float64}
-- `ξ`: Float64 of Vector{Float64}
-- `show_β`: Boolean
-- `show_ξ`: Boolean
-- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+| `type` | `y` | `x` |
+|:--|:--|:--|
+| `:SR` | Spectral radius of the amplification matrix. | Natural log of `ω*Δt/(2π)`. |
+| `:PDR` | Physical damping contribution from the β series. | `ω*Δt/(2π)`. |
+| `:ADR` | Algorithmic damping indicator. | `ω*Δt/(2π)`. |
+| `:PE` | Relative period-error indicator. | `ω*Δt/(2π)`. |
+
+# Keyword arguments
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `n` | `100` | Number of frequency samples. |
+| `dampingScheme` | `:lagged` | Match the integrator: `:lagged` or `:central`. |
+| `α` | `0.0` | Legacy mass-proportional damping parameter; not HHT algorithmic α. |
+| `ξ` | `0.01` | Scalar/vector of β-series damping contributions at `ωmax`. |
+| `β` | Derived from `ξ` | Explicit Caughey-series coefficients; overrides the derived values. |
+| `show_β` | `false` | Print β coefficients. |
+| `show_ξ` | `false` | Print the corresponding β-series contributions at `ωmax`. |
+
+The derived coefficients are `β[i]=2ξ[i]/ωmax^(2i-1)`. The amplification
+matrix uses the existing convention
+`ξeff(ω)=α/ω + sum(β[i]*ω^(2i-1)/2)`. Thus, for a physical mass term `a*M`,
+use `α=a/2`. The `:PDR` curve and `show_ξ` report only the β-series contribution;
+they do not include the mass term. Explicit β permits stiffness-proportional
+or higher-order Caughey damping models.
+
+# Use and limitations
+
+Use `:SR` to inspect a candidate stable step; use `:PE` and `:ADR` to judge
+numerical distortion. Select the same damping scheme as the integration run.
+This is a modal/proportional model, not a stability proof for an arbitrary
+coupled or nonproportionally damped matrix system.
+
+```julia
+x, radius = CDMaccuracyAnalysis(ωmin, ωmax, Δt, :SR;
+                              ξ=0.02, dampingScheme=:central)
+```
+
+See Serfőző and Pere, *An effective reduction method with Caughey damping for
+spurious oscillations in dynamic problems*, Meccanica (2025),
+<https://doi.org/10.1007/s11012-025-02036-9>.
 """
 function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, ξ=0.01, β=[2ξ[i]/(ωₘₐₓ)^(2i-1) for i in 1:length(ξ)], show_β=false, show_ξ=false, dampingScheme=:lagged)
     _transient_cdm_options(dampingScheme, :backward)
@@ -726,47 +1042,59 @@ function CDMaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0,
 end
 
 """
-    HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=nothing, γ=0.5 + (δ === nothing ? -α : δ), β=0.25 * (0.5 + γ)^2)
+    HHTaccuracyAnalysis(ωmin, ωmax, Δt, type; kwargs...)
 
-Gives some functions (graphs) for accuracy analysis of the HHT-α method described by [`HHT`](@ref).
-`ωₘᵢₙ` and `ωₘₐₓ` are the square root of smallest and largest eigenvalues of the
-**Kϕ**=ω²**Mϕ** eigenvalue problem, `Δt` is the time step size. `type` is one of the
-following values:
-- `:SR`: spectral radius
-- `:ADR`: algorithmic damping ratio
-- `:PE`: period error
-For details see [^2] and [^3].
+Evaluate the **HHT modal amplification matrix**, including physical damping.
+Use it to compare candidate time increments and HHT parameter choices.
 
-Physical damping is included in the amplification matrix. `ξ` is a modal damping
-ratio (a number or function of angular frequency). For Rayleigh damping
-`C = massDamping*M + stiffnessDamping*K`, supply the two coefficients; their
-contribution is added to `ξ`. `:PDR` returns the resulting physical damping ratio.
-A general nonproportional damping matrix cannot be characterized from the
-undamped frequency interval alone; the time integrator accepts that matrix.
+# Arguments and output
 
-`n` is the number of points in the graph. For the meaning of `α`, `β` and `γ`
-see [`HHT`](@ref). If `δ` is given, γ=0.5+δ and β=0.25⋅(0.5+γ)².
-Returns a tuple of x and y values of the graph. (Can be plotted with `plot(xy)`)
+- `ωmin`, `ωmax`: positive angular-frequency interval from `K*ϕ=ω²*M*ϕ`.
+- `Δt`: finite positive candidate increment.
+- `type`: analysis listed below.
+- Return `(x,y)` vectors of length `n`.
 
-[^2]: Belytschko, Ted, and Thomas JR, Hughes: *Computational methods for
-    transient analysis*, North-Holland, (1983).
+| `type` | `y` | `x` |
+|:--|:--|:--|
+| `:SR` | Amplification spectral radius. | Natural log of `ω*Δt/(2π)`. |
+| `:PDR` | Total physical modal damping ratio. | `ω*Δt/(2π)`. |
+| `:ADR` | Algorithmic damping indicator. | `ω*Δt/(2π)`. |
+| `:PE` | Relative period-error indicator. | `ω*Δt/(2π)`. |
 
-[^3]: Serfőző, D., Pere, B.: *A method to accurately define arbitrary algorithmic
-    damping character as viscous damping*. Arch Appl Mech 93, 3581–3595 (2023).
-    <https://doi.org/10.1007/s00419-023-02454-9>
+# Keyword arguments
 
-Return: `xy`
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `n` | `100` | Number of samples; at least 2. |
+| `α` | `0.0` | HHT algorithmic damping in `[-1/3,0]`. |
+| `δ` | `nothing` | Optional `γ=0.5+δ` relation. |
+| `γ` | `0.5-α` | Standard default, or `0.5+δ` when δ is supplied. |
+| `β` | `(0.5+γ)^2/4` | Displacement parameter; explicit values override the default. |
+| `ξ` | `0.0` | Physical modal ratio, a number or function `ξ(ω)`. |
+| `massDamping` | `0.0` | Coefficient of M in Rayleigh damping. |
+| `stiffnessDamping` | `0.0` | Coefficient of K in Rayleigh damping. |
 
-Types:
-- `ωₘᵢₙ`: Float64
-- `ωₘₐₓ`: Float64
-- `Δt`: Float64
-- `n`: Int64
-- `α`: Float64
-- `β`: Float64
-- `γ`: Float64
-- `δ`: Float64
-- `xy`: Tuple{Vector{Float64},Vector{Float64}}
+The physical modal ratio is
+`ξ(ω) + massDamping/(2ω) + stiffnessDamping*ω/2`.
+These terms affect the amplification matrix; `:PDR` reports their sum.
+HHT defaults and explicit parameter overrides follow [`HHT`](@ref).
+
+# Example and limitations
+
+```julia
+x, radius = HHTaccuracyAnalysis(ωmin, ωmax, Δt, :SR;
+                               α=-0.1, ξ=0.02, stiffnessDamping=1e-4)
+```
+
+Use the same coefficients as the transient calculation. This scalar analysis
+assumes modal/proportional damping; an arbitrary nonproportional matrix cannot
+be reconstructed from the undamped frequency interval alone. Stability of the
+standard linear scheme does not replace a time-step refinement check.
+
+See Belytschko and Hughes, *Computational Methods for Transient Analysis*
+(North-Holland, 1983), and Serfőző and Pere, *A method to accurately define
+arbitrary algorithmic damping character as viscous damping*, Arch. Appl. Mech.
+93 (2023), <https://doi.org/10.1007/s00419-023-02454-9>.
 """
 function HHTaccuracyAnalysis(ωₘᵢₙ, ωₘₐₓ, Δt, type; n=100, α=0.0, δ=nothing,
     γ=0.5 + (δ === nothing ? -α : δ), β=0.25 * (0.5 + γ)^2, ξ=0.0, massDamping=0.0, stiffnessDamping=0.0)
@@ -831,10 +1159,33 @@ end
 """
     FDMaccuracyAnalysis(λmin, λmax, Δt; type=:SR, n=100, ϑ=0.5)
 
-Return `(x, radius)` for the theta method on `C*ẋ + K*x = 0`, where
-`x = λ*Δt` and `λ` ranges over the generalized spectrum `K*ϕ = λ*C*ϕ`.
-The amplification factor is `(1-(1-ϑ)*x)/(1+ϑ*x)`. Only `type=:SR` is
-supported. See [`FDM`](@ref) for the time-integration method.
+Evaluate the **theta-method amplification factor** for [`FDM`](@ref).
+
+# Arguments
+
+| Argument | Meaning |
+|:--|:--|
+| `λmin`, `λmax` | Nonnegative real interval from `K*ϕ=λ*C*ϕ`. |
+| `Δt` | Finite positive candidate time increment. |
+
+# Keyword arguments
+
+| Keyword | Default | Meaning |
+|:--|:--|:--|
+| `type` | `:SR` | Spectral-radius analysis; the only supported choice. |
+| `n` | `100` | Number of eigenvalue samples; at least 2. |
+| `ϑ` | `0.5` | Theta weight in `[0,1]`, matching the integration run. |
+
+# Returns and interpretation
+
+Return `(x,radius)` vectors, with `x=λ*Δt` and
+`radius=abs((1-(1-ϑ)*x)/(1+ϑ*x))`. Values above one indicate modal growth.
+For `ϑ<0.5`, the nonnegative-real stability boundary is
+`λmax*Δt < 2/(1-2ϑ)`. Complex spectra require a full stability-region check.
+
+```julia
+x, radius = FDMaccuracyAnalysis(0.0, λmax, Δt; ϑ=0.5)
+```
 """
 function FDMaccuracyAnalysis(λₘᵢₙ, λₘₐₓ, Δt; type=:SR, n=100, ϑ=0.5)
     _transient_accuracy_check(λₘᵢₙ, λₘₐₓ, Δt, n; positive=false)

@@ -88,299 +88,40 @@ quadrangles; consult `spectralTransformation` for unsupported combinations.
 
 ## Transient integration
 
-`HHT`, `CDM` and `FDM` share coordinate transformation, approximation and MPC
-preparation. They return global nodal fields, with physical time samples
-`t0 + (j-1)*Δt` for `j=1:n`. Input histories have either one constant column
-or exactly `n` sampled columns; the solvers use column order and do not
-interpolate the input time labels. `U0`/`X0` and `V0` have exactly one initial
-column. All prescribed histories are supplied once through `support`.
+The [Time Integration guide](transient.md) contains the full HHT/CDM/FDM
+workflow, keyword tables, support histories, solver choices and time-step
+selection. The function references are [`HHT`](@ref), [`CDM`](@ref) and
+[`FDM`](@ref).
 
-```julia
-# Second-order dynamics: M*ü + C*u̇ + K*u = f
-u, v = HHT(K, M, C, f, u0, v0, n, Δt;
-           support=bc, mpc=ties, coordSys=cs, α=-0.1, δ=0.1)
-u, v = CDM(K, M, C, f, u0, v0, n, Δt;
-           support=bc, mpc=ties, coordSys=cs)
+| Method | System | Main choice |
+|:--|:--|:--|
+| HHT | Second order | Implicit dynamics and algorithmic damping. |
+| CDM | Second order | Explicit displacement updates and a stability-limited step. |
+| FDM | First order | Theta integration for diffusion/heat and other first-order systems. |
 
-# First-order dynamics: C*ẋ + K*x = q
-x = FDM(K, C, q, x0, n, Δt; support=bc, ϑ=0.5)
-```
-
-Omit the positional damping matrix in HHT/CDM for zero physical damping, or
-supply it with `damping=C`. HHT defaults to the standard parameter relation
-`γ=0.5-α`, `β=(1-α)^2/4`. Set `δ=0` explicitly to recover the historical
-independent parameter family; explicit `δ`, `γ` or `β` override the defaults.
-Custom parameters are not guaranteed unconditionally stable.
-The historical positional boundary-list calls
-remain available. Matrices and input fields are not modified.
-
-HHT and FDM accept the same linear solver controls as `solveField`:
-`solver`, `preconditioner`, `solveroptions` and `preconditioneroptions`.
-Supported direct solvers are `:backslash`, `:lu`, `:lu_no_ordering`,
-`:cholesky`, `:ldlt` and `:qr`. Iterative choices are `:cg` and `:gmres`.
-The factorization or preconditioner of the effective free-coordinate matrix
-is prepared once and reused across the entire time history. HHT uses
-`M_ff + (1+α)*γ*Δt*C_ff + (1+α)*β*Δt^2*K_ff`; FDM uses
-`C_ff + ϑ*Δt*K_ff`.
-
-```julia
-using IterativeSolvers, Preconditioners, IncompleteLU
-
-# Declare all contributing matrices symmetric for CG + automatic ICH.
-u, v = HHT(Symmetric(K), Symmetric(M), Symmetric(C), f, u0, v0, n, Δt;
-           support=bc, solver=:cg, preconditioner=:auto,
-           solveroptions=(reltol=1e-10, maxiter=1000),
-           preconditioneroptions=(memory=3,))
-
-# General/nonsymmetric systems: GMRES + ILU.
-x = FDM(K, C, q, x0, n, Δt;
-        support=bc, solver=:gmres, preconditioner=:ilu,
-        solveroptions=(reltol=1e-10, maxiter=1000),
-        preconditioneroptions=(τ=1e-3,))
-```
-
-`solver=:auto` is direct: ordinary matrices use Julia's factorization for
-backslash, while explicitly symmetric systems try Cholesky with LU fallback.
-Symmetry is preserved only when every contributing input matrix uses
-`Symmetric(...)`; symmetric stiffness and mass do not imply symmetric damping.
-CG additionally requires positive definiteness. `preconditioner=:auto` chooses
-`:ich` for symmetric CG systems and `:ilu` for GMRES. `:none` and preconstructed
-preconditioner objects are also accepted. Optional-package requirements and
-native keyword validation match `solveField`.
-
-For HHT with a nondiagonal mass matrix, the initial acceleration uses a separate
-mass-system preparation with the same solver settings. This avoids an implicit
-LU factorization when an iterative solver is requested. A diagonal mass still
-uses direct division. CDM retains its diagonal/cached-mass solve.
-
-Supports accept time callbacks as well as sampled scalar components:
-
-```julia
-bc = [BoundaryCondition("base"; field=U,
-                        ux=(x,y,z,t)->0.001*sin(20t), uy=0.0)]
-u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc)
-```
-
-`support` is the only source of prescribed primary-variable histories.
-A BC selects both the component and its value; sampled `ScalarField` components
-may have one constant column or exactly `n` columns. Spatial functions and
-`(x,y,z,t)` functions are supported as well. The solver constructs the history
-internally; no `applyBoundaryConditions!(U0, bc)` call is required. Functions
-that accept both three and four arguments (optional arguments or varargs) are
-interpreted as spatial functions; use an explicitly four-argument closure for
-a time-dependent BC. Physical groups/components are resolved once per BC.
-Boundary histories occupy `nfixed × n` storage, including during MPC transfer
-and approximation restriction; they do not allocate a full zero `ndof × n`
-history. Returned solution histories still require full nodal storage.
-
-```julia
-ux_history = ScalarField(U, "base", (x,y,z,t)->0.001*sin(20t);
-                         steps=n, tmin=t0, tmax=t0+(n-1)*Δt)
-bc = [BoundaryCondition("base"; field=U, ux=ux_history, uy=0.0)]
-u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc)
-```
-
-`U0`/`X0` initialize free primary values; `V0` initializes free velocities.
-Every initial field has exactly one column, also in a multifield SystemVector
-or tuple. Boundary values override initial data on supported DOFs. Multicolumn
-initial fields are rejected to prevent competing boundary specifications.
-
-Constrained derivatives follow the BC history through second-order finite
-differences at every sample, in both HHT and CDM. HHT advances only the free
-unknowns with Newmark kinematics; it first transfers prescribed inertia,
-damping and stiffness terms to the effective load and applies the HHT endpoint
-weights to that complete load. This avoids an unstable inverse Newmark
-recurrence for prescribed accelerations. With only two samples the history is linear.
-To prescribe a velocity history, integrate its scalar components with
-`integrate(v_history)`/`∫(v_history)` and use the results in BoundaryConditions.
-FDM uses the primary-variable increment, including capacity coupling.
-
-CDM retains `dampingScheme=:lagged` and `velocityScheme=:backward` for
-compatibility. Lagged damping uses the previous displacement difference and is
-first-order in that term; backward output velocities lie at half-step times.
-For centered damping and velocities at the reported sample times use:
-
-```julia
-u, v = CDM(K, M, C, f, u0, v0, n, Δt;
-           support=bc, dampingScheme=:central, velocityScheme=:central)
-```
-
-The centered scheme factors `M + Δt*C/2` once for fixed coefficients. It remains
-conditionally stable. Centered output velocities use second-order interior
-and final endpoint differences and retain the prescribed initial free V0.
-Use the same `dampingScheme` in `CDMaccuracyAnalysis` when comparing stability.
-
-
-Loads and initial values use local solver coordinates unless wrapped in
-`Global(...)`. All returned fields are global. MPCs identify local components;
-prescribed slave values are transferred to their master for every time sample.
-
-For block systems, use `SystemVector([field1,field2,...])` or a tuple in matrix
-block order for loads and initial fields. Return values follow:
-
-```julia
-(u1,u2), (v1,v2) = HHT(Kblock, Mblock, Cblock, F, U0, V0, n, Δt;
-                      support=bc, mpc=ties)
-(u1,u2), (v1,v2) = CDM(Kblock, Mblock, Cblock, F, U0, V0, n, Δt;
-                      support=bc, mpc=ties)
-x1,x2 = FDM(Kblock, Cblock, F, X0, n, Δt; support=bc, mpc=ties)
-```
-
-Remote translation/rotation coupling uses the existing `rigidRotationMap`.
-For `u_phys = u + R*φ`, form every physical operator with the same map:
-
-```julia
-R = rigidRotationMap(mpc_u, mpc_φ)
-block(A) = SystemMatrix([A A*R; R'*A R'*A*R])
-Kblock, Mblock, Cblock = block(Ku), block(Mu), block(Cu)
-F = SystemVector([fu, R'*fu])
-
-(u,φ), (v,ω) = HHT(Kblock, Mblock, Cblock, F, U0, V0, n, Δt;
-                   support=bc, mpc=[mpc_u,mpc_φ])
-u_phys = u + R*φ
-v_phys = v + R*ω
-```
-
-The same block inputs work with CDM and FDM. Translation/rotation coupling in
-mass and damping is essential: transforming stiffness alone leaves the
-rotational inertia missing. No artificial independent mass on the auxiliary
-rotation field is needed; rotational inertia follows from `R'*Mu*R`. Inactive
-auxiliary DOFs are removed by the common MPC backend before integration.
-
-Every block BC and MPC must explicitly identify its `field`. HHT and CDM
-require a nonsingular mass matrix on the remaining free coordinates; they do
-not solve arbitrary differential-algebraic systems. CDM uses diagonal division
-when possible and a cached mass factorization otherwise. It does not silently
-lump the mass after reduction, and its time step remains conditionally stable.
-
-Reduced interpolation and SEM use the existing cached basis transformations.
-Existing shared-backend limitations still apply: a coordinate basis cannot be
-combined with reduced/spectral interpolation on the same field, and SEM plus
-MPC on the same field is currently unsupported. Different block fields may
-use these features separately.
-
-`CDMaccuracyAnalysis` remains available. `HHTaccuracyAnalysis` includes a
-physical damping ratio (`ξ`, a number or function of angular frequency) and
-Rayleigh coefficients (`massDamping`, `stiffnessDamping`). For example:
-
-```julia
-x, radius = HHTaccuracyAnalysis(ωmin, ωmax, Δt, :SR;
-                               α=-0.1, δ=0.1, ξ=0.02,
-                               massDamping=0.0, stiffnessDamping=1e-4)
-```
-
-The scalar analysis describes modal/proportional damping. An arbitrary
-nonproportional matrix is supported by the time integrator but cannot be
-inferred from an undamped frequency interval. `FDMaccuracyAnalysis` returns
-the spectral radius of the theta update, including for backward Euler.
-
-```@docs
-FDMaccuracyAnalysis
-LowLevelFEM.prepare_transient_system
-LowLevelFEM.reconstruct_transient_solution
-```
+All three share coordinate, approximation and MPC preparation. Initial fields
+have one column; `support` supplies each prescribed history once. Results are
+global nodal fields at `t0+(j-1)*Δt`, including the initial sample.
 
 ## Operator modifications and nonlinear iteration
 
-The physics-independent equations are
-`A2*ü + A1*u̇ + A0*u = rhs` and `A1*u̇ + A0*u = rhs`.
-The positional calling conventions remain `HHT/CDM(A0,A2,[A1,]rhs,...)`
-and `FDM(A0,A1,rhs,...)`.
+See [Operator updates and nonlinear iteration](@ref transient-callbacks) for
+`modifyA2`, `modifyA1`, `modifyA0`, `modifyRHS`, callback state members and
+nonlinear tolerances. Each callback defaults to `nothing`. HHT/FDM iterate
+within a step; CDM keeps explicit displacement updates.
 
-All methods accept `modifyA2`, `modifyA1`, `modifyA0`, `modifyRHS`, defaulting
-to `nothing`. FDM rejects a nonempty `modifyA2`; its capacity matrix is A1.
-A callback has the signature `callback(operator, state)`.
+## First-order accuracy analysis
 
-| State member   | Meaning                                                               |
-| -------------- | --------------------------------------------------------------------- |
-| `fields`       | Tuple of current trial global nodal Fields, even for one field.       |
-| `velocity`     | Tuple of global first derivatives; unavailable at FDM initialization. |
-| `acceleration` | Tuple of global second derivatives for HHT/CDM; `nothing` for FDM.    |
-| `problems`     | Tuple of the corresponding Problem objects, including material data.  |
-| `t`, `dt`      | Evaluation time and time increment.                                   |
-| `step`         | Zero-based time-step index; initial sample is 0.                      |
-| `iteration`    | 0 for the predictor, then the number of completed nonlinear updates.  |
-| `phase`        | `:initial`, `:step` (HHT/FDM), or `:explicit` (CDM).                  |
-| `previous`     | Previous accepted field snapshot, or `nothing` at initialization.     |
-| `operators`    | Current full/global A2, A0, A1; updated in that order.                |
-
-Callbacks run in order **A2, A0, A1, RHS**. The A1 callback can use the updated
-A2 and A0, for example to assemble Rayleigh damping. Extra model parameters,
-contact objects and constants can be captured by a closure or callable object.
-No `Function` type restriction is imposed.
-
-Matrix callbacks receive a private copy of the previous accepted full operator
-and return a SystemMatrix, optionally wrapped in Symmetric. Returning `nothing`
-keeps that accepted operator. Return the argument to retain in-place edits to
-its private matrix copy. Every nonlinear trial starts from the accepted base,
-so updates do not accumulate from one trial to the next.
-
-The RHS callback receives a private one-column copy of the **original prescribed
-RHS sample** at `state.t`. It returns a global one-column Field, field tuple or
-SystemVector; `nothing` restores/keeps the prescribed sample. Unlike ordinary
-unwrapped solver inputs, callback RHS values are always global Cartesian
-components, matching callback state fields and matrices. Do not preapply MPCs,
-Dirichlet elimination or approximation transformations. The solver handles them.
-
-The returned matrix must preserve Problem identities, field ordering, dimensions
-and active DOF layout. It may change numerical values and sparse connectivity.
-The set of constrained DOFs, MPCs, coordinate systems, approximation bases and
-mesh connectivity stay fixed. Activating a previously removed auxiliary MPC
-DOF is rejected. Treat state Fields, Problems and `state.operators` as read-only;
-callbacks are trial evaluations and may run repeatedly at the same time.
-
-With no callbacks the original linear integration path is used. With callbacks,
-HHT and FDM iterate until their full discrete free-coordinate residual meets
-`abstol + reltol*scale`. Defaults are:
-
-```julia
-nonlinearoptions = (maxiter=30, reltol=1e-9, abstol=1e-11, relaxation=1.0)
+```@docs
+FDMaccuracyAnalysis
 ```
 
-Failure to converge throws an error identifying the method, step, time and
-residual. The accepted solution is not advanced on a failed trial.
+## Transient preparation helpers
 
-For Newton linearization of an internal force `g(u)`, return its tangent
-`J(u)` in modifyA0 and `f_external - g(u) + J(u)*u` in modifyRHS. The same
-iteration also permits Picard updates. State-dependent A2/A1 need their own
-consistent linearization to obtain Newton convergence; residual iteration alone
-does not manufacture those derivatives. A simple cubic-force example is:
+These lower-level helpers implement the shared preparation/reconstruction;
+ordinary applications call HHT, CDM or FDM directly.
 
-```julia
-# One scalar field; k, λ, and P are captured model parameters.
-updateA0 = (A, state) -> begin
-    u = vec(state.fields[1].a)
-    SystemMatrix(spdiagm(0 => k .+ 3λ .* u.^2), P)
-end
-updateRHS = (rhs, state) -> begin
-    out = copy(rhs)
-    out.a .+= 2λ .* state.fields[1].a.^3
-    out
-end
-u, v = HHT(K, M, C, f, u0, v0, n, Δt;
-           support=bc, modifyA0=updateA0, modifyRHS=updateRHS,
-           nonlinearoptions=(reltol=1e-10, maxiter=30))
+```@docs
+LowLevelFEM.prepare_transient_system
+LowLevelFEM.reconstruct_transient_solution
 ```
-
-HHT retains the previous accepted A0*u + A1*v - rhs contribution for HHT-alpha
-weighting. FDM retains its old A0*u-rhs contribution and uses
-`A1θ=(1-ϑ)*A1_old+ϑ*A1_new`. CDM remains explicit in displacement: its updates
-are evaluated at the current known field, with an acceleration consistency
-iteration if callbacks depend on acceleration. Changing stiffness/mass can
-change the explicit stability limit; selecting Δt remains the caller's task.
-
-Matrix projection is repeated only when an operator changes. Numerically equal
-matrices reuse the cached factorization/preconditioner; RHS-only changes do not
-invalidate it. All matrix and RHS updates support the existing multifield,
-remote MPC, reduced-order, spectral and coordinate transformations subject to
-their documented combination restrictions.
-
-The nonlinear convergence test uses the physical residual, scaled by the
-assembled term norms, plus `abstol`. Choose `abstol` in the units of the reduced
-equilibrium equation. A small update alone does not imply equilibrium and is
-not accepted as an alternative convergence test. Private operator copies
-protect accepted states and allow in-place callback edits; numerical equality
-checks are required to reuse factorizations when callbacks return new matrices.
-Returning `nothing` avoids reprojection and accepts the previous matrix.
-Original RHS histories are retained by reference in solver coordinates;
-callback inputs are converted to global components one sample at a time.
