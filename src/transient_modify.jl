@@ -72,7 +72,10 @@ function _transient_modified_frame(base, latest, p, snapshot, previous, j, itera
         callback = getproperty(hooks, key)
         callback === nothing && continue
         state = merge(snapshot, (; previous, iteration, phase, dt, operators))
-        argument = _transient_operator_copy(getproperty(base.operators, key))
+        accepted = getproperty(base.operators, key)
+        # Borrowed operators are read-only: projection reuse relies on their
+        # accepted values remaining unchanged throughout all trial evaluations.
+        argument = hooks.copyOperators ? _transient_operator_copy(accepted) : accepted
         applicable(callback, argument, state) ||
             throw(ArgumentError("modify$key must be callable as (operator, state)."))
         output = callback(argument, state)
@@ -175,10 +178,10 @@ end
 
 function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, preconditioner,
     solveroptions, preconditioneroptions, modifyA2, modifyA1, modifyA0, modifyRHS,
-    nonlinearoptions, kwargs...)
+    copyOperators, nonlinearoptions, kwargs...)
     options = _transient_nonlinear_options(nonlinearoptions)
     p = prepare_transient_system(K, M, C, rhs, U0, V0, n, dt; _modifier_data = true, kwargs...)
-    hooks = (A2 = modifyA2, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS)
+    hooks = (A2 = modifyA2, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS, copyOperators = copyOperators)
     linear = (; solver, preconditioner, solveroptions, preconditioneroptions)
     cache = Dict{Symbol, Any}()
     Vd, Ad = _transient_derivatives(p.D, dt)
@@ -228,10 +231,10 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
 end
 
 function _modified_cdm(K, M, C, rhs, U0, V0, n, dt;modifyA2, modifyA1, modifyA0, modifyRHS,
-                       nonlinearoptions, dampingScheme, velocityScheme, kwargs...)
+                       copyOperators, nonlinearoptions, dampingScheme, velocityScheme, kwargs...)
     options = _transient_nonlinear_options(nonlinearoptions)
     p = prepare_transient_system(K, M, C, rhs, U0, V0, n, dt; _modifier_data = true, kwargs...)
-    hooks = (A2 = modifyA2, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS)
+    hooks = (A2 = modifyA2, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS, copyOperators = copyOperators)
     cache = Dict{Symbol, Any}()
     Vd, Ad = _transient_derivatives(p.D, dt)
     U, V = zeros(length(p.free), n), zeros(length(p.free), n)
@@ -258,10 +261,10 @@ function _modified_cdm(K, M, C, rhs, U0, V0, n, dt;modifyA2, modifyA1, modifyA0,
 end
 
 function _modified_fdm(K, C, rhs, U0, n, dt; ϑ, solver, preconditioner, solveroptions,
-    preconditioneroptions, modifyA1, modifyA0, modifyRHS, nonlinearoptions, kwargs...)
+    preconditioneroptions, modifyA1, modifyA0, modifyRHS, copyOperators, nonlinearoptions, kwargs...)
     options = _transient_nonlinear_options(nonlinearoptions)
     p = prepare_transient_system(K, nothing, C, rhs, U0, nothing, n, dt; _modifier_data = true, kwargs...)
-    hooks = (A2 = nothing, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS)
+    hooks = (A2 = nothing, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS, copyOperators = copyOperators)
     linear = (; solver, preconditioner, solveroptions, preconditioneroptions)
     cache = Dict{Symbol, Any}()
     U = zeros(length(p.free), n)

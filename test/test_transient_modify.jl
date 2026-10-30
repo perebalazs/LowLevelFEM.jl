@@ -53,18 +53,18 @@ end
         force=(b,s)->field(a2(s.t)*2+a1(s.t)*v(s.t)+a0(s.t)*u(s.t),s.t)
         zero=field(0.0,0.0); initial=field(u(0.0),0.0); velocity=field(v(0.0),0.0)
         x,xd=HHT(2I0,I0,0.2I0,zero,initial,velocity,n,dt;
-            modifyA2=mass,modifyA1=damping,modifyA0=stiffness,modifyRHS=force)
+            modifyA2=mass,modifyA1=damping,modifyA0=stiffness,modifyRHS=force,copyOperators=false)
         @test x.a ≈ repeat(reshape(u.(t),1,:),N,1) atol=2e-10
         @test xd.a ≈ repeat(reshape(v.(t),1,:),N,1) atol=2e-9
         explicit_force=(b,s)->field(a2(s.t)*2+a1(s.t)*(v(s.t)-(s.phase==:initial ? 0 : dt))+
                                     a0(s.t)*u(s.t),s.t)
         x,_=CDM(2I0,I0,0.2I0,zero,initial,velocity,n,dt;
-            modifyA2=mass,modifyA1=damping,modifyA0=stiffness,modifyRHS=explicit_force)
+            modifyA2=mass,modifyA1=damping,modifyA0=stiffness,modifyRHS=explicit_force,copyOperators=false)
         @test x.a ≈ repeat(reshape(u.(t),1,:),N,1) atol=2e-10
         for θ in (0.0,0.5,1.0)
             x=FDM(2I0,0.2I0,zero,initial,n,dt;ϑ=θ,
                 modifyA1=(A,s)->matrix(a1(s.t)),modifyA0=stiffness,
-                modifyRHS=(b,s)->field(a1(s.t)+a0(s.t)*(0.5+s.t),s.t))
+                modifyRHS=(b,s)->field(a1(s.t)+a0(s.t)*(0.5+s.t),s.t),copyOperators=false)
             @test x.a ≈ repeat(reshape(0.5 .+t,1,:),N,1) atol=2e-10
         end
     end
@@ -87,6 +87,11 @@ end
         U,V=HHT(k*I0,I0,c*I0,zero,initial,zero,n,dt;
             modifyA0=tangent,modifyRHS=forcing,
             nonlinearoptions=(reltol=1e-12,abstol=1e-13,))
+        borrowedU,borrowedV=HHT(k*I0,I0,c*I0,zero,initial,zero,n,dt;
+            modifyA0=tangent,modifyRHS=forcing,copyOperators=false,
+            nonlinearoptions=(reltol=1e-12,abstol=1e-13,))
+        @test borrowedU.a ≈ U.a atol=1e-12
+        @test borrowedV.a ≈ V.a atol=1e-12
         x,v=1.0,0.0; a=-k-λ
         for j in 2:n
             xp=x+dt*v+dt^2/4*a; vp=v+dt/2*a
@@ -105,6 +110,10 @@ end
         X=FDM(k*I0,I0,zero,initial,n,dt;ϑ=1.0,
             modifyA0=tangent,modifyRHS=forcing,
             nonlinearoptions=(reltol=1e-12,abstol=1e-13,))
+        borrowedX=FDM(k*I0,I0,zero,initial,n,dt;ϑ=1.0,
+            modifyA0=tangent,modifyRHS=forcing,copyOperators=false,
+            nonlinearoptions=(reltol=1e-12,abstol=1e-13,))
+        @test borrowedX.a ≈ X.a atol=1e-12
         x=1.0
         for j in 2:n
             trial=x
@@ -118,6 +127,10 @@ end
         end
         U,V=CDM(k*I0,I0,c*I0,zero,initial,zero,n,dt;
             modifyA0=tangent,modifyRHS=forcing)
+        borrowedU,borrowedV=CDM(k*I0,I0,c*I0,zero,initial,zero,n,dt;
+            modifyA0=tangent,modifyRHS=forcing,copyOperators=false)
+        @test borrowedU.a ≈ U.a atol=1e-12
+        @test borrowedV.a ≈ V.a atol=1e-12
         x=1.0; prior=x+dt^2/2*(-k-λ)
         for j in 2:n
             xn=2x-prior+dt^2*(-k*x-λ*x^3-c*(x-prior)/dt)
@@ -151,7 +164,10 @@ end
             2K
         end
         trial,_=HHT(K,M,C,force,initial,initial,n,dt;support,mpc,modifyA0=callback)
+        borrowed,_=HHT(K,M,C,force,initial,initial,n,dt;
+            support,mpc,modifyA0=callback,copyOperators=false)
         @test trial[1].a+R.A*trial[2].a ≈ exact[1].a+R.A*exact[2].a atol=1e-10
+        @test borrowed[1].a+R.A*borrowed[2].a ≈ exact[1].a+R.A*exact[2].a atol=1e-10
         @test seen[]
         bad=(A,s)->SystemMatrix(LowLevelFEM.parent_system(M).A+spdiagm(0=>ones(size(M.A,1))),
                                M.model,M.test_model,M.problems,M.offsets)
@@ -216,7 +232,7 @@ end
             exact,_=HHT(Symmetric(2K),Symmetric(M),force,zero,zero,13,0.01;support)
             modified,_=HHT(Symmetric(K),Symmetric(M),force,zero,zero,13,0.01;
                 support,modifyA0=(A,s)->Symmetric(2K),solver=:cg,
-                solveroptions=(reltol=1e-12,maxiter=200))
+                solveroptions=(reltol=1e-12,maxiter=200),copyOperators=false)
             @test modified.a ≈ exact.a atol=1e-10
         end
     end
@@ -240,5 +256,70 @@ end
             modifyA0=(K,s)->nothing,nonlinearoptions=(typo=1,))
         @test_throws ErrorException HHT(A,A,z,z,z,3,0.1;
             modifyA0=(K,s)->nothing,solver=:unknown)
+    end
+end
+
+@testset "modify operators: private and borrowed matrix inputs" begin
+    with_test_gmsh() do
+        line_mesh(n=2, order=1)
+        P = Field([Material("body")]; type=:ScalarField, dim=1, fieldName=:p)
+        M = ∫(P⋅P)
+        K = ∫(Grad(P)⋅Grad(P)) + M
+        C = 0.2M
+        z = transient_field(P, zeros(ndofs(P), 1), [0.0])
+        load = ∫(P⋅1.0)
+        saved = (copy(K.A), copy(M.A), copy(C.A), copy(load.a))
+        n, dt = 6, 0.01
+        support = [BoundaryCondition("left"; field=P, p=(x,y,z,t)->0.1t)]
+        for run in (HHT, CDM, FDM), symmetric in (false, true)
+            wrap(A) = symmetric ? Symmetric(A, :L) : A
+            k, m, c = wrap(K), wrap(M), wrap(C)
+            execute(; kwargs...) = run === FDM ?
+                FDM(k, m, load, z, n, dt; support, kwargs...) :
+                run(k, m, c, load, z, z, n, dt; support, kwargs...)
+            result_fields(result) = result isa Tuple ? result : (result,)
+            expected = result_fields(execute())
+            for copyOperators in (true, false)
+                seen = Set{Symbol}()
+                function observe(key)
+                    return (A, state) -> begin
+                        accepted = getproperty(state.operators, key)
+                        @test (A === accepted) == !copyOperators
+                        @test (LowLevelFEM.parent_system(A).A ===
+                               LowLevelFEM.parent_system(accepted).A) == !copyOperators
+                        push!(seen, key)
+                        # Exercise both unchanged-operator return conventions.
+                        return key === :A0 ? A : nothing
+                    end
+                end
+                function discard_rhs(rhs, state)
+                    @test rhs.a !== load.a
+                    rhs.a .= 99.0
+                    return nothing
+                end
+                hooks = run === FDM ?
+                    (; modifyA0=observe(:A0), modifyA1=observe(:A1)) :
+                    (; modifyA0=observe(:A0), modifyA1=observe(:A1), modifyA2=observe(:A2))
+                actual = result_fields(execute(; hooks..., modifyRHS=discard_rhs, copyOperators))
+                for (a, b) in zip(actual, expected)
+                    @test a.a ≈ b.a atol=1e-10
+                end
+                @test seen == (run === FDM ? Set((:A0, :A1)) : Set((:A0, :A1, :A2)))
+            end
+            # Default mode discards edits unless the private argument is returned.
+            function discarded_edits(A, state)
+                LowLevelFEM.parent_system(A).A .*= 2.0
+                return nothing
+            end
+            actual = result_fields(execute(; modifyA0=discarded_edits))
+            for (a, b) in zip(actual, expected)
+                @test a.a ≈ b.a atol=1e-10
+            end
+            @test saved == (K.A, M.A, C.A, load.a)
+            for invalid in (0, nothing, :off)
+                @test_throws ArgumentError execute(; copyOperators=invalid)
+                @test_throws ArgumentError execute(; copyOperators=invalid, modifyA0=(A,s)->nothing)
+            end
+        end
     end
 end

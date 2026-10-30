@@ -143,3 +143,39 @@ end
         @test dot(sf.a[:, 1], Ksurface.A * sf.a[:, 1]) ≈ 13.0 atol=1e-10
     end
 end
+
+@testset "CSC reuse rejects incomplete vector component patterns" begin
+    with_test_gmsh() do
+        structured_rect_mesh(nx=2, ny=1, order=1)
+        U = Field([Material("body")]; type=:VectorField, dim=2, fieldName=:u)
+        term = Grad(U)⋅Grad(U)
+        B = [1.0 0 0 0; 0 1.0 0 0; 0 0 1.0 0; 0 0 0 1.0]
+        compound = Grad(U)⋅B⋅Grad(U)
+        reference = ∫(term)
+        pattern = build_csc_pattern(U, U)
+        actual = ∫(term; csc_matrix=copy(pattern))
+        @test actual.A ≈ reference.A atol=1e-12
+        actual = ∫(compound; csc_matrix=copy(pattern))
+        @test actual.A ≈ reference.A atol=1e-12
+
+        # Unequal column lengths inside one trial node's component block.
+        unequal = copy(pattern)
+        unequal.nzval .= 1.0
+        unequal[2, 1] = 0.0
+        dropzeros!(unequal)
+        # Equal lengths but different row patterns in the component columns.
+        different = sparse(ones(ndofs(U), ndofs(U)))
+        different[3, 1] = different[4, 1] = 0.0
+        different[5, 2] = different[6, 2] = 0.0
+        dropzeros!(different)
+        # Identical column patterns, but an incomplete test-component block.
+        partial = sparse(ones(ndofs(U), ndofs(U)))
+        partial[2, 1] = partial[2, 2] = 0.0
+        dropzeros!(partial)
+        for bad in (unequal, different, partial), expr in (term, compound)
+            saved = copy(bad.nzval)
+            @test_throws ArgumentError ∫(expr; csc_matrix=bad, threads=1)
+            @test bad.nzval == saved
+        end
+    end
+end

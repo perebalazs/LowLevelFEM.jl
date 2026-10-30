@@ -332,6 +332,7 @@ closure or callable object; no `Function` type restriction is imposed.
 | `modifyA1` | Update C, the first-derivative operator. | Update C, the capacity operator. |
 | `modifyA0` | Update K, the primary-field operator/tangent. | Update K, the primary-field operator/tangent. |
 | `modifyRHS` | Update f at the evaluated state. | Update q at the trial endpoint. |
+| `copyOperators` | Copy matrix callback inputs (default `true`); `false` borrows them read-only. | Same behavior. |
 | `nonlinearoptions` | Residual iteration settings, default `(;)`. | Same settings. |
 
 With no callbacks, keep `nonlinearoptions=(;)` for the fast linear path.
@@ -362,13 +363,41 @@ updated A2/A0 to build Rayleigh damping.
 
 | Callback | Input | Return |
 |:--|:--|:--|
-| Matrix callback | Private copy of the last accepted full operator. | `SystemMatrix`, optionally `Symmetric`, or `nothing`. |
+| Matrix callback | Last accepted full operator: private copy by default, read-only original with `copyOperators=false`. | `SystemMatrix`, optionally `Symmetric`, or `nothing`. |
 | RHS callback | Private one-column original prescribed RHS sample at `state.t`. | Global one-column Field, tuple, `SystemVector`, or `nothing`. |
 
-Return the private matrix argument to retain in-place edits. Returning
+With the default `copyOperators=true`, return the private matrix argument to
+retain in-place edits. Returning
 `nothing` keeps the accepted matrix or the original prescribed RHS sample.
 Every trial starts from the accepted base; changes do not accumulate across
 rejected/unequilibrated trials.
+
+#### Avoiding matrix input copies
+
+For callbacks that construct a new matrix, such as a weak-form assembly,
+`copyOperators=false` skips the otherwise unused input copy:
+
+```julia
+u, v = HHT(K, M, f, u0, v0, n, Δt;
+           support=bc, modifyA0=assembleA0, copyOperators=false)
+```
+
+This Boolean option applies to matrix inputs of `modifyA2`, `modifyA1` and
+`modifyA0` in HHT/CDM/FDM. Without matrix callbacks it has no effect.
+
+- The borrowed matrix is **read-only**, including its underlying sparse arrays.
+  Return a new, independently stored matrix for any change.
+- Returning the unchanged argument or `nothing` retains the accepted operator.
+- Do not overwrite a previously returned matrix, reuse its mutable storage for
+  a new result, or mutate operators through `state.operators`. Such changes can
+  corrupt accepted states and bypass projection/factorization invalidation.
+- Keep the default `copyOperators=true` for in-place matrix callbacks and return
+  their modified private argument. RHS callback inputs remain private in either
+  mode; copies needed for internal cache validity are retained.
+
+The saving is one full input-matrix copy per matrix callback evaluation. It does
+not remove weak-form assembly, projection, factorization or state construction;
+its effect on total runtime should be measured for the actual model.
 
 Callback data use **global Cartesian components**, including RHS values.
 Do not preapply coordinates, MPCs, Dirichlet elimination or basis reduction.
@@ -381,6 +410,50 @@ field order, dimensions, mesh connectivity, supports, MPCs, coordinates and
 approximation spaces stay fixed. Previously removed auxiliary MPC DOFs cannot
 be activated. Equal operators reuse their cached projection/factorization;
 RHS-only updates do not invalidate a matrix factorization.
+
+### Reusing CSC storage in a matrix callback
+
+On a fixed mesh/domain, a matrix callback can assemble into its private input
+instead of building a new CSC pattern on every evaluation. Keep
+`copyOperators=true` and initialize the operator with a **complete** pattern:
+
+```julia
+K = ∫(Grad(P)⋅Grad(P); csc_matrix=build_csc_pattern(P, P))
+
+function updateA0(A, state)
+    fill!(A.A.nzval, 0.0)
+    ∫(Grad(P)⋅(1 + state.t)⋅Grad(P); csc_matrix=A.A)
+end
+
+u, v = HHT(K, M, f, u0, v0, n, Δt;
+           support=bc, modifyA0=updateA0, copyOperators=true)
+```
+
+Here `A.A` belongs to the private callback argument, so overwriting it preserves
+the accepted operator and the previous trial used for cache comparisons.
+HHT needs the old endpoint force, and FDM also blends the old and new capacity
+matrices. These histories must not be overwritten through borrowed inputs or
+reused external result storage.
+
+A normal integral may have removed numerical zeros. Therefore, do not assume
+that an arbitrary existing `K.A` contains every coupling needed by a later
+nonlinear assembly. Supplying `build_csc_pattern(...)` to the **initial**
+integral preserves those entries; subsequent private copies retain them.
+Assembly adds to existing values: clear `nzval` before each independent assembly
+and never call `dropzeros!` on a pattern that will be reused. Put scalar factors
+inside the expression or use `weight=...`. Multiplying the assembled sparse
+matrix afterwards can remove structural zeros and make its pattern unsuitable
+for reuse. For example, replace `b*∫(...; weight=b, csc_matrix=...)` with
+`∫(...; weight=b, csc_matrix=...)`: the former also applies `b` twice.
+Incomplete vector component-block patterns are rejected before CSC scatter.
+
+This avoids rebuilding the pattern and allocating another output CSC matrix. The
+private input copy is still allocated at each callback evaluation; quadrature,
+worker buffers, coefficient fields and solver storage can also allocate.
+`copyOperators=false` is for callbacks returning independent new matrices and
+cannot be combined with overwriting `A.A` in this example. A single external
+CSC matrix repeatedly returned and overwritten is also unsafe: object identity
+can otherwise hide changed values from projection/cache reuse.
 
 ### Nonlinear controls
 

@@ -426,6 +426,7 @@ The generic names are `A2=M`, `A1=C`, `A0=K`.
 | `modifyA1` | `nothing` | First-derivative operator, e.g. damping. |
 | `modifyA0` | `nothing` | Primary-field operator, e.g. stiffness or tangent. |
 | `modifyRHS` | `nothing` | RHS at the evaluation time. |
+| `copyOperators` | `true` | Copy matrix callback inputs; `false` borrows them read-only. |
 | `nonlinearoptions` | `(;)` | Nonlinear iteration controls listed below. |
 
 HHT reevaluates callbacks within each step until discrete equilibrium converges.
@@ -437,10 +438,15 @@ Problems/material data, time, step, iteration, previous accepted snapshot and
 current operators. Callback order is **A2, A0, A1, RHS**.
 See the [complete callback guide](@ref transient-callbacks).
 
-The operator argument is a private copy. Return it to keep in-place edits;
-return `nothing` to keep the accepted matrix or the original prescribed RHS
-sample. State data are read-only. Mesh, field ordering, supports, MPCs and bases
-stay fixed; inactive MPC DOFs cannot be activated.
+With `copyOperators=true`, the matrix argument is a private copy; return it
+to keep in-place edits. With `copyOperators=false`, it is the accepted operator
+and **must remain read-only**. Return a new independent matrix to change it,
+or return the unchanged argument/`nothing` to retain it. Never overwrite an
+earlier returned matrix or its shared storage. The option affects only matrix
+callback inputs: RHS arguments remain private, and internal cache copies stay.
+Returning `nothing` from an RHS callback retains the prescribed RHS sample.
+State data are read-only. Mesh, field ordering, supports, MPCs and bases stay
+fixed; inactive MPC DOFs cannot be activated.
 
 | `nonlinearoptions` member | Default | Meaning |
 |:--|:--|:--|
@@ -498,13 +504,14 @@ end
 function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
     solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
     modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-    nonlinearoptions=(;), kwargs...)
+    copyOperators=true, nonlinearoptions=(;), kwargs...)
+    copyOperators isa Bool || throw(ArgumentError("copyOperators must be a Bool."))
     all(isfinite, (α, γ, β)) && -1/3 <= α <= 0 && γ >= 0 && β > 0 ||
         throw(ArgumentError("HHT: require -1/3 ≤ α ≤ 0, γ ≥ 0 and β > 0, all finite."))
     if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
         return _modified_hht(K,M,C,f,U0,V0,n,dt; α,γ,β,solver,preconditioner,
             solveroptions,preconditioneroptions,modifyA2,modifyA1,modifyA0,modifyRHS,
-            nonlinearoptions,kwargs...)
+            copyOperators,nonlinearoptions,kwargs...)
     end
     nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
         throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
@@ -630,10 +637,14 @@ the same as for [`HHT`](@ref); mass must be nonsingular on free coordinates.
 | `modifyA1` | `nothing` | A1=C: first-derivative operator. |
 | `modifyA0` | `nothing` | A0=K: primary-field operator. |
 | `modifyRHS` | `nothing` | RHS at the known current state. |
+| `copyOperators` | `true` | Copy matrix callback inputs; `false` borrows them read-only. |
 | `nonlinearoptions` | `(;)` | `maxiter=30`, `reltol=1e-9`, `abstol=1e-11`, `relaxation=1.0`. |
 
 Callbacks use `callback(operator,state)` in full global coordinates, with the
-same state, return types, private-copy and read-only contracts as [`HHT`](@ref).
+same state, return types and copying contracts as [`HHT`](@ref). With
+`copyOperators=false`, matrix inputs and all earlier returned matrices must
+remain read-only; return a new independent matrix for any change. RHS inputs
+remain private, and internal cache copies are retained.
 Returning `nothing` preserves the accepted operator or prescribed RHS sample.
 Displacement updates remain explicit. A consistency iteration handles callback
 dependence on acceleration or on the centered damping velocity; it does not
@@ -686,11 +697,12 @@ function CDM(K::_TransientMatrix, M::_TransientMatrix, f::_TransientData, U0, V0
 end
 function _CDM(K, M, C, f, U0, V0, n, dt;
     modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-    nonlinearoptions=(;), dampingScheme=:lagged, velocityScheme=:backward, kwargs...)
+    copyOperators=true, nonlinearoptions=(;), dampingScheme=:lagged, velocityScheme=:backward, kwargs...)
+    copyOperators isa Bool || throw(ArgumentError("copyOperators must be a Bool."))
     _transient_cdm_options(dampingScheme, velocityScheme)
     if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
         return _modified_cdm(K,M,C,f,U0,V0,n,dt; modifyA2,modifyA1,modifyA0,modifyRHS,
-                             nonlinearoptions,dampingScheme,velocityScheme,kwargs...)
+                             copyOperators,nonlinearoptions,dampingScheme,velocityScheme,kwargs...)
     end
     nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
         throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
@@ -818,6 +830,7 @@ Wrap both operators in `Symmetric(...)` for the symmetric automatic path.
 | `modifyA0` | `nothing` | A0=K: primary-field operator or tangent. |
 | `modifyRHS` | `nothing` | RHS at the trial endpoint. |
 | `modifyA2` | `nothing` | Reserved: any value other than `nothing` is rejected by FDM. |
+| `copyOperators` | `true` | Copy matrix callback inputs; `false` borrows them read-only. |
 | `nonlinearoptions` | `(;)` | Nonlinear iteration controls listed below. |
 
 FDM reevaluates callbacks within each step. It interpolates capacity as
@@ -831,10 +844,15 @@ Problems/material data, time, step, iteration, previous accepted snapshot and
 current operators. Callback order is **A2, A0, A1, RHS**.
 See the [complete callback guide](@ref transient-callbacks).
 
-The operator argument is a private copy. Return it to keep in-place edits;
-return `nothing` to keep the accepted matrix or the original prescribed RHS
-sample. State data are read-only. Mesh, field ordering, supports, MPCs and bases
-stay fixed; inactive MPC DOFs cannot be activated.
+With `copyOperators=true`, the matrix argument is a private copy; return it
+to keep in-place edits. With `copyOperators=false`, it is the accepted operator
+and **must remain read-only**. Return a new independent matrix to change it,
+or return the unchanged argument/`nothing` to retain it. Never overwrite an
+earlier returned matrix or its shared storage. The option affects only matrix
+callback inputs: RHS arguments remain private, and internal cache copies stay.
+Returning `nothing` from an RHS callback retains the prescribed RHS sample.
+State data are read-only. Mesh, field ordering, supports, MPCs and bases stay
+fixed; inactive MPC DOFs cannot be activated.
 
 | `nonlinearoptions` member | Default | Meaning |
 |:--|:--|:--|
@@ -882,12 +900,13 @@ function FDM(K::_TransientMatrix, C::_TransientMatrix, q, X0, n::Int, dt::Real;
              ϑ=0.5, solver=:auto, preconditioner=:auto,
              solveroptions=(;), preconditioneroptions=(;),
              modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-             nonlinearoptions=(;), kwargs...)
+             copyOperators=true, nonlinearoptions=(;), kwargs...)
+    copyOperators isa Bool || throw(ArgumentError("copyOperators must be a Bool."))
     isfinite(ϑ) && 0 <= ϑ <= 1 || throw(ArgumentError("FDM: require 0 ≤ ϑ ≤ 1."))
     modifyA2 === nothing || throw(ArgumentError("FDM has no A2 operator; use modifyA1 for capacity."))
     if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
         return _modified_fdm(K,C,q,X0,n,dt; ϑ,solver,preconditioner,solveroptions,
-            preconditioneroptions,modifyA1,modifyA0,modifyRHS,nonlinearoptions,kwargs...)
+            preconditioneroptions,modifyA1,modifyA0,modifyRHS,copyOperators,nonlinearoptions,kwargs...)
     end
     nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
         throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))

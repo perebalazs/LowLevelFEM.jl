@@ -22,6 +22,7 @@ include("helpers.jl")
         include("test_review_regressions.jl")
         include("test_contact.jl")
         include("test_validation.jl")
+        include("test_directional_rect_mesh.jl")
     end
     @testset "Legacy" begin
         include("legacy/test_legacy_elasticity.jl")

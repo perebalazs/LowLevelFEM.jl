@@ -2347,6 +2347,43 @@ function build_csc_pattern(
     )
 end
 
+# The CSC scatter kernel addresses each nodal component block by offsets.
+# Validate caller-owned patterns before using that optimization: dropping only
+# some structural zeros can otherwise shift writes to unrelated matrix entries.
+function _validate_csc_component_pattern(K::SparseMatrixCSC, pdim_u::Int, pdim_s::Int)
+    pdim_u == 1 && pdim_s == 1 && return nothing
+    invalid() = throw(ArgumentError(
+        "csc_matrix has an incomplete component-block pattern. Rebuild it with " *
+        "build_csc_pattern(...); keep structural zeros and avoid matrix " *
+        "operations that remove them (use weight=... for scalar factors)."
+    ))
+    rows, columns = K.rowval, K.colptr
+    @inbounds for first_col in 1:pdim_u:size(K, 2)
+        first = columns[first_col]
+        after = columns[first_col + 1]
+        count = after - first
+        count % pdim_s == 0 || invalid()
+        if pdim_s > 1
+            for position in first:pdim_s:after-1
+                row = rows[position]
+                (row - 1) % pdim_s == 0 || invalid()
+                for component in 2:pdim_s
+                    rows[position + component - 1] == row + component - 1 || invalid()
+                end
+            end
+        end
+        for component in 2:pdim_u
+            col = first_col + component - 1
+            start = columns[col]
+            columns[col + 1] - start == count || invalid()
+            for offset in 0:count-1
+                rows[start + offset] == rows[first + offset] || invalid()
+            end
+        end
+    end
+    return nothing
+end
+
 """
     find_csc_position(rowval, first, last, row)
 
@@ -2958,6 +2995,8 @@ function assemble_operator(
                 )
 
                 Kcsc = K
+                _nzval_buffers === nothing &&
+                    _validate_csc_component_pattern(Kcsc, Pu.pdim, Ps.pdim)
             end
 
             coordinates = node_coordinates === nothing ?
@@ -6450,6 +6489,7 @@ function _assemble_compound_block(
                 "$((ndofs(Ps), ndofs(Pu)))."
             )
             Kcsc = csc_matrix
+            _validate_csc_component_pattern(Kcsc, Pu.pdim, Ps.pdim)
         end
 
         coordinates = dense_node_coordinates(Pu)
