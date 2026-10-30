@@ -10337,7 +10337,7 @@ end
                            lx=1.0, ly=1.0,
                            n=10,
                            dx=lx/n, dy=ly/n,
-                           order=1)
+                           order=1, nx=nothing, ny=nothing)
 
 Create a structured quadrilateral mesh of a rectangular 2D domain using Gmsh.
 
@@ -10351,6 +10351,14 @@ quadrilateral elements.
 - `n`: Default subdivision parameter (used to define `dx`, `dy`).
 - `dx, dy`: Target element sizes in x and y directions.
 - `order`: Polynomial order of the finite elements.
+- `nx, ny`: Optional positive integer element counts in the x/y directions.
+  Each supplied count overrides the size-based subdivision in that direction.
+  With neither supplied, the historical common size `min(dx,dy)` is retained.
+
+For a slender rectangle, `nx=25, ny=3` gives 25 longitudinal elements and
+3 transverse layers without also refining the long direction. By contrast,
+`n=3` retains the common-size rule and can produce many more elements along
+an elongated domain.
 
 # Physical Groups
 The following physical groups are created:
@@ -10377,7 +10385,11 @@ physical groups `"leftremote"` and `"rightremote"` at the end-section centers.
 These provide reference nodes for MPC construction; enabling them alone
 creates no rigid coupling or boundary condition.
 """
-function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1, leftRemote::Bool=false, rightRemote::Bool=false)
+function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n, dy=ly / n, order=1, nx=nothing, ny=nothing, leftRemote::Bool=false, rightRemote::Bool=false)
+    for (name, count) in ((:nx, nx), (:ny, ny))
+        count === nothing || (count isa Integer && !(count isa Bool) && count > 0) ||
+            throw(ArgumentError("structured_rect_mesh: $name must be a positive integer or nothing."))
+    end
     if gmsh.isInitialized() == 0
         gmsh.initialize()
     end
@@ -10431,11 +10443,13 @@ function structured_rect_mesh(; x0=0.0, y0=0.0, lx=1.0, ly=1.0, n=10, dx=lx / n,
     #gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
 
     d = min(dx, dy)
+    count_x = nx === nothing ? ceil(lx / d) : nx
+    count_y = ny === nothing ? ceil(ly / d) : ny
 
-    gmsh.model.mesh.setTransfiniteCurve(1, ceil(lx / d) + 1)
-    gmsh.model.mesh.setTransfiniteCurve(3, ceil(lx / d) + 1)
-    gmsh.model.mesh.setTransfiniteCurve(2, ceil(ly / d) + 1)
-    gmsh.model.mesh.setTransfiniteCurve(4, ceil(ly / d) + 1)
+    gmsh.model.mesh.setTransfiniteCurve(1, count_x + 1)
+    gmsh.model.mesh.setTransfiniteCurve(3, count_x + 1)
+    gmsh.model.mesh.setTransfiniteCurve(2, count_y + 1)
+    gmsh.model.mesh.setTransfiniteCurve(4, count_y + 1)
 
     gmsh.model.mesh.setTransfiniteSurface(1)
 

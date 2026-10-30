@@ -47,6 +47,7 @@ const DOC_PAGES = [
         "Fields" => "reference/fields.md",
         "Operators" => "reference/operators.md",
         "Multifield" => "reference/multifield.md",
+        "Time Integration" => "reference/transient.md",
         "Linear" => "reference/linear.md",
         "Nonlinear" => "reference/nonlinear.md",
         "Heat" => "reference/heat.md",

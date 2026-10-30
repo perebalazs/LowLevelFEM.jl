@@ -262,7 +262,7 @@ function _build_preconditioner(
 
     error(
         "Preconditioner :$pc requires $package.jl.\n" *
-        "Install and load the package before calling solveField."
+        "Install and load the package before selecting this preconditioner."
     )
 end
 
@@ -311,12 +311,33 @@ preconditioner backend. It is only meaningful when LowLevelFEM constructs the
 preconditioner from a symbolic choice such as `:ich` or `:ilu`; it is rejected
 for `:none`, preconstructed preconditioners, and direct solvers.
 
-For multiple right-hand sides, the preconditioner is constructed once and
-reused for all columns of `B`.
+For multiple right-hand sides, the factorization or preconditioner is
+constructed once and reused for all columns of `B`. Transient solvers reuse
+the same preparation across time steps through `prepare_linear_solver`.
 """
-function solve_linear_system(
-    A,
-    B;
+function solve_linear_system(A, B; kwargs...)
+    prepared = prepare_linear_solver(A; kwargs...)
+    return solve_prepared_linear_system(prepared, B)
+end
+
+struct _PreparedLinearSolver{TA,TF,TP,TO}
+    A::TA
+    factor::TF
+    preconditioner::TP
+    solver::Symbol
+    solveroptions::TO
+end
+
+"""
+    prepare_linear_solver(A; solver=:backslash, preconditioner=:auto,
+                          solveroptions=(;), preconditioneroptions=(;))
+
+Prepare a reusable linear solve. A direct factorization or iterative
+preconditioner is constructed once for the fixed matrix `A`. The same backend
+and option validation are used by `solveField`, HHT and FDM.
+"""
+function prepare_linear_solver(
+    A;
     solver=:backslash,
     preconditioner=:auto,
     solveroptions=(;),
@@ -337,13 +358,22 @@ function solve_linear_system(
         end
     end
 
+    F = nothing
+    P = nothing
     if solver === :backslash
-        return A \ B
+        # Diagonal sparse storage must not turn transient state vectors sparse.
+        F = if size(A, 1) == size(A, 2) && isdiag(A)
+            d = Vector(diag(A))
+            bad = findfirst(x -> !isfinite(x) || iszero(x), d)
+            bad === nothing || throw(SingularException(bad))
+            Diagonal(d)
+        else
+            factorize(A)
+        end
 
     elseif solver === :auto_symmetric
         try
             F = cholesky(A)
-            return F \ B
         catch err
             if err isa PosDefException
                 @warn(
@@ -351,24 +381,21 @@ function solve_linear_system(
                     "positive definite. Falling back to LU factorization."
                 )
                 F = lu(sparse(A))
-                return F \ B
+            else
+                rethrow()
             end
-            rethrow()
         end
 
     elseif solver === :lu
         A0 = A isa Union{Symmetric,Hermitian} ? sparse(A) : A
         F = lu(A0)
-        return F \ B
 
     elseif solver === :lu_no_ordering
         A0 = A isa Union{Symmetric,Hermitian} ? sparse(A) : A
         F = lu(A0, q=nothing)
-        return F \ B
 
     elseif solver === :cholesky
         F = cholesky(A)
-        return F \ B
 
     elseif solver === :ldlt
         A isa Union{Symmetric,Hermitian} ||
@@ -378,11 +405,9 @@ function solve_linear_system(
             )
 
         F = ldlt(A)
-        return F \ B
 
     elseif solver === :qr
         F = qr(A)
-        return F \ B
 
     elseif solver in _ITERATIVE_SOLVERS
 
@@ -417,23 +442,29 @@ function solve_linear_system(
             P = pc
         end
 
-        X = similar(B)
-
-        for j in axes(B, 2)
-            X[:, j] = _solve_iterative(
-                Val(solver),
-                A,
-                @view(B[:, j]);
-                preconditioner=P,
-                solveroptions=solveroptions
-            )
-        end
-
-        return X
-
     else
         error("Unknown linear solver: $solver.")
     end
+    return _PreparedLinearSolver(A, F, P, solver, solveroptions)
+end
+
+function solve_prepared_linear_system(prepared::_PreparedLinearSolver, B::AbstractVecOrMat)
+    # UMFPACK cannot solve against SparseVector right-hand sides. Results of
+    # a linear solve are dense even when input data happen to be sparse.
+    rhs = B isa Union{SparseVector,SparseMatrixCSC} ? Array(B) : B
+    if prepared.factor !== nothing
+        return prepared.factor \ rhs
+    end
+    if rhs isa AbstractVector
+        return _solve_iterative(Val(prepared.solver), prepared.A, rhs;
+            preconditioner=prepared.preconditioner, solveroptions=prepared.solveroptions)
+    end
+    X = Matrix{eltype(rhs)}(undef, size(prepared.A, 2), size(rhs, 2))
+    for j in axes(rhs, 2)
+        X[:, j] = _solve_iterative(Val(prepared.solver), prepared.A, @view(rhs[:, j]);
+            preconditioner=prepared.preconditioner, solveroptions=prepared.solveroptions)
+    end
+    return X
 end
 
 function _check_solveroptions(options)
@@ -445,7 +476,7 @@ function _check_solveroptions(options)
     for key in reserved
         key in keys(options) &&
             error(
-                "Solver option `$key` is managed internally by solveField."
+                "Solver option `$key` is managed internally by the linear solver."
             )
     end
 
@@ -559,6 +590,21 @@ end
 
 parent_system(K::SystemMatrix) = K
 parent_system(K::SymmetricSystemMatrix) = K.parent
+
+# A SymmetricSystemMatrix declares one authoritative triangle. Expand it before
+# a change of basis; wrapping the projected raw triangle loses cross terms.
+system_matrix_data(K::SystemMatrix) = K.A
+system_matrix_data(K::SymmetricSystemMatrix) = sparse(Symmetric(K.parent.A, K.uplo))
+
+function _project_system_matrix(A, T)
+    if size(T, 1) == size(T, 2) && isdiag(T) && all(isone, diag(T))
+        return A
+    end
+    AT = A * T
+    _shrink_csc!(AT)
+    result = T' * AT
+    return _shrink_csc!(result)
+end
 
 reduced_matrix_wrapper(::SystemMatrix, A) = A
 reduced_matrix_wrapper(K::SymmetricSystemMatrix, A) = Symmetric(A, K.uplo)
@@ -1233,7 +1279,8 @@ function _prepare_singlefield_system(
     rhs_template, F0 = rhs_in_solver_coordinates(rhs, Q)
     nsteps = size(F0, 2)
 
-    A0 = Q === nothing ? K.A : Q.T' * K.A * Q.T
+    Afull = system_matrix_data(K0)
+    A0 = Q === nothing ? Afull : Q.T' * Afull * Q.T
 
     fixed = constrainedDoFs(P, support)
     xDfield = applyBoundaryConditions(P, support; steps=nsteps)
@@ -1254,14 +1301,10 @@ function _prepare_singlefield_system(
         xD_eff
     )
 
-    AT = A0 * T
-    _shrink_csc!(AT)
-    Kr = T' * AT
-    _shrink_csc!(Kr)
-    #Kr = T' * A0 * T
+    Kr = _project_system_matrix(A0, T)
     Br = T' * F0
 
-    B = copy(Br[free_r, :])
+    B = Br[free_r, :]
 
     if !isempty(fixed_r)
         B .-= Kr[free_r, fixed_r] * xD_r[fixed_r, :]
@@ -1568,10 +1611,8 @@ function prepare_multifield_system(
 
     nsteps = size(F0, 2)
 
-    A0 =
-        Q === nothing ?
-        K.A :
-        Q' * K.A * Q
+    Afull = system_matrix_data(K0)
+    A0 = Q === nothing ? Afull : Q' * Afull * Q
 
     # ----------------------------------------------------------
     # 2) Full-space Dirichlet data
@@ -1621,11 +1662,7 @@ function prepare_multifield_system(
     # 6) Galerkin projection
     # ----------------------------------------------------------
 
-    AT = A0 * T
-    _shrink_csc!(AT)
-    Kr = T' * AT
-    _shrink_csc!(Kr)
-    #Kr = T' * A0 * T
+    Kr = _project_system_matrix(A0, T)
     Br = T' * F0
 
     # ----------------------------------------------------------
@@ -1645,7 +1682,7 @@ function prepare_multifield_system(
     # 8) Reduced free-DOF system
     # ----------------------------------------------------------
 
-    B = copy(Br[free_r, :])
+    B = Br[free_r, :]
 
     if !isempty(fixed_r)
         B .-= Kr[free_r, fixed_r] * xD_r[fixed_r, :]
@@ -1804,7 +1841,7 @@ function _resolve_preconditioner(A, solver, preconditioner)
         A isa Union{Symmetric,Hermitian} ||
             error(
                 "Automatic preconditioning for :cg requires a symmetric system. " *
-                "Use Symmetric(K), specify a preconditioner explicitly, " *
+                "Use symmetric matrix wrappers, specify a preconditioner explicitly, " *
                 "or use preconditioner=:none."
             )
 

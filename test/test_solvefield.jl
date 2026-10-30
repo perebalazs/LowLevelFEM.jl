@@ -159,3 +159,21 @@ end
         @test all(iszero, u.a[constrainedDoFs(U, support), :])
     end
 end
+
+
+@testset "Shared linear backend: cached solves and sparse RHS" begin
+    A=sparse([3.0 -1.0; -1.0 2.0])
+    B=[1.0 2.0; 3.0 4.0]
+    for solver in (:backslash,:lu,:lu_no_ordering,:cholesky,:qr,:cg,:gmres)
+        options=solver in (:cg,:gmres) ? (reltol=1e-12,) : (;)
+        prepared=LowLevelFEM.prepare_linear_solver(Symmetric(A);solver,solveroptions=options)
+        @test LowLevelFEM.solve_prepared_linear_system(prepared,B) ≈ A\B
+        for j in axes(B,2)
+            b=sparsevec(B[:,j])
+            @test LowLevelFEM.solve_prepared_linear_system(prepared,b) ≈ A\B[:,j]
+        end
+    end
+    rectangular=sparse([1.0 0.0; 0.0 2.0; 1.0 1.0])
+    rhs=reshape([1.0,2.0,3.0],:,1)
+    @test LowLevelFEM.solve_linear_system(rectangular,rhs) ≈ rectangular\rhs
+end

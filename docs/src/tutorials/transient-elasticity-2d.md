@@ -8,6 +8,19 @@ The example introduces the complete workflow, including mesh generation, materia
 
 [lin_elast_2D_transient.ipynb](https://github.com/perebalazs/LowLevelFEM.jl/blob/main/examples/lin_elast_2D_transient.ipynb)
 
+## Choosing the time increment
+
+CDM must respect the largest frequency of the constrained/reduced system;
+lagged damping can tighten that limit. Standard HHT is unconditionally stable
+for the usual linear positive-mass system, but both methods still need enough
+time samples to resolve the desired response and prescribed motion.
+
+Use the [time-step guide](@ref transient-timestep) for the formulas and a
+`largestEigenValue` example. Then halve Δt, rebuild sampled histories and n for
+the same final time, and compare displacements, velocities and stress peaks.
+The [method and option tables](../reference/transient.md) cover damping,
+iterative solves, MPCs and nonlinear operator updates.
+
 ## Related
 
 - [Legacy Example Gallery](legacy-examples.md)

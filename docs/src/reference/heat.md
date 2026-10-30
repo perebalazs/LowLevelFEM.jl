@@ -32,5 +32,15 @@ solveTemperature
 solveHeatFlux
 initialTemperature
 initialTemperature!
+```
+
+## Time Integration
+
+The [Time Integration guide](transient.md) explains FDM inputs, theta choices,
+all keyword defaults and [choosing Δt](@ref transient-timestep). The same method
+also accepts general first-order scalar/vector/tensor or multifield systems.
+Here C denotes heat capacity (A1), while K denotes conduction (A0).
+
+```@docs
 FDM
 ```

@@ -55,11 +55,32 @@ smallestEigenValue
 
 ## Time Integration
 
+Start with the [Time Integration guide](transient.md) for method comparison,
+all keyword defaults, prescribed histories and [choosing Δt](@ref transient-timestep).
+The methods accept general scalar/vector/tensor and multifield operators.
+
+### Central differences (CDM)
+
 ```@docs
 CDM
+```
+
+### HHT / Newmark
+
+```@docs
 HHT
+```
+
+### Modal accuracy analysis
+
+```@docs
 CDMaccuracyAnalysis
 HHTaccuracyAnalysis
+```
+
+### Initial fields
+
+```@docs
 initialDisplacement
 initialDisplacement!
 initialVelocity

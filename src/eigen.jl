@@ -81,6 +81,7 @@ function prepare_eigen_system(
     nfull = size(A.A, 1)
     symA = _eigen_symmetric(A0)
     symB = _eigen_symmetric(B0)
+    Afull, Bfull = system_matrix_data(A0), system_matrix_data(B0)
 
     # Fast path: full-order Lagrange, no MPC, no local coordinates. Do not
     # allocate any global identity or project large sparse matrices needlessly.
@@ -95,7 +96,7 @@ function prepare_eigen_system(
 
         isempty(free) && error("solveEigen: no free degrees of freedom.")
         return (
-            A=A.A[free, free], B=B.A[free, free], T=nothing,
+            A=Afull[free, free], B=Bfull[free, free], T=nothing,
             Q=nothing, free=free, nfull=nfull,
             symmetricA=symA, symmetricB=symB,
             uploA=symA ? A0.uplo : :U,
@@ -108,16 +109,12 @@ function prepare_eigen_system(
     Q = nothing
     if !isempty(coordSys)
         if A.problems === nothing
-            isdefined(@__MODULE__, :_build_coordinate_transformation) ||
-                error("solveEigen: coordinate builders from solve.jl are unavailable.")
             P = A.model
             _has_approximation(P) &&
                 error("solveEigen: coordSys + reduced/spectral basis on the same field is not yet implemented.")
             QQ = _build_coordinate_transformation(P, coordSys)
             Q = QQ === nothing ? nothing : QQ.T
         else
-            isdefined(@__MODULE__, :_build_multifield_coordinate_transformation) ||
-                error("solveEigen: multifield coordinate builders from solve.jl are unavailable.")
             # The solveField builder validates that coordinate systems belong
             # to fields in A and that unsupported combinations are rejected.
             Q = _build_multifield_coordinate_transformation(A, coordSys)
@@ -155,12 +152,12 @@ function prepare_eigen_system(
         free, fixed_r, _ = reduced_bc_data(R, fixed_eff, xD_eff)
     end
 
-    Acoord = Q === nothing ? A.A : Q' * A.A * Q
-    Bcoord = Q === nothing ? B.A : Q' * B.A * Q
+    Acoord = Q === nothing ? Afull : Q' * Afull * Q
+    Bcoord = Q === nothing ? Bfull : Q' * Bfull * Q
 
     # Avoid allocating two large nested sparse products when possible.
-    Ar = T' * (Acoord * T)
-    Br = T' * (Bcoord * T)
+    Ar = _project_system_matrix(Acoord, T)
+    Br = _project_system_matrix(Bcoord, T)
 
     if A.problems !== nothing && !isempty(mpc)
         free = _remove_inactive_mpc_dofs(
@@ -240,6 +237,13 @@ function _eigen_selected_indices(λ, n::Int;
     return sort(selected; by=i -> (real(λ[i]), imag(λ[i])))
 end
 
+function _eigen_nearly_symmetric(M)
+    eltype(M) <: Real || return false
+    scale = opnorm(M, Inf)
+    scale == 0 && return true
+    return opnorm(M - M', Inf) <= 1e-12 * scale
+end
+
 """
     solve_eigen_reduced(prepared; n=6, shift=nothing, sigma=nothing,
                         which=nothing, solver=:auto, solveroptions=(;))
@@ -260,13 +264,6 @@ Two mutually exclusive search modes are supported:
 Native ARPACK options may be passed via `solveroptions`, and are checked
 before dispatch. ARPACK's `ritzvec=false` is incompatible with this API.
 """
-function _eigen_nearly_symmetric(M)
-    eltype(M) <: Real || return false
-    scale = opnorm(M, Inf)
-    scale == 0 && return true
-    return opnorm(M - M', Inf) <= 1e-12 * scale
-end
-
 function solve_eigen_reduced(
     prepared;
     n::Int=6,
@@ -274,7 +271,8 @@ function solve_eigen_reduced(
     sigma=nothing,
     which=nothing,
     solver::Symbol=:auto,
-    solveroptions=(;)
+    solveroptions=(;),
+    dense_limit=1024^3
 )
     A, B = prepared.A, prepared.B
     N = size(A, 1)
@@ -351,7 +349,8 @@ function solve_eigen_reduced(
     if symmetric
         try
             cholesky(Symmetric(B, prepared.uploB))
-        catch
+        catch err
+            err isa PosDefException || rethrow()
             symmetric = false
         end
     end
@@ -387,13 +386,22 @@ function solve_eigen_reduced(
     AA = symmetric ? Symmetric(A, prepared.uploA) : A
     BB = symmetric ? Symmetric(B, prepared.uploB) : B
 
+    dense_limit === nothing || (dense_limit isa Integer && !(dense_limit isa Bool) && dense_limit > 0) ||
+        throw(ArgumentError("solveEigen: dense_limit must be a positive byte count or nothing."))
     if chosen === :direct
+        # Include input copies, eigenvectors and factorization/work arrays.
+        estimate = 6 * big(N)^2 * max(sizeof(eltype(A)), sizeof(eltype(B)))
+        if dense_limit !== nothing && estimate > dense_limit
+            throw(ArgumentError("solveEigen: dense solution needs approximately $estimate bytes " *
+                "of working storage, exceeding dense_limit=$dense_limit. Use solver=:arpack " *
+                "with fewer modes, or explicitly increase dense_limit (nothing disables the guard)."))
+        end
         nontrivial = [key for key in keys(solveroptions)
                       if key ∉ (:sigma, :which, :nev)]
         isempty(nontrivial) || throw(ArgumentError(
             "solveEigen: ARPACK-only options $(join(string.(nontrivial), ", ")) " *
             "cannot be used with solver=:direct. Supported direct options: " *
-            "n/nev, shift OR sigma, which, normalize."
+            "n/nev, shift OR sigma, which. normalize is a solveEigen keyword, not a solver option."
         ))
         vals, vecs = if symmetric
             eigen(Symmetric(Matrix(A), prepared.uploA),
@@ -412,25 +420,35 @@ function solve_eigen_reduced(
         explicittransform=:none, ritzvec=true
     ), solveroptions)
     if selection === :threshold
-        # A small offset above the strict bound avoids singular A-shift*B
-        # and places eigenvalues exactly at the bound on the *negative*
-        # side of the shift-invert spectrum. Near-zero numerical noise in
-        # rigid-body modes is then rejected by the one-sided ARPACK search.
+        # Regularize below the bound so modes just above it are not lost.
+        # Filter using the requested bound, increasing the candidate count if
+        # the regularization window contains modes on/below the bound. This
+        # offset is numerical regularization, not a rigid-mode noise tolerance.
         size_scale = opnorm(A, Inf) / max(opnorm(B, Inf), floatmin(Float64))
         gap = 64 * eps(Float64) * max(abs(Float64(shift)), size_scale)
-        target = Float64(shift) + max(gap, eps(Float64)*max(1.0, abs(Float64(shift))))
+        target = Float64(shift) - max(gap, eps(Float64)*max(1.0, abs(Float64(shift))))
         opts = merge(opts, (; which=:LR, sigma=target, explicittransform=:none))
     else
         opts = merge(opts, (; sigma=sigma, which=arpack_which))
     end
 
-    #result = Arpack.eigs(AA, BB; opts...)
-    result = _arpack_eigs(AA, BB; opts...)
-    λ, ϕ, nconv = result[1], result[2], result[3]
-    nconv >= n || error("solveEigen: ARPACK converged only $nconv of $n eigenpairs.")
-    ix = _eigen_selected_indices(λ, n;
-        shift=shift, sigma=sigma, which=arpack_which)
-    return λ[ix], ϕ[:, ix]
+    requested = n
+    while true
+        result = _arpack_eigs(AA, BB; merge(opts, (; nev=requested))...)
+        λ, ϕ, nconv = result[1], result[2], result[3]
+        nconv >= requested || error("solveEigen: ARPACK converged only $nconv of $requested eigenpairs.")
+        if selection !== :threshold || count(z -> isfinite(z) && real(z) > shift, λ) >= n
+            ix = _eigen_selected_indices(λ, n; shift, sigma, which=arpack_which)
+            return λ[ix], ϕ[:, ix]
+        end
+        limit = symmetric ? N-1 : N-2
+        requested < limit || throw(ArgumentError(
+            "solveEigen: too few modes above shift; use solver=:direct, a smaller shift or fewer modes."))
+        requested = min(limit, max(requested+1, 2requested))
+        if haskey(opts, :ncv) && opts.ncv <= requested
+            throw(ArgumentError("solveEigen: increase ncv to select enough modes above shift."))
+        end
+    end
 end
 
 """
@@ -470,6 +488,10 @@ function reconstruct_eigenvectors(ϕr, prepared; normalize::Symbol=:unit, Bfull=
                 error("solveEigen: B-normalization requires positive real phi'*B*phi, got $z.")
             v ./= sqrt(real(z))
         end
+        if normalize !== :none
+            pivot = v[argmax(abs.(v))]
+            iszero(pivot) || (v .*= conj(pivot) / abs(pivot))
+        end
     end
     return ϕ
 end
@@ -477,7 +499,7 @@ end
 """
     solveEigen(A, B; n=6, nev=nothing, shift=nothing, sigma=nothing,
                which=nothing, support=[], mpc=[], coordSys=[],
-               solver=:auto, solveroptions=(;), normalize=:unit,
+               solver=:auto, solveroptions=(;), dense_limit=1024^3, normalize=:unit,
                output=:field, part=:real, kwargs...)
 
 Solve `A*ϕ = λ*B*ϕ` for single-field or multifield problems.
@@ -511,11 +533,19 @@ and `sigma` can be passed directly, or in `solveroptions=(; ...)`.
 `solver=:direct` uses a dense generalized eigensolve of the reduced matrices.
 `:arpack` requires `using Arpack`; `:auto` selects direct solution for reduced
 size at most 32 or near-full mode requests, and ARPACK otherwise. No optional package is
-loaded automatically.
+loaded automatically. Dense solution estimates six full matrix work arrays and
+rejects estimates above `dense_limit=1024^3` bytes before densifying. Increase
+the limit explicitly or use `dense_limit=nothing` to disable the guard.
+Unshifted `:SR` also supports indefinite/nonsymmetric pencils; use `shift=0.0`
+explicitly for faster positive-spectrum searches when its assumptions hold.
+The strict `shift` bound is not a physical rigid-mode tolerance: supply a
+positive cutoff when roundoff near zero must be excluded.
 
 `normalize=:none` retains reconstructed eigenvectors; `:unit` gives unit
 Euclidean norm; `:mass` and its alias `:B` normalize using the full B matrix.
-The latter requires an appropriate positive modal B-norm.
+The latter requires an appropriate positive modal B-norm. Normalized modes
+have their largest-magnitude component real and positive. Repeated eigenspaces
+may still have different bases; `normalize=:none` preserves the backend phase.
 
 Single-field `output=:field` returns one field (or a real/imaginary pair for
 `part=:both`). Multifield output is a tuple in block order. Raw eigenvectors
@@ -542,6 +572,7 @@ function solveEigen(
     coordSys=[],
     solver::Symbol=:auto,
     solveroptions=(;),
+    dense_limit=1024^3,
     normalize::Symbol=:unit,
     output::Symbol=:field,
     part::Symbol=:real,
@@ -564,7 +595,7 @@ function solveEigen(
             "solveEigen: unknown keyword :$key. Available ARPACK keywords: " *
             join(string.(_EIGEN_ARPACK_OPTIONS), ", ") *
             "; LowLevelFEM options: n, nev, shift, sigma, which, support, " *
-            "mpc, coordSys, solver, normalize, output, part, solveroptions."
+            "mpc, coordSys, solver, dense_limit, normalize, output, part, solveroptions."
         ))
     end
     for key in keys(native)
@@ -582,8 +613,8 @@ function solveEigen(
         support=support, mpc=mpc, coordSys=coordSys)
     λ, ϕr = solve_eigen_reduced(prepared;
         n=amount, shift=shift, sigma=sigma, which=which,
-        solver=solver, solveroptions=native)
-    Bfull = normalize in (:mass, :B) ? _eigen_parent(B).A : nothing
+        solver=solver, solveroptions=native, dense_limit=dense_limit)
+    Bfull = normalize in (:mass, :B) ? system_matrix_data(B) : nothing
     ϕ = reconstruct_eigenvectors(ϕr, prepared;
         normalize=normalize, Bfull=Bfull)
     output === :raw && return λ, ϕ
@@ -1002,7 +1033,7 @@ function smallestEigenValue(
         # Keep the old ARPACK fallback, but do not conceal invalid user options.
         if solver === :direct ||
            err isa ArgumentError || err isa DimensionMismatch ||
-           err isa MethodError || which !== :LR || sigma != 1e-8
+           err isa MethodError || err isa InterruptException || err isa OutOfMemoryError || which !== :LR || sigma != 1e-8
             rethrow()
         end
         @warn "smallestEigenValue: near-zero shift-invert failed; retrying with which=:SM and no sigma." exception=(err, catch_backtrace())
