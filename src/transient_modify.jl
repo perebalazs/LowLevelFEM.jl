@@ -208,6 +208,46 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
             inertia = frame.A2[f, f]*trial
             force = frame.A0[f, f]*x+frame.A0[f, c]*p.D[:, j]+
                   frame.A1[f, f]*v+frame.A1[f, c]*Vd[:, j]+frame.A2[f, c]*Ad[:, j]-frame.b[f]
+            
+
+            terms = (inertia, (1+α)*force, -α*oldforce)
+
+            reference = (1+α)*(norm(frame.b[f]) +
+                norm(frame.A0[f, c]*p.D[:, j]) +
+                norm(frame.A1[f, c]*Vd[:, j]) +
+                norm(frame.A2[f, c]*Ad[:, j])) +
+                abs(α)*oldreference
+
+            ok, residual = _transient_nonlinear_converged(
+                terms, options; reference
+                )
+
+            if ok
+                U[:, j], V[:, j] = x, v
+                a = trial
+                base = frame
+                previous = snapshot
+                break
+            end
+
+            iteration == options.maxiter &&
+                _transient_nonlinear_failure("HHT", p, j, residual, options)
+
+            # Prepare the linear solver only if a correction is needed.
+            A = frame.A2[f, f] +
+                (1+α)*γ*dt*frame.A1[f, f] +
+                (1+α)*β*dt^2*frame.A0[f, f]
+
+            entry = isempty(f) ? nothing :
+                _transient_modified_prepare!(
+                    cache, :effective, A,
+                    values(frame.operators), linear
+                    )
+
+            correction = _transient_modified_solve(entry, -sum(terms))
+            trial .+= options.relaxation.*correction
+
+            #=
             terms = (inertia, (1+α)*force, -α*oldforce)
             A = frame.A2[f, f]+(1+α)*γ*dt*frame.A1[f, f]+(1+α)*β*dt^2*frame.A0[f, f]
             entry = isempty(f) ? nothing : _transient_modified_prepare!(cache, :effective, A,
@@ -225,6 +265,7 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
             iteration == options.maxiter && _transient_nonlinear_failure("HHT", p, j, residual, options)
             correction = _transient_modified_solve(entry, -sum(terms))
             trial .+= options.relaxation.*correction
+            =#
         end
     end
     return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
