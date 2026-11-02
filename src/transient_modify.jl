@@ -180,6 +180,11 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
     solveroptions, preconditioneroptions, modifyA2, modifyA1, modifyA0, modifyRHS,
     copyOperators, nonlinearoptions, kwargs...)
     options = _transient_nonlinear_options(nonlinearoptions)
+
+    solver in (:auto, :backslash, :lu, :lu_no_ordering,
+               :cholesky, :ldlt, :qr, :cg, :gmres) ||
+        error("Unknown linear solver: $solver.")
+
     p = prepare_transient_system(K, M, C, rhs, U0, V0, n, dt; _modifier_data = true, kwargs...)
     hooks = (A2 = modifyA2, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS, copyOperators = copyOperators)
     linear = (; solver, preconditioner, solveroptions, preconditioneroptions)
@@ -246,26 +251,6 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
 
             correction = _transient_modified_solve(entry, -sum(terms))
             trial .+= options.relaxation.*correction
-
-            #=
-            terms = (inertia, (1+α)*force, -α*oldforce)
-            A = frame.A2[f, f]+(1+α)*γ*dt*frame.A1[f, f]+(1+α)*β*dt^2*frame.A0[f, f]
-            entry = isempty(f) ? nothing : _transient_modified_prepare!(cache, :effective, A,
-                values(frame.operators), linear)
-            reference = (1+α)*(norm(frame.b[f])+norm(frame.A0[f, c]*p.D[:, j])+
-                norm(frame.A1[f, c]*Vd[:, j])+norm(frame.A2[f, c]*Ad[:, j]))+abs(α)*oldreference
-            ok, residual = _transient_nonlinear_converged(terms, options; reference)
-            if ok
-                U[:, j], V[:, j] = x, v
-                a = trial
-                base = frame
-                previous = snapshot
-                break
-            end
-            iteration == options.maxiter && _transient_nonlinear_failure("HHT", p, j, residual, options)
-            correction = _transient_modified_solve(entry, -sum(terms))
-            trial .+= options.relaxation.*correction
-            =#
         end
     end
     return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
