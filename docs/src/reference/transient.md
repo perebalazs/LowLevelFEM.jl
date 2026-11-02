@@ -471,6 +471,10 @@ the solution is not advanced on an unconverged trial.
 
 ### Newton/Picard example
 
+See [Nonlinear Cantilever Dynamics: Secant vs Newton-Type HHT](../tutorials/cantilever-hht-secant-vs-newton.md)
+for a complete notebook comparing secant and tangent updates for a
+finite-rotation continuum model with the same internal-force residual.
+
 For internal force `g(u)`, return its tangent J(u) as A0 and
 `f_external-g(u)+J(u)*u` as RHS. Picard coefficient updates are also possible.
 State-dependent A2/A1 require their own consistent linearization for Newton

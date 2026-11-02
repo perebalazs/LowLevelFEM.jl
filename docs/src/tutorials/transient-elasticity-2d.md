@@ -23,5 +23,7 @@ iterative solves, MPCs and nonlinear operator updates.
 
 ## Related
 
+- [Nonlinear Cantilever Dynamics: Secant vs Newton-Type HHT](cantilever-hht-secant-vs-newton.md)
+
 - [Legacy Example Gallery](legacy-examples.md)
 - [Reference: Linear](../reference/linear.md)

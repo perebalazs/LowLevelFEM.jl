@@ -54,6 +54,11 @@ For a concrete DSL geometric-stiffness application, see
 That tutorial linearizes around a preloaded state; it does not replace a
 finite-deformation equilibrium solve.
 
+For a complete nonlinear transient calculation, see
+[Nonlinear Cantilever Dynamics: Secant vs Newton-Type HHT](cantilever-hht-secant-vs-newton.md).
+It compares the same internal-force residual with secant and analytical tangent
+updates, including the limitation of the interpolated-stress tangent.
+
 ## Check anisotropic shear ordering independently
 
 This optional material-response example checks the documented tangent

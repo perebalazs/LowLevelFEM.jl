@@ -8,6 +8,8 @@ Tutorials provide scenario-driven workflows for common LowLevelFEM tasks.
 - [Linear Elasticity (2D axisymmetric)](linear-elasticity-2d-axi.md) – Axisymmetric elasticity analysis with rotationally symmetric geometry.
 - [Linear Buckling and Prestressed Natural Frequencies](buckling-and-prestressed-modes.md) – Linear buckling load factors and the influence of initial stress on natural frequencies of a 3D column.
 - [Transient Elasticity (2D)](transient-elasticity-2d.md) – Time integration of elastic wave propagation and dynamic response.
+- [Nonlinear Cantilever Dynamics (HHT)](cantilever-hht-secant-vs-newton.md) – Large-amplitude vibration with secant-stiffness and Newton-type tangent iterations targeting the same internal-force residual.
+- [Modal and Buckling Basics](modal-and-buckling.md) – A small exact discrete eigenproblem and links to the complete buckling workflow.
 - [Heat Conduction](heat-conduction.md) – Steady-state heat transfer with prescribed temperatures and heat fluxes.
 - [Weak-Form DSL: Navier-Stokes](multifield-weak-form-dsl.md) – Building coupled PDEs directly from their weak form using compound operators.
 - [Timoshenko Beam Structures](timoshenko-beam-structures.md) – Planar Timoshenko beam formulations, including a Gerber beam with MPC-based internal hinges.

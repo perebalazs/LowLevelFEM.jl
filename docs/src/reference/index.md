@@ -30,8 +30,8 @@ their internal migration to DSL-backed wrappers is described below.
 - [Legacy nonlinear assembly](nonlinear.md)
 - [Legacy Poisson and dedicated differential matrices](poisson.md)
 
-The sidebar retains its existing page names for link compatibility; this topic
-map distinguishes retained engineering interfaces from legacy implementations. A function has one
+The sidebar includes these reference topics alongside the engineering pages;
+this topic map distinguishes retained engineering interfaces from legacy implementations. A function has one
 primary docstring entry, with links from related topics instead of copied
 reference text.
 
