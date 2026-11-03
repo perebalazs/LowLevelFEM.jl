@@ -9101,129 +9101,90 @@ function showScalarResults(S0; name="ScalarField", visible=false, smooth=false, 
 end
 
 """
-    plotOnPath(pathName, field; points=100, step=..., plot=false, 
-               name="field [\$field] on \$pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
+    plotOnPath(pathName, field; points=100, step=nothing, plot=false,
+               name="field [\$field] on \$pathName", visible=false,
+               offsetX=0, offsetY=0, offsetZ=0)
 
-Loads a 2D plot along a path into a View in Gmsh. `field` is the View id in
-Gmsh from which the field data is imported. `pathName` is the name of a
-physical group that contains a curve. The curve is divided into equal-length
-segments with `points` sampling points. The field is shown at these points.
-`step` is the sequence number of the displayed step. If no step is given, it shows all
-available steps as an animation. If `plot` is true, an additional return parameter (a tuple of
-vectors) is returned, where `x` is the horizontal axis and `y` is the vertical axis of the plot
-(see the `Plots` package). `name` is the title of the graph, and
-`visible` is a Boolean to toggle the initial visibility in Gmsh on or off.
-This function returns the tag of the View.
-
-Returns: `tag`
-
-or
-
-Returns: `tag`, `xy`
-
-Types:
-- `problem`: Problem
-- `pathName`: String
-- `field`: Integer
-- `points`: Integer
-- `step`: Integer
-- `plot`: Boolean
-- `name`: String
-- `visible`: Boolean
-- `tag`: Integer
-- `xy`: Tuples{Vector{Float64},Vector{Float64}}
+Sample a Gmsh model-data view along the curves of a physical group.
+`step` is a zero-based view step; `nothing` selects all steps. All selected
+steps are retrieved in one probe per sampling point. Vector values are shown
+as magnitudes and tensor values as von Mises equivalents.
+Return the new view tag, or `(tag, (x, y))` when `plot=true`; `y` contains the
+first selected step. Samples are uniform in curve parameter, as in the
+original implementation.
 """
-function plotOnPath(pathName, field; points=100, step=nothing, plot=false, name="field [$field] on $pathName", visible=false, offsetX=0, offsetY=0, offsetZ=0)
-    #gmsh.model.setCurrent(problem.name)
+function plotOnPath(pathName, field; points=100, step=nothing, plot=false,
+    name="field [$field] on $pathName", visible=false,
+    offsetX=0, offsetY=0, offsetZ=0)
+    points isa Integer && points >= 2 ||
+        throw(ArgumentError("plotOnPath: points must be an integer >= 2."))
     dimTags = gmsh.model.getEntitiesForPhysicalName(pathName)
-    if points < 2
-        error("plotOnPath: number of points is less than two (points = $points)!")
-    end
-    CoordValue = []
-    pt0 = [0, 0, 0]
-    pt1 = pt0
-    stepRange = 1:2
-    for ii ∈ 1:length(dimTags)
-        if dimTags[ii][1] != 1
-            error("Physical name '$name' with dimension ONE does not exist.")
+    isempty(dimTags) && error("plotOnPath: physical group '$pathName' was not found.")
+    all(dt -> dt[1] == 1, dimTags) ||
+        error("plotOnPath: physical group '$pathName' must contain only curves.")
+    nsteps = Int(gmsh.view.option.getNumber(field, "NbTimeStep"))
+    nsteps > 0 || error("plotOnPath: the source view has no time steps.")
+    if step !== nothing
+        step isa Integer && step >= 0 ||
+            throw(ArgumentError("plotOnPath: step must be a nonnegative integer or nothing."))
+        if step >= nsteps
+            @warn "plotOnPath: step exceeds the available range; using the last step." step nsteps
         end
-        path = dimTags[ii][2]
-        dataType, tags, data, time, numComponents = gmsh.view.getModelData(field, 0)
+    end
+    probe_step = step === nothing ? -1 : min(step, nsteps - 1)
+    count = step === nothing ? nsteps : 1
+    _, _, _, _, nc = gmsh.view.getHomogeneousModelData(field, 0)
+    nc in (1, 3, 9) || error("plotOnPath: unsupported component count $nc.")
+    nsamples = points * length(dimTags)
+    stride = 3 + count
+    data = Vector{Float64}(undef, nsamples * stride)
+    x = plot ? Vector{Float64}(undef, nsamples) : Float64[]
+    y = plot ? Vector{Float64}(undef, nsamples) : Float64[]
+    origin = zeros(3)
+    previous = zeros(3)
+    sample = 0
+    for (_, path) in dimTags
         bounds = gmsh.model.getParametrizationBounds(1, path)
-        bound1 = bounds[1][1]
-        bound2 = bounds[2][1]
-        step0 = (bound2 - bound1) / (points - 1)
-        nbstep = Int(gmsh.view.option.getNumber(field, "NbTimeStep"))
-        if ii == 1
-            pt0 = gmsh.model.getValue(1, path, [bound1])
-        end
-        if step === nothing
-            stepRange = 1:nbstep
-        else
-            stepRange = step >= nbstep ? nbstep : step + 1
-            if step >= nbstep
-                @warn("plotOnPath: step is greater than max. number of steps (max. number is chosen)  $step <==> $(nbstep)!")
-            end
-        end
-        cv = zeros(3 + length(stepRange))
+        lo, hi = bounds[1][1], bounds[2][1]
         for i in 1:points
-            pt1 = gmsh.model.getValue(1, path, [bound1 + (i - 1) * step0])
-            cv[1:3] = pt1 - pt0
-            for j in 1:length(stepRange)
-                v = 0
-                val, dis = gmsh.view.probe(field, pt1[1]+offsetX, pt1[2]+offsetY, pt1[3]+offsetZ, stepRange[j] - 1, -1, false, -1)
-                #if dis < 1e-5
-                    if numComponents == 1
-                        v = val[1]
-                    elseif numComponents == 3
-                        v = √(val[1]^2 + val[2]^2 + val[3]^2)
-                    elseif numComponents == 9
-                        v = √(0.5 * ((val[1] - val[5])^2 + (val[5] - val[9])^2 + (val[9] - val[1])^2 + 6 * (val[2]^2 + val[3]^2 + val[6]^2)))
-                    else
-                        error("Vagy skalár vagy vektor vagy tenzor...")
-                    end
-                #else
-                #    v = 0
-                #end
-                cv[3+j] = v
+            xyz = gmsh.model.getValue(1, path, [lo + (i - 1) * (hi - lo) / (points - 1)])
+            sample += 1
+            sample == 1 && (origin .= xyz)
+            base = (sample - 1) * stride
+            for k in 1:3
+                data[base + k] = xyz[k] - origin[k]
             end
-            append!(CoordValue, cv)
+            values, _ = gmsh.view.probe(field, xyz[1] + offsetX,
+                xyz[2] + offsetY, xyz[3] + offsetZ, probe_step, -1, false, -1)
+            length(values) == nc * count ||
+                error("plotOnPath: incomplete probe result at sample $sample.")
+            for j in 1:count
+                vbase = (j - 1) * nc
+                value = if nc == 1
+                    values[vbase + 1]
+                elseif nc == 3
+                    sqrt(sum(abs2, @view values[vbase+1:vbase+3]))
+                else
+                    a,b,c = values[vbase+1], values[vbase+5], values[vbase+9]
+                    sqrt(0.5*((a-b)^2+(b-c)^2+(c-a)^2+
+                        6*(values[vbase+2]^2+values[vbase+3]^2+values[vbase+6]^2)))
+                end
+                data[base + 3 + j] = value
+            end
+            if plot
+                x[sample] = sample == 1 ? 0.0 : x[sample-1] + norm(xyz - previous)
+                y[sample] = data[base + 4]
+                previous .= xyz
+            end
         end
     end
-    pathView = gmsh.view.add(name)
-    gmsh.view.addListData(pathView, "SP", points * length(dimTags), CoordValue)
-    
-    gmsh.view.option.setNumber(pathView, "Type", 2)
-    gmsh.view.option.setNumber(pathView, "Axes", 1)
-    gmsh.view.option.setNumber(pathView, "AdaptVisualizationGrid", 0)
-    
-    if visible == false
-        gmsh.view.option.setNumber(pathView, "Visible", 0)
-    end
-    
-    if plot == true
-        step = 0
-        x = zeros(points * length(dimTags))
-        y = zeros(points * length(dimTags))
-        y[1] = CoordValue[4+step]
-        x0 = 0
-        y0 = 0
-        z0 = 0
-        for i in 2:points * length(dimTags)
-            x1 = CoordValue[(length(stepRange)+3)*(i-1)+1]
-            y1 = CoordValue[(length(stepRange)+3)*(i-1)+2]
-            z1 = CoordValue[(length(stepRange)+3)*(i-1)+3]
-            x[i] = x[i-1] + √((x1 - x0)^2 + (y1 - y0)^2 + (z1 - z0)^2)
-            y[i] = CoordValue[(length(stepRange)+3)*(i-1)+4+step]
-            x0 = x1
-            y0 = y1
-            z0 = z1
-        end
-        xy = x, y
-        return pathView, xy
-    else
-        return pathView
-    end
+    tag = gmsh.view.add(name)
+    gmsh.view.addListData(tag, "SP", nsamples, data)
+    gmsh.view.option.setNumber(tag, "Type", 2)
+    gmsh.view.option.setNumber(tag, "Axes", 1)
+    gmsh.view.option.setNumber(tag, "AdaptVisualizationGrid", 0)
+    gmsh.view.option.setNumber(tag, "Visible", visible ? 1 : 0)
+    return plot ? (tag, (x, y)) : tag
 end
 
 """

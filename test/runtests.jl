@@ -10,6 +10,7 @@ include("helpers.jl")
 @testset "LowLevelFEM.jl" begin
     @testset "Modern architecture (DSL)" begin
         include("test_fields.jl")
+        include("test_postprocessing.jl")
         include("test_operators.jl")
         include("test_weakforms.jl")
         include("test_multifield.jl")
