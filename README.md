@@ -46,6 +46,32 @@ Citation metadata is provided in `CITATION.cff`.
 
 ## Capabilities
 
+LowLevelFEM supports two complementary workflows. **Engineering analyses** can start from familiar models, loads, and results; **weak-form and multifield analyses** can work directly with fields and operators. Both retain access to assembled matrices and intermediate results.
+
+### Engineering analysis
+
+- **Geometry and finite elements:** Gmsh geometry, physical groups, and 2D/3D meshes; line, triangle, quadrangle, tetrahedron, hexahedron, pyramid, and wedge elements with Lagrange interpolation up to order 10.
+- **Structural models:** 3D solids, plane stress, plane strain, axisymmetric elasticity, and truss structures; static, transient, and modal workflows where supported.
+- **Material behavior and large deformations:** linear elasticity (including user-supplied constitutive matrices); total-Lagrangian geometric nonlinearity and energy-based hyperelastic stress/tangent evaluation. Nonlinear equilibrium and dynamics can be assembled from user-defined state-dependent operators rather than requiring a predefined material/element model for every law.
+- **Thermal and coupled problems:** 2D, 3D, and axisymmetric heat conduction; capacity, convection, and latent-heat contributions; thermal expansion, thermal stresses, and heat generation due to elastic deformation.
+- **Loads and boundary conditions:** nodal and distributed loads on physical groups, function-defined loading and prescribed histories, elastic supports, initial displacement/velocity/temperature, and local coordinate systems (including spatially varying/curvilinear definitions).
+- **Static and transient solution:** direct and iterative linear solvers; consistent or lumped mass, Rayleigh/Caughey damping; HHT-α/Newmark implicit dynamics, central-difference explicit dynamics (CDM), and a θ-method for first-order evolution (FDM). State-dependent operator and right-hand-side callbacks support nonlinear iterations where needed.
+- **Eigenproblems:** natural frequencies and mode shapes (including prestressed modal analysis) and linear buckling factors/modes.
+- **Contact:** frictionless slave–master contact with closest-point search in the current configuration; penalty and Lagrange-multiplier enforcement, Gauss-point integration, and contact gap/pressure results in 2D/3D.
+- **Postprocessing and visualization:** displacement, stress, strain, and heat-flux fields; element-to-node smoothing, resultants and energy calculations, evaluations along paths and on surfaces, and Gmsh views and animations.
+
+### Weak-form and multifield modeling
+
+- **Explicit finite element fields:** user-defined scalar, vector, and tensor fields; nodal and elementwise representations with direct access to their numerical values.
+- **Operator-based formulation:** express linear and bilinear weak forms through differential operators (`Grad`, `SymGrad`, divergence, curl, and related field calculus), constitutive coefficients, and the integration operator `∫`.
+- **Matrix-level control:** inspect, combine, transform, and reuse assembled stiffness, mass, damping, capacity, coupling, and load operators; no user-written element loops are required for standard weak-form assembly.
+- **Multifield and mixed problems:** block `SystemMatrix`/`SystemVector` systems for coupled fields, including mixed-order and Taylor–Hood-type formulations using algebraic p/(p−1) reduction without remeshing.
+- **Constraints and transformed spaces:** multi-point constraints (including remote-point and periodic coupling), local coordinate transformations, and reduced approximation spaces; experimental spectral transformations are available for supported line and complete quadrangle elements.
+- **Nonlinear and evolving operators:** define and update material, geometric, coupling, and load terms at the operator level. HHT, CDM, and FDM expose `modifyA0`, `modifyA1`, `modifyA2` (where applicable), and `modifyRHS` callbacks; consistent tangent/residual pairs can be supplied explicitly.
+- **Efficient sparse assembly:** shared-memory multithreading, direct CSC assembly by default, optional triplet/IJV assembly, and reusable CSC sparsity patterns for repeated matrix construction.
+
+"Low-level" describes access to **fields, weak forms, matrices, and solver inputs**, not a requirement to implement numerical integration or element loops yourself.
+
 ## Installation
 
 ```julia
