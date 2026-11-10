@@ -44,18 +44,10 @@ function LowLevelFEM._tangent_from_energy(
     return tensor4_to_voigt(C4)
 end
 
-const voigt = (
-    (1,1),
-    (2,2),
-    (3,3),
-    (2,3),
-    (1,3),
-    (1,2)
-)
-
 @inline function tensor4_to_voigt(C4)
     @SMatrix [
-        C4[i,j,k,l] for (i,j) in voigt, (k,l) in voigt
+        C4[i,j,k,l] for (i,j) in LowLevelFEM.VOIGT3D,
+                          (k,l) in LowLevelFEM.VOIGT3D
     ]
 end
 

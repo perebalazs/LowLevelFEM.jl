@@ -1930,7 +1930,7 @@ end
 Assembles the **material (constitutive) tangent stiffness matrix**
 for a 3D solid under **finite deformation (Total Lagrange formulation)**,
 using a user-provided deformation gradient field `F` and a material
-tangent matrix `C` given in **6×6 Mandel/Voigt form**. Alternatively,
+tangent matrix `C` given in **6×6 engineering Voigt form**. Alternatively,
 it can compute the material tangent from a **free-energy density**
 `energy` (hyperelastic formulation) via `Tensors.jl`.
 
@@ -1942,7 +1942,8 @@ K_mat = ∫_Ω B(F)ᵀ · C · B(F) dΩ
 ```
 where `B(F)` is the nonlinear strain–displacement matrix associated with
 the Green–Lagrange strain, and `C` is the material tangent
-∂S/∂E expressed in Mandel notation.
+∂S/∂E expressed in engineering Voigt notation, ordered
+`[xx, yy, zz, xy, yz, zx]`.
 
 The routine is **material-agnostic**: it does not assume any specific
 constitutive law. The material behavior is entirely defined by the
@@ -1968,7 +1969,7 @@ supplied `C`, which may be spatially varying.
   which is interpolated to Gauss points during integration.
 
 - `C::AbstractMatrix` (size `6×6`)  
-  Material tangent matrix in Mandel/Voigt notation.
+  Material tangent matrix in engineering Voigt order `[xx, yy, zz, xy, yz, zx]`.
 
   Each entry `C[i,j]` may be either:
   - a `Number` (constant material tangent), or
@@ -2016,8 +2017,11 @@ E = 1/2 (FᵀF − I)
 K_e = ∫ B(F)ᵀ · C · B(F) dΩ
 
 ```
-The strain–displacement matrix `B(F)` is constructed consistently with
-Mandel notation (shear components scaled by 2).
+The strain–displacement matrix `B(F)` uses engineering Green strain:
+`[E11, E22, E33, 2E12, 2E23, 2E31]`. This is not Mandel scaling.
+The supplied `C` uses `[xx, yy, zz, xy, yz, zx]` on both axes, matching
+`energyMaterial` and the DSL. Older versions used `[xx, yy, zz, yz, xz, xy]`;
+convert a manually supplied old-order matrix with `p=[1,2,3,6,4,5]; C=C[p,p]`.
 
 ---
 
@@ -2231,10 +2235,10 @@ function materialTangentMatrix(
                                 B[2, col] = v2 * ∇Na2
                                 B[3, col] = v3 * ∇Na3
 
-                                # engineering shear rows (E23,E13,E12) already with factor 2 in B definition
-                                B[4, col] = v2 * ∇Na3 + v3 * ∇Na2
-                                B[5, col] = v1 * ∇Na3 + v3 * ∇Na1
-                                B[6, col] = v1 * ∇Na2 + v2 * ∇Na1
+                                # Engineering shear rows: 2E12, 2E23, 2E31.
+                                B[4, col] = v1 * ∇Na2 + v2 * ∇Na1
+                                B[5, col] = v2 * ∇Na3 + v3 * ∇Na2
+                                B[6, col] = v3 * ∇Na1 + v1 * ∇Na3
                             end
                         end
 
@@ -4097,8 +4101,8 @@ where:
 - `S` is an elementwise `TensorField`
 - `D` is a `6×6` matrix whose entries are elementwise `ScalarField`s
 
-The tangent can be used in DSL expressions after matching its Voigt order
-to the operator. See the ordering note below.
+The tangent uses the same Voigt order as `SymGrad` and `tensorToVector`
+and can be used directly in DSL expressions.
 
 # Optional extension and conventions
 
@@ -4110,22 +4114,14 @@ strain vector. Parameters are a named tuple of numbers or compatible
 can be reused across columns). Nodal input is converted to element-wise data.
 
 # Notes
-Current Tensors-extension tangent ordering:
+The tangent order is `[xx, yy, zz, xy, yz, zx]`, shared with `SymGrad` and
+`tensorToVector`. It maps engineering Green-strain increments
+`[δE_xx, δE_yy, δE_zz, 2δE_xy, 2δE_yz, 2δE_zx]` to stress increments.
+No component permutation or additional shear scaling is needed before DSL use.
 
-    [xx, yy, zz, yz, xz, xy]
-
-This differs from `SymGrad` and `tensorToVector`, whose order is
-`[xx, yy, zz, xy, yz, zx]`. For a symmetric constitutive tensor, convert
-both tangent axes before coupling to those operators:
-
-```julia
-p = [1, 2, 3, 6, 4, 5]
-D_dsl = D[p, p]
-```
-
-The stress field uses full column-major tensor storage and needs no such
-permutation. This note describes the current implementation; isotropic
-equal-shear examples alone do not establish anisotropic compatibility.
+Earlier versions returned `[xx, yy, zz, yz, xz, xy]`. Remove any manual
+`[1, 2, 3, 6, 4, 5]` permutation when updating existing code.
+The stress field retains full column-major tensor storage.
 
 This function computes stress and tangent simultaneously for efficiency.
 """
@@ -4178,8 +4174,8 @@ function.
 # Returns
 A `6×6` matrix whose entries are elementwise `ScalarField`s.
 
-The tangent can be used in DSL expressions after matching its Voigt order
-to the operator. See the ordering note below.
+The tangent uses the same Voigt order as `SymGrad` and `tensorToVector`
+and can be used directly in DSL expressions.
 
 # Optional extension and conventions
 
@@ -4191,22 +4187,14 @@ strain vector. Parameters are a named tuple of numbers or compatible
 can be reused across columns). Nodal input is converted to element-wise data.
 
 # Notes
-Current Tensors-extension tangent ordering:
+The tangent order is `[xx, yy, zz, xy, yz, zx]`, shared with `SymGrad` and
+`tensorToVector`. It maps engineering Green-strain increments
+`[δE_xx, δE_yy, δE_zz, 2δE_xy, 2δE_yz, 2δE_zx]` to stress increments.
+No component permutation or additional shear scaling is needed before DSL use.
 
-    [xx, yy, zz, yz, xz, xy]
-
-This differs from `SymGrad` and `tensorToVector`, whose order is
-`[xx, yy, zz, xy, yz, zx]`. For a symmetric constitutive tensor, convert
-both tangent axes before coupling to those operators:
-
-```julia
-p = [1, 2, 3, 6, 4, 5]
-D_dsl = D[p, p]
-```
-
-The stress field uses full column-major tensor storage and needs no such
-permutation. This note describes the current implementation; isotropic
-equal-shear examples alone do not establish anisotropic compatibility.
+Earlier versions returned `[xx, yy, zz, yz, xz, xy]`. Remove any manual
+`[1, 2, 3, 6, 4, 5]` permutation when updating existing code.
+The stress field retains full column-major tensor storage.
 
 This function internally uses the same constitutive kernel as
 `energyMaterial`, but computes only the tangent matrix.

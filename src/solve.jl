@@ -15,7 +15,7 @@
 using LinearAlgebra
 using SparseArrays
 
-export Global, solveField, rotateResult
+export Global, solveField, rotateResult, LinearSolveConvergenceError
 
 const _SolveFieldType = Union{ScalarField,VectorField,TensorField}
 
@@ -230,6 +230,28 @@ end
 const _ITERATIVE_SOLVERS = (:cg, :gmres)
 const _PRECONDITIONERS = (:auto, :none, :ich, :ilu)
 
+"""
+    LinearSolveConvergenceError
+
+An iterative linear solver stopped before convergence. The fields `solver`,
+`iterations`, and `residual_norm` record the backend, completed iteration count,
+and final true residual norm `norm(A*x-b)`.
+
+By default `solveField`, HHT and FDM propagate this error rather than accepting
+an unconverged linear solution. Set `solveroptions=(on_failure=:warn, ...)`
+explicitly to warn and return the last iterate instead.
+"""
+struct LinearSolveConvergenceError{T<:Real} <: Exception
+    solver::Symbol
+    iterations::Int
+    residual_norm::T
+end
+
+function Base.showerror(io::IO, err::LinearSolveConvergenceError)
+    print(io, uppercase(string(err.solver)), " did not converge after ",
+          err.iterations, " iterations; residual norm = ", err.residual_norm, ".")
+end
+
 function _require_iterative_solver(::Val{solver}) where solver
     error(
         "Solver :$solver requires IterativeSolvers.jl.\n" *
@@ -302,6 +324,9 @@ disable preconditioning explicitly. A preconstructed preconditioner object may
 also be passed directly through `preconditioner`.
 
 `solveroptions` is a `NamedTuple` of native iterative-solver keyword options.
+The LowLevelFEM option `on_failure` defaults to `:error`, raising
+[`LinearSolveConvergenceError`](@ref) on nonconvergence. Set `on_failure=:warn`
+to emit a warning and return the final iterate explicitly.
 The keywords `log`, `Pl`, `Pr`, and `initially_zero` are managed internally by
 LowLevelFEM and must not be supplied. `solveroptions` is rejected for direct
 solvers rather than being ignored silently.
@@ -459,7 +484,8 @@ function solve_prepared_linear_system(prepared::_PreparedLinearSolver, B::Abstra
         return _solve_iterative(Val(prepared.solver), prepared.A, rhs;
             preconditioner=prepared.preconditioner, solveroptions=prepared.solveroptions)
     end
-    X = Matrix{eltype(rhs)}(undef, size(prepared.A, 2), size(rhs, 2))
+    T = promote_type(float(eltype(prepared.A)), float(eltype(rhs)))
+    X = Matrix{T}(undef, size(prepared.A, 2), size(rhs, 2))
     for j in axes(rhs, 2)
         X[:, j] = _solve_iterative(Val(prepared.solver), prepared.A, @view(rhs[:, j]);
             preconditioner=prepared.preconditioner, solveroptions=prepared.solveroptions)
@@ -470,6 +496,9 @@ end
 function _check_solveroptions(options)
     options isa NamedTuple ||
         error("solveroptions must be a NamedTuple.")
+
+    get(options, :on_failure, :error) in (:error, :warn) ||
+        throw(ArgumentError("solveroptions.on_failure must be :error or :warn."))
 
     reserved = (:log, :Pl, :Pr, :initially_zero)
 
@@ -1972,6 +2001,11 @@ iterative solver, for example
 ```julia
 solveroptions=(reltol=1e-8, maxiter=5000)
 ```
+
+An iterative solver that does not converge raises
+[`LinearSolveConvergenceError`](@ref), including when called from a transient
+solver. To accept its last iterate with a warning, explicitly pass
+`solveroptions=(reltol=1e-8, maxiter=5000, on_failure=:warn)`.
 
 The options `log`, `Pl`, `Pr`, and `initially_zero` are managed internally by
 LowLevelFEM. `preconditioneroptions` similarly contains options used when

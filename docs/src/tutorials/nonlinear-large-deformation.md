@@ -29,13 +29,10 @@ Then evaluate stress and material tangent at element nodes:
 ```julia
 response = energyMaterial(ψ, C; params=(μ=mat.μ, λ=mat.λ))
 S = response.S
-D_raw = response.D
-pvoigt = [1, 2, 3, 6, 4, 5]
-D_dsl = D_raw[pvoigt, pvoigt]
+D_dsl = response.D
 ```
 
-The permutation matches the current extension's tangent order to the DSL Voigt
-order. Use `IIPiolaKirchhoff` or `tangentMatrix` when only one response is needed.
+The tangent already uses the DSL order `[xx,yy,zz,xy,yz,zx]`. Use `IIPiolaKirchhoff` or `tangentMatrix` when only one response is needed.
 Constitutive sampling and Gauss-point interpolation are distinct operations;
 convert coefficient representations where required by the chosen assembly path.
 See [Constitutive API](../reference/constitutive.md) for conventions and restrictions.
@@ -61,8 +58,8 @@ updates, including the limitation of the interpolated-stress tangent.
 
 ## Check anisotropic shear ordering independently
 
-This optional material-response example checks the documented tangent
-permutation against three distinct engineering shear moduli. It is a
+This optional material-response example checks the shared tangent ordering
+against three distinct engineering shear moduli. It is a
 constitutive check, not a nonlinear equilibrium simulation. `Tensors` must
 already be installed and is loaded explicitly.
 
@@ -78,8 +75,7 @@ try
     psi(C,p) = p.a/8*(C[1,2]+C[2,1])^2 +
                p.b/8*(C[2,3]+C[3,2])^2 + p.c/8*(C[3,1]+C[1,3])^2
     response = energyMaterial(psi, C; params=(a=2.0,b=3.0,c=5.0))
-    perm = [1,2,3,6,4,5]
-    D_dsl = response.D[perm,perm]
+    D_dsl = response.D
     for (i,mu) in zip(4:6,(2.0,3.0,5.0))
         @assert all(A -> maximum(abs.(A .- mu)) < 1e-10, D_dsl[i,i].A)
     end

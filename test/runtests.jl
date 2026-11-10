@@ -4,6 +4,7 @@ using SparseArrays
 using Test
 using Arpack
 using IterativeSolvers, Preconditioners, IncompleteLU
+import Tensors
 
 include("helpers.jl")
 
@@ -16,6 +17,8 @@ include("helpers.jl")
         include("test_multifield.jl")
         include("test_boundary_conditions.jl")
         include("test_solvefield.jl")
+        include("test_solver_extensions.jl")
+        include("test_energy_material.jl")
         include("test_solveeigen.jl")
         include("test_transient.jl")
         include("test_transient_remote.jl")

@@ -125,3 +125,16 @@ ordinary applications call HHT, CDM or FDM directly.
 LowLevelFEM.prepare_transient_system
 LowLevelFEM.reconstruct_transient_solution
 ```
+
+## Iterative convergence
+
+An unconverged CG or GMRES solve raises `LinearSolveConvergenceError` by default.
+The exception exposes `solver`, `iterations`, and the true `residual_norm`.
+This also stops HHT and FDM when an inner linear solve fails.
+
+Use `solveroptions=(reltol=1e-8, maxiter=5000, on_failure=:warn)` only when
+you explicitly want a warning and the last iterate instead.
+
+```@docs
+LinearSolveConvergenceError
+```

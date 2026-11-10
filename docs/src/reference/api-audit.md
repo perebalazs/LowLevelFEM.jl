@@ -22,7 +22,7 @@ These findings are recorded without changing executable `.jl` source:
 | `nodalForce!`, `nodalAcceleration!` | Exported but undefined; no callable implementation is supplied by those names. |
 | `probe_field` | Exported but undefined; use the documented Gmsh-view `probe` interface where appropriate. |
 | `Adv(P)` | Calls the internal constructor without its velocity argument; use an explicit coefficient row times `Grad(P)` as in the [advection guide](../tutorials/poisson-and-custom-operators.md). |
-| Energy-based material tangent | The Tensors extension and DSL Voigt orders differ. See the documented two-axis permutation under [constitutive models](constitutive.md). |
+| Energy-based material tangent | The Tensors extension and DSL share `[xx,yy,zz,xy,yz,zx]`. Remove permutations from older code; see [constitutive models](constitutive.md). |
 
 `gmsh` is re-exported from the bundled Gmsh API; this project does not duplicate
 its complete external reference. `Field`, `MPC`, `ε`, `sourceVector` and

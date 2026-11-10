@@ -3,6 +3,7 @@ module LowLevelFEMPreconditionersExt
 using LowLevelFEM
 using Preconditioners
 using LinearAlgebra
+using SparseArrays
 
 
 function LowLevelFEM._build_preconditioner(
@@ -10,7 +11,8 @@ function LowLevelFEM._build_preconditioner(
     A;
     preconditioneroptions=(;)
 )
-    A0 = A isa Union{Symmetric,Hermitian} ? parent(A) : A
+    # Expand the authoritative triangle rather than exposing ignored storage.
+    A0 = A isa Union{Symmetric,Hermitian} ? sparse(A) : A
 
     memory = get(preconditioneroptions, :memory, 2)
 

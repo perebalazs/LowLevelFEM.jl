@@ -11,9 +11,10 @@ function LowLevelFEM._build_preconditioner(
     A;
     preconditioneroptions=(;)
 )
+    # Expand the authoritative triangle rather than exposing ignored storage.
     A0 =
         A isa Union{Symmetric,Hermitian} ?
-        parent(A) :
+        sparse(A) :
         A
 
     if !(A0 isa SparseMatrixCSC)

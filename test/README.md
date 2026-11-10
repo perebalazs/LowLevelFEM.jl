@@ -22,6 +22,13 @@ coupled solving; `test_boundary_conditions.jl` owns the combined coordinate/MPC
 regressions. Eigen constraints are also exercised through `solveEigen` because
 modal reconstruction has a different contract from a static solve.
 
+`test_energy_material.jl` loads the optional Tensors extension and checks a
+coupled anisotropic law against analytic stress/tangent values, finite
+differences in engineering Green strain, and an affine DSL energy.
+`test_solver_extensions.jl` checks authoritative symmetric/Hermitian triangles,
+multiple integer right-hand sides, and explicit iterative nonconvergence in
+both standalone and transient solves.
+
 `helpers.jl` provides isolated Gmsh fixtures and numerical assertions. Models use
 explicit small mesh sizes. Parallel checks use `threads=:auto` against
 `threads=1`; a process with at least two Julia threads exercises both paths.
@@ -58,7 +65,7 @@ energies 5 and 155 are retained, with an additional 2D reference of 26.
 `SymGrad` follows the documented engineering strain order
 `[xx, yy, zz, xy, yz, zx]`, consistent with `VOIGT3D`. Unequal shear coefficients
 give the reference energy 112. The three formerly broken expectations are
-ordinary passing tests after the operator fixes in `src/multifield.jl`.
+ordinary passing tests after the operator fixes in `src/multifield/`.
 
 Custom 3D coefficient matrices prepared for the former `SymGrad` order
 `[xx, yy, zz, xy, xz, yz]` need the corresponding row and column permutation:

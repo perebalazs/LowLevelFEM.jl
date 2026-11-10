@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   test:
-    name: Run tests (Julia 1.12)
+    name: Run tests (Julia 1.13)
     runs-on: ubuntu-latest
 
     steps:

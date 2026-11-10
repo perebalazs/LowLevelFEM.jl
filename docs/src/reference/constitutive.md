@@ -31,12 +31,17 @@ IIPiolaKirchhoff
 tangentMatrix
 ```
 
+Stress extraction, the energy-based tangent and `SymGrad` share the order
+`[xx,yy,zz,xy,yz,zx]`. The tangent maps engineering Green-strain increments
+to stress increments; use it directly without permutation or extra shear factors.
+
 ```@warning
-The current Tensors extension returns tangents in `[xx,yy,zz,yz,xz,xy]` order,
-while `SymGrad` and `tensorToVector` use `[xx,yy,zz,xy,yz,zx]`. For a symmetric
-constitutive tensor use `p=[1,2,3,6,4,5]` and `D_dsl=D[p,p]` before combining
-the tangent with those operators. Full tensor stress storage needs no such
-permutation. The source implementation is unchanged.
+Earlier versions of the Tensors extension used `[xx,yy,zz,yz,xz,xy]`.
+Remove the old manual permutation `p=[1,2,3,6,4,5]` from existing code;
+applying it again now changes the material response.
+`materialTangentMatrix` also accepts the shared order on both matrix axes.
+For a manually supplied matrix stored in its old `[xx,yy,zz,yz,xz,xy]` order,
+convert that matrix once with `p=[1,2,3,6,4,5]; C=C[p,p]`.
 ```
 
 ## Tensor components
