@@ -7,6 +7,10 @@ on:
     tags: '*'
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Run tests (Julia 1.12)
@@ -20,8 +24,9 @@ jobs:
         with:
           version: '1.13'
 
-      - name: Instantiate project
-        run: julia --project -e 'using Pkg; Pkg.instantiate()'
+      - uses: julia-actions/cache@v3
+        with:
+          delete-old-caches: 'false'
 
       - name: Run tests with coverage
         env:
@@ -56,31 +61,19 @@ jobs:
         with:
           version: '1.13'
 
-      # --- új lépés: javítja a JLL előkompilálási hibát ---
-      - name: Pre-install Julia stdlibs
-        run: |
-          julia -e '
-            using Pkg;
-            Pkg.Registry.update();
-            for pkg in ["OpenSSL_jll", "LibSSH2_jll", "LibGit2_jll", "LibCURL_jll"]
-                try
-                    Pkg.add(pkg)
-                catch e
-                    @warn("Skipping preinstall for $pkg", e)
-                end
-            end
-          '
+      - uses: julia-actions/cache@v3
+        with:
+          delete-old-caches: 'false'
 
       - name: Install documentation dependencies
         run: |
           julia --project=docs -e '
             using Pkg
-            Pkg.Registry.update()
             Pkg.develop(PackageSpec(path=pwd()))
             Pkg.instantiate()
           '
 
-      - name: Build docs (HTML + LaTeX)
+      - name: Build docs (HTML)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}

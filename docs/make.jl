@@ -97,17 +97,6 @@ makedocs(
     doctest = false,
 )
 
-# LaTeX (PDF) dokumentáció
-#@info "STARTING LATEX BUILD"
-#makedocs(
-#    sitename = "LowLevelFEM",
-#    authors = "Balázs Pere",
-#    format = Documenter.LaTeX(),
-#    pages = DOC_PAGES,
-#    doctest = false,
-#)
-
-
 deploydocs(
     repo = "github.com/perebalazs/LowLevelFEM.jl.git",
     branch = "gh-pages",

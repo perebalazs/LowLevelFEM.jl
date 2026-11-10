@@ -2,7 +2,7 @@ name: CompatHelper
 
 on:
   schedule:
-    - cron: '00 00 * * *'
+    - cron: '0 0 * * 1'
   workflow_dispatch:
 
 jobs:
@@ -22,11 +22,11 @@ jobs:
       
       - name: Install dependencies
         run: |
-          julia --project=@. -e 'using Pkg; Pkg.add("CompatHelper")'
+          julia --project=@compathelper -e 'using Pkg; Pkg.add("CompatHelper")'
       
       - name: Run CompatHelper
         env:
           GITHUB_TOKEN: ${{ secrets.COMPATHELPER_TOKEN }}
           COMPATHELPER_PRIV: ""
         run: |
-          julia --project=@. -e 'using CompatHelper; CompatHelper.main()'
+          julia --project=@compathelper -e 'using CompatHelper; CompatHelper.main()'
