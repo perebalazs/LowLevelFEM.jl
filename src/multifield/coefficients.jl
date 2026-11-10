@@ -611,6 +611,111 @@ function _eval_coefficient_chain_at_gp(Cprep::AbstractVector, elem, hgp)
     return Cgp
 end
 
+const PreparedChainFactor = Union{Float64,Matrix{Float64},Matrix{Any},Dict{Int,Matrix{Float64}}}
+
+# Prepared bilinear chains follow the same AbstractVector dispatch as raw chains.
+struct CoefficientChainPlan <: AbstractVector{Any}
+    factors::Vector{PreparedChainFactor}
+end
+Base.size(p::CoefficientChainPlan) = size(p.factors)
+Base.getindex(p::CoefficientChainPlan, i::Int) = p.factors[i]
+Base.IndexStyle(::Type{CoefficientChainPlan}) = IndexLinear()
+
+struct CoefficientChainWorkspace
+    plan::CoefficientChainPlan
+    evaluated::Vector{Matrix{Float64}}
+    products::Vector{Matrix{Float64}}
+end
+
+_is_constant_chain_factor(x) = x isa Number || (x isa AbstractMatrix && eltype(x) <: Number)
+_normalize_chain_factor(x::AbstractMatrix{<:Number}) = Matrix{Float64}(x)
+_normalize_chain_factor(x) = x
+
+function _prepare_coefficient_chain(mats::AbstractVector)
+    # Keep the old path for nonfinite literal data, including its propagation
+    # of NaN/Inf through sparse-pattern-aware multiplication.
+    for factor in mats
+        if factor isa Number
+            isfinite(factor) || return mats
+        elseif factor isa AbstractMatrix{<:Number}
+            all(isfinite,factor) || return mats
+        end
+    end
+    factors = PreparedChainFactor[]
+    constant_prefix = true
+    for factor in mats
+        factor = _normalize_chain_factor(factor)
+        constant_prefix &= _is_constant_chain_factor(factor)
+        # Only fold the leading literal prefix. Folding A*B in c(x)*A*B
+        # reassociates floating-point products and can overflow/underflow even
+        # when the original left-to-right evaluation remains finite.
+        if constant_prefix && !isempty(factors)
+            factors[end] = _small_matmul(last(factors), factor)
+        else
+            push!(factors, factor)
+        end
+    end
+    length(factors) == 1 && return only(factors)
+    any(x -> x isa AbstractMatrix, factors) || return mats
+    return CoefficientChainPlan(factors)
+end
+
+function CoefficientChainWorkspace(plan::CoefficientChainPlan)
+    evaluated = Matrix{Float64}[]
+    products = Matrix{Float64}[]
+    rows, cols = 0, 0
+    for factor in plan.factors
+        push!(evaluated, factor isa Matrix{Any} ? zeros(size(factor)) : zeros(0,0))
+        if factor isa AbstractMatrix
+            if rows == 0
+                rows, cols = size(factor)
+            else
+                cols = size(factor, 2)
+            end
+        end
+        push!(products, zeros(rows, cols))
+    end
+    return CoefficientChainWorkspace(plan, evaluated, products)
+end
+
+@inline _eval_coefficient_chain_at_gp!(ws, plan::AbstractVector, elem, hgp) =
+    _eval_coefficient_chain_at_gp(plan, elem, hgp)
+
+function _eval_coefficient_chain_at_gp!(ws, plan::CoefficientChainPlan, elem, hgp)
+    # Owned by one assembly worker; no result or evaluated field buffer is shared.
+    scratch = ws.chain_workspace
+    if scratch === nothing || scratch.plan !== plan
+        scratch = CoefficientChainWorkspace(plan)
+        ws.chain_workspace = scratch
+    end
+    scalar = 1.0
+    product = nothing
+    @inbounds for i in eachindex(plan.factors)
+        factor = plan.factors[i]
+        if factor isa AbstractMatrix
+            value = factor isa Matrix{Any} ?
+                _eval_coefficient_at_gp!(scratch.evaluated[i], factor, elem, hgp) : factor
+            out = scratch.products[i]
+            if product === nothing
+                @. out = scalar * value
+            else
+                mul!(out, product, value)
+            end
+            product = out
+        else
+            value = _eval_coefficient_at_gp(factor, elem, hgp)
+            if product === nothing
+                scalar *= value
+            else
+                out = scratch.products[i]
+                @. out = product * value
+                product = out
+            end
+        end
+    end
+    return product
+end
+
 @inline function surface_basis_from_J(Jac, k)
     a1 = SVector(Jac[1,3k-2], Jac[2,3k-2], Jac[3,3k-2])
     a2 = SVector(Jac[1,3k-1], Jac[2,3k-1], Jac[3,3k-1])

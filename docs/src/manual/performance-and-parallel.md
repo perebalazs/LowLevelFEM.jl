@@ -24,6 +24,13 @@ Kp = ∫(Grad(P) ⋅ Grad(P); threads=:auto)
 
 ## Repeated assembly and memory
 
+In bilinear coefficient chains such as `Grad(P) ⋅ A ⋅ c ⋅ B ⋅ Grad(P)`,
+assembly precomputes only the leading constant factors and reuses a private
+workspace per worker for the remaining products. Scalar fields and matrices
+with field entries are evaluated at every integration point. Products retain
+their left-to-right order across variable factors, including when their
+magnitudes differ greatly. No change to the weak-form expression is required.
+
 Direct CSC assembly is the default. Reuse a compatible structural pattern when
 the mesh, integration domain and trial/test spaces are unchanged:
 

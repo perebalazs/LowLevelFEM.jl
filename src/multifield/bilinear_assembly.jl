@@ -14,6 +14,7 @@ mutable struct OperatorWorkspace
     patCgp::Union{Nothing,MatrixPattern}
 
     Cgp::Union{Nothing,Matrix{Float64}}
+    chain_workspace::Union{Nothing,CoefficientChainWorkspace}
 end
 
 @inline function _eval_coefficient_at_gp!(
@@ -88,6 +89,7 @@ function OperatorWorkspace(
         patBu,
         patBsT,
         patTmp,
+        nothing,
         nothing,
         nothing
     )
@@ -411,8 +413,8 @@ function assemble_element_matrix_with_geometry!(
 
     @inbounds for k in 1:numIntPoints
         if Cprep isa AbstractVector
-            Cgp = _eval_coefficient_chain_at_gp(
-                Cprep, elem, view(h, :, k)
+            Cgp = _eval_coefficient_chain_at_gp!(
+                ws, Cprep, elem, view(h, :, k)
             )
 
         elseif Cprep isa AbstractMatrix &&
@@ -1516,6 +1518,9 @@ function assemble_operator(
                 DomainSpec(:Ω, String(phName))
    
             Cprep = _prepare_coefficient(coefficient, dom_here)
+            # RHS component vectors also use _prepare_coefficient; only
+            # bilinear coefficient vectors represent multiplication chains.
+            Cprep isa AbstractVector && (Cprep = _prepare_coefficient_chain(Cprep))
             
             # Unwrap a coefficient chain containing a single factor.
             if Cprep isa AbstractVector && length(Cprep) == 1
