@@ -13,7 +13,9 @@ fieldError
 resultant
 integrate
 normalVector
+normalVectors
 tangentVector
+tangentVectors
 ```
 
 ## Result Views

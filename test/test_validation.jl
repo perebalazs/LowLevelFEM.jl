@@ -87,29 +87,6 @@
     end
 
     with_test_gmsh() do
-        structured_box_mesh(n=1, order=2)
-        mat = Material("body")
-        U = Field([mat], type=:VectorField, dim=3, fieldName=:u, reducedOrder=true)
-        K = ∫(SymGrad(U) ⋅ D(:Solid, mat) ⋅ SymGrad(U))
-        M = ∫(U ⋅ U)
-        f = ∫(U ⋅ [1.0, 0.0, 0.0]; Γ="right")
-        support = [BoundaryCondition("left"; field=U, ux=0.01, uy=0.0, uz=0.0)]
-        cs = CoordinateSystem(VectorField(U, "right", [0.0, 1.0, 0.0]),
-                              VectorField(U, "right", [-1.0, 0.0, 0.0]))
-        # Preserve the original explicit unsupported-combination regression.
-        err = try
-            solveField(K, f; support=support, coordSys=[cs])
-            nothing
-        catch e
-            e
-        end
-        @test err isa ErrorException
-        @test occursin("not yet implemented", sprint(showerror, err))
-        @test_throws ErrorException solveEigen(K, M; n=1, support=support,
-                                               coordSys=[cs], solver=:direct)
-    end
-
-    with_test_gmsh() do
         (; U, C, zero_u) = flat_contact_fixture()
         @test_throws ErrorException ContactGap(C; components=:invalid)
         @test_throws ErrorException ContactGap(C; active=:invalid)

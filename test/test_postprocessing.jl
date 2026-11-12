@@ -51,3 +51,58 @@
         end
     end
 end
+
+@testset "Geometric vector-field pairs" begin
+    function check_frame(a, b, c)
+        @test isElementwise(a) && isElementwise(b) && isElementwise(c)
+        @test a.type === b.type === c.type === :v3D
+        @test a.numElem == b.numElem == c.numElem
+        for (A, B, C) in zip(a.A, b.A, c.A)
+            for (x, y, z) in zip(eachcol(reshape(A, 3, :)),
+                                 eachcol(reshape(B, 3, :)),
+                                 eachcol(reshape(C, 3, :)))
+                @test hcat(x, y, z)' * hcat(x, y, z) ≈ I atol=1e-12
+                @test cross(x, y) ≈ z atol=1e-12
+            end
+        end
+    end
+
+    with_test_gmsh() do
+        structured_rect_mesh(n=1, order=2)
+        P = Field([Material("body")]; type=:VectorField, dim=3)
+        t = tangentVector(P, "right")
+        n1, n2 = normalVectors(P, "right")
+        check_frame(t, n1, n2)
+        @test all(a -> reshape(a, 3, :) ≈ repeat([0.0, 0.0, 1.0], 1, 3), n2.A)
+
+        n = normalVector(P, "body")
+        t1, t2 = tangentVectors(P, "body")
+        check_frame(t1, t2, n)
+        @test only(t1.A)[1:3] ≈ [1.0, 0.0, 0.0]
+        @test_throws ArgumentError tangentVectors(P, "right")
+
+        tags, coords, _ = gmsh.model.mesh.getNodes()
+        for (i, tag) in enumerate(tags)
+            x, y, _ = coords[3i-2:3i]
+            gmsh.model.mesh.setNode(tag, [0.2y^2, y+0.1x*y, x+0.1y^2], Float64[])
+        end
+
+        n = normalVector(P, "body")
+        t1, t2 = tangentVectors(P, "body")
+        check_frame(t1, t2, n)
+        @test maximum(abs, only(t1.A)[1:3:end, 1]) < 0.1  # Avoid the nearly normal x-axis.
+
+        t = tangentVector(P, "right")
+        n1, n2 = normalVectors(P, "right")
+        check_frame(t, n1, n2)
+    end
+
+    with_test_gmsh() do
+        structured_box_mesh(n=1)
+        P = Field([Material("body")]; type=:VectorField, dim=3)
+        faces = last.(gmsh.model.getEntities(2))
+        gmsh.model.addPhysicalGroup(2, faces, -1, "shell")
+        t1, t2 = tangentVectors(P, "shell")
+        check_frame(t1, t2, normalVector(P, "shell"))
+    end
+end

@@ -8,7 +8,8 @@ export SystemMatrix, SystemVector, subSystemMatrix
 export constrainedDoFs, freeDoFs, allDoFs, DoFs
 export elementsToNodes, nodesToElements, elementsToElements
 export projectTo2D, expandTo3D, isNodal, isElementwise
-export fieldError, resultant, integrate, ∫, normalVector, tangentVector
+export fieldError, resultant, integrate, ∫
+export normalVector, normalVectors, tangentVector, tangentVectors
 export rotateNodes, CoordinateSystem, Transformation
 export showDoFResults, showModalResults, showBucklingResults
 export showStrainResults, showStressResults, showElementResults, showHeatFluxResults

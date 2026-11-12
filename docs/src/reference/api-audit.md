@@ -6,7 +6,7 @@ CurrentModule = LowLevelFEM
 
 This inventory covers the loaded package exports (including aliases, types,
 macros and contact constants), not unused historical source files. After this
-documentation update, all **224 defined exported bindings** have discoverable
+documentation update, all **228 defined exported bindings** have discoverable
 Julia documentation, including inherited alias/macro documentation. Four
 additional exported names have no implementation and are listed below.
 Docstring presence alone does not prove every behavior is correct; signatures,
@@ -189,6 +189,7 @@ changes. Existing Julia source files are restricted to docstring changes.
 | `nodesToElements` | [Reference](fields.md) |
 | `nonLinearStiffnessMatrix` | [Reference](linear.md) |
 | `normalVector` | [Reference](postprocessing.md) |
+| `normalVectors` | [Reference](postprocessing.md) |
 | `openGeometry` | [Reference](preprocessing.md) |
 | `openPostProcessor` | [Reference](postprocessing.md) |
 | `openPreProcessor` | [Reference](preprocessing.md) |
@@ -249,6 +250,7 @@ changes. Existing Julia source files are restricted to docstring changes.
 | `symmetricGradientMatrix` | [Reference](poisson.md) |
 | `tangentMatrix` | [Reference](constitutive.md) |
 | `tangentVector` | [Reference](postprocessing.md) |
+| `tangentVectors` | [Reference](postprocessing.md) |
 | `temperatureConstraint` | [Reference](boundary-conditions.md) |
 | `tensorDivDivMatrix` | [Reference](poisson.md) |
 | `tensorField` | [Reference](fields.md) |

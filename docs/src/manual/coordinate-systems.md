@@ -26,10 +26,12 @@ Direction fields may vary in space, but must be nondegenerate and have one colum
 For example a radial basis is undefined at the cylinder axis.
 
 MPCs relate local solver components; different master/slave bases can represent
-rotated periodic relations. Local coordinates combined with `reducedOrder=true`
-on the same field are currently unsupported; using them on different fields of
-a mixed system is permitted. Check additional spectral/MPC restrictions in
-[Solution API](../reference/solution.md).
+rotated periodic relations. With `reducedOrder=true`, the reduced-order
+interpolation is applied to the local components. The interpolated values
+are then rotated at each full-order node (`u_global = Q * T * u_reduced`).
+A spatially varying basis can therefore change the polynomial variation of the
+Cartesian components. Prescribed values must be representable in the reduced
+local space. Check spectral/MPC restrictions in [Solution API](../reference/solution.md).
 
 See [CoordinateSystem, rotateNodes and rotateResult](../reference/boundary-conditions.md)
 for exact signatures and supported field representations.

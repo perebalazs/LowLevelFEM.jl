@@ -1265,8 +1265,8 @@ and the reduced system is formed as
 
 `coordSys` and MPC may be combined. In that case the MPC identifies local
 components and the coordinate transformation gives those components their
-global physical directions. Combining `coordSys` with reduced-order
-interpolation on the same field is not yet implemented.
+global physical directions. With `reducedOrder=true`, `T` interpolates
+the local components before `Q` rotates them at each node.
 """
 function _prepare_singlefield_system(
     K0,
@@ -1297,12 +1297,8 @@ function _prepare_singlefield_system(
 
     Q = _build_coordinate_transformation(P, coordSys)
 
-    if Q !== nothing
-        P.reducedOrder &&
-            error("solveField: CoordinateSystem + reducedOrder=true on the same field is not yet implemented.")
-
-        template isa VectorField ||
-            error("solveField: coordSys currently supports VectorField problems only.")
+    if Q !== nothing && !(template isa VectorField)
+        error("solveField: coordSys currently supports VectorField problems only.")
     end
 
     rhs_template, F0 = rhs_in_solver_coordinates(rhs, Q)
@@ -1426,9 +1422,7 @@ component bases. `Global(...)` is the explicit exception for right-hand-side
 data supplied in global Cartesian components.
 
 Each `CoordinateSystem` identifies its field through `e1.model`. Fields
-without a local coordinate system receive an identity block. A coordinate
-system may coexist with reduced-order interpolation on another field, but not
-yet on the same field.
+without a local coordinate system receive an identity block.
 """
 function _build_multifield_coordinate_transformation(
     K::SystemMatrix,
@@ -1487,12 +1481,6 @@ function _build_multifield_coordinate_transformation(
             error(
                 "solveField: coordSys can only be attached to vector fields " *
                 "with pdim == dim."
-            )
-
-        P.reducedOrder &&
-            error(
-                "solveField: CoordinateSystem + reducedOrder=true on the same field " *
-                "is not yet implemented."
             )
 
         Qp = _build_coordinate_transformation(
@@ -1577,8 +1565,8 @@ Consequently,
     K_reduced = T' * Q' * K * Q * T.
 
 Fields without a coordinate transformation receive an identity `Qᵢ`.
-A coordinate system may coexist with reduced-order interpolation on a
-different field and may also be combined with field-specific MPCs.
+Reduced-order interpolation and field-specific MPCs act on the local
+components of each field.
 
 MPC relations are imposed on the local solver components. Therefore, if
 master and slave DOFs use different local coordinate bases, the corresponding
@@ -1586,8 +1574,7 @@ global relation contains the relative rotation between those bases. This is
 intentional and can represent rotated periodic or sector-symmetry relations.
 
 The caller is responsible for assigning coordinate systems that give the
-intended physical meaning to tied DOFs. Attaching `coordSys` and
-`reducedOrder=true` to the same field is not yet implemented.
+intended physical meaning to tied DOFs.
 """
 function prepare_multifield_system(
     K0::Union{SystemMatrix,SymmetricSystemMatrix},
@@ -1968,8 +1955,9 @@ u_{g,s} = Q_s Q_m^T u_{g,m},
 
 which can represent rotated periodic or sector-symmetry constraints.
 
-`CoordinateSystem + reducedOrder=true` on the same field is not yet
-implemented.
+With `reducedOrder=true`, order reduction acts on the local components.
+A spatially varying coordinate system can change the polynomial variation
+of the reconstructed Cartesian components.
 
 # Linear solvers
 
@@ -2076,10 +2064,9 @@ end
 Solve a linear multifield finite-element system.
 
 Full-order and reduced-order fields may be mixed in the same block system.
-Each field may have its own MPCs and local coordinate systems. A coordinate
-system may coexist with `reducedOrder=true` on another field, but
-`CoordinateSystem + reducedOrder=true` on the same field is not yet
-implemented.
+Each field may have its own MPCs and local coordinate systems. A field using
+`reducedOrder=true` interpolates its local components before reconstructing
+the Cartesian result.
 
 For a multifield system,
 

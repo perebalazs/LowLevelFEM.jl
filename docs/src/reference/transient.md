@@ -125,7 +125,8 @@ prescribed slave values transfer to their masters at every sample. Each block
 BC and MPC must identify `field=Problem`.
 
 - Reduced-order and SEM interpolation use the existing cached transformations.
-- Coordinates plus reduced/SEM interpolation on the same field are unsupported.
+- Reduced-order interpolation acts on the local components when a coordinate
+  system is present. Coordinates plus SEM on the same field are unsupported.
 - SEM plus MPC on the same field is currently unsupported.
 - Separate block fields may use these features independently.
 - HHT/CDM need nonsingular mass on the remaining free coordinates; arbitrary

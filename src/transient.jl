@@ -221,10 +221,9 @@ function prepare_transient_system(K0, M0, C0, rhs, U0, V0, n, dt;
         bc.problem === nothing || any(P -> P === bc.problem, problems) ||
             error("Transient: support refers to a field outside the system.")
     end
-    # Follow the existing solveField/solveEigen limitation explicitly.
     for P in problems
-        if _has_approximation(P) && any(cs -> cs.e1.model === P, coordSys)
-            error("Transient: coordSys + reduced/spectral basis on the same field is not yet implemented.")
+        if P.basis === :spectral && any(cs -> cs.e1.model === P, coordSys)
+            error("Transient: coordSys + spectral basis on the same field is not yet implemented.")
         end
     end
     if K.problems === nothing
@@ -488,9 +487,8 @@ u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc, α=-0.1)
 # Limitations
 
 Mass must be nonsingular on free reduced coordinates; arbitrary mass-singular
-DAEs are not supported. Combining coordinates with reduced/SEM interpolation
-on the same field, or SEM with MPC on the same field, follows the shared
-backend's current restrictions. See also [`CDM`](@ref), [`FDM`](@ref).
+DAEs are not supported. Combining SEM with local coordinates or MPCs on the
+same field is unsupported. See also [`CDM`](@ref), [`FDM`](@ref).
 """
 function HHT(K::_TransientMatrix, M::_TransientMatrix, C::_TransientMatrix,
              f::_TransientData, U0, V0, n::Int, dt::Real;

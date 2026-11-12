@@ -110,18 +110,16 @@ function prepare_eigen_system(
     if !isempty(coordSys)
         if A.problems === nothing
             P = A.model
-            _has_approximation(P) &&
-                error("solveEigen: coordSys + reduced/spectral basis on the same field is not yet implemented.")
+            P.basis === :spectral &&
+                error("solveEigen: coordSys + spectral basis on the same field is not yet implemented.")
             QQ = _build_coordinate_transformation(P, coordSys)
             Q = QQ === nothing ? nothing : QQ.T
         else
-            # The solveField builder validates that coordinate systems belong
-            # to fields in A and that unsupported combinations are rejected.
+            # The solveField builder validates that coordinate systems belong to A.
             Q = _build_multifield_coordinate_transformation(A, coordSys)
             for P in problems
-                if _has_approximation(P) &&
-                   any(cs -> cs.e1.model === P, coordSys)
-                    error("solveEigen: coordSys + reduced/spectral basis on the same field is not yet implemented.")
+                if P.basis === :spectral && any(cs -> cs.e1.model === P, coordSys)
+                    error("solveEigen: coordSys + spectral basis on the same field is not yet implemented.")
                 end
             end
         end

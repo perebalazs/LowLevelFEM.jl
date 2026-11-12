@@ -1176,6 +1176,85 @@ function tangentVector(problem::Problem, phName::String)
     return VectorField(tangentvectors, [;;], [0.0], numElem, 1, :v3D, problem)
 end
 
+"""
+    normalVectors(problem::Problem, phName::String) -> (n1, n2)
+
+Return two elementwise 3D `VectorField`s normal to the tangent of a curve
+physical group. At each element node, `(t, n1, n2)` is right-handed and
+orthonormal, with `t` oriented as in [`tangentVector`](@ref).
+
+Project a common global coordinate axis onto the normal plane to form `n2`.
+Choose the axis least aligned with the tangents across the group, preferring
+`z`, then `y`, then `x` in a tie. For a curve in the `xy` plane, `n2` points
+along positive `z` and `n1` lies in the plane. Where the chosen axis is nearly
+parallel to the tangent, use the least aligned axis at that node. This switch
+can change the frame orientation between nodes. Supply section principal
+directions separately when their orientation matters to the constitutive law.
+"""
+function normalVectors(problem::Problem, phName::String)
+    t = tangentVector(problem, phName)
+    return _transverse_frame_fields(t, (3, 2, 1); curve=true)
+end
+
+"""
+    tangentVectors(problem::Problem, phName::String) -> (t1, t2)
+
+Return two elementwise 3D `VectorField`s tangent to a surface physical group.
+At each element node, `(t1, t2, n)` is right-handed and orthonormal, with `n`
+oriented as in [`normalVector`](@ref).
+
+Project a common global coordinate axis onto the tangent plane to form `t1`
+and set `t2 = cross(n, t1)`. Choose the axis least aligned with the normals
+across the group, preferring `x`, then `y`, then `z` in a tie. Where the chosen
+axis is nearly parallel to the normal, use the least aligned axis at that
+node. On curved elements, interpolating the returned fields can change
+their lengths and orthogonality between nodes.
+"""
+function tangentVectors(problem::Problem, phName::String)
+    gmsh.model.setCurrent(problem.name)
+    entities = gmsh.model.getEntitiesForPhysicalName(phName)
+    all(first(entity) == 2 for entity in entities) ||
+        throw(ArgumentError("tangentVectors: expected a surface physical group."))
+    n = normalVector(problem, phName)
+    return _transverse_frame_fields(n, (1, 2, 3); curve=false)
+end
+
+# Choose a common reference from the maximum alignment of each Cartesian
+# axis with the sampled directions. Keep it where its projection is stable.
+function _transverse_frame_fields(v::VectorField, priority; curve::Bool)
+    isempty(v.numElem) && throw(ArgumentError("The physical group has no elements."))
+    max_alignment = SVector(0.0, 0.0, 0.0)
+    for (tag, values) in zip(v.numElem, v.A)
+        for i in 1:3:length(values)
+            d = SVector(values[i], values[i+1], values[i+2])
+            magnitude = norm(d)
+            isfinite(magnitude) && magnitude > 0 ||
+                throw(ArgumentError("Invalid frame direction on element $tag."))
+            max_alignment = max.(max_alignment, abs.(d / magnitude))
+        end
+    end
+    reference = priority[argmin(ntuple(i -> max_alignment[priority[i]], 3))]
+    cartesian = (SVector(1.0, 0.0, 0.0), SVector(0.0, 1.0, 0.0), SVector(0.0, 0.0, 1.0))
+
+    first_values, second_values = similar(v.A), similar(v.A)
+    for (e, values) in pairs(v.A)
+        a, b = similar(values), similar(values)
+        for i in 1:3:length(values)
+            d = normalize(SVector(values[i], values[i+1], values[i+2]))
+            # A projection shorter than 1/2 calls for a better reference axis.
+            axis = abs(d[reference]) > sqrt(3.0)/2 ? argmin(abs.(d)) : reference
+            p = normalize(cartesian[axis] - d[axis] * d)
+            q = cross(d, p)
+            first, second = curve ? (-q, p) : (p, q)
+            a[i:i+2, 1] .= first
+            b[i:i+2, 1] .= second
+        end
+        first_values[e], second_values[e] = a, b
+    end
+    return VectorField(first_values, [;;], [0.0], copy(v.numElem), 1, :v3D, v.model),
+           VectorField(second_values, [;;], [0.0], copy(v.numElem), 1, :v3D, v.model)
+end
+
 function normalVector1D(problem::Problem, phName::String)
     gmsh.model.setCurrent(problem.name)
 
