@@ -1568,7 +1568,7 @@ function assemble_operator(
                         gauss isa Int     ? max(1, 2order+1 + gauss) :
                         (2order + 1)
    
-                    intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(gorder))
+                    intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, gauss isa AbstractString ? gauss : "Gauss" * string(gorder))
                     #intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
                     numIntPoints = length(intWeights)
    
