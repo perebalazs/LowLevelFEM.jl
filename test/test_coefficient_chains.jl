@@ -92,3 +92,24 @@ end
         @test sum(variable_load[2:2:end]) ≈ 2.0
     end
 end
+
+@testset "Adjoint row coefficients in compound forms and loads" begin
+    with_test_gmsh() do
+        structured_rect_mesh(n=2, order=1)
+        mat = Material("body")
+        P = Field([mat], type=:ScalarField, dim=2, fieldName=:p)
+        U = Field([mat], type=:VectorField, dim=2, fieldName=:u)
+        c = ScalarField(P, "body", (x,y,z)->1+x+y)
+
+        a = [1.0, -0.5]
+        g = [c, 2.0]
+        B = a' ⋅ Grad(P) + g' ⋅ U
+        Bref = reshape(a, 1, 2) ⋅ Grad(P) + reshape(g, 1, 2) ⋅ U
+        @test ∫(B' ⋅ B).A ≈ ∫(Bref' ⋅ Bref).A
+
+        # A row on the left can also be used by itself as a load.
+        @test ∫(g' ⋅ U).a ≈ ∫(U ⋅ g).a
+        @test ∫((g' ⋅ U) * 2.0).a ≈ ∫((U ⋅ g) * 2.0).a
+        @test ∫(c * (g' ⋅ U)).a ≈ ∫(U ⋅ g; weight=c).a
+    end
+end

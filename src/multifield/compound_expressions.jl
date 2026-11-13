@@ -122,6 +122,13 @@ Base.:*(t::Union{BilinearTerm,LinearTerm,CompoundBilinear}, w::Union{Number,Scal
 Base.:*(w::Union{Number,ScalarField}, t::Union{BilinearTerm,LinearTerm,CompoundBilinear}) =
     WeightedTerm(t, w)
 
+# Integrating a matrix chain on its own uses the linear-form path.
+Base.:*(t::MatrixChain, w::Union{Number,ScalarField}) =
+    LinearTerm(t) * w
+
+Base.:*(w::Union{Number,ScalarField}, t::MatrixChain) =
+    w * LinearTerm(t)
+
 function ∫(wt::WeightedTerm;
     Ω=nothing, Γ=nothing, weight=nothing,
     gauss=:full,
@@ -366,6 +373,12 @@ end
 
 function ⋅(A::AbstractMatrix, op::OpApplied)
     return op ⋅ adjoint(A)
+end
+
+# The adjoint of a vector-backed row is a vector. Keep the coefficient
+# two-dimensional so the projection can take part in a compound operator.
+function ⋅(A::Adjoint{<:Any,<:AbstractVector}, op::OpApplied)
+    return Matrix(A) ⋅ op
 end
 
 function ⋅(A::AbstractMatrix, ch::MatrixChain)
