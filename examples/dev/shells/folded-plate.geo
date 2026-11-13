@@ -1,6 +1,6 @@
 // Two square plates sharing curve 2.
 SetFactory("Built-in");
-n = 1;
+n = 5;
 
 Point(1) = {0, 0, 0};
 Point(2) = {1, 0, 0};
@@ -34,7 +34,7 @@ Physical Point("B") = {6};
 Transfinite Curve {1:7} = n + 1;
 Transfinite Surface {1, 2};
 Recombine Surface {1, 2};
-Mesh.ElementOrder = 1;
+Mesh.ElementOrder = 2;
 Mesh 2;
 //+
 //+
