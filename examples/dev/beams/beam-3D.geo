@@ -16,6 +16,7 @@ Line(2) = {2, 3};
 //+
 Line(3) = {3, 4};
 //+
+Mesh.ElementOrder=3;
 Mesh 1;
 //+
 Physical Point("A", 4) = {1};
