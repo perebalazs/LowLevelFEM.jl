@@ -23,6 +23,10 @@
                 @test norm(Kopen.A) < 1e-12
 
                 Gall = ContactGap(C; active=:all)
+                element = first(C.slave_elements)
+                @test LowLevelFEM._contact_quadrature(element, :reduced).nip == 1
+                gauss_points, _ = gmsh.model.mesh.getIntegrationPoints(element.etype, "Gauss1")
+                @test LowLevelFEM._contact_quadrature(element, -2).nip == length(gauss_points) ÷ 3
                 Kall = ∫(Gall ⋅ cn ⋅ Gall; threads=1)
                 @test norm(Kall.A) > 0
                 @test Kall.A ≈ Kall.A' atol=1e-12
@@ -41,6 +45,8 @@
                 normal_jump = vectorField(U, "body", [0.0, (x,y,z)->y>1.0 ? 1.0 : 0.0, 0.0])
                 tangent_jump = vectorField(U, "body", [(x,y,z)->y>1.0 ? 1.0 : 0.0, 0.0, 0.0])
                 @test dot(normal_jump.a[:, 1], Kall.A * normal_jump.a[:, 1]) ≈ cn atol=1e-10
+                Kreduced = ∫(Gall ⋅ cn ⋅ Gall; gauss=:reduced)
+                @test dot(normal_jump.a[:, 1], Kreduced.A * normal_jump.a[:, 1]) ≈ cn atol=1e-10
                 @test norm(Kall.A * tangent_jump.a) < 1e-10
 
                 updateContact!(C, zero_u)

@@ -1,6 +1,6 @@
 // Two square plates sharing curve 2.
 SetFactory("Built-in");
-n = 5;
+n = 20;
 
 Point(1) = {0, 0, 0};
 Point(2) = {1, 0, 0};

@@ -179,3 +179,64 @@ end
         end
     end
 end
+
+@testset "Order-dependent reduced quadrature" begin
+    for order in 1:3
+        with_test_gmsh() do
+            structured_rect_mesh(n=1, order=order)
+            P = Field([Material("body")]; type=:ScalarField, dim=2)
+            rule = "CompositeGauss$(2order-1)"
+            M = ∫(P ⋅ P; gauss=:reduced)
+            reference = ∫(P ⋅ P; gauss=rule)
+            @test M.A ≈ reference.A atol=1e-12
+            @test rank(Matrix(M.A)) == order^2
+            @test ∫(P ⋅ P; gauss=:reduced, assembly=:ijv).A ≈ M.A atol=1e-12
+
+            # Integer offsets retain the original Gauss-family alternative.
+            alternative = ∫(P ⋅ P; gauss=-2)
+            @test alternative.A ≈ ∫(P ⋅ P; gauss="Gauss$(2order-1)").A atol=1e-12
+            @test ∫(P ⋅ P).A ≈ ∫(P ⋅ P; gauss="Gauss$(2order+1)").A atol=1e-12
+            if order == 1
+                @test norm(alternative.A - M.A) > 1e-3
+            end
+
+            c = ScalarField(P, "body", (x,y,z)->1+x+2y)
+            @test ∫(P ⋅ c; gauss=:reduced).a ≈
+                  ∫(P ⋅ c; gauss=rule).a atol=1e-12
+            @test ∫((P ⋅ P) * c; gauss=:reduced).A ≈
+                  ∫((P ⋅ P) * c; gauss=rule).A atol=1e-12
+
+            U = Field([Material("body")]; type=:VectorField, dim=2)
+            B = [1.0 0.0] ⋅ Grad(P) + [0.0 1.0] ⋅ U
+            actual = ∫(B' ⋅ B; gauss=:reduced)
+            expected = ∫(B' ⋅ B; gauss=rule)
+            @test actual.problems == expected.problems
+            @test actual.A ≈ expected.A atol=1e-12
+        end
+    end
+
+    for order in 1:3
+        with_test_gmsh() do
+            line_mesh(n=1, order=order)
+            P = Field([Material("body")]; type=:ScalarField, dim=1)
+            M = ∫(P ⋅ P; gauss=:reduced)
+            @test rank(Matrix(M.A)) == order
+            @test M.A ≈ ∫(P ⋅ P; gauss=-2).A atol=1e-12
+        end
+
+        with_test_gmsh() do
+            structured_box_mesh(n=1, order=order)
+            P = Field([Material("body")]; type=:ScalarField, dim=3)
+            M = ∫(P ⋅ P; gauss=:reduced)
+            @test rank(Matrix(M.A)) == order^3
+            @test M.A ≈ ∫(P ⋅ P; gauss="CompositeGauss$(2order-1)").A atol=1e-12
+        end
+    end
+
+    with_test_gmsh() do
+        for shape in ("Triangle", "Tetrahedron", "Prism", "Pyramid")
+            et = gmsh.model.mesh.getElementType(shape, 1)
+            @test LowLevelFEM._weakform_integration_rule(et, 1, :reduced) == "Gauss1"
+        end
+    end
+end

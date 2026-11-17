@@ -1,3 +1,25 @@
+# Shared quadrature selection for weak-form matrix and load assembly.
+function _weakform_integration_rule(et::Integer, order::Integer, gauss)
+    gauss isa AbstractString && return gauss
+
+    gorder = if gauss === :reduced
+        max(1, 2order - 1)
+    elseif gauss isa Int
+        max(1, 2order + 1 + gauss)
+    else
+        2order + 1
+    end
+
+    if gauss === :reduced
+        _, dim, _, _, _, primary_nodes = gmsh.model.mesh.getElementProperties(et)
+        if 1 <= dim <= 3 && primary_nodes == 2^dim
+            return "CompositeGauss" * string(gorder)
+        end
+    end
+
+    return "Gauss" * string(gorder)
+end
+
 mutable struct OperatorWorkspace
     Jac::Matrix{Float64}
     jacDet::Vector{Float64}
@@ -1136,10 +1158,17 @@ Optional domain specification (`Ω` or `Γ`).
 
 `gauss`
 
-Number of integration points.
-    `:full`       2order+1
-    `:reduced`    2order-1
-    Int           2order+1 + Int
+Select the Gmsh integration rule using the mesh element order `p`:
+
+- `:full`: `Gauss(2p+1)`.
+- `:reduced`: `CompositeGauss(max(1,2p-1))` on lines, quadrangles,
+  and hexahedra; `Gauss(max(1,2p-1))` on other element shapes.
+- `Int`: `Gauss(max(1,2p+1+offset))`, retaining the Gauss family.
+- `AbstractString`: an explicit Gmsh rule name.
+
+Reduced integration uses `p`, `p²`, or `p³` points on tensor-product
+elements, including one point at mesh order one. For Reissner–Mindlin
+shells, apply it to the complete transverse shear energy.
 
 `assembly=:csc`
 
@@ -1563,13 +1592,8 @@ function assemble_operator(
                         connectivity = elemNodeTags[itype]
                     end
    
-                    gorder = gauss == :reduced ? max(1, 2order - 1) :
-                        gauss == :full    ? (2order + 1) :
-                        gauss isa Int     ? max(1, 2order+1 + gauss) :
-                        (2order + 1)
-   
-                    intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, gauss isa AbstractString ? gauss : "Gauss" * string(gorder))
-                    #intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(2order + 1))
+                    rule = _weakform_integration_rule(et, order, gauss)
+                    intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, rule)
                     numIntPoints = length(intWeights)
    
                     _, fun, _ = gmsh.model.mesh.getBasisFunctions(et, intPoints, "Lagrange")

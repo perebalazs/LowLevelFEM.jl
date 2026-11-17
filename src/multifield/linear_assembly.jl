@@ -201,10 +201,11 @@ Arguments
 - `rhs` : scalar, vector, tensor field, or numeric vector
 - `weight` : optional quadrature weight or coefficient
 - `domain` : domain specification (`Ω` or `Γ`)
-- `gauss` : Number of integration points.
-        `:full`       2order+1
-        `:reduced`    2order-1
-        Int           2order+1 + Int
+- `gauss`: Gmsh integration-rule selection. `:full` uses `Gauss(2p+1)`.
+  `:reduced` uses `CompositeGauss(max(1,2p-1))` on lines, quadrangles,
+  and hexahedra, with `Gauss(max(1,2p-1))` on other shapes.
+  Here `p` is the mesh element order. An integer offsets `2p+1`
+  within the Gauss family; a string specifies a Gmsh rule directly.
 - `threads` : number of assembly workers; `:auto` uses all Julia threads and
   `1` selects serial assembly
 
@@ -284,16 +285,8 @@ function assemble_linear(
                 _, _, order, numNodes, _, _ =
                     gmsh.model.mesh.getElementProperties(et)
 
-                gorder = gauss == :reduced ? max(1, 2order - 1) :
-                    gauss == :full    ? (2order + 1) :
-                    gauss isa Int     ? max(1,2order+1 + gauss) :
-                    (2order + 1)
-
-                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, "Gauss" * string(gorder))
-                #intPoints, intWeights =
-                #    gmsh.model.mesh.getIntegrationPoints(
-                #        et, "Gauss" * string(2order + 1)
-                #    )
+                rule = _weakform_integration_rule(et, order, gauss)
+                intPoints, intWeights = gmsh.model.mesh.getIntegrationPoints(et, rule)
 
                 numIntPoints = length(intWeights)
 

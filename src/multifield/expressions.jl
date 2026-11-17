@@ -814,9 +814,14 @@ Weak-form expression composed of operators and coefficients.
 `gauss`
 
 `:full` or `:reduced` integration, or an `Int` offset to the Gauss rule
-order (not a direct point count). For polynomial order `p`, the standard
-paths request `Gauss(2p+1)` for full and `Gauss(max(1,2p-1))` for reduced;
-an integer `k` requests `Gauss(max(1,2p+1+k))`. `:gll` requests experimental
+order (not a direct point count). For mesh order `p`, `:full` requests
+`Gauss(2p+1)`. `:reduced` requests `CompositeGauss(max(1,2p-1))` on
+lines, quadrangles, and hexahedra, giving `p`, `p²`, and `p³` points;
+other element shapes use `Gauss(max(1,2p-1))`.
+An integer `k` requests `Gauss(max(1,2p+1+k))`, so `gauss=-2` retains
+the Gauss-family alternative to `:reduced`. Apply selective reduction
+to the complete transverse shear energy of a Reissner–Mindlin shell.
+A string selects a Gmsh rule directly. `:gll` requests experimental
 Gauss-Lobatto-Legendre quadrature and is currently supported only for a single
 spectral bilinear term of the form `P ⋅ P`.
 

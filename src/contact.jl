@@ -3241,11 +3241,11 @@ end
 
 function _contact_quadrature(element::_ContactElement, gauss)
     gorder = _contact_gauss_order(element.order, gauss)
+    rule = gauss === :reduced ?
+        _weakform_integration_rule(element.etype, element.order, gauss) :
+        "Gauss" * string(gorder)
     intPoints, intWeights =
-        gmsh.model.mesh.getIntegrationPoints(
-            element.etype,
-            "Gauss" * string(gorder)
-        )
+        gmsh.model.mesh.getIntegrationPoints(element.etype, rule)
 
     nip = length(intWeights)
 

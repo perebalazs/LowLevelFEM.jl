@@ -615,6 +615,21 @@ K = ∫(SymGrad(Pu) ⋅ D ⋅ SymGrad(Pu);
 The `assembly` keyword affects bilinear forms only. Linear forms use their own
 parallel vector-assembly path.
 
+## Reduced integration
+
+`gauss=:reduced` follows the mesh element order `p` automatically, using
+`p` points on lines, `p×p` on quadrangles, and `p×p×p` on hexahedra
+(one point for first-order elements); other shapes use `Gauss(max(1,2p-1))`.
+`gauss=-2` retains the original Gauss-family rule, which can have a different
+point layout and count.
+
+For a Reissner–Mindlin shell, reduce the complete transverse shear term:
+
+```julia
+K = ∫(B_mb' ⋅ D_mb ⋅ B_mb; Γ="plates") +
+    ∫(B_s' ⋅ D_s ⋅ B_s; Γ="plates", gauss=:reduced)
+```
+
 ## Parallel CSC assembly
 
 By default, assembly uses all Julia threads available to the process:

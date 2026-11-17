@@ -766,6 +766,10 @@ gauss = 2
 gauss = 8
 ```
 
+`:reduced` uses tensor-product Gauss rules on line and quadrangular contact
+elements, following the mesh order; integer offsets such as `gauss=-2`
+retain the Gauss-family rules.
+
 Increasing the quadrature order improves the numerical projection of the
 generally non-polynomial closest-point gap; it does not change the interpolation
 order of the projected field.
