@@ -977,6 +977,7 @@ function normalVector(problem::Problem, phName::String)
             et = elemTypes[i]
             elementName, eldim, order, numNodes, localNodeCoord, _ =
                 gmsh.model.mesh.getElementProperties(et)
+            numNodes = Int(numNodes)
 
             # Lokális koordináták átalakítása 3D formába
             localNodeCoord2 = zeros(length(localNodeCoord) ÷ 2 * 3)
@@ -1118,6 +1119,7 @@ function tangentVector(problem::Problem, phName::String)
 
             elementName, eldim, order, numNodes, localNodeCoord, _ =
                 gmsh.model.mesh.getElementProperties(et)
+            numNodes = Int(numNodes)
 
             # 1D → nincs 3D kiterjesztés, közvetlenül használható
             localNodeCoord2 = zeros(length(localNodeCoord) * 3)
@@ -1288,6 +1290,7 @@ function normalVector1D(problem::Problem, phName::String)
 
             elementName, eldim, order, numNodes, localNodeCoord, _ =
                 gmsh.model.mesh.getElementProperties(et)
+            numNodes = Int(numNodes)
 
             # 1D → nincs 3D kiterjesztés, közvetlenül használható
             localNodeCoord2 = zeros(length(localNodeCoord) * 3)

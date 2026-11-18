@@ -73,6 +73,8 @@ end
         t = tangentVector(P, "right")
         n1, n2 = normalVectors(P, "right")
         check_frame(t, n1, n2)
+        # The legacy curve normal also reshapes Gmsh basis data.
+        test_constant_field(LowLevelFEM.normalVector1D(P, "right"), zeros(3))
         @test all(a -> reshape(a, 3, :) ≈ repeat([0.0, 0.0, 1.0], 1, 3), n2.A)
 
         n = normalVector(P, "body")
