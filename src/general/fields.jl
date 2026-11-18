@@ -174,7 +174,7 @@ struct ScalarField <: AbstractField
                                         elseif applicable(f,1,2,3)
                                             sc1[k, it] = f(x, y, z)
                                         else
-                                            error("ScalarField: function must have 3 or 4 arguments.")
+                                            error("ScalarField: function must accept (x, y, z) or (x, y, z, t). Hint: include unused coordinates, e.g. (x, y, z) -> x, even for a 1D or 2D mesh.")
                                         end
                                     else
                                         sc1[k, it] = f
@@ -196,7 +196,7 @@ struct ScalarField <: AbstractField
     end
     function ScalarField(s::ScalarField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
         if step > s.nsteps || step < 1
-            error("ScalarField: `step` is out of range - 0 < $step < $(s.nsteps)")
+            error("ScalarField: step=$step is outside 1:$(s.nsteps). Hint: select an existing step with 1 <= step <= $(s.nsteps).")
         end
         A = Vector{Matrix{Float64}}(undef, length(s.numElem))
         s1 = nodesToElements(s)
@@ -402,7 +402,8 @@ struct VectorField <: AbstractField
         iref === nothing &&
             error(
                 "VectorField: at least one component must be a ScalarField " *
-                "when using VectorField([c1, c2, c3])."
+                "when using VectorField([c1, c2, c3]). " *
+                "Hint: for numeric components, use VectorField(problem, physicalName, [c1, c2, c3]) to specify the mesh support."
             )
 
         ref = nodesToElements(comps[iref])
@@ -678,7 +679,7 @@ struct VectorField <: AbstractField
     end
     function VectorField(s::VectorField; steps=1, tmin=0.0, tmax=tmin+(steps-1), step=1)
         if step > s.nsteps || step < 1
-            error("VectorField: `step` is out of range - 0 < $step < $(s.nsteps)")
+            error("VectorField: step=$step is outside 1:$(s.nsteps). Hint: select an existing step with 1 <= step <= $(s.nsteps).")
         end
         A = Vector{Matrix{Float64}}(undef, length(s.numElem))
         s1 = nodesToElements(s)
@@ -1024,7 +1025,8 @@ struct TensorField <: AbstractField
         iref === nothing &&
             error(
                 "TensorField: at least one component must be a ScalarField " *
-                "when using TensorField(matrix)."
+                "when using TensorField(matrix). " *
+                "Hint: for a numeric matrix, use TensorField(problem, physicalName, matrix) to specify the mesh support."
             )
 
         ref = nodesToElements(comps[iref])

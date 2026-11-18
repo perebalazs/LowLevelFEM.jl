@@ -113,7 +113,7 @@ struct Material
         A = 1.0
     )
         type ∈ (:Hooke, :StVenantKirchhoff, :NeoHookeCompressible, :JFO) ||
-            error("Invalid material type: $type")
+            error("Invalid material type: $type. Hint: choose type=:Hooke, :StVenantKirchhoff, :NeoHookeCompressible or :JFO.")
 
         ec = elastic_constants(E=E, ν=ν, λ=λ, μ=μ, κ=κ)
 
@@ -336,7 +336,7 @@ function ensureContiguousNodeTags!()
     nodeTags, _, _ = gmsh.model.mesh.getNodes()
 
     isempty(nodeTags) &&
-        error("ensureContiguousNodeTags!: the current Gmsh model contains no nodes.")
+        error("ensureContiguousNodeTags!: the current Gmsh model contains no nodes. Hint: generate or load a mesh in the current model before creating the Problem.")
 
     n = length(nodeTags)
 
@@ -673,7 +673,7 @@ struct Problem
             Now problem type = $type ????")
         end
         if !isa(mat, Vector)
-            error("Problem: materials are not arranged in a vector. Put them in [...]")
+            error("Problem: materials must be supplied in a vector. Hint: use Problem([mat]; ...) or Field([mat]; ...) even for a single material.")
         end
         name = gmsh.model.getCurrent()
         ensureContiguousNodeTags!()

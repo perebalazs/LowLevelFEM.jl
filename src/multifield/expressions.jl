@@ -110,7 +110,8 @@ function _check_scalarfield(sf::ScalarField)
             "ScalarField must be nodal for integration.\n" *
             "Field: $(sf)\n" *
             "Only nodal fields are supported because Gauss values\n" *
-            "are obtained via Lagrange interpolation."
+            "are obtained via Lagrange interpolation.\n" *
+            "Hint: convert the coefficient with elementsToNodes(sf) before using it in the weak form."
         )
     end
 

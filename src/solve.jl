@@ -468,7 +468,7 @@ function prepare_linear_solver(
         end
 
     else
-        error("Unknown linear solver: $solver.")
+        error("Unknown linear solver: $solver. Hint: choose solver=:backslash, :lu, :lu_no_ordering, :cholesky, :ldlt, :qr, :cg or :gmres.")
     end
     return _PreparedLinearSolver(A, F, P, solver, solveroptions)
 end
@@ -495,7 +495,7 @@ end
 
 function _check_solveroptions(options)
     options isa NamedTuple ||
-        error("solveroptions must be a NamedTuple.")
+        error("solveroptions must be a NamedTuple. Hint: use solveroptions=(reltol=1e-8,) for an iterative solver; keep the trailing comma for a single option, or use (;) for defaults.")
 
     get(options, :on_failure, :error) in (:error, :warn) ||
         throw(ArgumentError("solveroptions.on_failure must be :error or :warn."))
@@ -514,7 +514,7 @@ end
 
 function _check_preconditioneroptions(options)
     options isa NamedTuple ||
-        error("preconditioneroptions must be a NamedTuple.")
+        error("preconditioneroptions must be a NamedTuple. Hint: use (; option=value) with an option supported by the selected preconditioner, or (;) for defaults.")
 
     return nothing
 end
@@ -1849,7 +1849,7 @@ function _resolve_preconditioner(A, solver, preconditioner)
     preconditioner isa Symbol || return preconditioner
 
     preconditioner in _PRECONDITIONERS ||
-        error("Unknown preconditioner: $preconditioner.")
+        error("Unknown preconditioner: $preconditioner. Hint: choose preconditioner=:auto, :none, :ich or :ilu, or pass a preconstructed preconditioner object.")
 
     preconditioner !== :auto && return preconditioner
 

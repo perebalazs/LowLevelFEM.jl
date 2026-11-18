@@ -1,0 +1,130 @@
+\documentclass[a4paper,9pt]{extarticle}
+\usepackage[margin=11mm]{geometry}
+\usepackage{fontspec,multicol,xcolor,amsmath,amssymb,titlesec,fancyvrb,hyperref}
+\setmainfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}[Scale=0.79]
+\definecolor{blue}{HTML}{17618A}
+\definecolor{gray}{HTML}{52616B}
+\hypersetup{colorlinks=true,urlcolor=blue}
+\setlength{\columnsep}{7mm}\setlength{\parindent}{0pt}\setlength{\parskip}{2pt}
+\titlespacing*{\section}{0pt}{5pt}{2pt}
+\titleformat{\section}{\color{blue}\bfseries\fontsize{9}{10}\selectfont}{}{0pt}{}
+\newcommand{\code}[1]{{\ttfamily\small #1}}
+\DefineVerbatimEnvironment{julia}{Verbatim}{fontsize=\fontsize{7.2}{8.6}\selectfont,commandchars=\\\{\}}
+\begin{document}
+{\color{blue}\fontsize{17}{19}\selectfont\bfseries LowLevelFEM.jl}\hfill {\color{gray}\small QUICK REFERENCE • 2026}\par
+{\large\bfseries Weak-Form DSL Cheat Sheet}\hfill\small Julia • A4 / one page\par
+\vspace{1mm}\hrule\vspace{2mm}
+\begin{multicols}{2}
+\section{1. Concept and setup}
+\textbf{Weak form} $a(v,u)=\ell(v)$ $\longrightarrow$ sparse matrix $Ku=f$. The \emph{same} \code{Problem} descriptor may represent trial and test spaces in a symmetric form. Mesh physical-group names select integration domains.
+\begin{julia}
+using LowLevelFEM
+# Assume a Gmsh mesh and material 'mat' exist.
+Pu = Problem([mat], type=:VectorField,
+             dim=2, field=:u)
+P  = Problem([mat], type=:ScalarField,
+             dim=2, field=:T)
+\end{julia}
+\textbf{Descriptors} \code{Problem(...)} are used in weak forms; computed \code{ScalarField}, \code{VectorField}, \code{TensorField} contain field values. Group names (e.g. \code{"body"}, \code{"left"}) must exist in the mesh.
+\section{2. Differential operators (weak-form DSL)}
+\begin{tabular}{@{}ll@{}}
+\code{Id(P)} or \code{P} & identity $u$\\
+\code{Grad(P)} & $\nabla u$ (scalar or vector)\\
+\code{SymGrad(Pu)} & engineering strain vector\\
+\code{Div(Pu)} & $\nabla\!\cdot u$\\
+\code{Curl(Pu)} & $\nabla\!\times u$\\
+\code{TensorDiv(P)} & divergence of tensor\\
+\code{Adv(P)} & advection operator\\
+\code{SurfaceGrad(P)} & tangential surface gradient\\
+\code{SurfaceSymGrad(P)} & membrane strain\\
+\code{SurfaceDiv(P)} & surface divergence\\
+\code{AxialGrad(P)} & prescribed axial direction\\
+\code{TangentialGrad(P)} & element tangent direction
+\end{tabular}
+\textbf{2D conventions:} \code{Grad(Pu)} gives $[u_{x,x},u_{x,y},u_{y,x},u_{y,y}]$; \code{SymGrad(Pu)} gives $[\varepsilon_{xx},\varepsilon_{yy},\gamma_{xy}]$, with $\gamma_{xy}=u_{x,y}+u_{y,x}$. In 3D: $[xx,yy,zz,xy,yz,zx]$ (engineering shear).
+\section{3. Algebra and integration}
+\begin{julia}
+K = ∫(Grad(P) ⋅ k ⋅ Grad(P); Ω="body")
+M = ∫(P ⋅ rho ⋅ P; Ω="body")
+f = ∫(P ⋅ q; Ω="body")
+g = ∫(P ⋅ flux; Γ="right")
+\end{julia}
+\code{⋅} contracts operators/coefficient chains; coefficients may be numbers, matrices, or spatially varying fields. \code{Ω} denotes a volume/domain physical group, \code{Γ} a boundary group.
+\begin{julia}
+K = ∫(Grad(P) ⋅ Grad(P);
+      Ω="body", gauss=:full,
+      threads=:auto, assembly=:csc)
+# Alternative: gauss=:reduced,
+# assembly=:ijv, threads=1
+\end{julia}
+\textbf{Shortcuts:} \code{∫Ω("body", expr)}, \code{∫Γ("right", expr)}. Default matrix assembly is sparse CSC; integration returns \code{SystemMatrix} or an assembled load field.
+\section{4. Canonical PDE recipes}
+\textbf{Diffusion / Poisson} $-\nabla\cdot(k\nabla T)=q$:
+\begin{julia}
+K = ∫(Grad(P) ⋅ k ⋅ Grad(P); Ω="body")
+f = ∫(P ⋅ q; Ω="body")
+\end{julia}
+\textbf{2D linear elasticity} $\int\varepsilon(v)^TC\varepsilon(u)$:
+\begin{julia}
+C = D(:PlaneStress, E, nu)
+K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
+      Ω="body")
+f = ∫(Pu ⋅ [0, -1]; Γ="right")
+\end{julia}
+\columnbreak
+\section{5. Solve + essential boundary conditions}
+\begin{julia}
+bc = BoundaryCondition("left", ux=0, uy=0)
+u = solveField(K, f; support=[bc])
+# Scalar problem: use a scalar-compatible BC.
+\end{julia}
+\textbf{Interpretation:} distributed loads and natural boundary terms belong in $f$; Dirichlet constraints are imposed by \code{support}. Other solver options include \code{mpc}, \code{coordSys}, \code{solver}, and \code{preconditioner}.
+\section{6. Mixed and coupled fields}
+\textbf{Mixed block terms} (e.g. velocity--pressure):
+\begin{julia}
+# Pu and Pp are distinct Problem descriptors.
+B = ∫(Div(Pu) ⋅ Pp; Ω="body")
+Bt = ∫(Pp ⋅ Div(Pu); Ω="body")
+\end{julia}
+\textbf{Compound operator} $B=A_1\nabla u+A_2u$:
+\begin{julia}
+B = A1 ⋅ Grad(Pu) + A2 ⋅ Pu
+K = ∫(B' ⋅ C ⋅ B; Ω="body")
+\end{julia}
+Compound expressions can generate coupled matrix blocks automatically when operators reference multiple \code{Problem}s. Keep test/trial field ordering consistent.
+\section{7. Useful additional forms}
+\begin{julia}
+# Mass / reaction term
+M = ∫(Pu ⋅ rho ⋅ Pu; Ω="body")
+# Elastic foundation on a boundary
+Kb = ∫(Pu ⋅ [kx 0; 0 ky] ⋅ Pu;
+       Γ="edge")
+# Divergence penalty
+Kd = ∫(Div(Pu) ⋅ Div(Pu); Ω="body")
+# Curl-curl form
+Kc = ∫(Curl(Pu) ⋅ Curl(Pu); Ω="body")
+\end{julia}
+\section{8. Field algebra (postprocessing, NOT DSL)}
+\begin{julia}
+# u and T below are computed FE fields.
+eps = (u ∘ ∇ + ∇ ∘ u) / 2
+sigma = C * eps  # compatible tensor law
+heatflux = -k * ∇(T)
+divu = div(u); curlu = curl(u)
+\end{julia}
+Field operations also include \code{grad}, \code{trace}, \code{∂x}, \code{∂y}, \code{∂z}; the returned fields are distinct from symbolic \code{Grad(P)} / \code{Div(P)} used for matrix assembly.
+\section{9. Performance and pitfalls}
+\begin{julia}
+pat = build_csc_pattern(Pu, Pu; Ω="body")
+fill!(pat.nzval, 0.0)
+K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
+      Ω="body", csc_matrix=pat)
+\end{julia}
+\textbf{Pattern reuse:} clear \code{nzval} before an independent assembly; do \emph{not} call \code{dropzeros!} on the reusable pattern. Copy results before reusing the same matrix storage. Check coefficient/operator dimensions, physical-group names, integration order and shear conventions.
+\vspace{2mm}\hrule\vspace{1mm}
+{\footnotesize\textbf{Documentation:} \href{https://perebalazs.github.io/LowLevelFEM.jl/dev/reference/multifield/}{DSL / Multifield API} \quad \href{https://perebalazs.github.io/LowLevelFEM.jl/dev/tutorials/}{Tutorials}\\
+\textbf{Source:} \href{https://github.com/perebalazs/LowLevelFEM.jl}{github.com/perebalazs/LowLevelFEM.jl}\quad\textit{Examples assume valid mesh, material, and compatible field types.}}
+\end{multicols}
+\end{document}
+
