@@ -8,28 +8,27 @@ Point(2) = {100, 0, 0, 1.0};
 //+
 Point(3) = {100, 100, 0, 1.0};
 //+
-Point(4) = {500, 100, 0, 1.0};
+Point(4) = {300, 100, 0, 1.0};
 //+
-Point(5) = {500, 0, 0, 1.0};
-//+
-Point(6) = {600, 0, 0, 1.0};
+Point(5) = {300, 0, 0, 1.0};
 //+
 Circle(1) = {1, 2, 3};
 //+
-Circle(2) = {4, 5, 6};
-//+
-Line(3) = {3, 4};
+Line(2) = {3, 4};
 //+
 Extrude {{1, 0, 0}, {0, 0, 0}, Pi/2} {
-  Curve{1}; Curve{3}; Curve{2}; 
+  Curve{1}; Curve{2}; 
 }
 
 //+
-MeshSize {:} = 20;
+MeshSize {:} = 10;
+Mesh.ElementOrder=2;
 Mesh 2;
 //+
-Physical Surface("shell", 11) = {1, 2, 3};
+Physical Surface("shell", 8) = {1, 2};
 //+
-Physical Curve("xy", 12) = {1, 3, 2};
+Physical Curve("xy", 9) = {2, 1};
 //+
-Physical Curve("zx", 13) = {6, 8, 10};
+Physical Curve("yz", 10) = {6};
+//+
+Physical Curve("zx", 11) = {7, 5};
