@@ -1001,3 +1001,49 @@ function _remove_inactive_mpc_dofs(
     ]
 end
 
+"""
+    rigidRotationTransformation(K::SystemMatrix, R::SystemMatrix)
+
+Construct the global rigid-rotation transformation
+
+    T = [I R; 0 I]
+
+using the field ordering stored in K.
+
+R maps rotational degrees of freedom to displacements.
+The returned Transformation can be used as T' * K * T.
+"""
+function rigidRotationTransformation(K::SystemMatrix, R::SystemMatrix)
+
+    K.problems === nothing &&
+        error("A multifield SystemMatrix is required.")
+
+    U, Φ = R.test_model, R.model
+    iu = findfirst(p -> p === U, K.problems)
+    iφ = findfirst(p -> p === Φ, K.problems)
+
+    (iu === nothing || iφ === nothing) &&
+        error("The fields of R must belong to K.")
+
+    iu == iφ &&
+        error("Displacement and rotation fields must differ.")
+
+    size(R.A) == (ndofs(U), ndofs(Φ)) ||
+        error("Incompatible rigid-rotation map dimensions.")
+
+    n = size(K.A, 1)
+    size(K.A, 2) == n ||
+        error("The system matrix must be square.")
+
+    i, j, v = findnz(R.A)
+    d = collect(1:n)
+
+    T = sparse(
+        [d; i .+ K.offsets[iu]],
+        [d; j .+ K.offsets[iφ]],
+        [ones(n); v],
+        n, n
+    )
+
+    return Transformation(T, n, 1)
+end

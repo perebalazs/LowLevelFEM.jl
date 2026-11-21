@@ -783,8 +783,109 @@ See [SystemMatrix, SystemVector and solveField](solution.md).
 
 See [Boundary conditions and MPC](boundary-conditions.md) for `MultiPointConstraint`/`MPC`.
 
+### Rigid rotation coupling
+
+A rigid-rotation map describes the displacement induced at selected slave nodes
+by a rotation field. For a slave node at position `x` relative to the master
+point `x_m`, the small-rotation displacement is
+
+```math
+u_R(x) = \varphi(x) \times (x-x_m).
+```
+
+The sparse map `R` expresses this relationship in the discrete field spaces:
+
+```math
+u = u_0 + R\varphi.
+```
+
+Here `u` is the physical displacement, `u_0` is the displacement field before
+adding the rigid-rotation contribution, and `\varphi` denotes the rotation
+field. The map contributes to the kinematics of the selected slave region; it
+does not turn the entire deformable structure into a rigid body.
+
+For a two-field system with generalized displacements
+
+```math
+q = \begin{bmatrix} u \\ \varphi \end{bmatrix},
+\qquad
+q_0 = \begin{bmatrix} u_0 \\ \varphi \end{bmatrix},
+```
+
+the transformation is
+
+```math
+q = Tq_0, \qquad
+T = \begin{bmatrix} I & R \\ 0 & I \end{bmatrix}.
+```
+
+Because the virtual work of the external forces must be preserved, both the
+stiffness matrix and the load vector are transformed:
+
+```math
+\boxed{K_1 = T^\mathsf{T} K_0 T, \qquad f_1 = T^\mathsf{T} f_0.}
+```
+
+In particular, if `f_0 = [f_u; f_\varphi]`, the transformed generalized
+rotation loads include the moment induced by the displacement forces:
+
+```math
+f_1 = \begin{bmatrix} f_u \\ f_\varphi + R^\mathsf{T}f_u \end{bmatrix}.
+```
+
+#### Example: remote coupling in a shell model
+
+The following example assumes that `U` and `Φ` are displacement and rotation
+fields, `K` is the assembled shell stiffness, `Kd` is an optional drilling
+stabilization matrix, `fu` and `fφ` are assembled nodal loads, and `bc_u` and
+`bc_φ` are the support boundary conditions. The physical groups `remote` and
+`load` identify the master point and its slave boundary.
+
+```julia
+mpc_u = MultiPointConstraint(master="remote", slave="load", field=U)
+mpc_φ = MultiPointConstraint(master="remote", slave="load", field=Φ)
+
+R = rigidRotationMap(mpc_u, mpc_φ)
+
+K0 = K + Kd
+f0 = SystemVector([fu, fφ])
+
+T = rigidRotationTransformation(K0, R)
+K1 = T' * K0 * T
+f1 = T' * f0
+
+u0, φ = solveField(K1, f1;
+                    support=[bc_u, bc_φ],
+                    mpc=[mpc_u, mpc_φ])
+
+u = u0 + R * φ
+```
+
+`rigidRotationTransformation` builds the square transformation for the
+multifield degree-of-freedom ordering stored in `K0`, so the user need not
+construct identity and zero blocks manually. The `Transformation` operations
+act on the stiffness matrix, while `T' * f0` acts on the `SystemVector` and
+preserves its field metadata.
+
+For a load applied only to the `remote` master point, the rigid-rotation map
+has no corresponding displacement rows and `R' * f_u` is zero. In that special
+case `f1` equals `f0`. Forces applied on slave nodes generally induce a
+nonzero additional generalized moment and require the load transformation.
+
+After solution, use `u0 + R * φ` for the physical nodal displacement. For
+visualization on the shell surface, it can be converted to element data:
+
+```julia
+u = nodesToElements(u0 + R * φ, onPhysicalGroup="shell")
+```
+
+The MPCs and the rigid-rotation transformation serve different purposes:
+the MPCs impose master/slave constraints, while `T` incorporates the
+rotation-induced displacement consistently into the assembled equations.
+
 ```@docs
 rigidRotationMap
+rigidRotationTransformation
 collapseMPC
 ```
 

@@ -3412,7 +3412,7 @@ end
 Transpose the sparse transformation, preserving node count and dimension.
 """
 function transpose(A::Transformation)
-    return Transformation(transpose(A.T), A.non, A.dim)
+    return Transformation(sparse(transpose(A.T)), A.non, A.dim)
 end
 
 """
@@ -3422,7 +3422,7 @@ Return the adjoint nodal transformation (equivalent to transpose for these
 real-valued matrices).
 """
 function adjoint(A::Transformation)
-    return Transformation(adjoint(A.T), A.non, A.dim)
+    return Transformation(sparse(adjoint(A.T)), A.non, A.dim)
 end
 
 """
@@ -3458,6 +3458,35 @@ function *(B::SystemMatrix, A::Transformation)
     else
         error("*(A::Transformation, B::SystemMatrix): size missmatch dim * non = $dim * $non ≠ $n.")
     end
+end
+
+
+"""
+    *(T::Transformation, f::SystemVector) -> SystemVector
+
+Apply a square transformation to a system vector.
+
+All right-hand-side columns are transformed, while the field
+metadata and degree-of-freedom ordering are preserved.
+
+Use `T' * f` to transform generalized forces consistently
+with the stiffness transformation `T' * K * T`.
+"""
+function *(T::Transformation, f::SystemVector)
+
+    n = size(f.a, 1)
+
+    size(T.T) == (n, n) ||
+        throw(DimensionMismatch(
+            "Transformation and SystemVector dimensions do not match."
+        ))
+
+    return SystemVector(
+        T.T * f.a,
+        f.model,
+        f.problems,
+        f.offsets
+    )
 end
 
 ###############################################################################

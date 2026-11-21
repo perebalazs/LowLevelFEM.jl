@@ -93,7 +93,7 @@ export ε
 export ⋅
 
 export consistentToLumped
-export rigidRotationMap, collapseMPC
+export rigidRotationMap, rigidRotationTransformation, collapseMPC
 
 
 """
