@@ -20,6 +20,7 @@ their internal migration to DSL-backed wrappers is described below.
 | Solve a linear system or eigenproblem | [Solution](solution.md) | [Matrix-level workflow](../explanations/matrix-level-workflow.md) |
 | Evaluate an energy-based material | [Constitutive models](constitutive.md) | [Nonlinear formulations](../tutorials/nonlinear-large-deformation.md) |
 | Model contact | [Contact](contact.md) | [Contact tutorials](../tutorials/contact-mechanics.md) |
+| Integrate fields or matrices over thickness or another scalar parameter | [Parameter integration](parameter-integration.md) | [Layered shell example](@ref layered-shell-parameter-integration) |
 | Inspect, integrate or display results | [Postprocessing](postprocessing.md) | [Postprocessing guide](../manual/postprocessing-and-visualization.md) |
 
 ## Engineering workflow and legacy implementations

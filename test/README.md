@@ -17,7 +17,9 @@ The runner always executes two separately named groups:
 - **Legacy:** old elasticity assembly/solves and compatibility comparisons.
   These files can eventually be removed together with their runner includes.
 
-Each modern file owns one theme. `test_multifield.jl` covers block algebra and
+Each modern file owns one theme. `test_parameterintegration.jl` checks
+scalar, field and mixed-matrix quadrature, layered stiffness moments,
+metadata compatibility and missing elementwise coefficients in weak forms. `test_multifield.jl` covers block algebra and
 coupled solving; `test_boundary_conditions.jl` owns the combined coordinate/MPC
 regressions. Eigen constraints are also exercised through `solveEigen` because
 modal reconstruction has a different contract from a static solve.

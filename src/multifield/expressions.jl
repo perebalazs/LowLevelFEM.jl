@@ -103,20 +103,6 @@ interface documentation.
 """
 Adv(P) = OpApplied(P, AdvOp())
 
-function _check_scalarfield(sf::ScalarField)
-
-    if !isNodal(sf)
-        error(
-            "ScalarField must be nodal for integration.\n" *
-            "Field: $(sf)\n" *
-            "Only nodal fields are supported because Gauss values\n" *
-            "are obtained via Lagrange interpolation.\n" *
-            "Hint: convert the coefficient with elementsToNodes(sf) before using it in the weak form."
-        )
-    end
-
-end
-
 """
     AxialGrad(P)
 
@@ -197,32 +183,6 @@ K = ∫(SurfaceSymGrad(Pu) ⋅ C ⋅ SurfaceSymGrad(Pu))
 See also: SurfaceGrad, SurfaceDiv
 """
 SurfaceSymGrad(P) = OpApplied(P, SurfaceSymGradOp())
-
-function _check_scalarfields(expr)
-
-    if expr isa WeakTerm
-
-        c = expr.term.coef
-
-        if c isa ScalarField
-            _check_scalarfield(c)
-
-        elseif c isa AbstractMatrix
-            for x in c
-                if x isa ScalarField
-                    _check_scalarfield(x)
-                end
-            end
-        end
-
-    elseif expr isa WeakSum
-
-        _check_scalarfields(expr.a)
-        _check_scalarfields(expr.b)
-
-    end
-
-end
 
 # ------------------------------------------------------------
 # Bilinear term
@@ -868,8 +828,6 @@ function ∫(
         "GLL quadrature currently supports only a single bilinear term of " *
         "the form P ⋅ P. Weak sums and other WeakExpr forms are not yet implemented."
     )
-
-    _check_scalarfields(expr)
 
     assembly in (:csc, :ijv) || error(
         "Unsupported matrix assembly mode $assembly. Expected :csc or :ijv."

@@ -52,6 +52,7 @@ const DOC_PAGES = [
         "Fields" => "reference/fields.md",
         "Operators" => "reference/operators.md",
         "Field Calculus" => "reference/field-calculus.md",
+        "Parameter Integration" => "reference/parameter-integration.md",
         "Boundary Conditions, MPC and Coordinates" => "reference/boundary-conditions.md",
         "Multifield" => "reference/multifield.md",
         "Solution and Eigenproblems" => "reference/solution.md",
