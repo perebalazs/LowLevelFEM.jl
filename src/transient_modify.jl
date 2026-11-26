@@ -178,7 +178,7 @@ end
 
 function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, preconditioner,
     solveroptions, preconditioneroptions, modifyA2, modifyA1, modifyA0, modifyRHS,
-    copyOperators, nonlinearoptions, kwargs...)
+    copyOperators, nonlinearoptions, saved, kwargs...)
     options = _transient_nonlinear_options(nonlinearoptions)
 
     solver in (:auto, :backslash, :lu, :lu_no_ordering,
@@ -190,14 +190,16 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
     linear = (; solver, preconditioner, solveroptions, preconditioneroptions)
     cache = Dict{Symbol, Any}()
     Vd, Ad = _transient_derivatives(p.D, dt)
-    U, V = zeros(length(p.free), n), zeros(length(p.free), n)
+    U, V = zeros(length(p.free), length(saved)), zeros(length(p.free), length(saved))
     U[:, 1], V[:, 1] = p.u0, p.v0
+    u, v = p.u0, p.v0
+    k = 2
     base = _transient_initial_frame(K, M, C, p)
     a, base, previous = _transient_modified_acceleration(p, base, p.u0, p.v0, zeros(length(p.free)), 1,
         Vd, Ad, nothing, hooks, options, cache, linear; dt)
     f, c = p.free, p.fixed
     for j in 2:n
-        xold, vold = copy(U[:, j-1]), copy(V[:, j-1])
+        xold, vold = u, v
         oldforce = base.A0[f, f]*xold+base.A0[f, c]*p.D[:, j-1]+
                  base.A1[f, f]*vold+base.A1[f, c]*Vd[:, j-1]+base.A2[f, c]*Ad[:, j-1]-base.b[f]
         oldreference = norm(base.b[f])+norm(base.A0[f, c]*p.D[:, j-1])+norm(base.A1[f, c]*Vd[:, j-1])+norm(base.A2[f, c]*Ad[:, j-1])
@@ -228,7 +230,11 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
                 )
 
             if ok
-                U[:, j], V[:, j] = x, v
+                u = x
+                if j == saved[k]
+                    U[:, k], V[:, k] = u, v
+                    k += 1
+                end
                 a = trial
                 base = frame
                 previous = snapshot
@@ -253,54 +259,54 @@ function _modified_hht(K, M, C, rhs, U0, V0, n, dt; α, γ, β, solver, precondi
             trial .+= options.relaxation.*correction
         end
     end
-    return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
+    return reconstruct_transient_solution(U, p.D, p, saved), reconstruct_transient_solution(V, Vd, p, saved)
 end
 
 function _modified_cdm(K, M, C, rhs, U0, V0, n, dt;modifyA2, modifyA1, modifyA0, modifyRHS,
-                       copyOperators, nonlinearoptions, dampingScheme, velocityScheme, kwargs...)
+                       copyOperators, nonlinearoptions, dampingScheme, velocityScheme, saved, kwargs...)
     options = _transient_nonlinear_options(nonlinearoptions)
     p = prepare_transient_system(K, M, C, rhs, U0, V0, n, dt; _modifier_data = true, kwargs...)
     hooks = (A2 = modifyA2, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS, copyOperators = copyOperators)
     cache = Dict{Symbol, Any}()
     Vd, Ad = _transient_derivatives(p.D, dt)
-    U, V = zeros(length(p.free), n), zeros(length(p.free), n)
+    U, V = zeros(length(p.free), length(saved)), zeros(length(p.free), length(saved))
     U[:, 1], V[:, 1] = p.u0, p.v0
+    u, v = p.u0, p.v0
+    k = 2
     base = _transient_initial_frame(K, M, C, p)
     a, base, previous = _transient_modified_acceleration(p, base, p.u0, p.v0, zeros(length(p.free)), 1,
         Vd, Ad, nothing, hooks, options, cache, (; ); cdm = true, dt)
     prior = p.u0-dt*p.v0+dt^2/2*a
     for j in 1:n-1
-        x = copy(U[:, j])
+        x = u
         v = (x-prior)/dt
         a, base, previous = _transient_modified_acceleration(p, base, x, v, a, j, Vd, Ad, previous,
             hooks, options, cache, (; ); cdm = true, phase = :explicit,
             velocity_shift = dampingScheme === :central ? dt/2 : 0.0, dt)
-        U[:, j+1] .=2x-prior+dt^2*a
-        V[:, j+1] .=(U[:, j+1]-x)/dt
-        prior = x
+        next = 2x-prior+dt^2*a
+        k = _transient_store_cdm!(U, V, saved, k, j+1, next, x, prior, dt, velocityScheme)
+        prior, u = x, next
     end
-    if velocityScheme === :central
-        V, _  =  _transient_derivatives(U, dt)
-        V[:, 1] .= p.v0
-    end
-    return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
+    return reconstruct_transient_solution(U, p.D, p, saved), reconstruct_transient_solution(V, Vd, p, saved)
 end
 
 function _modified_fdm(K, C, rhs, U0, n, dt; ϑ, solver, preconditioner, solveroptions,
-    preconditioneroptions, modifyA1, modifyA0, modifyRHS, copyOperators, nonlinearoptions, kwargs...)
+    preconditioneroptions, modifyA1, modifyA0, modifyRHS, copyOperators, nonlinearoptions, saved, kwargs...)
     options = _transient_nonlinear_options(nonlinearoptions)
     p = prepare_transient_system(K, nothing, C, rhs, U0, nothing, n, dt; _modifier_data = true, kwargs...)
     hooks = (A2 = nothing, A1 = modifyA1, A0 = modifyA0, RHS = modifyRHS, copyOperators = copyOperators)
     linear = (; solver, preconditioner, solveroptions, preconditioneroptions)
     cache = Dict{Symbol, Any}()
-    U = zeros(length(p.free), n)
+    U = zeros(length(p.free), length(saved))
     U[:, 1] = p.u0
+    u = p.u0
+    k = 2
     base = _transient_initial_frame(K, nothing, C, p)
     previous = _transient_snapshot(p, p.u0, nothing, nothing, 1)
     base = _transient_modified_frame(base, base, p, previous, nothing, 1, 0, :initial, hooks, dt)
     f, c = p.free, p.fixed
     for j in 2:n
-        old = copy(U[:, j-1])
+        old = u
         trial = copy(old)
         frame = base
         oldforce = base.A0[f, f]*old+base.A0[f, c]*p.D[:, j-1]-base.b[f]
@@ -320,7 +326,11 @@ function _modified_fdm(K, C, rhs, U0, n, dt; ϑ, solver, preconditioner, solvero
                 norm(capacity[f, c]*boundary_rate)
             ok, residual = _transient_nonlinear_converged(terms, options; reference)
             if ok
-                U[:, j] = trial
+                u = trial
+                if j == saved[k]
+                    U[:, k] = u
+                    k += 1
+                end
                 base = frame
                 previous = snapshot
                 break
@@ -330,5 +340,5 @@ function _modified_fdm(K, C, rhs, U0, n, dt; ϑ, solver, preconditioner, solvero
             trial .+= options.relaxation.*correction
         end
     end
-    return reconstruct_transient_solution(U, p.D, p)
+    return reconstruct_transient_solution(U, p.D, p, saved)
 end

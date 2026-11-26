@@ -21,6 +21,21 @@ the same final time, and compare displacements, velocities and stress peaks.
 The [method and option tables](../reference/transient.md) cover damping,
 iterative solves, MPCs and nonlinear operator updates.
 
+## Store fewer output samples
+
+Use `save_every` to reduce the returned displacement/velocity history without
+changing the time increment or skipping integration steps:
+
+```julia
+u, v = HHT(K, M, C, f, u0, v0, n, Δt; support=bc, save_every=10)
+# The same keyword is available in CDM and FDM.
+```
+
+The initial and final states are always included. Use the returned `.t` labels
+for plots, since the last saved interval may be shorter. Sampled loads and
+supports must still contain one constant column or all `n` integration samples.
+See the [storage and time-grid guide](@ref transient-saving).
+
 ## Related
 
 - [Nonlinear Cantilever Dynamics: Secant vs Newton-Type HHT](cantilever-hht-secant-vs-newton.md)

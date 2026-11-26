@@ -1,0 +1,179 @@
+\documentclass[a4paper,11pt]{extarticle}
+\usepackage[margin=11mm]{geometry}
+% Compile with: pdflatex LowLevelFEM_DSL_CheatSheet_pdflatex.tex
+% UTF-8 source; DejaVu's Type 1 fonts preserve the original typography.
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern} % Scalable math fonts, including small subscripts.
+\usepackage[scaled=0.8]{DejaVuSans}
+\usepackage[scaled=0.8]{DejaVuSansMono}
+\renewcommand{\familydefault}{\sfdefault}
+\usepackage{multicol,xcolor,amsmath,amssymb,titlesec,fancyvrb,upquote,graphicx,hyperref}
+\input{glyphtounicode}
+\pdfgentounicode=1
+% These mappings also apply inside the fancyvrb Julia environments.
+% Keep the actual Unicode characters in the Julia examples below.
+% Match the 0.79 scale of the original monospaced font.
+\newcommand{\DSLsymbol}[1]{\scalebox{0.79}{\ensuremath{#1}}}
+\DeclareUnicodeCharacter{2022}{\textbullet}
+\DeclareUnicodeCharacter{222B}{\DSLsymbol{\int}}
+\DeclareUnicodeCharacter{22C5}{\DSLsymbol{\cdot}}
+\DeclareUnicodeCharacter{03A9}{\DSLsymbol{\Omega}}
+\DeclareUnicodeCharacter{0393}{\DSLsymbol{\Gamma}}
+\DeclareUnicodeCharacter{2218}{\DSLsymbol{\circ}}
+\DeclareUnicodeCharacter{2207}{\DSLsymbol{\nabla}}
+\DeclareUnicodeCharacter{2202}{\DSLsymbol{\partial}}
+\DeclareUnicodeCharacter{03BD}{\DSLsymbol{\nu}}
+\definecolor{blue}{HTML}{17618A}
+\definecolor{gray}{HTML}{52616B}
+\hypersetup{colorlinks=true,urlcolor=blue}
+\setlength{\columnsep}{7mm}\setlength{\parindent}{0pt}\setlength{\parskip}{2pt}
+\titlespacing*{\section}{0pt}{5pt}{2pt}
+\titleformat{\section}{\color{blue}\bfseries\fontsize{9}{10}\selectfont}{}{0pt}{}
+\newcommand{\code}[1]{\mbox{\ttfamily\small #1}}
+\DefineVerbatimEnvironment{julia}{Verbatim}{fontsize=\fontsize{8.6}{8.6}\selectfont,commandchars=\\\{\}}
+\begin{document}
+{\color{blue}\fontsize{17}{19}\selectfont\bfseries LowLevelFEM.jl}\hfill {\color{gray}\small QUICK REFERENCE • 2026}\par
+{\large\bfseries Weak-Form DSL Cheat Sheet}\hfill\small Julia • A4 / one page\par
+\vspace{1mm}\hrule\vspace{2mm}
+\begin{multicols}{2}
+	
+	
+\paragraph{Workflow} Geometry $\to$ FE mesh (Gmsh) $\to$ fields $\to$ weak form $\to$ sparse matrix, right hand side (rhs) $\to$ boundary conditions (bc) $\to$ solver $\to$ rusulting fields $\to$ post processor $\to$ visualization (Gmsh, Plots).
+
+Field represents both the trying and test space.
+\paragraph{Setup} Load LowLeveleFEM package
+\begin{julia}
+using LowLevelFEM
+\end{julia}
+%
+\paragraph{Geometry} Created by Gmsh or imported STEP or IGES files.
+\begin{julia}
+openGeometry("part.geo") # opens a *.geo file in Gmsh
+openPreProcessor()       # launch Gmsh to draw or make FE mesh
+\end{julia}
+%
+\paragraph{Define the problem} Select the region to solve on, give the type of field to solve
+\begin{julia}
+mat = Material("part". E=2e5, ν=0.3)
+# 3D vector field
+U = Field([mat], type=:VectorField, dim=3, fieldName=:u) named "u"
+# 2D scalar field
+P = Field([mat], type=:ScalarField, dim=2, fieldName=:p) named "p"
+\end{julia}
+part is a name of a physical group in Gmsh.
+
+type can be :ScalarField, :VectorField, :TensorField.
+
+dim is 1, 2 or 3.
+
+fieldName is arbitrary letter. This will be used durin definition of bc.
+%
+\paragraph{Weak form} Solve the sparse matrix (system matrix?) and rhs from a weak form.
+\begin{julia}
+K = ∫(SymGrad(U) ⋅ D(:PlaneStress, mat) ⋅ SymGrad(U), Ω="surf")		# Stiffness matrix in Ω, where dimension of Ω is the same as dimension of U 
+\end{julia}
+Differential operators in weak form
+
+\begin{tabular}{@{}ll@{}}
+\code{U} & identity $u$\\
+\code{Grad(U)} & $\nabla u$ (scalar or vector)\\
+\code{SymGrad(U)} & engineering strain vector\\
+\code{Div(U)} & $\nabla\!\cdot u$\\
+\code{Curl(U)} & $\nabla\!\times u$\\
+\code{TensorDiv(P)} & divergence of tensor\\
+\end{tabular}\par
+\subparagraph{2D conventions} 
+
+\code{Grad(U)} gives $[u_{x,x},u_{x,y},u_{y,x},u_{y,y}]$
+
+\code{SymGrad(U)} gives $[u_{x,x},u_{y,y},u_{x,y}+u_{y,x}]$
+
+\subparagraph{3D convention}
+
+\code{SymGrad(U)}: $[xx,yy,zz,xy,yz,zx]$ (engineering shear).
+\section{3. Algebra and integration}
+\begin{julia}
+K = ∫(Grad(P) ⋅ k ⋅ Grad(P); Ω="body")
+M = ∫(P ⋅ rho ⋅ P; Ω="body")
+f = ∫(P ⋅ q; Ω="body")
+g = ∫(P ⋅ flux; Γ="right")
+\end{julia}
+\code{⋅} contracts operators/coefficient chains; coefficients may be numbers, matrices, or spatially varying fields. \code{Ω} denotes a volume/domain physical group, \code{Γ} a boundary group.
+\begin{julia}
+K = ∫(Grad(P) ⋅ Grad(P);
+      Ω="body", gauss=:full,
+      threads=:auto, assembly=:csc)
+# Alternative: gauss=:reduced,
+# assembly=:ijv, threads=1
+\end{julia}
+\textbf{Shortcuts:} \code{∫Ω("body", expr)}, \code{∫Γ("right", expr)}. Default matrix assembly is sparse CSC; integration returns \code{SystemMatrix} or an assembled load field.
+\section{4. Canonical PDE recipes}
+\textbf{Diffusion / Poisson} $-\nabla\cdot(k\nabla T)=q$:
+\begin{julia}
+K = ∫(Grad(P) ⋅ k ⋅ Grad(P); Ω="body")
+f = ∫(P ⋅ q; Ω="body")
+\end{julia}
+\textbf{2D linear elasticity} $\int\varepsilon(v)^TC\varepsilon(u)$:
+\begin{julia}
+C = D(:PlaneStress, E, nu)
+K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
+      Ω="body")
+f = ∫(Pu ⋅ [0, -1]; Γ="right")
+\end{julia}
+\columnbreak
+\section{5. Solve + essential boundary conditions}
+\begin{julia}
+bc = BoundaryCondition("left", ux=0, uy=0)
+u = solveField(K, f; support=[bc])
+# Scalar problem: use a scalar-compatible BC.
+\end{julia}
+\textbf{Interpretation:} distributed loads and natural boundary terms belong in $f$; Dirichlet constraints are imposed by \code{support}. Other solver options include \code{mpc}, \code{coordSys}, \code{solver}, and \code{preconditioner}.
+\section{6. Mixed and coupled fields}
+\textbf{Mixed block terms} (e.g. velocity--pressure):
+\begin{julia}
+# Pu and Pp are distinct Problem descriptors.
+B = ∫(Div(Pu) ⋅ Pp; Ω="body")
+Bt = ∫(Pp ⋅ Div(Pu); Ω="body")
+\end{julia}
+\textbf{Compound operator} $B=A_1\nabla u+A_2u$:
+\begin{julia}
+B = A1 ⋅ Grad(Pu) + A2 ⋅ Pu
+K = ∫(B' ⋅ C ⋅ B; Ω="body")
+\end{julia}
+Compound expressions can generate coupled matrix blocks automatically when operators reference multiple \code{Problem}s. Keep test/trial field ordering consistent.
+\section{7. Useful additional forms}
+\begin{julia}
+# Mass / reaction term
+M = ∫(Pu ⋅ rho ⋅ Pu; Ω="body")
+# Elastic foundation on a boundary
+Kb = ∫(Pu ⋅ [kx 0; 0 ky] ⋅ Pu;
+       Γ="edge")
+# Divergence penalty
+Kd = ∫(Div(Pu) ⋅ Div(Pu); Ω="body")
+# Curl-curl form
+Kc = ∫(Curl(Pu) ⋅ Curl(Pu); Ω="body")
+\end{julia}
+\section{8. Field algebra (postprocessing, NOT DSL)}
+\begin{julia}
+# u and T below are computed FE fields.
+eps = (u ∘ ∇ + ∇ ∘ u) / 2
+sigma = C * eps  # compatible tensor law
+heatflux = -k * ∇(T)
+divu = div(u); curlu = curl(u)
+\end{julia}
+Field operations also include \code{grad}, \code{trace}, \code{∂x}, \code{∂y}, \code{∂z}; the returned fields are distinct from symbolic \code{Grad(P)} / \code{Div(P)} used for matrix assembly.
+\section{9. Performance and pitfalls}
+\begin{julia}
+pat = build_csc_pattern(Pu, Pu; Ω="body")
+fill!(pat.nzval, 0.0)
+K = ∫(SymGrad(Pu) ⋅ C ⋅ SymGrad(Pu);
+      Ω="body", csc_matrix=pat)
+\end{julia}
+\textbf{Pattern reuse:} clear \code{nzval} before an independent assembly; do \emph{not} call \code{dropzeros!} on the reusable pattern. Copy results before reusing the same matrix storage. Check coefficient/operator dimensions, physical-group names, integration order and shear conventions.
+\vspace{2mm}\hrule\vspace{1mm}
+{\footnotesize\textbf{Documentation:} \href{https://perebalazs.github.io/LowLevelFEM.jl/dev/reference/multifield/}{DSL / Multifield API} \quad \href{https://perebalazs.github.io/LowLevelFEM.jl/dev/tutorials/}{Tutorials}\\
+\textbf{Source:} \href{https://github.com/perebalazs/LowLevelFEM.jl}{github.com/perebalazs/LowLevelFEM.jl}\quad\textit{Examples assume valid mesh, material, and compatible field types.}}
+\end{multicols}
+\end{document}
+

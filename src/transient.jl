@@ -42,6 +42,35 @@ function _transient_time(n, dt, t0)
     return t
 end
 
+# Step zero is the initial sample; always retain the final integration sample.
+function _transient_save_indices(n, save_every)
+    save_every isa Integer && !(save_every isa Bool) && save_every > 0 ||
+        throw(ArgumentError("Transient: save_every must be a positive integer."))
+    n >= 2 || throw(ArgumentError("Transient: n must be at least 2 (including the initial sample)."))
+    saved = collect(1:Int(min(save_every, n)):n)
+    last(saved) == n || push!(saved, n)
+    return saved
+end
+
+# Central CDM velocities are completed when the next integration sample exists.
+# The stencil uses adjacent integration states, even when output is thinned.
+function _transient_store_cdm!(U, V, saved, k, j, next, u, previous, dt, velocityScheme)
+    central = velocityScheme === :central
+    if central && j > 2 && saved[k-1] == j-1
+        V[:, k-1] .= (next - previous) / (2dt)
+    end
+    if j == saved[k]
+        U[:, k] .= next
+        if central && j == last(saved) && j > 2
+            V[:, k] .= (3next - 4u + previous) / (2dt)
+        elseif !central || j == last(saved)
+            V[:, k] .= (next - u) / dt
+        end
+        k += 1
+    end
+    return k
+end
+
 function _transient_field(P, a, t)
     kind = P.pdim == 1 ? :scalar : P.pdim == 2 ? :v2D :
            P.pdim == 3 ? :v3D : P.pdim == 9 ? :tensor :
@@ -257,19 +286,21 @@ function prepare_transient_system(K0, M0, C0, rhs, U0, V0, n, dt;
 end
 
 """
-    reconstruct_transient_solution(U, D, prepared)
+    reconstruct_transient_solution(U, D, prepared, saved=eachindex(prepared.t))
 
 Insert free values `U` and constrained values `D`, prolong through `T`, rotate
 through `Q`, and return ordinary nodal Fields with physical time labels.
-Multifield output follows the matrix block order.
+`U` contains only the saved columns; `D` and prepared time labels retain the
+full integration grid and are selected by `saved`. Multifield output follows
+the matrix block order.
 """
-function reconstruct_transient_solution(U, D, p)
+function reconstruct_transient_solution(U, D, p, saved=eachindex(p.t))
     X = zeros(size(p.T, 2), size(U, 2))
     X[p.free, :] .= U
-    X[p.fixed, :] .= D
+    X[p.fixed, :] .= @view D[:, saved]
     Xfull = p.T * X
     p.Q === nothing || (Xfull = p.Q * Xfull)
-    return split_multifield_solution(Xfull, p.problems, p.offsets, p.t)
+    return split_multifield_solution(Xfull, p.problems, p.offsets, p.t[saved])
 end
 
 # Second-order endpoint differences; two samples define a linear history.
@@ -339,7 +370,7 @@ M\\ddot{u} + C\\dot{u} + Ku = f.
 | `K`, `M`, `C` | Field, second-derivative and first-derivative operators; single- or multifield `SystemMatrix`s. |
 | `f` | Constant or sampled RHS Field, `SystemVector`, field tuple or local/global sum. |
 | `U0`, `V0` | Initial primary field and first derivative, one column each, on free DOFs. |
-| `n` | Number of stored samples, **including the initial sample**; `n ≥ 2`. |
+| `n` | Number of integration samples, **including the initial sample**; `n ≥ 2`. |
 | `Δt` | Constant finite positive time increment. |
 
 Omit positional `C` for zero physical damping. Only in that calling form,
@@ -367,6 +398,14 @@ Custom `γ ≥ 0`, `β > 0` are accepted but need their own stability assessment
 | `mpc` | `MPC[]` | Multi-point constraints, including multifield remote couplings. |
 | `coordSys` | `CoordinateSystem[]` | Local bases for loads, initial values, supports and MPC components. |
 | `t0` | `0.0` | Time of the initial sample. |
+| `save_every` | `1` | Save every this many integration steps; positive integer, excluding `Bool`. |
+
+All `n-1` integration steps are computed, including every callback evaluation.
+`save_every` changes only output storage: retain step 0, steps divisible by
+`save_every`, and step `n-1` once. The final time remains `t0+(n-1)*Δt`.
+Solution histories and reconstruction allocate only the retained columns;
+rolling internal states use the original `Δt`. Input loads, prescribed histories
+and their derivatives still use the full integration grid.
 
 Loads have one constant column or exactly `n` sampled columns. Initial fields
 have **one column**. Input time labels are not resampled. `support` is the only
@@ -462,8 +501,9 @@ Nonconvergence throws a step/time/residual error. Without callbacks, leave
 
 # Returns
 
-Return `(u,v)` as global nodal Fields, with `n` columns at
-`t[j] = t0 + (j-1)*Δt`. For multiple fields, return tuples in block order:
+Return `(u,v)` as global nodal Fields with synchronized columns and time labels
+`t0 + k*Δt` for the retained step indices `k`. With `save_every=1`, all `n`
+samples are returned, preserving the default behavior. For multiple fields, return tuples in block order:
 `(u1,u2), (v1,v2) = HHT(...)`.
 
 # Choosing the time step
@@ -502,14 +542,15 @@ end
 function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
     solver=:auto, preconditioner=:auto, solveroptions=(;), preconditioneroptions=(;),
     modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-    copyOperators=true, nonlinearoptions=(;), kwargs...)
+    copyOperators=true, nonlinearoptions=(;), save_every=1, kwargs...)
+    saved = _transient_save_indices(n, save_every)
     copyOperators isa Bool || throw(ArgumentError("copyOperators must be a Bool."))
     all(isfinite, (α, γ, β)) && -1/3 <= α <= 0 && γ >= 0 && β > 0 ||
         throw(ArgumentError("HHT: require -1/3 ≤ α ≤ 0, γ ≥ 0 and β > 0, all finite."))
     if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
         return _modified_hht(K,M,C,f,U0,V0,n,dt; α,γ,β,solver,preconditioner,
             solveroptions,preconditioneroptions,modifyA2,modifyA1,modifyA0,modifyRHS,
-            copyOperators,nonlinearoptions,kwargs...)
+            copyOperators,nonlinearoptions,saved,kwargs...)
     end
     nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
         throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
@@ -518,8 +559,10 @@ function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
     Kff, Mff, Cff = p.K[free, free], p.M[free, free], p.C[free, free]
     Kfc, Mfc, Cfc = p.K[free, fixed], p.M[free, fixed], p.C[free, fixed]
     Vd, Ad = _transient_derivatives(p.D, dt)
-    U, V = zeros(length(free), n), zeros(length(free), n)
+    U, V = zeros(length(free), length(saved)), zeros(length(free), length(saved))
     U[:, 1], V[:, 1] = p.u0, p.v0
+    u, v = p.u0, p.v0
+    k = 2
     if !isempty(free)
         effective = _prepare_transient_linear_solver(
             Mff + (1+α)*γ*dt*Cff + (1+α)*β*dt^2*Kff, (K, M, C);
@@ -535,21 +578,24 @@ function _HHT(K, M, C, f, U0, V0, n, dt; α, γ, β,
             a = solve_prepared_linear_system(mass, rhs0)
         end
         for j in 2:n
-            u, v = @view(U[:, j-1]), @view(V[:, j-1])
             up = u + dt*v + dt^2*(0.5-β)*a
             vp = v + dt*(1-γ)*a
             force = Kff*up + Cff*vp + boundary_force(j) - _transient_column(p.F, j)
             rhs = -(1+α)*force
             iszero(α) || (rhs .+= α .* oldforce)
             a = solve_prepared_linear_system(effective, rhs)
-            U[:, j] .= up + β*dt^2*a
-            V[:, j] .= vp + γ*dt*a
+            u = up + β*dt^2*a
+            v = vp + γ*dt*a
+            if j == saved[k]
+                U[:, k], V[:, k] = u, v
+                k += 1
+            end
             if !iszero(α)
                 oldforce = force + β*dt^2*(Kff*a) + γ*dt*(Cff*a)
             end
         end
     end
-    return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
+    return reconstruct_transient_solution(U, p.D, p, saved), reconstruct_transient_solution(V, Vd, p, saved)
 end
 
 function _transient_cdm_options(dampingScheme, velocityScheme)
@@ -576,7 +622,7 @@ M\\ddot{u} + C\\dot{u} + Ku = f.
 | `K`, `M`, `C` | Primary-field, second-derivative and first-derivative operators. |
 | `f` | Constant or sampled RHS; Field, `SystemVector`, tuple or local/global sum. |
 | `U0`, `V0` | Initial primary field and first derivative; one column each. |
-| `n`, `Δt` | Stored sample count (`n ≥ 2`, including the initial sample) and positive constant increment. |
+| `n`, `Δt` | Integration sample count (`n ≥ 2`, including the initial sample) and positive constant increment. |
 
 Single-field and multifield `SystemMatrix`s are accepted. Omit `C` for zero
 damping; only that calling form accepts `damping=C` (default `nothing`).
@@ -607,6 +653,14 @@ lumped**. CDM has no `solver` or preconditioner keywords.
 | `mpc` | `MPC[]` | Multi-point constraints, including multifield remote couplings. |
 | `coordSys` | `CoordinateSystem[]` | Local bases for loads, initial values, supports and MPC components. |
 | `t0` | `0.0` | Time of the initial sample. |
+| `save_every` | `1` | Save every this many integration steps; positive integer, excluding `Bool`. |
+
+All `n-1` integration steps are computed, including every callback evaluation.
+`save_every` changes only output storage: retain step 0, steps divisible by
+`save_every`, and step `n-1` once. The final time remains `t0+(n-1)*Δt`.
+Solution histories and reconstruction allocate only the retained columns;
+rolling internal states use the original `Δt`. Input loads, prescribed histories
+and their derivatives still use the full integration grid.
 
 Loads have one constant column or exactly `n` sampled columns. Initial fields
 have **one column**. Input time labels are not resampled. `support` is the only
@@ -652,7 +706,9 @@ tolerances are nonnegative, and `relaxation` lies in `(0,1]`.
 
 # Returns
 
-Return `(u,v)` as global nodal Fields at `t0 + (j-1)*Δt`, `j=1:n`.
+Return `(u,v)` as global nodal Fields with synchronized columns and time labels
+`t0 + k*Δt` for retained steps `k`; `save_every=1` returns all `n` samples.
+Central velocities use neighboring integration states, including unsaved ones.
 Multifield outputs are tuples in block order, for example
 `(u1,u2), (v1,v2) = CDM(...)`. Backward free velocities are half-step estimates
 stored under these same time labels; choose `velocityScheme=:central` for
@@ -695,12 +751,14 @@ function CDM(K::_TransientMatrix, M::_TransientMatrix, f::_TransientData, U0, V0
 end
 function _CDM(K, M, C, f, U0, V0, n, dt;
     modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-    copyOperators=true, nonlinearoptions=(;), dampingScheme=:lagged, velocityScheme=:backward, kwargs...)
+    copyOperators=true, nonlinearoptions=(;), dampingScheme=:lagged, velocityScheme=:backward,
+    save_every=1, kwargs...)
+    saved = _transient_save_indices(n, save_every)
     copyOperators isa Bool || throw(ArgumentError("copyOperators must be a Bool."))
     _transient_cdm_options(dampingScheme, velocityScheme)
     if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
         return _modified_cdm(K,M,C,f,U0,V0,n,dt; modifyA2,modifyA1,modifyA0,modifyRHS,
-                             copyOperators,nonlinearoptions,dampingScheme,velocityScheme,kwargs...)
+                             copyOperators,nonlinearoptions,dampingScheme,velocityScheme,saved,kwargs...)
     end
     nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
         throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
@@ -709,8 +767,10 @@ function _CDM(K, M, C, f, U0, V0, n, dt;
     Kff, Mff, Cff = p.K[free, free], p.M[free, free], p.C[free, free]
     Kfc, Mfc, Cfc = p.K[free, fixed], p.M[free, fixed], p.C[free, fixed]
     Vd, Ad = _transient_derivatives(p.D, dt)
-    U, V = zeros(length(free), n), zeros(length(free), n)
+    U, V = zeros(length(free), length(saved)), zeros(length(free), length(saved))
     U[:, 1], V[:, 1] = p.u0, p.v0
+    u, v = p.u0, p.v0
+    k = 2
     if !isempty(free)
         mass = _transient_factor(Mff; mass=true)
         a0 = mass \ (_transient_column(p.F, 1) - Kff*p.u0 - Cff*p.v0 -
@@ -719,20 +779,15 @@ function _CDM(K, M, C, f, U0, V0, n, dt;
         centered = dampingScheme === :central
         effective = centered ? _transient_factor(Mff + dt/2*Cff) : mass
         for j in 2:n
-            u = @view U[:, j-1]
             rhs = _transient_column(p.F, j-1) - Kff*u -
                   Cff*((u-previous)/dt) - Kfc*p.D[:, j-1] -
                   Cfc*Vd[:, j-1] - Mfc*Ad[:, j-1]
-            U[:, j] .= 2u - previous + dt^2*(effective \ rhs)
-            V[:, j] .= (U[:, j] - u) / dt
-            previous = copy(u)
+            next = 2u - previous + dt^2*(effective \ rhs)
+            k = _transient_store_cdm!(U, V, saved, k, j, next, u, previous, dt, velocityScheme)
+            previous, u = u, next
         end
     end
-    if velocityScheme === :central
-        V, _ = _transient_derivatives(U, dt)
-        V[:, 1] .= p.v0
-    end
-    return reconstruct_transient_solution(U, p.D, p), reconstruct_transient_solution(V, Vd, p)
+    return reconstruct_transient_solution(U, p.D, p, saved), reconstruct_transient_solution(V, Vd, p, saved)
 end
 
 """
@@ -751,7 +806,7 @@ C\\dot{x} + Kx = q.
 | `K`, `C` | Primary-field and first-derivative/capacity operators; single- or multifield matrices. |
 | `q` | Constant or sampled RHS Field, `SystemVector`, tuple or local/global sum. |
 | `X0` | Initial primary field, one column, on free coordinates. |
-| `n`, `Δt` | Sample count (`n ≥ 2`, including the initial sample) and positive constant increment. |
+| `n`, `Δt` | Integration sample count (`n ≥ 2`, including the initial sample) and positive constant increment. |
 
 The positional-support alias `FDM(K,C,q,bc,X0,n,Δt)` is retained. Here `C` is
 capacity/first-derivative data, whereas it denotes damping in HHT/CDM.
@@ -776,6 +831,14 @@ capacity/first-derivative data, whereas it denotes damping in HHT/CDM.
 | `mpc` | `MPC[]` | Multi-point constraints, including multifield remote couplings. |
 | `coordSys` | `CoordinateSystem[]` | Local bases for loads, initial values, supports and MPC components. |
 | `t0` | `0.0` | Time of the initial sample. |
+| `save_every` | `1` | Save every this many integration steps; positive integer, excluding `Bool`. |
+
+All `n-1` integration steps are computed, including every callback evaluation.
+`save_every` changes only output storage: retain step 0, steps divisible by
+`save_every`, and step `n-1` once. The final time remains `t0+(n-1)*Δt`.
+Solution histories and reconstruction allocate only the retained columns;
+rolling internal states use the original `Δt`. Input loads, prescribed histories
+and their derivatives still use the full integration grid.
 
 Loads have one constant column or exactly `n` sampled columns. Initial fields
 have **one column**. Input time labels are not resampled. `support` is the only
@@ -871,7 +934,8 @@ reduced-order and SEM restrictions as in [`HHT`](@ref) apply.
 
 # Returns
 
-Return a global nodal Field `x` with `n` columns at `t0 + (j-1)*Δt`.
+Return a global nodal Field `x` with columns and time labels `t0 + k*Δt` for
+retained steps `k`; `save_every=1` returns all `n` samples.
 A multifield result is a tuple in matrix block order: `x1,x2 = FDM(...)`.
 
 # Choosing the time step
@@ -898,13 +962,14 @@ function FDM(K::_TransientMatrix, C::_TransientMatrix, q, X0, n::Int, dt::Real;
              ϑ=0.5, solver=:auto, preconditioner=:auto,
              solveroptions=(;), preconditioneroptions=(;),
              modifyA2=nothing, modifyA1=nothing, modifyA0=nothing, modifyRHS=nothing,
-             copyOperators=true, nonlinearoptions=(;), kwargs...)
+             copyOperators=true, nonlinearoptions=(;), save_every=1, kwargs...)
+    saved = _transient_save_indices(n, save_every)
     copyOperators isa Bool || throw(ArgumentError("copyOperators must be a Bool."))
     isfinite(ϑ) && 0 <= ϑ <= 1 || throw(ArgumentError("FDM: require 0 ≤ ϑ ≤ 1."))
     modifyA2 === nothing || throw(ArgumentError("FDM has no A2 operator; use modifyA1 for capacity."))
     if _has_transient_modifiers(modifyA2,modifyA1,modifyA0,modifyRHS)
         return _modified_fdm(K,C,q,X0,n,dt; ϑ,solver,preconditioner,solveroptions,
-            preconditioneroptions,modifyA1,modifyA0,modifyRHS,copyOperators,nonlinearoptions,kwargs...)
+            preconditioneroptions,modifyA1,modifyA0,modifyRHS,copyOperators,nonlinearoptions,saved,kwargs...)
     end
     nonlinearoptions isa NamedTuple && isempty(nonlinearoptions) ||
         throw(ArgumentError("nonlinearoptions require a modify callback and must be a NamedTuple."))
@@ -912,20 +977,26 @@ function FDM(K::_TransientMatrix, C::_TransientMatrix, q, X0, n::Int, dt::Real;
     free, fixed = p.free, p.fixed
     Kff, Cff = p.K[free, free], p.C[free, free]
     Kfc, Cfc = p.K[free, fixed], p.C[free, fixed]
-    U = zeros(length(free), n)
+    U = zeros(length(free), length(saved))
     U[:, 1] .= p.u0
+    u = p.u0
+    k = 2
     if !isempty(free)
         effective = _prepare_transient_linear_solver(Cff + ϑ*dt*Kff, (K, C);
             solver, preconditioner, solveroptions, preconditioneroptions)
         previous = Cff - (1-ϑ)*dt*Kff
         for j in 2:n
-            rhs = previous*U[:, j-1] +
+            rhs = previous*u +
                   dt*((1-ϑ)*_transient_column(p.F, j-1) + ϑ*_transient_column(p.F, j)) -
                   dt*Kfc*((1-ϑ)*p.D[:, j-1] + ϑ*p.D[:, j]) - Cfc*(p.D[:, j]-p.D[:, j-1])
-            U[:, j] .= solve_prepared_linear_system(effective, rhs)
+            u = solve_prepared_linear_system(effective, rhs)
+            if j == saved[k]
+                U[:, k] .= u
+                k += 1
+            end
         end
     end
-    return reconstruct_transient_solution(U, p.D, p)
+    return reconstruct_transient_solution(U, p.D, p, saved)
 end
 
 # Historical positional BC lists route through exactly the same pipeline.

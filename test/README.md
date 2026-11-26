@@ -51,8 +51,13 @@ output and explicit `output=:raw`. Eigen field copy/conversion/persistence check
 belong to `test_fields.jl`; invalid inputs belong to `test_validation.jl`.
 Contact tests target `ContactGap` weak forms, not obsolete notebook members.
 
-No transient analysis or time integrator is tested. Multiple static RHS columns
-and stored-column selection exercise field representation only. Temporary
+Transient suites cover CDM, HHT and FDM, moving supports, reduced spaces,
+coordinates, MPCs and operator callbacks. `test_transient_save.jl` compares
+thinned output against full histories across direct/iterative backends,
+CDM schemes, callback states, short runs, nondivisible intervals and strides
+larger than the run. It also checks `save_every=1`, parameter validation and
+synchronized multifield metadata. Multiple static RHS columns and stored-column
+selection additionally exercise field representation. Temporary
 persistence files use `mktempdir`; tests do not write into the package sources.
 
 ## Operator regression conventions

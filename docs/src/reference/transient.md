@@ -43,7 +43,7 @@ remain available; the keyword `support=bc` makes new calls easier to read.
 | Operators | Compatible `SystemMatrix`s, optionally wrapped in `Symmetric`. |
 | Loads | One constant column or exactly `n` columns in time order. |
 | `U0`, `X0`, `V0` | Exactly one initial column; values initialize free coordinates. |
-| `n` | Number of stored samples, including the initial one; at least 2. |
+| `n` | Number of integration samples, including the initial one; at least 2. |
 | `Δt`, `t0` | Constant positive increment and initial time (default `0.0`). |
 
 The final time is `t0 + (n-1)*Δt`. Input Field time labels are **not**
@@ -54,12 +54,44 @@ Loads and initial values accept nodal/element Fields, block `SystemVector`s
 or field tuples in matrix order. Ordinary data use local solver components;
 `Global(field)` or `Global(SystemVector(...))` marks Cartesian input. A local
 load and `Global(...)` load can be added. Output consists of global nodal
-Fields with one column per sample.
+Fields with one column per retained sample (all samples by default).
 
 | Method | Single-field output | Multifield output |
 |:--|:--|:--|
 | HHT / CDM | `(u,v)` | `(u1,u2), (v1,v2)` in block order. |
 | FDM | `x` | `(x1,x2)` in block order. |
+
+### [Store fewer results](@id transient-saving)
+
+All three methods accept `save_every=1`, a positive integer (not `Bool`).
+Every integration step is still computed with the original Δt. The returned
+history contains step 0, every step divisible by `save_every`, and the final
+step `n-1`, without duplicating the endpoint. All fields, velocities and time
+labels use the same retained steps. With `save_every=1`, results are unchanged.
+
+```julia
+# n includes the initial sample: 11 increments, four saved states.
+u, v = HHT(K, M, C, f, u0, v0, 12, Δt; support=bc, save_every=4)
+# u.t == v.t == [0, 4Δt, 8Δt, 11Δt] when t0=0.
+x = FDM(K, C, q, x0, 12, Δt; support=bc, save_every=4)
+```
+
+If `save_every > n-1`, only the initial and final states are returned.
+The saved column count is `1 + cld(n-1, save_every)`; the final interval can be
+shorter than `save_every*Δt`. Use the returned `.t` labels in postprocessing.
+Coarser output can miss peaks even though the integration is unchanged.
+
+Solution histories and full-field reconstruction allocate only saved columns;
+integration uses rolling state vectors. CDM central velocities still use
+adjacent integration states, including unsaved ones. Callbacks run with the
+same step numbers, times, derivatives and previous accepted state as in a
+full-output run, independently of saving. This applies to direct and iterative
+solvers, positional-support aliases, local coordinates, MPCs and multifield
+outputs alike.
+
+Keep sampled loads and supports on the complete `n`-sample integration grid.
+Their preparation and prescribed derivative histories are unchanged and still
+use that grid; `save_every` reduces solution-history storage, not input storage.
 
 ## [Prescribed histories and constraints](@id transient-support)
 
@@ -134,7 +166,7 @@ BC and MPC must identify `field=Problem`.
 
 Physical groups and components are resolved once per BC. Boundary-history
 storage scales with prescribed rows times n, including transfer/restriction;
-returned full solution histories still need nodal storage times n.
+returned solution histories need nodal storage times the saved column count.
 
 ## HHT parameters
 
