@@ -39,11 +39,18 @@ function _covers_domain(coef::ScalarField, domain::DomainSpec)
 end
 
 @inline function _build_elemwise_coeff_dict(coef::ScalarField, domain::DomainSpec)
-    if isElementwise(coef) && _covers_domain(coef, domain)
+    if isElementwise(coef)
+        length(coef.numElem) == length(coef.A) == length(unique(coef.numElem)) ||
+            throw(ArgumentError("Weak form: invalid or duplicate elementwise coefficient tags."))
+        _covers_domain(coef, domain) || throw(ArgumentError(
+            "Weak form: elementwise coefficient does not cover physical group '$(domain.name)'. " *
+            "Supply values on every integration element or explicitly transfer the field to that group."
+        ))
         p = coef
+    elseif isNodal(coef)
+        p = nodesToElements(coef, onPhysicalGroup=domain.name)
     else
-        p = elementsToNodes(coef)
-        p = nodesToElements(p, onPhysicalGroup=domain.name)
+        throw(ArgumentError("Weak form: coefficient has no field values for physical group '$(domain.name)'."))
     end
 
     return Dict(zip(p.numElem, p.A))

@@ -70,6 +70,7 @@ LowLevelFEM supports two complementary workflows. **Engineering analyses** can s
 
 - **Explicit finite element fields:** user-defined scalar, vector, and tensor fields; nodal and elementwise representations with direct access to their numerical values.
 - **Operator-based formulation:** express linear and bilinear weak forms through differential operators (`Grad`, `SymGrad`, divergence, curl, and related field calculus), constitutive coefficients, and the integration operator `∫`. Examples include beam and shell models.
+- **Laminated composite shells:** linear-elastic orthotropic plies with user-defined orientations, through-thickness stiffness integration, membrane–bending coupling, and ply-level stress recovery using the weak-form DSL. See the [laminated composite shell tutorial](tutorials/laminated-composite-shell.md).
 - **Matrix-level control:** inspect, combine, transform, and reuse assembled stiffness, mass, damping, capacity, coupling, and load operators; no user-written element loops are required for standard weak-form assembly.
 - **Multifield and mixed problems:** block `SystemMatrix`/`SystemVector` systems for coupled fields, including mixed-order and Taylor–Hood-type formulations using algebraic p/(p−1) reduction without remeshing.
 - **Constraints and transformed spaces:** multi-point constraints (including remote-point and periodic coupling), local coordinate transformations, and reduced approximation spaces; experimental spectral transformations are available for supported line and complete quadrangle elements.

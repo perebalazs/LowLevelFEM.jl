@@ -39,7 +39,10 @@ these columns as a physical time history is invalid.
 
 Use [integrate](postprocessing.md) for scalar spatial integration over a group.
 `integrate(field)` and `∫(field)` are time-history integrals; `∫(weak_form)`
-assembles matrices or loads. These overloads have different meanings.
+assembles matrices or loads. `integrate(f, a, b)` and `∫(f, a, b)` perform
+[independent-parameter integration](parameter-integration.md), retaining field
+values and time columns (e.g. for through-thickness integration). These
+overloads have different meanings.
 
 ## Compatibility helpers
 

@@ -14,6 +14,7 @@ include("debugtools.jl")
 using .DebugTools
 include("general.jl")
 include("operators.jl")
+include("parameterintegration.jl")
 include("linear.jl")
 include("heat.jl")
 include("nonlinear.jl")

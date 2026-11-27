@@ -730,6 +730,12 @@ matrices, matrix chains, and matrices whose entries are `Number` or
 K = ∫(Grad(Pu) ⋅ A ⋅ B ⋅ C ⋅ Grad(Pu); Ω="body")
 ```
 
+Elementwise coefficient fields must cover all elements of the chosen physical
+group; missing data raise an error instead of being extended by nodal averaging.
+Nodal coefficients are mapped to the integration elements. For constructing
+such matrices through thickness or other scalar parameters, see
+[parameter integration](parameter-integration.md).
+
 Only the global scatter operation differs between the CSC and IJV paths.
 
 ## Element types and interpolation order
@@ -882,6 +888,9 @@ u = nodesToElements(u0 + R * φ, onPhysicalGroup="shell")
 The MPCs and the rigid-rotation transformation serve different purposes:
 the MPCs impose master/slave constraints, while `T` incorporates the
 rotation-induced displacement consistently into the assembled equations.
+
+See the [Thin-Walled U-Channel Cantilever tutorial](../tutorials/u-channel-shell.md)
+for the complete shell formulation, remote loading and stress recovery.
 
 ```@docs
 rigidRotationMap
