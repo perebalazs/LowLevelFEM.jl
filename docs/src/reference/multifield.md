@@ -889,6 +889,9 @@ The MPCs and the rigid-rotation transformation serve different purposes:
 the MPCs impose master/slave constraints, while `T` incorporates the
 rotation-induced displacement consistently into the assembled equations.
 
+See the [Thin-Walled U-Channel Cantilever tutorial](../tutorials/u-channel-shell.md)
+for the complete shell formulation, remote loading and stress recovery.
+
 ```@docs
 rigidRotationMap
 rigidRotationTransformation

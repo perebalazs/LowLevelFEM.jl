@@ -107,6 +107,9 @@ flat-section measure; more general kinematics or Jacobian factors belong in
 the integrand. Transverse shear and drilling terms may be assembled separately
 as in the existing shell workflow.
 
+The [Laminated Composite Shells tutorial](../tutorials/laminated-composite-shell.md)
+provides a complete five-ply orthotropic laminate example using this integration.
+
 ## Using elementwise coefficients in weak forms
 
 The ordinary weak-form assembler accepts nodal and elementwise scalar
